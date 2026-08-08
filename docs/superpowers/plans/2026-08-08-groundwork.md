@@ -326,8 +326,8 @@ Add Testcontainers.PostgreSql, Npgsql, xUnit, MVC Testing and HealthChecks. Fixt
 dotnet tool restore
 dotnet restore --locked-mode
 dotnet format whitespace --verify-no-changes
-dotnet build --no-restore --locked-mode
-dotnet test --no-build --locked-mode
+dotnet build --no-restore
+dotnet test --no-build
 git add Vinx.Erp.sln Directory.Build.props Directory.Packages.props packages.lock.json .config src tests/public
 git commit -m "feat: scaffold modular .NET foundation"
 ```
@@ -432,11 +432,12 @@ npm --workspace apps/web run test -- --run
 npm --workspace apps/web run build
 npm run test:no-direct-supabase
 dotnet tool restore
-dotnet restore --use-lock-file
 dotnet restore --locked-mode
 dotnet format whitespace --verify-no-changes
-dotnet build --no-restore --locked-mode
-dotnet test --no-build --locked-mode --filter 'FullyQualifiedName!~PrivateQuality'
+dotnet build --no-restore
+while IFS= read -r public_test_project; do
+  dotnet test "$public_test_project" --no-build
+done < <(rg --files -g '*.csproj' tests/public | sort)
 ```
 
 Private script first verifies it is a verifier-owned clone, runs only private suite and emits test name/outcome/redacted evidence/correlation ID, never test source.
