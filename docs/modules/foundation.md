@@ -10,15 +10,33 @@ Foundation owns the cross-cutting contracts that every ERP module consumes. It d
 - Identity and file-storage provider boundaries: `IdentityProvider` and `FileStorage`.
 - Durable audit, correlation context, redaction, OpenTelemetry conventions, health checks, idempotency keys and outbox technical contracts.
 
-## Multi-company authorization
+## Company scope
 
-A person can hold different memberships, roles and scopes in more than one company. The active context is one company or a read-only all-authorized view. Every command, including an MCP command, provides one explicit `empresa_id`; the server validates membership, capability and scope regardless of frontend visibility.
+All commands carry one company. A person can hold different memberships, roles
+and scopes in more than one company. The active context is one company or a
+read-only all-authorized view. Every command, including an MCP command,
+provides one explicit `empresa_id`; the server validates membership, capability
+and scope regardless of frontend visibility.
+
+## Contract version
+
+`1.0`
 
 The frontend receives effective capabilities only to shape menus, routes, buttons, columns and data. It is never the authorization authority. API, MCP and database protections deny forged or cross-company requests.
 
 ## Data and audit rules
 
 Business and configuration data use soft delete with `deleted_at`, `deleted_by_user_id` and `deleted_reason`; a restore is authorized and audited. Audit events are append-only and use retention rather than soft delete. Module data remains explicitly company-scoped; an authorized group-wide view is a union, never a tenant-less record.
+
+## Deletion strategy
+
+Mutable entities use soft delete with `deleted_at`, `deleted_by_user_id` and
+`deleted_reason`. `audit.audit_events` is append-only and uses retention rather
+than soft delete.
+
+## Migration notes
+
+The first migration is `InitialFoundationBaseline`.
 
 ## Module responsibilities
 
