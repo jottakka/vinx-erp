@@ -51,7 +51,24 @@ public sealed class AuditPrivilegeTests
                 has_table_privilege('vinx_runtime', 'audit.audit_events', 'INSERT'),
                 has_table_privilege('vinx_runtime', 'audit.audit_events', 'UPDATE'),
                 has_table_privilege('vinx_runtime', 'audit.audit_events', 'DELETE'),
-                has_function_privilege('vinx_runtime', 'audit.append_event(uuid,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE')
+                has_function_privilege('vinx_runtime', 'audit.append_event(uuid,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE'),
+                has_function_privilege('vinx_runtime', 'audit.reject_audit_event_mutation()', 'EXECUTE'),
+                appender.prosecdef,
+                appender.proconfig,
+                NOT EXISTS (
+                    SELECT 1
+                    FROM aclexplode(COALESCE(appender.proacl, acldefault('f', appender.proowner))) AS privilege
+                    WHERE privilege.grantee = 0 AND privilege.privilege_type = 'EXECUTE'),
+                NOT EXISTS (
+                    SELECT 1
+                    FROM pg_proc AS rejector
+                    CROSS JOIN LATERAL aclexplode(
+                        COALESCE(rejector.proacl, acldefault('f', rejector.proowner))) AS privilege
+                    WHERE rejector.oid = 'audit.reject_audit_event_mutation()'::regprocedure
+                      AND privilege.grantee = 0
+                      AND privilege.privilege_type = 'EXECUTE')
+            FROM pg_proc AS appender
+            WHERE appender.oid = 'audit.append_event(uuid,uuid,text,text,text,uuid,text,uuid,text,jsonb)'::regprocedure
             """, administrator);
         await using var reader = await command.ExecuteReaderAsync();
 
@@ -63,6 +80,51 @@ public sealed class AuditPrivilegeTests
         Assert.False(reader.GetBoolean(4));
         Assert.False(reader.GetBoolean(5));
         Assert.True(reader.GetBoolean(6));
+        Assert.False(reader.GetBoolean(7));
+        Assert.True(reader.GetBoolean(8));
+        Assert.Equal(["search_path=audit, pg_catalog"], reader.GetFieldValue<string[]>(9));
+        Assert.True(reader.GetBoolean(10));
+        Assert.True(reader.GetBoolean(11));
+    }
+
+    [Theory]
+    [InlineData("company_context_required", AuditOutcome.Success)]
+    [InlineData("another_action", AuditOutcome.Denied)]
+    public void Null_requested_company_is_rejected_unless_action_and_outcome_are_the_context_required_denial(
+        string action,
+        AuditOutcome outcome)
+    {
+        Assert.Throws<ArgumentException>(() => new AuditEvent(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            null,
+            AuditSource.Web,
+            action,
+            "authorization",
+            null,
+            outcome,
+            Guid.NewGuid(),
+            "redacted",
+            "{}"));
+    }
+
+    [Fact]
+    public void Null_requested_company_is_allowed_for_the_context_required_denial()
+    {
+        var auditEvent = new AuditEvent(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            null,
+            AuditSource.Web,
+            "company_context_required",
+            "authorization",
+            null,
+            AuditOutcome.Denied,
+            Guid.NewGuid(),
+            "redacted",
+            "{}");
+
+        Assert.Null(auditEvent.RequestedCompanyId);
     }
 
     [Fact]

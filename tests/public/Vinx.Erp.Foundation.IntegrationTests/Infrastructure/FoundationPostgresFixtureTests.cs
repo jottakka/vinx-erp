@@ -6,6 +6,38 @@ namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 public sealed class FoundationPostgresFixtureTests
 {
     [Fact]
+    public async Task StartAsync_grants_public_schema_privileges_only_to_the_migrator()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                role_name,
+                has_schema_privilege(role_name, 'public', 'USAGE'),
+                has_schema_privilege(role_name, 'public', 'CREATE')
+            FROM unnest(ARRAY['vinx_audit_owner', 'vinx_migrator', 'vinx_runtime']) AS role_name
+            ORDER BY role_name
+            """, connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        var privileges = new List<(string Role, bool Usage, bool Create)>();
+        while (await reader.ReadAsync())
+        {
+            privileges.Add((reader.GetString(0), reader.GetBoolean(1), reader.GetBoolean(2)));
+        }
+
+        Assert.Equal(
+        [
+            ("vinx_audit_owner", false, false),
+            ("vinx_migrator", true, true),
+            ("vinx_runtime", false, false)
+        ],
+        privileges);
+    }
+
+    [Fact]
     public async Task ReapplyBootstrapAsync_revokes_preexisting_database_create_from_audit_owner()
     {
         await using var fixture = new FoundationPostgresFixture();

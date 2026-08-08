@@ -24,7 +24,9 @@ public sealed class AuditEvent
         ArgumentException.ThrowIfNullOrWhiteSpace(action);
         ArgumentException.ThrowIfNullOrWhiteSpace(resourceType);
         ArgumentException.ThrowIfNullOrWhiteSpace(metadataJson);
-        if (requestedCompanyId is null && !string.Equals(action, "company_context_required", StringComparison.Ordinal))
+        if (requestedCompanyId is null
+            && (!string.Equals(action, "company_context_required", StringComparison.Ordinal)
+                || outcome != AuditOutcome.Denied))
         {
             throw new ArgumentException(
                 "A requested company is required unless the denial is company_context_required.",

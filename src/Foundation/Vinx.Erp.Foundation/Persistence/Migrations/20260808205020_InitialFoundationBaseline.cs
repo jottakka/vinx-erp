@@ -1120,6 +1120,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 END;
                 $function$;
 
+                REVOKE ALL ON FUNCTION audit.reject_audit_event_mutation()
+                    FROM PUBLIC, vinx_runtime;
+
                 CREATE FUNCTION audit.append_event(
                     p_actor_user_id uuid,
                     p_requested_company_id uuid,
@@ -1233,6 +1236,13 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
             migrationBuilder.DropTable(name: "companies", schema: "foundation");
 
             migrationBuilder.DropTable(name: "groups", schema: "foundation");
+
+            migrationBuilder.Sql(
+                """
+                DROP SCHEMA IF EXISTS audit;
+                DROP SCHEMA IF EXISTS foundation;
+                """
+            );
         }
     }
 }
