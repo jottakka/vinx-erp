@@ -4,9 +4,10 @@
 |---|---|
 | Status | unavailable — source URL and immutable commit not configured |
 | Source URL | Not registered |
-| Pinned commit or tag | Not registered |
-| Inspection date | 2026-08-08 |
-| Checkout location | Outside this repository; choose a local sibling directory |
+| Pinned immutable commit SHA | Not registered |
+| Inspection date | Not inspected |
+| Checkout location | System temporary directory outside this repository and its worktrees |
 
-No cited path becomes confirmed evidence until the source URL and commit are
-filled with a real immutable value.
+No cited path becomes confirmed evidence until the source URL and a full,
+immutable commit SHA are filled with real values. A branch or tag name is not a
+valid substitute for the SHA.

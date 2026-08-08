@@ -1,68 +1,55 @@
 # Legacy Evidence Inventory
 
-This is the initial, evidence-based inventory for the legacy application. The
-legacy source is currently unavailable: `reference.md` has no registered source
-URL or immutable commit. The entries below therefore use current issue and
-architecture documents as provisional evidence only. No legacy path, screen,
-workflow, migration, or policy is locally confirmed.
+The legacy source is unavailable: `reference.md` has no registered source URL
+or pinned immutable commit SHA. This is therefore a canonical inventory of
+artifact-level *reported identifiers*, not a record of locally verified source
+files. Every identifier, wildcard, and table reference below requires source
+verification from a detached checkout at the pinned SHA.
 
 ## Inventory rules
 
-`confirmed` requires direct inspection of the pinned, read-only checkout. A
-`provisional` entry may rely on current issue or architecture evidence, but it
-must be revisited after the source URL and immutable commit are registered.
+`confirmed` requires direct inspection of the pinned, read-only checkout.
+`provisional` means that the linked issue reports an identifier, but neither its
+existence in the source nor its behavior has been locally inspected.
 
-Every entry has exactly one decision. The decision vocabulary is:
+Every canonical row has exactly one disposition:
 
-| Decision | Meaning |
+| Disposition | Meaning |
 |---|---|
-| `preserve` | Retain the observed behavior or artifact, subject to validation against the target architecture. |
-| `adapt` | Use the evidence as input, but change the behavior or artifact to meet the target architecture and requirements. |
-| `discard` | Do not carry the observed behavior or artifact into the target implementation. |
-| `hypothesis` | Record an item that still needs evidence before a preserve, adapt, or discard decision is justified. |
+| `preserve` | Retain the observed artifact or behavior, subject to target-architecture validation. |
+| `adapt` | Use the observed artifact or behavior as input, with changes for the target architecture. |
+| `discard` | Do not carry the observed artifact or behavior into the target implementation. |
+| `hypothesis` | Keep the reported identifier pending source inspection; no preserve, adapt, or discard decision is yet justified. |
 
-## Known categories
+## Canonical artifact inventory
 
-### Screens and schema
+| Area | Provisional reported path or artifact identifier | Linked evidence | Observed behavior | Confidence | Disposition |
+|---|---|---|---|---|---|
+| Screen | `src/feature-module/Pages/vinx/workcenter/tickets.tsx` | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68) | Reported screen path; screen behavior has not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | `supabase/rbac_schema.sql` | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68) | Reported schema artifact; schema behavior has not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | `supabase/migrations/0045*` — reported wildcard identifier requiring source verification | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) | Reported migration-series identifier; its matching files and behavior have not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | `supabase/migrations/0047_rh_ondas_bcde.sql` | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) | Reported migration artifact; migration behavior has not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | `supabase/migrations/0055_kanban_automatizado.sql` | [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Reported migration artifact; migration behavior has not been inspected. | `provisional` | `hypothesis` |
+| Service | `ticketsService.ts` | [Issue #7](https://github.com/jottakka/vinx-erp/issues/7) | Reported service identifier; service behavior has not been inspected. | `provisional` | `hypothesis` |
+| Service | `demandasService.ts` | [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Reported service identifier; service behavior has not been inspected. | `provisional` | `hypothesis` |
+| Policy | 21 RH tables policy span — reported table-span identifier requiring source verification | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Reported policy span; table names and policy behavior have not been inspected. | `provisional` | `hypothesis` |
+| Workflow | `rh_ausencias/documento_url` — reported identifier requiring source verification | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Reported RH workflow/data identifier; workflow behavior has not been inspected. | `provisional` | `hypothesis` |
 
-| Category | Evidence reference | Current observation | Confidence | Decision |
-|---|---|---|---|---|
-| Frontend screens | [Issue #2](https://github.com/jottakka/vinx-erp/issues/2) and [Issue #12](https://github.com/jottakka/vinx-erp/issues/12) | The legacy frontend is a React/Vite application with real and template screens; exact screen inventory awaits the pinned checkout. | `provisional` | `adapt` |
-| Database migrations | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) and [architecture specification](../superpowers/specs/2026-08-08-vinx-erp-architecture-design.md) | The old migration chain is not a reproducible baseline and contains cited dependency/DDL concerns. | `provisional` | `adapt` |
+## Verification backlog
 
-### Services and policies
+This backlog directs future inspection. It intentionally has no disposition
+column; the canonical inventory above remains the only decision record.
 
-| Category | Evidence reference | Current observation | Confidence | Decision |
-|---|---|---|---|---|
-| Authorization policies | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) and [Issue #3](https://github.com/jottakka/vinx-erp/issues/3) | Existing access behavior is insufficient for the target per-company capability model. | `provisional` | `discard` |
-
-### Workflows
-
-| Category | Evidence reference | Current observation | Confidence | Decision |
-|---|---|---|---|---|
-| RH workflows | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) and [Issue #51](https://github.com/jottakka/vinx-erp/issues/51) | Existing RH persistence is not evidence of a safe medical-data workflow. | `provisional` | `adapt` |
-| Service Desk workflows | [Issue #7](https://github.com/jottakka/vinx-erp/issues/7) | Existing ticket behavior is a reference only; domain commands and visibility need a new boundary. | `provisional` | `adapt` |
-| Kanban workflows | [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Existing work/project behavior is reference material; company scope and versioned transitions are required. | `provisional` | `adapt` |
-
-## Follow-up requiring the pinned source
-
-The exact legacy paths below are intentionally unavailable until the source URL
-and immutable commit are registered. The requested screenshots and tests are
-the evidence to collect from that checkout; their absence is not evidence that
-the corresponding artifact does not exist.
-
-| Item | Exact path in pinned checkout | Screenshot or test to collect | Owner | Next review | Confidence | Decision |
-|---|---|---|---|---|---|---|
-| Frontend screen inventory | Not available until the pinned checkout is registered | Route index plus screenshots of real and template screens; route smoke test | Legacy-reference maintainer | After checkout registration | `hypothesis` | `hypothesis` |
-| Migration chain and schema | Not available until the pinned checkout is registered | Ordered migration listing, dependency/DDL review, and clean replay test | Data/platform owner | After checkout registration | `hypothesis` | `hypothesis` |
-| Authorization behavior | Not available until the pinned checkout is registered | Policy/middleware paths, representative access matrix, and authorization tests | Foundation/security owner | After checkout registration | `hypothesis` | `hypothesis` |
-| RH workflows | Not available until the pinned checkout is registered | RH route/component paths, data-flow diagram, and medical-data boundary tests | HR module owner | After checkout registration | `hypothesis` | `hypothesis` |
-| Service Desk workflows | Not available until the pinned checkout is registered | Ticket route/service paths, visibility screenshots, and command/transition tests | Service Desk owner | After checkout registration | `hypothesis` | `hypothesis` |
-| Kanban workflows | Not available until the pinned checkout is registered | Board/project paths, company-scope screenshots, and versioned-transition tests | Kanban owner | After checkout registration | `hypothesis` | `hypothesis` |
+| Verification target | Linked evidence | Source verification required |
+|---|---|---|
+| Reported screen identifier | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68) | Confirm the exact path, route, and observed screen behavior. |
+| Reported schema and migration identifiers | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68), [Issue #43](https://github.com/jottakka/vinx-erp/issues/43), and [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | List matching files, inspect order and contents, and record observed behavior. |
+| Reported service identifiers | [Issue #7](https://github.com/jottakka/vinx-erp/issues/7) and [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Confirm the service locations and record their observed inputs, outputs, and callers. |
+| Reported RH policy and workflow identifiers | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Confirm each table name, policy, and the `rh_ausencias/documento_url` identifier; record observed behavior. |
 
 ## Review gate
 
-When `reference.md` contains a real source URL and immutable commit, inspect a
-fresh read-only checkout outside this repository. Replace each unavailable
-path with the exact inspected path, attach the collected screenshot or test
-evidence, update confidence, and retain exactly one decision per entry.
+When `reference.md` contains a real source URL and full immutable commit SHA,
+inspect a fresh read-only checkout outside this repository. Replace reported
+identifiers only with source-verified evidence, update confidence, and retain
+exactly one disposition for each canonical artifact.

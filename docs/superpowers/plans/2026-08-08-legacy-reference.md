@@ -124,22 +124,62 @@ git commit -m "docs: add provisional legacy inventory"
 Run:
 
 ```bash
-git ls-files docs/legacy
-git status --short
+BRANCH_BASE="$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || git rev-list --max-parents=0 HEAD)"
+git diff --name-status "$BRANCH_BASE"..HEAD
+if git diff --name-only "$BRANCH_BASE"..HEAD | rg -n '(^|/)(src|supabase|node_modules|vendor|dist|build)/|(^|/)\.env($|\.)|\.(sql|csv|sqlite|db|zip|tar|gz)$'; then
+  echo "Prohibited legacy source or material found in the branch diff" >&2
+  exit 1
+fi
 ```
 
-Expected: only the three Markdown files are tracked under `docs/legacy`; the worktree is clean after the commits.
+Expected: the complete branch diff lists only documentation and repository
+metadata; it contains no legacy source, dependencies, data, secrets, or other
+prohibited material.
 
 - [ ] **Step 2: Check acceptance criteria**
 
 Run:
 
 ```bash
-git diff HEAD~2..HEAD --check
-rg -n "Status|Source URL|Pinned commit|Inspection date|preserve|adapt|discard|provisional" docs/legacy
+BRANCH_BASE="$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || git rev-list --max-parents=0 HEAD)"
+git diff --check "$BRANCH_BASE"..HEAD
+for field in "Status" "Source URL" "Pinned immutable commit SHA" "Inspection date" "Checkout location"; do
+  rg -q "^\\| $field \\|" docs/legacy/reference.md
+done
+rg -q '^| Inspection date | Not inspected |$' docs/legacy/reference.md
+awk -F '|' '
+  /^## Canonical artifact inventory$/ { canonical = 1; next }
+  /^## Verification backlog$/ { canonical = 0 }
+  canonical && /^\|/ {
+    artifact = $3
+    evidence = $4
+    disposition = $7
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", artifact)
+    gsub(/^[[:space:]`]+|[[:space:]`]+$/, "", disposition)
+    if (artifact == "Provisional reported path or artifact identifier" || artifact ~ /^-+$/) next
+    rows++
+    if (evidence !~ /\]\([^)]*\)/) {
+      print "Missing linked evidence: " artifact > "/dev/stderr"
+      invalid = 1
+    }
+    if (disposition !~ /^(preserve|adapt|discard|hypothesis)$/) {
+      print "Invalid or non-single disposition: " artifact > "/dev/stderr"
+      invalid = 1
+    }
+  }
+  END {
+    if (!rows) {
+      print "No canonical inventory rows found" > "/dev/stderr"
+      invalid = 1
+    }
+    exit invalid
+  }
+' docs/legacy/inventory.md
 ```
 
-Expected: metadata, workflow and decision vocabulary are present with no whitespace errors.
+Expected: the full branch range has no whitespace errors; required reference
+metadata is present; and every canonical inventory row has linked evidence and
+exactly one valid disposition.
 
 - [ ] **Step 3: Report the handoff**
 
