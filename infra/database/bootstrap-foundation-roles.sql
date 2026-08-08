@@ -22,6 +22,10 @@ $$;
 
 GRANT vinx_audit_owner TO vinx_migrator WITH INHERIT FALSE, SET TRUE;
 
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE, CREATE ON SCHEMA public TO vinx_migrator;
+REVOKE ALL ON SCHEMA public FROM vinx_runtime, vinx_audit_owner;
+
 DO $$
 DECLARE
     database_name text := current_database();

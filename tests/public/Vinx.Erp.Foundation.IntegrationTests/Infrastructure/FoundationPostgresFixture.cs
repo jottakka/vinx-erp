@@ -1,6 +1,9 @@
 using System.Security.Cryptography;
+using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Testcontainers.PostgreSql;
+using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Foundation.Persistence.Interceptors;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -65,6 +68,21 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
         return true;
     }
 
+    public async Task MigrateAsync()
+    {
+        await using var context = CreateMigratorDbContext();
+        await context.Database.MigrateAsync();
+    }
+
+    public FoundationDbContext CreateAdministratorDbContext() =>
+        CreateDbContext(_container.GetConnectionString());
+
+    public FoundationDbContext CreateMigratorDbContext() =>
+        CreateDbContext(MigratorConnectionString);
+
+    public FoundationDbContext CreateRuntimeDbContext() =>
+        CreateDbContext(RuntimeConnectionString);
+
     public ValueTask DisposeAsync() => _container.DisposeAsync();
 
     private async Task ExecuteBootstrapAsync(NpgsqlConnection connection)
@@ -106,5 +124,15 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             Password = password
         };
         return builder.ConnectionString;
+    }
+
+    private static FoundationDbContext CreateDbContext(string connectionString)
+    {
+        var options = new DbContextOptionsBuilder<FoundationDbContext>()
+            .UseNpgsql(connectionString)
+            .UseSnakeCaseNamingConvention()
+            .AddInterceptors(new RowVersionInterceptor())
+            .Options;
+        return new FoundationDbContext(options);
     }
 }
