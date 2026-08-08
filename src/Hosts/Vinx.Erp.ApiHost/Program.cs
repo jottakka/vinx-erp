@@ -7,6 +7,7 @@ using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Identity;
+using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 
@@ -24,6 +25,7 @@ builder.Services.AddDbContext<FoundationDbContext>(options => options
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
 builder.Services.AddScoped<RoleAssignmentService>();
+builder.Services.AddSingleton<AuthorizationTelemetry>();
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = "FoundationDeferred";
@@ -44,7 +46,11 @@ app.MapGet("/foundation/capabilities", async (
     CapabilityMapService service,
     CancellationToken cancellationToken) =>
 {
-    var actor = ActorContext.FromAuthenticatedPrincipal(principal);
+    if (!ActorContext.TryFromAuthenticatedPrincipal(principal, out var actor))
+    {
+        return Results.Unauthorized();
+    }
+
     var result = await service.GetCapabilitiesAsync(actor, companyId, cancellationToken);
     return result.ToMinimalApiResult();
 }).RequireAuthorization();

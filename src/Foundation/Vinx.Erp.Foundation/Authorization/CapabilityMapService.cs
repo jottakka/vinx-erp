@@ -7,7 +7,10 @@ using Vinx.Erp.Foundation.Persistence;
 
 namespace Vinx.Erp.Foundation.Authorization;
 
-public sealed class CapabilityMapService(FoundationDbContext database, AuditAppender auditAppender)
+public sealed class CapabilityMapService(
+    FoundationDbContext database,
+    AuditAppender auditAppender,
+    AuthorizationTelemetry telemetry)
 {
     public async Task<AuthorizationResult<IReadOnlyList<EffectiveCapability>>> GetCapabilitiesAsync(
         ActorContext actor,
@@ -79,7 +82,7 @@ public sealed class CapabilityMapService(FoundationDbContext database, AuditAppe
         }
         catch
         {
-            return AuthorizationResult<IReadOnlyList<EffectiveCapability>>.Failure(AuthorizationErrorCode.AuditUnavailable);
+            return AuditUnavailable(AuditUnavailablePhase.Authorization);
         }
     }
 
@@ -107,10 +110,20 @@ public sealed class CapabilityMapService(FoundationDbContext database, AuditAppe
             await transaction.CommitAsync(cancellationToken);
             return AuthorizationResult<IReadOnlyList<EffectiveCapability>>.Failure(denial);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch
         {
-            return AuthorizationResult<IReadOnlyList<EffectiveCapability>>.Failure(AuthorizationErrorCode.AuditUnavailable);
+            return AuditUnavailable(AuditUnavailablePhase.DenialAudit);
         }
+    }
+
+    private AuthorizationResult<IReadOnlyList<EffectiveCapability>> AuditUnavailable(AuditUnavailablePhase phase)
+    {
+        telemetry.RecordAuditUnavailable(AuthorizationOperation.CapabilityMap, phase);
+        return AuthorizationResult<IReadOnlyList<EffectiveCapability>>.Failure(AuthorizationErrorCode.AuditUnavailable);
     }
 
     private async Task ApplyContextAsync(ActorContext actor, Guid? companyId, CancellationToken cancellationToken)

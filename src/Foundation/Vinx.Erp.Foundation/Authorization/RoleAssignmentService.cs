@@ -10,7 +10,10 @@ using Vinx.Erp.Foundation.Persistence;
 
 namespace Vinx.Erp.Foundation.Authorization;
 
-public sealed class RoleAssignmentService(FoundationDbContext database, AuditAppender auditAppender)
+public sealed class RoleAssignmentService(
+    FoundationDbContext database,
+    AuditAppender auditAppender,
+    AuthorizationTelemetry telemetry)
 {
     private const string CommandName = "foundation.roles.assign";
     private const string RequiredCapability = "foundation.roles.assign";
@@ -56,7 +59,7 @@ public sealed class RoleAssignmentService(FoundationDbContext database, AuditApp
 
                     var replay = JsonSerializer.Deserialize<AssignRoleToMembershipResult>(existing.ResultJson);
                     return replay is null
-                        ? AuthorizationResult<AssignRoleToMembershipResult>.Failure(AuthorizationErrorCode.AuditUnavailable)
+                        ? AuditUnavailable(AuditUnavailablePhase.IdempotencyReplay)
                         : AuthorizationResult<AssignRoleToMembershipResult>.Success(replay);
                 }
                 else
@@ -122,7 +125,7 @@ public sealed class RoleAssignmentService(FoundationDbContext database, AuditApp
         catch
         {
             database.ChangeTracker.Clear();
-            return AuthorizationResult<AssignRoleToMembershipResult>.Failure(AuthorizationErrorCode.AuditUnavailable);
+            return AuditUnavailable(AuditUnavailablePhase.SuccessTransaction);
         }
 
         return await ReturnAuditedDenialAsync(actor, command.CompanyId, denial!.Value, cancellationToken);
@@ -166,9 +169,13 @@ public sealed class RoleAssignmentService(FoundationDbContext database, AuditApp
             await transaction.CommitAsync(cancellationToken);
             return AuthorizationResult<AssignRoleToMembershipResult>.Failure(denial);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch
         {
-            return AuthorizationResult<AssignRoleToMembershipResult>.Failure(AuthorizationErrorCode.AuditUnavailable);
+            return AuditUnavailable(AuditUnavailablePhase.DenialAudit);
         }
     }
 
@@ -191,7 +198,7 @@ public sealed class RoleAssignmentService(FoundationDbContext database, AuditApp
             await transaction.RollbackAsync(cancellationToken);
             if (record is null)
             {
-                return AuthorizationResult<AssignRoleToMembershipResult>.Failure(AuthorizationErrorCode.AuditUnavailable);
+                return AuditUnavailable(AuditUnavailablePhase.ConcurrentReplay);
             }
 
             if (!string.Equals(record.PayloadHash, payloadHash, StringComparison.Ordinal))
@@ -201,7 +208,7 @@ public sealed class RoleAssignmentService(FoundationDbContext database, AuditApp
 
             var replay = JsonSerializer.Deserialize<AssignRoleToMembershipResult>(record.ResultJson);
             return replay is null
-                ? AuthorizationResult<AssignRoleToMembershipResult>.Failure(AuthorizationErrorCode.AuditUnavailable)
+                ? AuditUnavailable(AuditUnavailablePhase.ConcurrentReplay)
                 : AuthorizationResult<AssignRoleToMembershipResult>.Success(replay);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -210,8 +217,14 @@ public sealed class RoleAssignmentService(FoundationDbContext database, AuditApp
         }
         catch
         {
-            return AuthorizationResult<AssignRoleToMembershipResult>.Failure(AuthorizationErrorCode.AuditUnavailable);
+            return AuditUnavailable(AuditUnavailablePhase.ConcurrentReplay);
         }
+    }
+
+    private AuthorizationResult<AssignRoleToMembershipResult> AuditUnavailable(AuditUnavailablePhase phase)
+    {
+        telemetry.RecordAuditUnavailable(AuthorizationOperation.RoleAssignment, phase);
+        return AuthorizationResult<AssignRoleToMembershipResult>.Failure(AuthorizationErrorCode.AuditUnavailable);
     }
 
     private async Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken)

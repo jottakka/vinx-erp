@@ -70,6 +70,22 @@ public sealed class AuthorizationEndpointTests
         Assert.Equal(["Company", "Team"], capability.Scopes.OrderBy(scope => scope));
     }
 
+    [Theory]
+    [InlineData(null, "00000000-0000-0000-0000-000000000001")]
+    [InlineData("not-a-user-id", "00000000-0000-0000-0000-000000000001")]
+    [InlineData("00000000-0000-0000-0000-000000000001", null)]
+    [InlineData("00000000-0000-0000-0000-000000000001", "not-a-correlation-id")]
+    public async Task Capability_map_with_missing_or_malformed_actor_claims_returns_generic_unauthorized(
+        string? userIdClaim,
+        string? correlationIdClaim)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(userIdClaim, correlationIdClaim);
+        var response = await factory.CreateClient().GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
     private static async Task<Guid> SeedCompanyAsync(FoundationApiFactory factory)
     {
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();

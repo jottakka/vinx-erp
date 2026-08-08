@@ -6,20 +6,25 @@ public sealed record ActorContext(Guid UserId, Guid CorrelationId)
 {
     public static ActorContext FromAuthenticatedPrincipal(ClaimsPrincipal principal)
     {
-        ArgumentNullException.ThrowIfNull(principal);
-        var userId = ParseRequiredClaim(principal, ClaimTypes.NameIdentifier);
-        var correlationId = ParseRequiredClaim(principal, "correlation_id");
-        return new ActorContext(userId, correlationId);
+        return TryFromAuthenticatedPrincipal(principal, out var actor)
+            ? actor
+            : throw new InvalidOperationException("The authenticated principal is missing required identity context.");
     }
 
-    private static Guid ParseRequiredClaim(ClaimsPrincipal principal, string claimType)
+    public static bool TryFromAuthenticatedPrincipal(ClaimsPrincipal? principal, out ActorContext actor)
     {
-        var value = principal.FindFirst(claimType)?.Value;
-        if (!Guid.TryParse(value, out var parsedValue))
+        actor = null!;
+        if (principal?.Identity?.IsAuthenticated != true
+            || !TryParseClaim(principal, ClaimTypes.NameIdentifier, out var userId)
+            || !TryParseClaim(principal, "correlation_id", out var correlationId))
         {
-            throw new InvalidOperationException($"The authenticated principal is missing a valid {claimType} claim.");
+            return false;
         }
 
-        return parsedValue;
+        actor = new ActorContext(userId, correlationId);
+        return true;
     }
+
+    private static bool TryParseClaim(ClaimsPrincipal principal, string claimType, out Guid value) =>
+        Guid.TryParse(principal.FindFirst(claimType)?.Value, out value);
 }
