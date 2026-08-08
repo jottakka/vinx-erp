@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+bin/
+obj/
+TestResults/
+artifacts/
+playwright-report/
+test-results/
+supabase/.temp/
