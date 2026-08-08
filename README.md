@@ -14,3 +14,10 @@ versioned architecture and repository policies below.
 Read [AGENTS.md](AGENTS.md) before changing behavior. It defines the required
 authorization, company-context, audit, observability, documentation and
 sensitive-data rules.
+
+## Verification and merge policy
+
+Run [public verification](docs/runbooks/public-verification.md) before a pull
+request. GitHub Free may not offer the private-repository branch protections
+needed to enforce every desired rule, so agents never push or merge `main`;
+the repository owner performs reviewed merges deliberately.

@@ -10,4 +10,5 @@ TestResults/
 artifacts/
 playwright-report/
 test-results/
+*.feature.cs
 supabase/.temp/
