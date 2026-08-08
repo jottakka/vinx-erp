@@ -23,6 +23,9 @@ submodule of this repository, and do not modify the legacy files during
 inspection. Remove or recreate the sibling checkout when the inspection is
 finished according to local retention policy.
 
+Every inventory entry must use exactly one decision: `preserve`, `adapt`,
+`discard`, or `hypothesis`.
+
 The committed reference metadata records only the source URL, immutable
 commit, inspection date, checkout-location guidance, and status. It contains
 no local checkout path that exposes user-specific secrets.
