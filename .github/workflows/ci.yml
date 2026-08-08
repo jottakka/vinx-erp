@@ -24,6 +24,7 @@ jobs:
       - run: ./scripts/verify-public.sh
 
   verify-storage:
+    needs: verify-public
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

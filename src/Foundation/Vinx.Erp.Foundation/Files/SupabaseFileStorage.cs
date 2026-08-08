@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace Vinx.Erp.Foundation.Files;
 
@@ -26,7 +27,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         using var lookupResponse = await httpClient.SendAsync(lookupRequest, cancellationToken);
         if (lookupResponse.IsSuccessStatusCode)
         {
-            var bucket = await lookupResponse.Content.ReadFromJsonAsync<BucketResponse>(cancellationToken: cancellationToken);
+            var bucket = await ReadBucketAsync(lookupResponse.Content, cancellationToken);
             if (bucket is { Public: false })
             {
                 return;
@@ -35,6 +36,28 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
 
         throw new InvalidOperationException(
             $"Supabase Storage container provisioning failed with create status {(int)createResponse.StatusCode}, lookup status {(int)lookupResponse.StatusCode}, container {options.ContainerId}.");
+    }
+
+    private static async Task<BucketResponse?> ReadBucketAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await content.ReadFromJsonAsync<BucketResponse>(cancellationToken: cancellationToken);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
     }
 
     private void AddAuthenticationHeaders(HttpRequestMessage request)
