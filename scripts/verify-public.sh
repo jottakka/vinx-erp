@@ -15,5 +15,5 @@ dotnet build --no-restore
 ./scripts/verify-ef-negative-guards.sh
 
 while IFS= read -r public_test_project; do
-  dotnet test "$public_test_project" --no-build
+  dotnet test "$public_test_project" --no-build --filter 'Category!=SupabaseStorage'
 done < <(rg --files -g '*.csproj' tests/public | sort)

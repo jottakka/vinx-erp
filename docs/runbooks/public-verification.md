@@ -22,6 +22,8 @@ history. Those checks run before later snapshot and public-test work.
 Storage verification is a separate CI job and invokes only
 `./scripts/verify-supabase-storage.sh`; it is not part of
 `verify-public.sh`.
+The storage verifier captures local API and service-role configuration without
+printing either value, then unsets both values and stops Supabase on exit.
 
 To inspect the local Supabase runtime outside CI, use the Docker Desktop
 context for that command only:

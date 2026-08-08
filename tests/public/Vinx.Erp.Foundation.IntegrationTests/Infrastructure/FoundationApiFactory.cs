@@ -63,6 +63,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("FOUNDATION_RUNTIME_CONNECTION", _fixture.RuntimeConnectionString);
+        builder.UseSetting("SUPABASE_STORAGE_URL", "http://127.0.0.1:54321");
+        builder.UseSetting("SUPABASE_STORAGE_SERVICE_ROLE_KEY", "test-service-role-key");
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<DbContextOptions<FoundationDbContext>>();
