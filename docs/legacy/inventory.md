@@ -27,22 +27,22 @@ Every entry has exactly one decision. The decision vocabulary is:
 
 | Category | Evidence reference | Current observation | Confidence | Decision |
 |---|---|---|---|---|
-| Frontend screens | Issue #2 and #12 | The legacy frontend is a React/Vite application with real and template screens; exact screen inventory awaits the pinned checkout. | `provisional` | `adapt` |
-| Database migrations | Issue #43 and architecture docs | The old migration chain is not a reproducible baseline and contains cited dependency/DDL concerns. | `provisional` | `adapt` |
+| Frontend screens | [Issue #2](https://github.com/jottakka/vinx-erp/issues/2) and [Issue #12](https://github.com/jottakka/vinx-erp/issues/12) | The legacy frontend is a React/Vite application with real and template screens; exact screen inventory awaits the pinned checkout. | `provisional` | `adapt` |
+| Database migrations | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) and [architecture specification](../superpowers/specs/2026-08-08-vinx-erp-architecture-design.md) | The old migration chain is not a reproducible baseline and contains cited dependency/DDL concerns. | `provisional` | `adapt` |
 
 ### Services and policies
 
 | Category | Evidence reference | Current observation | Confidence | Decision |
 |---|---|---|---|---|
-| Authorization policies | Issue #43 and issue #3 | Existing access behavior is insufficient for the target per-company capability model. | `provisional` | `discard` |
+| Authorization policies | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) and [Issue #3](https://github.com/jottakka/vinx-erp/issues/3) | Existing access behavior is insufficient for the target per-company capability model. | `provisional` | `discard` |
 
 ### Workflows
 
 | Category | Evidence reference | Current observation | Confidence | Decision |
 |---|---|---|---|---|
-| RH workflows | Issues #8 and #51 | Existing RH persistence is not evidence of a safe medical-data workflow. | `provisional` | `adapt` |
-| Service Desk workflows | Issue #7 | Existing ticket behavior is a reference only; domain commands and visibility need a new boundary. | `provisional` | `adapt` |
-| Kanban workflows | Issue #6 | Existing work/project behavior is reference material; company scope and versioned transitions are required. | `provisional` | `adapt` |
+| RH workflows | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) and [Issue #51](https://github.com/jottakka/vinx-erp/issues/51) | Existing RH persistence is not evidence of a safe medical-data workflow. | `provisional` | `adapt` |
+| Service Desk workflows | [Issue #7](https://github.com/jottakka/vinx-erp/issues/7) | Existing ticket behavior is a reference only; domain commands and visibility need a new boundary. | `provisional` | `adapt` |
+| Kanban workflows | [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Existing work/project behavior is reference material; company scope and versioned transitions are required. | `provisional` | `adapt` |
 
 ## Follow-up requiring the pinned source
 
