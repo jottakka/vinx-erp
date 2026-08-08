@@ -1,0 +1,5 @@
+name: vinx-erp
+services: {}
+networks:
+  vinx-erp:
+    name: vinx-erp

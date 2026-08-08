@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "tools:check": "node --version && dotnet --version && docker version --format '{{.Server.Version}}' && supabase --version",
+    "supabase": "supabase",
+    "test:no-direct-supabase": "! rg -n 'supabase|createClient' apps/web/src"
+  },
+  "devDependencies": {
+    "supabase": "^2.113.0"
+  }
+}
