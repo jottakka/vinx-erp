@@ -27,12 +27,12 @@ Every canonical row has exactly one disposition:
 |---|---|---|---|---|---|
 | Screen | `src/feature-module/Pages/vinx/workcenter/tickets.tsx` | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68) | Reported screen path; screen behavior has not been inspected. | `provisional` | `hypothesis` |
 | Migration/schema | `supabase/rbac_schema.sql` | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68) | Reported schema artifact; schema behavior has not been inspected. | `provisional` | `hypothesis` |
-| Migration/schema | `supabase/migrations/0045*` — reported wildcard identifier requiring source verification | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) | Reported migration-series identifier; its matching files and behavior have not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | Reported migration-0045 series identifier — filename not confirmed; source verification required | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) | Issue-reported migration-series identifier; its files and behavior have not been inspected. | `provisional` | `hypothesis` |
 | Migration/schema | `supabase/migrations/0047_rh_ondas_bcde.sql` | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) | Reported migration artifact; migration behavior has not been inspected. | `provisional` | `hypothesis` |
-| Migration/schema | `supabase/migrations/0055_kanban_automatizado.sql` | [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Reported migration artifact; migration behavior has not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | Reported migration-0055 identifier — filename not confirmed; source verification required | [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Issue-reported migration identifier; its filename and behavior have not been inspected. | `provisional` | `hypothesis` |
 | Service | `ticketsService.ts` | [Issue #7](https://github.com/jottakka/vinx-erp/issues/7) | Reported service identifier; service behavior has not been inspected. | `provisional` | `hypothesis` |
 | Service | `demandasService.ts` | [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Reported service identifier; service behavior has not been inspected. | `provisional` | `hypothesis` |
-| Policy | 21 RH tables policy span — reported table-span identifier requiring source verification | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Reported policy span; table names and policy behavior have not been inspected. | `provisional` | `hypothesis` |
+| Policy | Reported RH 21-table policy span — table names unavailable; source verification required | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Issue-reported policy span; table names and policy behavior have not been inspected. | `provisional` | `hypothesis` |
 | Workflow | `rh_ausencias/documento_url` — reported identifier requiring source verification | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Reported RH workflow/data identifier; workflow behavior has not been inspected. | `provisional` | `hypothesis` |
 
 ## Verification backlog
@@ -45,7 +45,7 @@ column; the canonical inventory above remains the only decision record.
 | Reported screen identifier | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68) | Confirm the exact path, route, and observed screen behavior. |
 | Reported schema and migration identifiers | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68), [Issue #43](https://github.com/jottakka/vinx-erp/issues/43), and [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | List matching files, inspect order and contents, and record observed behavior. |
 | Reported service identifiers | [Issue #7](https://github.com/jottakka/vinx-erp/issues/7) and [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Confirm the service locations and record their observed inputs, outputs, and callers. |
-| Reported RH policy and workflow identifiers | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Confirm each table name, policy, and the `rh_ausencias/documento_url` identifier; record observed behavior. |
+| Reported RH policy and workflow identifiers | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Identify the policy-span table names, then confirm its policies and the `rh_ausencias/documento_url` identifier; record observed behavior. |
 
 ## Review gate
 

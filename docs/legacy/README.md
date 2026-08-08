@@ -8,14 +8,23 @@ Create a unique checkout directory under the system temporary directory. This
 location is outside both this repository and its worktrees:
 
 ```bash
+set -eu
+
 LEGACY_URL="<configured-source-url-without-credentials>"
 LEGACY_COMMIT="<configured-full-commit-sha>"
-LEGACY_TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vinx-legacy.XXXXXX")"
+LEGACY_TMP_ROOT="$(mktemp -d)"
 LEGACY_DIR="$LEGACY_TMP_ROOT/checkout"
 git clone "$LEGACY_URL" "$LEGACY_DIR"
 git -C "$LEGACY_DIR" checkout --detach "$LEGACY_COMMIT"
+test "$(git -C "$LEGACY_DIR" rev-parse HEAD)" = "$LEGACY_COMMIT"
 chmod -R a-w "$LEGACY_DIR"
 ```
+
+`mktemp -d` deliberately has no caller-provided root or template: it creates
+the temporary parent in the system temporary directory, and the clone is made
+only in its `checkout` child. With `set -eu`, a clone, detached-checkout, or
+checked-out-commit mismatch stops the workflow before the checkout is made
+read-only.
 
 Inspect the detached checkout in place. Do not add it as a subdirectory or
 submodule of this repository, and do not modify the legacy files during

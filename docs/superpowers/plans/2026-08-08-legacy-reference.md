@@ -29,7 +29,14 @@
 
 - [ ] **Step 1: Write the read-only workflow**
 
-Create `docs/legacy/README.md` with commands that clone the configured URL into a sibling directory, check out the pinned commit, make the checkout read-only for ordinary inspection, and never add it as a subdirectory or submodule of the new repository. Explain that the committed reference metadata contains no local checkout path that exposes user-specific secrets.
+Create `docs/legacy/README.md` with `set -eu` commands that use `mktemp -d`
+without a caller-provided root or template, clone into its `checkout` child,
+detach at the configured full immutable SHA, verify
+`git -C "$LEGACY_DIR" rev-parse HEAD` exactly equals `LEGACY_COMMIT`, then make
+the checkout read-only for ordinary inspection. The workflow must fail on clone,
+checkout, or hash mismatch and must never add the checkout as a subdirectory or
+submodule of the new repository. Explain that committed reference metadata
+contains no local checkout path that exposes user-specific secrets.
 
 - [ ] **Step 2: Record the unavailable source state**
 
@@ -42,12 +49,14 @@ Create `docs/legacy/reference.md` with explicit fields:
 |---|---|
 | Status | unavailable — source URL and immutable commit not configured |
 | Source URL | Not registered |
-| Pinned commit or tag | Not registered |
-| Inspection date | 2026-08-08 |
-| Checkout location | Outside this repository; choose a local sibling directory |
+| Pinned immutable commit SHA | Not registered |
+| Inspection date | Not inspected |
+| Checkout location | System temporary directory outside this repository and its worktrees |
 ```
 
-Add a rule that no cited path becomes confirmed evidence until the URL and commit are filled with a real immutable value.
+Add a rule that no cited path becomes confirmed evidence until the URL and full
+immutable commit SHA are filled with real values; a branch or tag is not an
+acceptable substitute.
 
 - [ ] **Step 3: Verify the documentation contract**
 
@@ -81,25 +90,34 @@ Document that `confirmed` requires inspection of the pinned checkout, while `pro
 
 - [ ] **Step 2: Record known categories and evidence**
 
-Add tables for screens, migrations/schema, services and workflows. Include the currently documented evidence without presenting it as locally verified:
+Add one canonical artifact-level table with the columns `Area`, `Provisional
+reported path or artifact identifier`, `Linked evidence`, `Observed behavior`,
+`Confidence`, and `Disposition`. Use only issue-supported, explicitly
+provisional rows, each with `hypothesis` as its one disposition:
 
-| Category | Evidence reference | Current observation | Confidence | Decision |
-|---|---|---|---|---|
-| Frontend screens | Issue #2 and #12 | The legacy frontend is a React/Vite application with real and template screens; exact screen inventory awaits the pinned checkout. | provisional | adapt |
-| Database migrations | Issue #43 and architecture docs | The old migration chain is not a reproducible baseline and contains cited dependency/DDL concerns. | provisional | adapt |
-| Authorization policies | Issue #43 and issue #3 | Existing access behavior is insufficient for the target per-company capability model. | provisional | discard |
-| RH workflows | Issues #8 and #51 | Existing RH persistence is not evidence of a safe medical-data workflow. | provisional | adapt |
-| Service Desk workflows | Issue #7 | Existing ticket behavior is a reference only; domain commands and visibility need a new boundary. | provisional | adapt |
-| Kanban workflows | Issue #6 | Existing work/project behavior is reference material; company scope and versioned transitions are required. | provisional | adapt |
+| Area | Provisional reported path or artifact identifier | Linked evidence | Observed behavior | Confidence | Disposition |
+|---|---|---|---|---|---|
+| Screen | `src/feature-module/Pages/vinx/workcenter/tickets.tsx` | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68) | Reported screen path; screen behavior has not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | `supabase/rbac_schema.sql` | [Issue #68](https://github.com/jottakka/vinx-erp/issues/68) | Reported schema artifact; schema behavior has not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | Reported migration-0045 series identifier — filename not confirmed; source verification required | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) | Issue-reported migration-series identifier; its files and behavior have not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | `supabase/migrations/0047_rh_ondas_bcde.sql` | [Issue #43](https://github.com/jottakka/vinx-erp/issues/43) | Reported migration artifact; migration behavior has not been inspected. | `provisional` | `hypothesis` |
+| Migration/schema | Reported migration-0055 identifier — filename not confirmed; source verification required | [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Issue-reported migration identifier; its filename and behavior have not been inspected. | `provisional` | `hypothesis` |
+| Service | `ticketsService.ts` | [Issue #7](https://github.com/jottakka/vinx-erp/issues/7) | Reported service identifier; service behavior has not been inspected. | `provisional` | `hypothesis` |
+| Service | `demandasService.ts` | [Issue #6](https://github.com/jottakka/vinx-erp/issues/6) | Reported service identifier; service behavior has not been inspected. | `provisional` | `hypothesis` |
+| Policy | Reported RH 21-table policy span — table names unavailable; source verification required | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Issue-reported policy span; table names and policy behavior have not been inspected. | `provisional` | `hypothesis` |
+| Workflow | `rh_ausencias/documento_url` — reported identifier requiring source verification | [Issue #8](https://github.com/jottakka/vinx-erp/issues/8) | Reported RH workflow/data identifier; workflow behavior has not been inspected. | `provisional` | `hypothesis` |
 
-Add a follow-up table for items requiring the pinned source, including exact paths, screenshots or tests, and owner/next review.
+Add a verification-backlog table that links each follow-up to its issue and
+requires source inspection before recording paths, behavior, or table names as
+confirmed.
 
 - [ ] **Step 3: Verify inventory traceability**
 
 Run:
 
 ```bash
-rg -n "provisional|preserve|adapt|discard|hypothesis|Issue #|Confidence|Decision" docs/legacy/inventory.md
+set -eu
+rg -n "provisional|preserve|adapt|discard|hypothesis|Issue #|Confidence|Disposition" docs/legacy/inventory.md
 git diff --check
 ```
 
@@ -124,9 +142,12 @@ git commit -m "docs: add provisional legacy inventory"
 Run:
 
 ```bash
+set -eu
+
 BRANCH_BASE="$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || git rev-list --max-parents=0 HEAD)"
 git diff --name-status "$BRANCH_BASE"..HEAD
-if git diff --name-only "$BRANCH_BASE"..HEAD | rg -n '(^|/)(src|supabase|node_modules|vendor|dist|build)/|(^|/)\.env($|\.)|\.(sql|csv|sqlite|db|zip|tar|gz)$'; then
+git diff --name-only "$BRANCH_BASE"..HEAD
+if git diff --name-only "$BRANCH_BASE"..HEAD | rg -n -i '(^|/)(src|supabase|node_modules|vendor|dist|build|data|secrets?|credentials?)/|(^|/)\.env($|\.)|\.(c|cc|cpp|cs|go|java|js|jsx|ts|tsx|py|rb|php|rs|sh|sql|csv|tsv|sqlite|db|parquet|zip|tar|gz)$'; then
   echo "Prohibited legacy source or material found in the branch diff" >&2
   exit 1
 fi
@@ -141,24 +162,60 @@ prohibited material.
 Run:
 
 ```bash
+set -eu
+
 BRANCH_BASE="$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || git rev-list --max-parents=0 HEAD)"
 git diff --check "$BRANCH_BASE"..HEAD
-for field in "Status" "Source URL" "Pinned immutable commit SHA" "Inspection date" "Checkout location"; do
-  rg -q "^\\| $field \\|" docs/legacy/reference.md
+git diff --name-status "$BRANCH_BASE"..HEAD
+git diff --name-only "$BRANCH_BASE"..HEAD
+for metadata in \
+  '| Status | unavailable — source URL and immutable commit not configured |' \
+  '| Source URL | Not registered |' \
+  '| Pinned immutable commit SHA | Not registered |' \
+  '| Inspection date | Not inspected |' \
+  '| Checkout location | System temporary directory outside this repository and its worktrees |'; do
+  rg -Fqx "$metadata" docs/legacy/reference.md
 done
-rg -q '^| Inspection date | Not inspected |$' docs/legacy/reference.md
-awk -F '|' '
+awk '
+  function trim(value) {
+    sub(/^[[:space:]]+/, "", value)
+    sub(/[[:space:]]+$/, "", value)
+    return value
+  }
+  function markdown_value(value) {
+    value = trim(value)
+    sub(/^`/, "", value)
+    sub(/`$/, "", value)
+    return value
+  }
   /^## Canonical artifact inventory$/ { canonical = 1; next }
   /^## Verification backlog$/ { canonical = 0 }
   canonical && /^\|/ {
-    artifact = $3
-    evidence = $4
-    disposition = $7
-    gsub(/^[[:space:]]+|[[:space:]]+$/, "", artifact)
-    gsub(/^[[:space:]`]+|[[:space:]`]+$/, "", disposition)
-    if (artifact == "Provisional reported path or artifact identifier" || artifact ~ /^-+$/) next
+    count = split($0, column, "|")
+    if (!header_seen) {
+      for (field_index = 2; field_index < count; field_index++) {
+        heading = trim(column[field_index])
+        if (heading == "Provisional reported path or artifact identifier") artifact_column = field_index
+        if (heading == "Linked evidence") evidence_column = field_index
+        if (heading == "Disposition") disposition_column = field_index
+      }
+      if (!artifact_column || !evidence_column || !disposition_column) {
+        print "Canonical inventory headers are incomplete" > "/dev/stderr"
+        invalid = 1
+      }
+      header_seen = 1
+      next
+    }
+    if (trim(column[2]) ~ /^:?-+:?$/) next
+    artifact = trim(column[artifact_column])
+    evidence = trim(column[evidence_column])
+    disposition = markdown_value(column[disposition_column])
     rows++
-    if (evidence !~ /\]\([^)]*\)/) {
+    if (artifact == "") {
+      print "Missing artifact identifier" > "/dev/stderr"
+      invalid = 1
+    }
+    if (evidence !~ /\[[^]]+\]\([^)]+\)/) {
       print "Missing linked evidence: " artifact > "/dev/stderr"
       invalid = 1
     }
@@ -168,6 +225,10 @@ awk -F '|' '
     }
   }
   END {
+    if (!header_seen) {
+      print "No canonical inventory header found" > "/dev/stderr"
+      invalid = 1
+    }
     if (!rows) {
       print "No canonical inventory rows found" > "/dev/stderr"
       invalid = 1
@@ -183,4 +244,4 @@ exactly one valid disposition.
 
 - [ ] **Step 3: Report the handoff**
 
-Report the worktree path, branch, commit SHAs, source-unavailable status, and the next required input: the legacy repository URL plus immutable commit/tag.
+Report the worktree path, branch, commit SHAs, source-unavailable status, and the next required input: the legacy repository URL plus full immutable commit SHA.
