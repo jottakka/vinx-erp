@@ -18,11 +18,13 @@ read-only all-authorized view. Every command, including an MCP command,
 provides one explicit `empresa_id`; the server validates membership, capability
 and scope regardless of frontend visibility.
 
+The frontend receives effective capabilities only to shape menus, routes,
+buttons, columns and data. It is never the authorization authority. API, MCP
+and database protections deny forged or cross-company requests.
+
 ## Contract version
 
 `1.0`
-
-The frontend receives effective capabilities only to shape menus, routes, buttons, columns and data. It is never the authorization authority. API, MCP and database protections deny forged or cross-company requests.
 
 ## Data and audit rules
 
@@ -30,9 +32,7 @@ Business and configuration data use soft delete with `deleted_at`, `deleted_by_u
 
 ## Deletion strategy
 
-Mutable entities use soft delete with `deleted_at`, `deleted_by_user_id` and
-`deleted_reason`. `audit.audit_events` is append-only and uses retention rather
-than soft delete.
+See Data and audit rules above; this section introduces no second deletion policy.
 
 ## Migration notes
 

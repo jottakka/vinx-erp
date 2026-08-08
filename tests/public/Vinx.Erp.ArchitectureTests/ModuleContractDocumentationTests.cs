@@ -22,6 +22,16 @@ public sealed class ModuleContractDocumentationTests
         Assert.All(RequiredHeadings, heading => Assert.Contains(heading, text, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void LegacyInventoryDeclaresCompletion()
+    {
+        var text = File.ReadAllText(Path.Combine(RepositoryRoot(), "docs/inventory/legacy-foundation-inventory.md"));
+        Assert.Contains(
+            "Inventory completion: every discovered table, view, function, policy, bucket, routed screen and Supabase-backed feature has a classified row.",
+            text,
+            StringComparison.Ordinal);
+    }
+
     private static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

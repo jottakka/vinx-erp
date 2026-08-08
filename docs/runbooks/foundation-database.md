@@ -29,3 +29,25 @@ the committed artifact unchanged. The EF negative guard is separate from the
 current-tree check: its controlled drift project proves the model-pending
 command fails for a real difference, while its failing `BrokenMigration` proves
 that EF does not record a failed migration in `__EFMigrationsHistory`.
+
+## Legacy reference preflight
+
+Task 7 used a disposable detached clone of
+`https://github.com/cbqoliveira/vinx-erp.git` at resolved HEAD
+`2ccb0b40fa38925b8aa1bd32a38ade12d7edab47`. The clone was read-only: no
+legacy migration, service, DDL or data command was run. Discovery was limited
+to `rg` inside that explicit clone.
+
+The legacy authorization evidence is classified around `anon`,
+`authenticated` and `service_role`; it is reference evidence, not provider
+state. Any future isolated database check uses `postgres:17.9-alpine` and a
+schema-only snapshot boundary:
+
+```bash
+pg_dump --schema-only --no-owner --no-privileges \
+  --schema=foundation --schema=audit
+```
+
+The snapshot must contain no data and must not be used to create the schema.
+Production preflight, provider state and deployment remain outside this task
+and belong to issue #70.
