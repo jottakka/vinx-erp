@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Awaiting written review before implementation begins.
+Approved.
 
 ## Goals
 
@@ -128,7 +128,8 @@ Foundation owns these initial entities:
   resource type and identifier, outcome, correlation identifier, redacted
   reason/metadata and timestamp. The requested-company UUID is evidence of the
   attempted context rather than a foreign key, so an unknown or unauthorized
-  company identifier can still be audited.
+  company identifier can still be audited. It is nullable only for the
+  `company_context_required` denial, where no company UUID was supplied.
 
 Business and configuration entities use soft deletion with `deleted_at`,
 `deleted_by_user_id` and `deleted_reason`. EF query filters exclude deleted
@@ -192,8 +193,10 @@ For an application transaction, the server performs this sequence:
 Transaction-local context is mandatory so a pooled connection cannot retain an
 earlier actor or company. Every RLS expression reads settings with
 `current_setting(name, true)`; an absent value is `NULL` and denies all rows
-rather than raising or opening access. The runtime application database role
-has no `BYPASSRLS` attribute and is distinct from every table owner.
+rather than raising or opening access. The runtime application database role is
+`vinx_runtime LOGIN NOINHERIT NOBYPASSRLS` and is distinct from every table
+owner. It receives its password only from server configuration; browser
+clients never receive it.
 
 The migration implements this explicit policy matrix:
 
@@ -202,9 +205,9 @@ The migration implements this explicit policy matrix:
 | Company-owned tables | Enable and force RLS. `USING` and `WITH CHECK` require the row's `company_id` to equal the transaction-local requested company. |
 | `foundation.companies` | Enable and force RLS. Only the row whose `id` equals the requested company is visible. |
 | `foundation.groups` | Enable and force RLS. A group is visible only when it owns the requested company. |
-| Global `capabilities` | Grant read-only access to named active capabilities; no runtime write access. |
-| Global `users` and `external_identities` | No general runtime table access in this issue; the authenticated `ActorContext` supplies the resolved internal user identifier. |
-| `audit.audit_events` | No RLS. The runtime role has no table DML and can only execute the append function described below. |
+| Global `capabilities` | Grant `SELECT` only; no runtime write access. |
+| Global `users` and `external_identities` | Grant no runtime table privilege; the authenticated `ActorContext` supplies the resolved internal user identifier. |
+| `audit.audit_events` | No RLS. Grant no runtime table privilege; runtime can only execute the append function described below. |
 
 Integration tests execute tenant access under the runtime role, never a table
 owner. Future tables must choose one of these categories explicitly in their
@@ -217,7 +220,10 @@ credential. Browser clients never receive this credential or direct data
 access.
 
 The first endpoint returns effective capability names and their granted scope
-types for the verified actor and one requested company. It consumes an
+types for the verified actor and one requested company. Its application
+boundary accepts a nullable requested-company value solely so it can persist
+the authenticated actor's `company_context_required` denial before returning
+HTTP 400; authorized evaluation still requires a value. It consumes an
 `ActorContext` constructed from an authenticated server-side principal. Public
 integration tests use a test authentication scheme; production login and token
 validation remain owned by issue #44. The endpoint has no generic resource
@@ -225,6 +231,18 @@ evaluator. Persisting all five scope types now allows later modules to define
 resource ownership and hierarchy rules without changing the authorization
 vocabulary; resource-level evaluation begins only when a module has concrete
 resources to evaluate.
+
+The API host calls `AddAuthentication()` and `AddAuthorization()` during
+service registration and `UseAuthentication()` then `UseAuthorization()`
+before mapping Foundation endpoints. Until issue #44 supplies real token
+validation, the production default authentication handler is deliberately
+deny-only: it never authenticates a principal and challenges with HTTP 401.
+Integration tests replace it only through `ConfigureTestServices`.
+
+The runtime Npgsql connection is supplied only by
+`FOUNDATION_RUNTIME_CONNECTION`; absent configuration fails startup by naming
+that variable without printing its value. Public host tests supply an
+ephemeral runtime connection through their shared test factory.
 
 ## Audit and failure semantics
 
@@ -236,7 +254,10 @@ without its required success event.
 Denied requests cannot write their event in the rejected business transaction.
 After the server reaches a denial decision, it starts a separate short audit
 transaction, establishes the verified actor/requested-company/correlation
-context with `SET LOCAL`, and appends the denial event. A narrow
+context with transaction-local settings, and appends the denial event. For
+`company_context_required`, it clears the company setting and passes a null
+requested-company argument; all other authorization decisions carry the
+requested UUID. A narrow
 security-definer audit append function is available to the runtime role for
 this path so an absent membership cannot prevent recording the attempted
 access. `audit.audit_events` and the function share a dedicated non-login owner
@@ -263,6 +284,9 @@ prompt bodies, medical details or file contents.
 The server-side storage provisioning boundary exposes only the current use
 case: idempotently ensure one private container. Its Supabase adapter creates
 or verifies the private bucket and confirms that anonymous reads are denied.
+The integration test seeds a fixed non-sensitive object through the admin API,
+makes an anonymous GET without inspecting its body, and accepts only local
+provider non-success statuses 400, 401, 403 or 404.
 The browser receives neither Storage administration credentials nor a
 service-role credential.
 
@@ -313,16 +337,28 @@ empty PostgreSQL database
 ```
 
 The versioned bootstrap command runs with the ephemeral container administrator
-and creates a login migration role, a no-login runtime role and a dedicated
-no-login audit owner before EF executes any migration containing grants. The
-production runbook requires the equivalent provider-approved role bootstrap;
-credentials come from the environment and are never committed.
+and creates `vinx_migrator LOGIN NOINHERIT NOBYPASSRLS`,
+`vinx_runtime LOGIN NOINHERIT NOBYPASSRLS` and
+`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`. It grants membership of
+`vinx_audit_owner` to `vinx_migrator`; because the migrator is
+`NOINHERIT`, it receives no audit-owner privilege implicitly, while the
+membership's `SET` option permits PostgreSQL `ALTER ... OWNER TO
+vinx_audit_owner` checks. The migration temporarily grants that owner
+`CREATE` on the trusted `audit` schema, creates all protections, transfers
+the audit table and append function, then revokes schema `CREATE` again. The
+bootstrap grants both login roles `CONNECT` on the
+database, grants `CREATE` on the database only to `vinx_migrator`, and is
+idempotent. The production runbook requires the equivalent provider-approved
+preflight; credentials come from the environment and deployment execution
+remains issue #70.
 
 The EF design-time configuration obtains its ephemeral connection string from
 the job environment; it contains no committed secret. `dotnet ef database
-update` is the CI database creation path. The snapshot command uses the pinned
-container's `pg_dump` with `--schema-only --no-owner --no-privileges` and
-includes the Foundation and audit schemas. Normalization is limited to the
+update` is the CI database creation path. Both the standalone snapshot writer
+and the default snapshot verifier build from their own fresh pinned database,
+apply the migrations, and use that container's `pg_dump` with
+`--schema-only --no-owner --no-privileges` for the Foundation and audit
+schemas. Normalization is limited to the
 pinned `pg_dump` version header, `\\restrict`/`\\unrestrict` markers and
 volatile dump comments, and is versioned with the verification script. A
 snapshot difference fails CI and must be reviewed together with the migration
@@ -336,13 +372,18 @@ programmatically with `Database.MigrateAsync`. Neither path uses
 `EnsureCreated`.
 
 The public integration fixture starts a fresh Testcontainers PostgreSQL
-instance, creates the migration and runtime roles, migrates with the migration
-role, then runs application access with the runtime role. It never shares a
-database state with another test class. A separate Supabase-local job
+instance, creates the three roles, verifies their attributes and migrator
+`SET ROLE` ownership capability, migrates with the migration role, then runs
+application access through the legitimate runtime login connection. It never
+shares a database state with another test class. A separate Supabase-local job
 provisions the private bucket through the Storage adapter and runs provider
 integration tests; it does not participate in the business-schema snapshot.
-The public verification script also asserts that the pinned EF command exits
-non-zero when the model contains changes without a migration.
+The public verifier runs foundation database verification before public .NET
+tests. A separate CI Storage job runs only the local-Supabase verifier. A
+controlled temporary EF project proves that
+`migrations has-pending-model-changes` exits non-zero for actual model drift;
+a separate temporary `BrokenMigration` proves that a failed migration is not
+recorded in `__EFMigrationsHistory` and reports its migration identifier.
 
 ## Testing and error handling
 
@@ -367,15 +408,21 @@ Public tests cover, at minimum:
   context and returning zero rows without an error.
 - Verifying the runtime role can execute the audit append function but has no
   direct audit-table DML privilege.
+- Verifying the explicit runtime grants: database `CONNECT`; schema
+  `USAGE`; only approved company-table `SELECT`/`INSERT`/`UPDATE`;
+  capability `SELECT`; audit-function `EXECUTE`; and no global or audit
+  table DML.
 - Verifying that `SET LOCAL` context does not survive a transaction on a reused
   connection.
 - Proving the Supabase-local provisioning operation is idempotent, the bucket
   is private and anonymous access is denied.
 - Rejecting cross-company access to EF file metadata under the runtime role.
 
-The public BDD language is Foundation-specific. It replaces the skipped
-payment-approval example with scenarios for a missing explicit company on the
-capability map and a cross-company role assignment that is denied and audited.
+The public BDD language is Foundation-specific. Both scenarios remain under
+one feature-level `@ignore` until the Task 4 Reqnroll step definitions and API
+slice exist; Task 4 removes `@ignore` and makes them executable. They cover a missing
+explicit company on the capability map and a cross-company role assignment
+that is denied and audited.
 No Paguai vocabulary remains in Foundation tests.
 
 Application errors use stable, non-sensitive codes. Missing company context,
