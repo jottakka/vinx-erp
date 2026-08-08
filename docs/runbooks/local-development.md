@@ -10,8 +10,8 @@ globally.
 
 ```bash
 npm install
-npx supabase start
-npx supabase status
+DOCKER_CONTEXT=desktop-linux npx supabase start
+DOCKER_CONTEXT=desktop-linux npx supabase status
 ```
 
 With the default local configuration, the main service URLs are:
@@ -21,8 +21,8 @@ With the default local configuration, the main service URLs are:
 - Mailpit: `http://127.0.0.1:54324`
 
 The local PostgreSQL port is `54322`; other generated credentials and service
-URLs are displayed by `npx supabase status`. Keep them local. `.env.local` is
-ignored by Git and must never be committed.
+URLs are displayed by `DOCKER_CONTEXT=desktop-linux npx supabase status`.
+Keep them local. `.env.local` is ignored by Git and must never be committed.
 
 The repository's Compose file declares only the shared `vinx-erp` network. It
 does not start a second PostgreSQL, Auth or Storage service alongside
@@ -32,24 +32,20 @@ Supabase.
 
 The first `npx supabase start` downloads the local Docker images and can take
 some time. If a transient health-check timeout occurs, wait for the services
-to stabilize, then check them with `npx supabase status`. Use
+to stabilize, then check them with
+`DOCKER_CONTEXT=desktop-linux npx supabase status`. Use
 `--ignore-health-check` only for diagnosis, never as the normal start command.
 
 Vinx ERP assumes Docker Desktop. If Docker Desktop and another runtime such as
 Colima coexist, first confirm the intended runtime with `docker context show`.
-Keep the user's global context unchanged and select Docker Desktop only for a
-Vinx command when needed:
-
-```bash
-DOCKER_CONTEXT=desktop-linux npx supabase start
-DOCKER_CONTEXT=desktop-linux npx supabase status
-```
+Every Supabase command in this runbook explicitly selects Docker Desktop for
+that process; it does not change the user's global Docker context.
 
 ## Stop local services
 
 ```bash
-npx supabase stop
+DOCKER_CONTEXT=desktop-linux npx supabase stop
 ```
 
-Use `npx supabase stop --no-backup` only when discarding local database state
-is intentional.
+Use `DOCKER_CONTEXT=desktop-linux npx supabase stop --no-backup` only when
+discarding local database state is intentional.
