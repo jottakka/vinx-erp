@@ -6,6 +6,31 @@ namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 public sealed class FoundationPostgresFixtureTests
 {
     [Fact]
+    public async Task ReapplyBootstrapAsync_revokes_preexisting_database_create_from_audit_owner()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var contaminateCommand = new NpgsqlCommand(
+            """
+            DO $$
+            BEGIN
+                EXECUTE format(
+                    'GRANT CREATE ON DATABASE %I TO vinx_audit_owner',
+                    current_database());
+            END
+            $$;
+            """, connection);
+        await contaminateCommand.ExecuteNonQueryAsync();
+        Assert.True(await AuditOwnerCanCreateAsync(connection));
+
+        await fixture.ReapplyBootstrapAsync();
+
+        Assert.False(await AuditOwnerCanCreateAsync(connection));
+    }
+
+    [Fact]
     public async Task StartAsync_creates_the_three_non_superuser_roles_and_migrator_can_set_audit_owner()
     {
         await using var fixture = new FoundationPostgresFixture();
@@ -28,7 +53,14 @@ public sealed class FoundationPostgresFixtureTests
         await reader.CloseAsync();
         await using var attributesCommand = new NpgsqlCommand(
             """
-            SELECT rolname, rolcanlogin, rolinherit, rolbypassrls
+            SELECT
+                rolname,
+                rolcanlogin,
+                rolinherit,
+                rolbypassrls,
+                rolsuper,
+                rolcreatedb,
+                rolcreaterole
             FROM pg_roles
             WHERE rolname = ANY (@roles)
             ORDER BY rolname
@@ -39,21 +71,31 @@ public sealed class FoundationPostgresFixtureTests
         });
 
         await using var attributesReader = await attributesCommand.ExecuteReaderAsync();
-        var attributes = new List<(string Name, bool CanLogin, bool Inherit, bool BypassRls)>();
+        var attributes = new List<(
+            string Name,
+            bool CanLogin,
+            bool Inherit,
+            bool BypassRls,
+            bool Superuser,
+            bool CreateDatabase,
+            bool CreateRole)>();
         while (await attributesReader.ReadAsync())
         {
             attributes.Add((
                 attributesReader.GetString(0),
                 attributesReader.GetBoolean(1),
                 attributesReader.GetBoolean(2),
-                attributesReader.GetBoolean(3)));
+                attributesReader.GetBoolean(3),
+                attributesReader.GetBoolean(4),
+                attributesReader.GetBoolean(5),
+                attributesReader.GetBoolean(6)));
         }
 
         Assert.Equal(
         [
-            ("vinx_audit_owner", false, false, false),
-            ("vinx_migrator", true, false, false),
-            ("vinx_runtime", true, false, false)
+            ("vinx_audit_owner", false, false, false, false, false, false),
+            ("vinx_migrator", true, false, false, false, false, false),
+            ("vinx_runtime", true, false, false, false, false, false)
         ],
         attributes);
 
@@ -94,5 +136,13 @@ public sealed class FoundationPostgresFixtureTests
         await runtimeConnection.OpenAsync();
         await using var runtimeCommand = new NpgsqlCommand("SELECT current_user", runtimeConnection);
         Assert.Equal("vinx_runtime", await runtimeCommand.ExecuteScalarAsync());
+    }
+
+    private static async Task<bool> AuditOwnerCanCreateAsync(NpgsqlConnection connection)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT has_database_privilege('vinx_audit_owner', current_database(), 'CREATE')", connection);
+        return (bool)(await command.ExecuteScalarAsync()
+            ?? throw new InvalidOperationException("The privilege query returned no result."));
     }
 }

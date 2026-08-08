@@ -28,6 +28,8 @@ DECLARE
 BEGIN
     EXECUTE format('GRANT CONNECT ON DATABASE %I TO vinx_migrator, vinx_runtime', database_name);
     EXECUTE format('GRANT CREATE ON DATABASE %I TO vinx_migrator', database_name);
-    EXECUTE format('REVOKE CREATE ON DATABASE %I FROM vinx_runtime', database_name);
+    EXECUTE format(
+        'REVOKE CREATE ON DATABASE %I FROM vinx_runtime, vinx_audit_owner',
+        database_name);
 END
 $$;

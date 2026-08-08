@@ -50,6 +50,12 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
         return connection;
     }
 
+    public async Task ReapplyBootstrapAsync()
+    {
+        await using var connection = await OpenAdministratorConnectionAsync();
+        await ExecuteBootstrapAsync(connection);
+    }
+
     public async Task<bool> MigratorCanSetAuditOwnerAsync()
     {
         await using var connection = new NpgsqlConnection(MigratorConnectionString);
