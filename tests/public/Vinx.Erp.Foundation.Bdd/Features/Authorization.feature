@@ -1,4 +1,4 @@
-@ignore @foundation
+@foundation
 Feature: Foundation authorization
 
 Scenario: Capability map without an explicit company is denied
