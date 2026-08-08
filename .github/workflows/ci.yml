@@ -22,3 +22,9 @@ jobs:
         with:
           global-json-file: global.json
       - run: ./scripts/verify-public.sh
+
+  verify-storage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./scripts/verify-supabase-storage.sh

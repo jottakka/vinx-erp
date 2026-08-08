@@ -11,6 +11,8 @@ dotnet tool restore
 dotnet restore --locked-mode
 dotnet format whitespace --verify-no-changes
 dotnet build --no-restore
+./scripts/verify-foundation-database.sh
+./scripts/verify-ef-negative-guards.sh
 
 while IFS= read -r public_test_project; do
   dotnet test "$public_test_project" --no-build

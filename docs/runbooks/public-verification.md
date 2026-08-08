@@ -8,8 +8,20 @@ Run the builder-visible quality gates from the repository root:
 
 The runner installs the locked Node workspace, checks the React application,
 prevents browser access to Supabase, restores and builds the .NET solution,
-and runs public tests. It intentionally does not discover, run or report the
+then verifies the Foundation migrations and committed schema snapshot before
+running public tests. It intentionally does not discover, run or report the
 private quality suite.
+
+The migration verifier starts its own pinned, disposable PostgreSQL container.
+It detects a model change without a Foundation migration, applies the migration
+history and compares a normalized schema-only dump with the reviewed snapshot.
+The negative EF guard also proves the model-pending check with a controlled
+drift project and proves a failing `BrokenMigration` is absent from migration
+history. Those checks run before later snapshot and public-test work.
+
+Storage verification is a separate CI job and invokes only
+`./scripts/verify-supabase-storage.sh`; it is not part of
+`verify-public.sh`.
 
 To inspect the local Supabase runtime outside CI, use the Docker Desktop
 context for that command only:
