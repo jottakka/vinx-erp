@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
+using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Encodings.Web;
@@ -17,6 +18,8 @@ using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
+using Vinx.Erp.Foundation.Identity;
+using JsonClaimValueTypes = Microsoft.IdentityModel.JsonWebTokens.JsonClaimValueTypes;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Domain;
@@ -30,24 +33,30 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly FoundationPostgresFixture _fixture = new();
     private readonly TestPrincipalClaims _principalClaims;
     private readonly JwtTestAuthority? _jwtAuthority;
+    private readonly CountingIdentityProvider? _countingIdentityProvider;
     private readonly bool _useJwtBearer;
 
     private FoundationApiFactory(
         Guid actorUserId,
         Guid correlationId,
         TestPrincipalClaims principalClaims,
-        JwtTestAuthority? jwtAuthority = null)
+        JwtTestAuthority? jwtAuthority = null,
+        CountingIdentityProvider? countingIdentityProvider = null)
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
         _principalClaims = principalClaims;
         _jwtAuthority = jwtAuthority;
+        _countingIdentityProvider = countingIdentityProvider;
         _useJwtBearer = jwtAuthority is not null;
     }
 
     public Guid ActorUserId { get; }
     public Guid CorrelationId { get; }
     public FoundationPostgresFixture Fixture => _fixture;
+    public int IdentityProviderCallCount => _countingIdentityProvider?.CallCount
+        ?? throw new InvalidOperationException("The factory is not configured with a counting identity provider.");
+    public ClaimsPrincipal? AuthenticatedJwtPrincipal { get; private set; }
 
     public string CreateJwtToken(JwtTokenVariation variation) =>
         (_jwtAuthority ?? throw new InvalidOperationException("The factory is not configured for JWT bearer testing."))
@@ -62,7 +71,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         var factory = new FoundationApiFactory(
             resolvedActorUserId,
             resolvedCorrelationId,
-            new TestPrincipalClaims(
+            CreateTestPrincipalClaims(
                 "https://project.supabase.co/auth/v1",
                 "external-subject",
                 "same-address@example.test",
@@ -90,7 +99,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         var factory = new FoundationApiFactory(
             Guid.NewGuid(),
             Guid.NewGuid(),
-            new TestPrincipalClaims(issuer, subject, email, correlationIdClaim));
+            CreateTestPrincipalClaims(issuer, subject, email, correlationIdClaim));
         await factory._fixture.StartAsync();
         await factory._fixture.MigrateAsync();
         return factory;
@@ -98,11 +107,25 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     public static async Task<FoundationApiFactory> CreateWithJwtBearerAsync()
     {
+        return await CreateWithJwtBearerAsync(useCountingIdentityProvider: false);
+    }
+
+    public static async Task<FoundationApiFactory> CreateWithJwtBearerAndCountingIdentityProviderAsync()
+    {
+        return await CreateWithJwtBearerAsync(useCountingIdentityProvider: true);
+    }
+
+    private static async Task<FoundationApiFactory> CreateWithJwtBearerAsync(bool useCountingIdentityProvider)
+    {
+        var identityProvider = useCountingIdentityProvider
+            ? new CountingIdentityProvider(new SupabaseIdentityProvider(JwtTestAuthority.Issuer))
+            : null;
         var factory = new FoundationApiFactory(
             Guid.NewGuid(),
             Guid.NewGuid(),
-            new TestPrincipalClaims(null, null, null, null),
-            new JwtTestAuthority());
+            CreateTestPrincipalClaims(null, null, null, null),
+            new JwtTestAuthority(),
+            identityProvider);
         await factory._fixture.StartAsync();
         await factory._fixture.MigrateAsync();
         await factory.SeedAuthenticatedActorAsync();
@@ -125,6 +148,12 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 .AddInterceptors(new RowVersionInterceptor()));
             if (_useJwtBearer)
             {
+                if (_countingIdentityProvider is not null)
+                {
+                    services.RemoveAll<IIdentityProvider>();
+                    services.AddSingleton<IIdentityProvider>(_countingIdentityProvider);
+                }
+
                 services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
                 {
                     options.MetadataAddress = JwtTestAuthority.MetadataAddress;
@@ -133,6 +162,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                         options.MetadataAddress,
                         new OpenIdConnectConfigurationRetriever(),
                         new HttpDocumentRetriever(options.Backchannel));
+                    options.Events = new JwtBearerEvents
+                    {
+                        OnTokenValidated = context =>
+                        {
+                            AuthenticatedJwtPrincipal = context.Principal;
+                            return Task.CompletedTask;
+                        }
+                    };
                 });
             }
             else
@@ -168,6 +205,28 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 "external-subject"));
         await administrator.SaveChangesAsync();
     }
+
+    private static TestPrincipalClaims CreateTestPrincipalClaims(
+        string? issuer,
+        string? subject,
+        string? email,
+        string? correlationId)
+    {
+        var issuedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        return new TestPrincipalClaims(
+            issuer,
+            subject,
+            email,
+            correlationId,
+            Guid.NewGuid().ToString("D"),
+            issuedAt,
+            issuedAt + 1,
+            [
+                new AmrEntry("password", issuedAt - 10),
+                new AmrEntry("email", issuedAt - 20),
+                new AmrEntry("token_refresh", issuedAt - 5)
+            ]);
+    }
 }
 
 public enum JwtTokenVariation
@@ -176,7 +235,15 @@ public enum JwtTokenVariation
     InvalidSignature,
     InvalidIssuer,
     InvalidAudience,
-    Expired
+    Expired,
+    MissingSessionId,
+    MalformedSessionId,
+    MissingAmr,
+    EmptyAmr,
+    RefreshOnlyAmr,
+    AuthenticatorAfterIssuedAt,
+    IssuedAtAtOrAfterExpiresAt,
+    TwoAmrEntries
 }
 
 internal sealed class JwtTestAuthority : IDisposable
@@ -190,21 +257,87 @@ internal sealed class JwtTestAuthority : IDisposable
 
     public string CreateToken(JwtTokenVariation variation)
     {
-        var now = DateTime.UtcNow;
+        var now = DateTimeOffset.UtcNow;
+        var expiresAt = variation switch
+        {
+            JwtTokenVariation.Expired => now.ToUnixTimeSeconds() - 3600,
+            JwtTokenVariation.IssuedAtAtOrAfterExpiresAt => now.ToUnixTimeSeconds() + 3600,
+            _ => now.ToUnixTimeSeconds() + 1
+        };
+        var issuedAt = variation == JwtTokenVariation.IssuedAtAtOrAfterExpiresAt
+            ? expiresAt
+            : now.ToUnixTimeSeconds();
         var signingKey = new RsaSecurityKey(
             variation == JwtTokenVariation.InvalidSignature ? _invalidSigningRsa : _signingRsa)
         {
             KeyId = "test-key"
         };
+        var claims = new List<Claim>
+        {
+            new("sub", "external-subject"),
+            new("iat", issuedAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64)
+        };
+        if (variation != JwtTokenVariation.MissingSessionId)
+        {
+            claims.Add(new Claim(
+                "session_id",
+                variation == JwtTokenVariation.MalformedSessionId ? "not-a-uuid" : Guid.NewGuid().ToString("D")));
+        }
+
+        claims.AddRange(CreateAmrClaims(variation, issuedAt));
         var token = new JwtSecurityToken(
             issuer: variation == JwtTokenVariation.InvalidIssuer ? "https://other.supabase.co/auth/v1" : Issuer,
             audience: variation == JwtTokenVariation.InvalidAudience ? "other-audience" : Audience,
-            claims: [new Claim("sub", "external-subject")],
-            notBefore: variation == JwtTokenVariation.Expired ? now.AddHours(-2) : now.AddMinutes(-1),
-            expires: variation == JwtTokenVariation.Expired ? now.AddHours(-1) : now.AddMinutes(10),
+            claims: claims,
+            notBefore: variation == JwtTokenVariation.Expired ? now.AddHours(-2).UtcDateTime : now.AddMinutes(-1).UtcDateTime,
+            expires: DateTimeOffset.FromUnixTimeSeconds(expiresAt).UtcDateTime,
             signingCredentials: new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
+
+    private static IEnumerable<Claim> CreateAmrClaims(JwtTokenVariation variation, long issuedAt)
+    {
+        if (variation == JwtTokenVariation.MissingAmr)
+        {
+            yield break;
+        }
+
+        if (variation == JwtTokenVariation.EmptyAmr)
+        {
+            yield return new Claim("amr", "[]", JsonClaimValueTypes.Json);
+            yield break;
+        }
+
+        AmrEntry[] entries = variation switch
+        {
+            JwtTokenVariation.RefreshOnlyAmr =>
+            [new AmrEntry("token_refresh", issuedAt - 1)],
+            JwtTokenVariation.AuthenticatorAfterIssuedAt =>
+            [new AmrEntry("password", issuedAt + 1)],
+            JwtTokenVariation.TwoAmrEntries =>
+            [
+                new AmrEntry("password", issuedAt - 10),
+                new AmrEntry("email", issuedAt - 20)
+            ],
+            _ =>
+            [
+                new AmrEntry("password", issuedAt - 10),
+                new AmrEntry("email", issuedAt - 20),
+                new AmrEntry("token_refresh", issuedAt - 5)
+            ]
+        };
+
+        foreach (var entry in entries)
+        {
+            yield return new Claim("amr", SerializeAmrEntry(entry), JsonClaimValueTypes.Json);
+        }
+    }
+
+    private static string SerializeAmrEntry(AmrEntry entry) => JsonSerializer.Serialize(new
+    {
+        method = entry.Method,
+        timestamp = entry.Timestamp
+    });
 
     public HttpResponseMessage GetResponse(Uri requestUri)
     {
@@ -258,7 +391,13 @@ public sealed record TestPrincipalClaims(
     string? Issuer,
     string? Subject,
     string? Email,
-    string? CorrelationId);
+    string? CorrelationId,
+    string SessionId,
+    long IssuedAt,
+    long ExpiresAt,
+    IReadOnlyList<AmrEntry> Amr);
+
+public sealed record AmrEntry(string Method, long Timestamp);
 
 public sealed class TestAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
@@ -289,9 +428,32 @@ public sealed class TestAuthenticationHandler(
             identityClaims.Add(new Claim("correlation_id", claims.CorrelationId));
         }
 
+        identityClaims.Add(new Claim("session_id", claims.SessionId));
+        identityClaims.Add(new Claim("iat", claims.IssuedAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
+        identityClaims.Add(new Claim("exp", claims.ExpiresAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
+        identityClaims.AddRange(claims.Amr.Select(entry =>
+            new Claim("amr", JsonSerializer.Serialize(new
+            {
+                method = entry.Method,
+                timestamp = entry.Timestamp
+            }), JsonClaimValueTypes.Json)));
+
         var identity = new ClaimsIdentity(identityClaims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
         return Task.FromResult(AuthenticateResult.Success(ticket));
+    }
+}
+
+internal sealed class CountingIdentityProvider(IIdentityProvider inner) : IIdentityProvider
+{
+    private int _callCount;
+
+    public int CallCount => Volatile.Read(ref _callCount);
+
+    public bool TryGetExternalIdentityProof(ClaimsPrincipal principal, out ExternalIdentityProof proof)
+    {
+        Interlocked.Increment(ref _callCount);
+        return inner.TryGetExternalIdentityProof(principal, out proof);
     }
 }

@@ -149,11 +149,14 @@ autoridade de plataforma não será introduzida nesta fatia.
 
 1. PR-base de auditoria global: escopo tipado, função, grants, snapshot e
    rollback. Não introduz sessão, endpoint ou alteração de provider.
-2. PR de sessão: adapter de claims, modelo EF, gate e operações próprias,
+2. Microfatia de prova Supabase: `session_id` UUID e `amr` com autenticação
+   não-refresh, `401` fail-closed e sem persistência; não introduz sessão EF,
+   gate ou revogação.
+3. PR de sessão: adapter de claims, modelo EF, gate e operações próprias,
    sobre a auditoria global já entregue.
-3. PR de desativação: capability de grupo, comando transacional, migration,
-   documentação e testes públicos, sobre as duas PRs anteriores.
-4. Depois de todas mergeadas, a issue #18 implementa MFA step-up/AAL sobre a
+4. PR de desativação: capability de grupo, comando transacional, migration,
+   documentação e testes públicos, sobre as três PRs anteriores.
+5. Depois de todas mergeadas, a issue #18 implementa MFA step-up/AAL sobre a
    evidência de sessão já admitida.
 
 ## Critérios verificáveis
