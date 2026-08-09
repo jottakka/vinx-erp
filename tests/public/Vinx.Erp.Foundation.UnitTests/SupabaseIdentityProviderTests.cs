@@ -27,7 +27,7 @@ public sealed class SupabaseIdentityProviderTests
         Assert.Equal("external-subject", proof.Key.Subject);
         Assert.Equal(SessionId, proof.ProviderSessionId);
         Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(99), proof.ProviderAuthenticatedAt);
-        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(201), proof.TokenExpiresAt);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(101), proof.TokenExpiresAt);
     }
 
     [Fact]
@@ -132,6 +132,13 @@ public sealed class SupabaseIdentityProviderTests
             PrincipalWith([Amr("password", 101)]), out _));
     }
 
+    [Fact]
+    public void Try_get_external_identity_proof_rejects_an_unrepresentable_refresh_timestamp()
+    {
+        Assert.False(Provider().TryGetExternalIdentityProof(
+            PrincipalWith([Amr("token_refresh", long.MaxValue), Amr("password", 100)]), out _));
+    }
+
     public static TheoryData<string, string?, bool> InvalidRequiredScalarClaims() =>
         new()
         {
@@ -147,7 +154,7 @@ public sealed class SupabaseIdentityProviderTests
             { "sub", "external-subject", true },
             { "session_id", SessionId.ToString("D"), true },
             { "iat", "100", true },
-            { "exp", "201", true }
+            { "exp", "101", true }
         };
 
     public static TheoryData<Claim[]> InvalidAmrClaims() =>
@@ -184,7 +191,7 @@ public sealed class SupabaseIdentityProviderTests
         new Claim("sub", "external-subject"),
         new Claim("session_id", SessionId.ToString("D")),
         new Claim("iat", "100", ClaimValueTypes.Integer64),
-        new Claim("exp", "201", ClaimValueTypes.Integer64),
+        new Claim("exp", "101", ClaimValueTypes.Integer64),
         Amr("password", 100)
     ];
 

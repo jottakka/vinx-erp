@@ -107,13 +107,17 @@ public sealed class SupabaseIdentityProvider(string issuer) : IIdentityProvider
                 return false;
             }
 
+            if (!TryGetUnixTime(timestamp, out var authenticationTime))
+            {
+                return false;
+            }
+
             if (string.Equals(method, "token_refresh", StringComparison.Ordinal))
             {
                 continue;
             }
 
-            if (!TryGetUnixTime(timestamp, out var authenticationTime)
-                || authenticationTime > issuedAt)
+            if (authenticationTime > issuedAt)
             {
                 return false;
             }
