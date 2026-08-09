@@ -9,6 +9,7 @@ public sealed class AuditMigrationTests
 {
     private const string BeforeAuditScope = "20260809024707_RenameExternalIdentityProviderToIssuer";
     private const string AddAuditScope = "20260809184931_AddAuditScope";
+    private const long AuditDownPauseLockKey = 412_208_309;
 
     [Fact]
     public async Task Add_audit_scope_backfills_legacy_events_and_removes_the_legacy_appender()
@@ -165,6 +166,55 @@ public sealed class AuditMigrationTests
         Assert.False(reader.GetBoolean(3));
     }
 
+    [Fact]
+    public async Task Downgrade_blocks_a_legacy_compatible_global_append_before_destructive_ddl()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await CreateDowngradePauseTriggerAsync(administrator);
+        await using var coordinator = await fixture.OpenAdministratorConnectionAsync();
+        await AcquirePauseLockAsync(coordinator);
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+
+        var downgradeTask = migrator.Database.MigrateAsync(BeforeAuditScope);
+        try
+        {
+            using var pauseSignalCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await WaitForPendingAdvisoryLockAsync(administrator, pauseSignalCancellation.Token);
+
+            var appendTask = AppendCurrentEventAsync(
+                runtime,
+                "global",
+                null,
+                action: "company_context_required",
+                outcome: "denied");
+            using var blockSignalCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var blockSignal = WaitForRuntimeAppendToBlockAsync(
+                administrator,
+                runtime.ProcessID,
+                blockSignalCancellation.Token);
+            var firstCompleted = await Task.WhenAny(appendTask, blockSignal);
+            blockSignalCancellation.Cancel();
+            await IgnoreCancellationAsync(blockSignal);
+
+            await ReleasePauseLockAsync(coordinator);
+            await downgradeTask;
+
+            Assert.Same(blockSignal, firstCompleted);
+            await Assert.ThrowsAsync<PostgresException>(async () => await appendTask);
+        }
+        finally
+        {
+            await ReleasePauseLockAsync(coordinator);
+            await AwaitDowngradeAsync(downgradeTask);
+            await DropDowngradePauseTriggerAsync(administrator);
+        }
+    }
+
     private static async Task InsertLegacyEventAsync(NpgsqlConnection runtime, Guid? companyId, string action)
         => await AppendLegacyEventAsync(runtime, companyId, action, "denied");
 
@@ -192,18 +242,148 @@ public sealed class AuditMigrationTests
         NpgsqlConnection runtime,
         string scope,
         Guid? companyId,
-        Guid? correlationId = null)
+        Guid? correlationId = null,
+        string action = "foundation.test",
+        string outcome = "success")
     {
         await using var command = new NpgsqlCommand(
             """
             SELECT audit.append_event(
-                @actor_user_id, @scope, @requested_company_id, 'web', 'foundation.test', 'test', NULL,
-                'success', @correlation_id, 'redacted', '{}'::jsonb)
+                @actor_user_id, @scope, @requested_company_id, 'web', @action, 'test', NULL,
+                @outcome, @correlation_id, 'redacted', '{}'::jsonb)
             """, runtime);
         command.Parameters.AddWithValue("actor_user_id", Guid.NewGuid());
         command.Parameters.AddWithValue("scope", scope);
         command.Parameters.AddWithValue("requested_company_id", (object?)companyId ?? DBNull.Value);
+        command.Parameters.AddWithValue("action", action);
+        command.Parameters.AddWithValue("outcome", outcome);
         command.Parameters.AddWithValue("correlation_id", correlationId ?? Guid.NewGuid());
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task CreateDowngradePauseTriggerAsync(NpgsqlConnection administrator)
+    {
+        await using var command = new NpgsqlCommand(
+            $"""
+            CREATE FUNCTION public.pause_audit_scope_downgrade()
+            RETURNS event_trigger
+            LANGUAGE plpgsql
+            AS $function$
+            BEGIN
+                PERFORM pg_advisory_xact_lock({AuditDownPauseLockKey});
+            END;
+            $function$;
+
+            CREATE EVENT TRIGGER pause_audit_scope_downgrade
+            ON ddl_command_start
+            WHEN TAG IN ('DROP FUNCTION')
+            EXECUTE FUNCTION public.pause_audit_scope_downgrade();
+            """, administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task DropDowngradePauseTriggerAsync(NpgsqlConnection administrator)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            DROP EVENT TRIGGER IF EXISTS pause_audit_scope_downgrade;
+            DROP FUNCTION IF EXISTS public.pause_audit_scope_downgrade();
+            """, administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task AcquirePauseLockAsync(NpgsqlConnection coordinator)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT pg_advisory_lock(@lock_key);", coordinator);
+        command.Parameters.AddWithValue("lock_key", AuditDownPauseLockKey);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task ReleasePauseLockAsync(NpgsqlConnection coordinator)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT pg_advisory_unlock(@lock_key);", coordinator);
+        command.Parameters.AddWithValue("lock_key", AuditDownPauseLockKey);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task WaitForPendingAdvisoryLockAsync(
+        NpgsqlConnection administrator,
+        CancellationToken cancellationToken)
+    {
+        await WaitUntilAsync(async () =>
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_locks AS locks
+                    INNER JOIN pg_stat_activity AS activity ON activity.pid = locks.pid
+                    WHERE activity.usename = 'vinx_migrator'
+                      AND locks.locktype = 'advisory'
+                      AND NOT locks.granted)
+                """, administrator);
+            return (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
+        }, cancellationToken);
+    }
+
+    private static async Task WaitForRuntimeAppendToBlockAsync(
+        NpgsqlConnection administrator,
+        int processId,
+        CancellationToken cancellationToken)
+    {
+        await WaitUntilAsync(async () =>
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_stat_activity
+                    WHERE pid = @process_id
+                      AND wait_event_type = 'Lock')
+                """, administrator);
+            command.Parameters.AddWithValue("process_id", processId);
+            return (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
+        }, cancellationToken);
+    }
+
+    private static async Task WaitUntilAsync(
+        Func<Task<bool>> condition,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            if (await condition())
+            {
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private static async Task IgnoreCancellationAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private static async Task AwaitDowngradeAsync(Task downgradeTask)
+    {
+        try
+        {
+            await downgradeTask;
+        }
+        catch (PostgresException)
+        {
+        }
     }
 }

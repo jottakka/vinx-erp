@@ -101,6 +101,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 GRANT USAGE, CREATE ON SCHEMA audit TO vinx_audit_owner;
                 SET ROLE vinx_audit_owner;
 
+                LOCK TABLE audit.audit_events IN ACCESS EXCLUSIVE MODE;
+
                 DO $block$
                 BEGIN
                     IF EXISTS (SELECT 1 FROM audit.audit_events WHERE scope = 'global') THEN
