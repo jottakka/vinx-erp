@@ -23,9 +23,13 @@ de trace sem acoplar módulos a um provider de logging específico.
 
 API, MCP e Worker chamam a mesma extensão de logging. API e MCP usam também
 o middleware de correlação; Worker só ganhará correlação quando existir uma
-unidade de trabalho concreta.
+unidade de trabalho concreta. Ao introduzir o primeiro job do Worker, a
+fatia desse job deve abrir e encerrar um scope de correlação próprio; não há
+operação de Worker a ser correlacionada nesta PR. A reavaliação está em #100.
 
-O formatter usa JSON, timestamps UTC e scopes. Os filtros permanecem na
+O formatter usa JSON, `TimestampFormat = "O"`, timestamps UTC e scopes. A
+extensão define `Microsoft.AspNetCore` em `Warning`, para que diagnósticos
+rotineiros de requisição não poluam produção; os demais filtros permanecem na
 seção padrão `Logging` de configuração do host, inclusive por variáveis de
 ambiente. A extensão não remove providers: registra somente o console JSON
 de forma idempotente e preserva providers explicitamente adicionados pelo
@@ -33,7 +37,8 @@ deploy futuro.
 
 O middleware abre scope somente com `CorrelationId`, mantém a tag
 `vinx.correlation_id` no `Activity` e não emite log por requisição. Tags e
-`Baggage` do `Activity` não entram automaticamente nos logs.
+`Baggage` do `Activity` não entram automaticamente nos logs; filtro impede
+também diagnósticos HTTP rotineiros do framework.
 
 ## Limites
 
@@ -48,6 +53,8 @@ durável distinta do logging operacional.
 
 ## Verificação
 
-Testes públicos cobrem provider JSON único, rastreio de `TraceId`/`SpanId` e
-scope de correlação sem tags ou `Baggage`. A mudança passa pelo gate público
-uma vez antes do push da PR #88.
+Testes públicos cobrem provider JSON único e idempotente, `Timestamp` UTC,
+filtro HTTP, rastreio de `TraceId`/`SpanId`, descarte de scope em exceção e
+isolamento de scopes concorrentes sem tags ou `Baggage`. Casos e comandos
+ficam no contrato durável em `docs/verification/portable-logging-test-cases.md`.
+A mudança passa pelo gate público uma vez antes do push da PR #88.
