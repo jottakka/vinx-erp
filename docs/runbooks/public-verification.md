@@ -24,6 +24,10 @@ Storage verification is a separate CI job and invokes only
 `verify-public.sh`.
 The storage verifier captures local API and service-role configuration without
 printing either value, then unsets both values and stops Supabase on exit.
+It honors an explicitly supplied `DOCKER_CONTEXT`; otherwise it prefers the
+available Docker Desktop context on macOS and leaves Docker to use its default
+context on Linux. A local startup failure reports only a generic Docker/context
+diagnostic, never the Supabase CLI output.
 
 To inspect the local Supabase runtime outside CI, use the Docker Desktop
 context for that command only:
