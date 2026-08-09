@@ -23,45 +23,32 @@ CREATE SCHEMA audit;
 CREATE SCHEMA foundation;
 
 
--- Name: append_event(uuid, uuid, text, text, text, uuid, text, uuid, text, jsonb); Type: FUNCTION; Schema: audit; Owner: -
+-- Name: append_event(uuid, text, uuid, text, text, text, uuid, text, uuid, text, jsonb); Type: FUNCTION; Schema: audit; Owner: -
 
-CREATE FUNCTION audit.append_event(p_actor_user_id uuid, p_requested_company_id uuid, p_source text, p_action text, p_resource_type text, p_resource_id uuid, p_outcome text, p_correlation_id uuid, p_reason text, p_metadata jsonb) RETURNS void
+CREATE FUNCTION audit.append_event(p_actor_user_id uuid, p_scope text, p_requested_company_id uuid, p_source text, p_action text, p_resource_type text, p_resource_id uuid, p_outcome text, p_correlation_id uuid, p_reason text, p_metadata jsonb) RETURNS void
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'audit', 'pg_catalog'
     AS $$
 BEGIN
-    IF p_requested_company_id IS NULL
-        AND (p_action <> 'company_context_required' OR p_outcome <> 'denied') THEN
-        RAISE EXCEPTION 'requested company is required for this audit event'
+    IF p_scope IS NULL OR p_scope NOT IN ('global', 'company') THEN
+        RAISE EXCEPTION 'audit scope is invalid'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF (p_scope = 'global' AND p_requested_company_id IS NOT NULL)
+        OR (p_scope = 'company' AND p_requested_company_id IS NULL) THEN
+        RAISE EXCEPTION 'audit scope and requested company are incompatible'
             USING ERRCODE = '23514';
     END IF;
 
     INSERT INTO audit_events (
-        id,
-        actor_user_id,
-        requested_company_id,
-        source,
-        action,
-        resource_type,
-        resource_id,
-        outcome,
-        correlation_id,
-        reason,
-        metadata_json,
-        occurred_at)
+        id, actor_user_id, scope, requested_company_id, source, action,
+        resource_type, resource_id, outcome, correlation_id, reason,
+        metadata_json, occurred_at)
     VALUES (
-        gen_random_uuid(),
-        p_actor_user_id,
-        p_requested_company_id,
-        p_source,
-        p_action,
-        p_resource_type,
-        p_resource_id,
-        p_outcome,
-        p_correlation_id,
-        p_reason,
-        p_metadata,
-        clock_timestamp());
+        gen_random_uuid(), p_actor_user_id, p_scope, p_requested_company_id,
+        p_source, p_action, p_resource_type, p_resource_id, p_outcome,
+        p_correlation_id, p_reason, p_metadata, clock_timestamp());
 END;
 $$;
 
@@ -101,7 +88,8 @@ CREATE TABLE audit.audit_events (
     reason character varying(1000),
     metadata_json jsonb NOT NULL,
     occurred_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_audit_events_requested_company CHECK (((requested_company_id IS NOT NULL) OR (((action)::text = 'company_context_required'::text) AND ((outcome)::text = 'denied'::text))))
+    scope character varying(20) NOT NULL,
+    CONSTRAINT ck_audit_events_requested_company CHECK (((((scope)::text = 'global'::text) AND (requested_company_id IS NULL)) OR (((scope)::text = 'company'::text) AND (requested_company_id IS NOT NULL))))
 );
 
 

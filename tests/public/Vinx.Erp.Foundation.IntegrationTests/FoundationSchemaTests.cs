@@ -161,7 +161,7 @@ public sealed class FoundationSchemaTests
                 has_schema_privilege('vinx_runtime', 'public', 'CREATE'),
                 has_function_privilege(
                     'vinx_runtime',
-                    'audit.append_event(uuid,uuid,text,text,text,uuid,text,uuid,text,jsonb)',
+                    'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)',
                     'EXECUTE'),
                 has_function_privilege(
                     'vinx_runtime',
@@ -181,6 +181,31 @@ public sealed class FoundationSchemaTests
         Assert.False(reader.GetBoolean(7));
         Assert.True(reader.GetBoolean(8));
         Assert.False(reader.GetBoolean(9));
+    }
+
+    [Fact]
+    public async Task Audit_events_require_a_scope_without_a_database_default()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT attribute.attnotnull, definition.adbin IS NULL
+            FROM pg_attribute AS attribute
+            LEFT JOIN pg_attrdef AS definition
+                ON definition.adrelid = attribute.attrelid
+                AND definition.adnum = attribute.attnum
+            WHERE attribute.attrelid = 'audit.audit_events'::regclass
+              AND attribute.attname = 'scope'
+            """, connection);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
     }
 
     [Fact]

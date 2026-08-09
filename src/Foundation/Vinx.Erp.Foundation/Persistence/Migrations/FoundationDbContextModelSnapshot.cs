@@ -77,6 +77,12 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("resource_type");
 
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("scope");
+
                     b.Property<string>("Source")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -94,7 +100,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.ToTable("audit_events", "audit", t =>
                         {
-                            t.HasCheckConstraint("ck_audit_events_requested_company", "requested_company_id IS NOT NULL OR (action = 'company_context_required' AND outcome = 'denied')");
+                            t.HasCheckConstraint("ck_audit_events_requested_company", "(scope = 'global' AND requested_company_id IS NULL) OR (scope = 'company' AND requested_company_id IS NOT NULL)");
                         });
                 });
 
