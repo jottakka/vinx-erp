@@ -336,9 +336,15 @@ public sealed class AuditEventConfiguration : IEntityTypeConfiguration<AuditEven
         builder.ToTable("audit_events", "audit", table =>
             table.HasCheckConstraint(
                 "ck_audit_events_requested_company",
-                "requested_company_id IS NOT NULL OR (action = 'company_context_required' AND outcome = 'denied')"));
+                "(scope = 'global' AND requested_company_id IS NULL) OR (scope = 'company' AND requested_company_id IS NOT NULL)"));
         builder.HasKey(entity => entity.Id);
         builder.Property(entity => entity.Id).ValueGeneratedNever();
+        builder.Property(entity => entity.Scope)
+            .HasConversion(
+                scope => scope == AuditScope.Global ? "global" : "company",
+                value => value == "global" ? AuditScope.Global : AuditScope.Company)
+            .HasMaxLength(20)
+            .IsRequired();
         builder.Property(entity => entity.Source)
             .HasConversion(
                 source => source == AuditSource.Web ? "web" :

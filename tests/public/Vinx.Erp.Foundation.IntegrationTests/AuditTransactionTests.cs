@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
+using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Vinx.Erp.Foundation.Audit;
+using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
 
@@ -48,11 +51,58 @@ public sealed class AuditTransactionTests
         telemetry.AssertRecordedOnlyApprovedTags("capability_map", "denial_audit");
     }
 
+    [Fact]
+    public async Task Runtime_transaction_rolls_back_a_saved_mutation_after_the_appender_loses_execute()
+    {
+        await using var factory = await FoundationApiFactory.CreateAsync();
+        var scenario = await RoleAssignmentServiceIntegrationTests.SeedScenarioAsync(factory);
+        await RevokeAuditAppendAsync(factory);
+        var correlationId = Guid.NewGuid();
+        var assignmentId = Guid.NewGuid();
+
+        await using (var runtime = factory.Fixture.CreateRuntimeDbContext())
+        await using (var transaction = await runtime.Database.BeginTransactionAsync())
+        {
+            await runtime.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT set_config('app.company_id', {scenario.CompanyId.ToString()}, true)");
+            runtime.RoleAssignments.Add(new RoleAssignment(
+                assignmentId,
+                scenario.CompanyId,
+                scenario.AssignableRoleId,
+                scenario.TargetMembershipId,
+                factory.ActorUserId,
+                Guid.NewGuid()));
+            await runtime.SaveChangesAsync();
+
+            var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
+                await new AuditAppender(runtime).AppendAsync(new AuditEventData(
+                    factory.ActorUserId,
+                    AuditScope.Company,
+                    scenario.CompanyId,
+                    AuditSource.Web,
+                    "foundation.test.rollback",
+                    "test",
+                    assignmentId,
+                    AuditOutcome.Success,
+                    correlationId,
+                    "redacted",
+                    "{}"),
+                    CancellationToken.None));
+            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+
+            await transaction.RollbackAsync();
+        }
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.False(await administrator.RoleAssignments.AnyAsync(assignment => assignment.Id == assignmentId));
+        Assert.False(await administrator.AuditEvents.AnyAsync(auditEvent => auditEvent.CorrelationId == correlationId));
+    }
+
     private static async Task RevokeAuditAppendAsync(FoundationApiFactory factory)
     {
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
-            "REVOKE EXECUTE ON FUNCTION audit.append_event(uuid,uuid,text,text,text,uuid,text,uuid,text,jsonb) FROM vinx_runtime;",
+            "REVOKE EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) FROM vinx_runtime;",
             administrator);
         await command.ExecuteNonQueryAsync();
     }

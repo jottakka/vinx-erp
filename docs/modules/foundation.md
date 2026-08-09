@@ -45,6 +45,14 @@ Entidades mutáveis compartilham identidade, auditoria, exclusão lógica e vers
 
 Business and configuration data use soft delete with `deleted_at`, `deleted_by_user_id` and `deleted_reason`; a restore is authorized and audited. Audit events are append-only and use retention rather than soft delete. Module data remains explicitly company-scoped; an authorized group-wide view is a union, never a tenant-less record.
 
+Cada evento de auditoria possui `scope`: `company` exige uma
+`requested_company_id`, enquanto `global` exige que ela seja nula. O runtime
+insere eventos somente por `audit.append_event`; não recebe permissões diretas
+de alteração na tabela. O append de sucesso participa da mesma transação da
+mutação de negócio: se ele falhar, a mutação também é revertida. A migração não
+permite downgrade enquanto houver eventos globais, para não reescrever ou
+apagar auditoria histórica.
+
 Idempotent writes replay a matching request and payload. Reusing a request with a
 different payload returns `idempotency_conflict`; a separate write that loses a
 business-database integrity race returns the redacted `integrity_conflict` and
