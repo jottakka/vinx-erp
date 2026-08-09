@@ -12,6 +12,7 @@ public sealed class FoundationSchemaTests
     [
         ("foundation", "capabilities", "SELECT"),
         ("foundation", "companies", "SELECT"),
+        ("foundation", "external_identities", "SELECT"),
         ("foundation", "files", "SELECT"),
         ("foundation", "groups", "SELECT"),
         ("foundation", "idempotency_records", "INSERT"),
