@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -73,11 +74,18 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var app = builder.Build();
 
+app.Use(async (context, next) =>
+{
+    var correlation = ServerCorrelationContext.Begin(context);
+    Activity.Current?.SetTag("vinx.correlation_id", correlation.CorrelationId.ToString());
+    await next(context);
+});
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapFoundationHealthEndpoints();
 app.MapGet("/foundation/capabilities", async (
     Guid? companyId,
+    HttpContext httpContext,
     ClaimsPrincipal principal,
     InternalIdentityResolver identityResolver,
     CapabilityMapService service,
@@ -89,7 +97,9 @@ app.MapGet("/foundation/capabilities", async (
         return Results.Unauthorized();
     }
 
-    var actor = new ActorContext(internalUserId.Value, Guid.NewGuid());
+    var actor = new ActorContext(
+        internalUserId.Value,
+        ServerCorrelationContext.Get(httpContext).CorrelationId);
     var result = await service.GetCapabilitiesAsync(actor, companyId, cancellationToken);
     return result.ToMinimalApiResult();
 }).RequireAuthorization();

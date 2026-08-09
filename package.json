@@ -6,7 +6,7 @@
   "scripts": {
     "tools:check": "node --version && dotnet --version && docker version --format '{{.Server.Version}}' && supabase --version",
     "supabase": "supabase",
-    "test:no-direct-supabase": "! grep -R -n -E 'supabase|createClient' apps/web/src"
+    "test:no-direct-supabase": "bash -c 'grep -R -n -E \"supabase|createClient\" apps/web/src; status=$?; test \"$status\" -eq 1'"
   },
   "devDependencies": {
     "supabase": "^2.113.0"

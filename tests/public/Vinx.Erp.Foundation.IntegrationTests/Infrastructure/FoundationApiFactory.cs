@@ -1,6 +1,11 @@
 using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net;
+using System.Security.Cryptography;
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -9,6 +14,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.IdentityModel.Tokens;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Domain;
@@ -21,17 +29,29 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     private readonly FoundationPostgresFixture _fixture = new();
     private readonly TestPrincipalClaims _principalClaims;
+    private readonly JwtTestAuthority? _jwtAuthority;
+    private readonly bool _useJwtBearer;
 
-    private FoundationApiFactory(Guid actorUserId, Guid correlationId, TestPrincipalClaims principalClaims)
+    private FoundationApiFactory(
+        Guid actorUserId,
+        Guid correlationId,
+        TestPrincipalClaims principalClaims,
+        JwtTestAuthority? jwtAuthority = null)
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
         _principalClaims = principalClaims;
+        _jwtAuthority = jwtAuthority;
+        _useJwtBearer = jwtAuthority is not null;
     }
 
     public Guid ActorUserId { get; }
     public Guid CorrelationId { get; }
     public FoundationPostgresFixture Fixture => _fixture;
+
+    public string CreateJwtToken(JwtTokenVariation variation) =>
+        (_jwtAuthority ?? throw new InvalidOperationException("The factory is not configured for JWT bearer testing."))
+        .CreateToken(variation);
 
     public static async Task<FoundationApiFactory> CreateAsync(
         Guid? actorUserId = null,
@@ -68,6 +88,19 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         return factory;
     }
 
+    public static async Task<FoundationApiFactory> CreateWithJwtBearerAsync()
+    {
+        var factory = new FoundationApiFactory(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            new TestPrincipalClaims(null, null, null, null),
+            new JwtTestAuthority());
+        await factory._fixture.StartAsync();
+        await factory._fixture.MigrateAsync();
+        await factory.SeedAuthenticatedActorAsync();
+        return factory;
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("FOUNDATION_RUNTIME_CONNECTION", _fixture.RuntimeConnectionString);
@@ -82,19 +115,35 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 .UseNpgsql(_fixture.RuntimeConnectionString)
                 .UseSnakeCaseNamingConvention()
                 .AddInterceptors(new RowVersionInterceptor()));
-            services.AddSingleton(_principalClaims);
-            services.AddAuthentication(options =>
+            if (_useJwtBearer)
             {
-                options.DefaultAuthenticateScheme = TestAuthenticationScheme;
-                options.DefaultChallengeScheme = TestAuthenticationScheme;
-            }).AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(
-                TestAuthenticationScheme,
-                _ => { });
+                services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
+                {
+                    options.MetadataAddress = JwtTestAuthority.MetadataAddress;
+                    options.Backchannel = new HttpClient(new JwtMetadataHandler(_jwtAuthority!));
+                    options.ConfigurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
+                        options.MetadataAddress,
+                        new OpenIdConnectConfigurationRetriever(),
+                        new HttpDocumentRetriever(options.Backchannel));
+                });
+            }
+            else
+            {
+                services.AddSingleton(_principalClaims);
+                services.AddAuthentication(options =>
+                {
+                    options.DefaultAuthenticateScheme = TestAuthenticationScheme;
+                    options.DefaultChallengeScheme = TestAuthenticationScheme;
+                }).AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(
+                    TestAuthenticationScheme,
+                    _ => { });
+            }
         });
     }
 
     public override async ValueTask DisposeAsync()
     {
+        _jwtAuthority?.Dispose();
         await _fixture.DisposeAsync();
         await base.DisposeAsync();
     }
@@ -111,6 +160,90 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 "external-subject"));
         await administrator.SaveChangesAsync();
     }
+}
+
+public enum JwtTokenVariation
+{
+    Valid,
+    InvalidSignature,
+    InvalidIssuer,
+    InvalidAudience,
+    Expired
+}
+
+internal sealed class JwtTestAuthority : IDisposable
+{
+    public const string Issuer = "https://project.supabase.co/auth/v1";
+    public const string Audience = "authenticated";
+    public const string MetadataAddress = "https://identity.test/.well-known/openid-configuration";
+    private const string JwksAddress = "https://identity.test/keys";
+    private readonly RSA _signingRsa = RSA.Create(2048);
+    private readonly RSA _invalidSigningRsa = RSA.Create(2048);
+
+    public string CreateToken(JwtTokenVariation variation)
+    {
+        var now = DateTime.UtcNow;
+        var signingKey = new RsaSecurityKey(
+            variation == JwtTokenVariation.InvalidSignature ? _invalidSigningRsa : _signingRsa)
+        {
+            KeyId = variation == JwtTokenVariation.InvalidSignature ? "unknown-key" : "test-key"
+        };
+        var token = new JwtSecurityToken(
+            issuer: variation == JwtTokenVariation.InvalidIssuer ? "https://other.supabase.co/auth/v1" : Issuer,
+            audience: variation == JwtTokenVariation.InvalidAudience ? "other-audience" : Audience,
+            claims: [new Claim("sub", "external-subject")],
+            notBefore: variation == JwtTokenVariation.Expired ? now.AddHours(-2) : now.AddMinutes(-1),
+            expires: variation == JwtTokenVariation.Expired ? now.AddHours(-1) : now.AddMinutes(10),
+            signingCredentials: new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    public HttpResponseMessage GetResponse(Uri requestUri)
+    {
+        if (requestUri.AbsoluteUri == MetadataAddress)
+        {
+            return JsonResponse(new { issuer = Issuer, jwks_uri = JwksAddress });
+        }
+
+        if (requestUri.AbsoluteUri == JwksAddress)
+        {
+            var parameters = _signingRsa.ExportParameters(false);
+            return JsonResponse(new
+            {
+                keys = new[]
+                {
+                    new
+                    {
+                        kty = "RSA",
+                        use = "sig",
+                        kid = "test-key",
+                        n = Base64UrlEncoder.Encode(parameters.Modulus),
+                        e = Base64UrlEncoder.Encode(parameters.Exponent)
+                    }
+                }
+            });
+        }
+
+        return new HttpResponseMessage(HttpStatusCode.NotFound);
+    }
+
+    public void Dispose()
+    {
+        _signingRsa.Dispose();
+        _invalidSigningRsa.Dispose();
+    }
+
+    private static HttpResponseMessage JsonResponse(object payload) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json")
+    };
+}
+
+internal sealed class JwtMetadataHandler(JwtTestAuthority authority) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        Task.FromResult(authority.GetResponse(request.RequestUri
+            ?? throw new InvalidOperationException("The JWT metadata request did not have a URI.")));
 }
 
 public sealed record TestPrincipalClaims(

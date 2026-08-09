@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using Microsoft.EntityFrameworkCore;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -10,7 +11,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class AuthorizationEndpointTests
 {
     [Fact]
-    public async Task Capability_map_without_a_company_returns_the_stable_context_error_and_audits_the_denial()
+    public async Task Capability_map_uses_server_correlation_instead_of_a_client_claim()
     {
         await using var factory = await FoundationApiFactory.CreateAsync();
         var client = factory.CreateClient();
@@ -25,6 +26,7 @@ public sealed class AuthorizationEndpointTests
         Assert.Equal(factory.ActorUserId, auditEvent.ActorUserId);
         Assert.Null(auditEvent.RequestedCompanyId);
         Assert.NotEqual(Guid.Empty, auditEvent.CorrelationId);
+        Assert.NotEqual(factory.CorrelationId, auditEvent.CorrelationId);
         Assert.Equal(AuditOutcome.Denied, auditEvent.Outcome);
     }
 
@@ -117,6 +119,39 @@ public sealed class AuthorizationEndpointTests
         await administrator.SaveChangesAsync();
 
         var response = await factory.CreateClient().GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Capability_map_accepts_a_valid_jwt_bearer_token_from_controlled_metadata_and_jwks()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            factory.CreateJwtToken(JwtTokenVariation.Valid));
+
+        var response = await client.GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(JwtTokenVariation.InvalidSignature)]
+    [InlineData(JwtTokenVariation.InvalidIssuer)]
+    [InlineData(JwtTokenVariation.InvalidAudience)]
+    [InlineData(JwtTokenVariation.Expired)]
+    public async Task Capability_map_rejects_jwt_bearer_tokens_that_fail_production_validation(
+        JwtTokenVariation variation)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            factory.CreateJwtToken(variation));
+
+        var response = await client.GetAsync("/foundation/capabilities");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
