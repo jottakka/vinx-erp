@@ -1,6 +1,6 @@
 namespace Vinx.Erp.Foundation.Domain;
 
-public sealed class IdempotencyRecord
+public sealed class IdempotencyRecord : ICompanyScoped
 {
     private IdempotencyRecord()
     {

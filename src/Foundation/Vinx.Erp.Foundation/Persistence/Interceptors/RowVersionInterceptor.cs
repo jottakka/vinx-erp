@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Vinx.Erp.Foundation.Domain;
 
 namespace Vinx.Erp.Foundation.Persistence.Interceptors;
 
@@ -31,7 +32,7 @@ public sealed class RowVersionInterceptor : SaveChangesInterceptor
         }
 
         foreach (var entry in context.ChangeTracker.Entries()
-                     .Where(entry => entry.State == EntityState.Modified && entry.Metadata.FindProperty("RowVersion") is not null))
+                     .Where(entry => entry.State == EntityState.Modified && entry.Entity is IConcurrencyVersioned))
         {
             AdvanceRowVersion(entry);
         }
@@ -39,7 +40,7 @@ public sealed class RowVersionInterceptor : SaveChangesInterceptor
 
     private static void AdvanceRowVersion(EntityEntry entry)
     {
-        var rowVersion = entry.Property("RowVersion");
+        var rowVersion = entry.Property(nameof(IConcurrencyVersioned.RowVersion));
         var originalValue = rowVersion.OriginalValue as long?;
         rowVersion.CurrentValue = checked((originalValue ?? 0L) + 1L);
     }
