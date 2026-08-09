@@ -124,6 +124,29 @@ public sealed class AuthorizationEndpointTests
     }
 
     [Fact]
+    public async Task Runtime_can_read_external_identity_lookup_without_mutating_it()
+    {
+        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = administrator.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                has_table_privilege('vinx_runtime', 'foundation.external_identities', 'SELECT'),
+                has_table_privilege('vinx_runtime', 'foundation.external_identities', 'INSERT'),
+                has_table_privilege('vinx_runtime', 'foundation.external_identities', 'UPDATE'),
+                has_table_privilege('vinx_runtime', 'foundation.external_identities', 'DELETE')
+            """;
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.False(reader.GetBoolean(1));
+        Assert.False(reader.GetBoolean(2));
+        Assert.False(reader.GetBoolean(3));
+    }
+
+    [Fact]
     public async Task Capability_map_accepts_a_valid_jwt_bearer_token_from_controlled_metadata_and_jwks()
     {
         await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
