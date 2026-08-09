@@ -13,7 +13,7 @@ public sealed class AuthorizationEndpointTests
     [Fact]
     public async Task Capability_map_uses_server_correlation_instead_of_a_client_claim()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var client = factory.CreateClient();
 
         var response = await client.GetAsync("/foundation/capabilities");
@@ -33,7 +33,7 @@ public sealed class AuthorizationEndpointTests
     [Fact]
     public async Task Capability_map_without_membership_returns_the_stable_membership_error()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var companyId = await SeedCompanyAsync(factory);
         var client = factory.CreateClient();
 
@@ -46,7 +46,7 @@ public sealed class AuthorizationEndpointTests
     [Fact]
     public async Task Capability_map_without_a_grant_returns_the_stable_capability_error()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var companyId = await SeedMembershipAsync(factory);
         var client = factory.CreateClient();
 
@@ -59,7 +59,7 @@ public sealed class AuthorizationEndpointTests
     [Fact]
     public async Task Capability_map_returns_distinct_scopes_grouped_by_capability_name()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var companyId = await SeedGrantedMembershipAsync(factory);
         var client = factory.CreateClient();
 
@@ -75,7 +75,7 @@ public sealed class AuthorizationEndpointTests
     [Fact]
     public async Task Capability_map_uses_the_internal_user_mapped_from_issuer_and_subject()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var companyId = await SeedGrantedMembershipAsync(factory);
 
         var response = await factory.CreateClient().GetAsync($"/foundation/capabilities?companyId={companyId}");
@@ -126,7 +126,7 @@ public sealed class AuthorizationEndpointTests
     [Fact]
     public async Task Runtime_can_read_external_identity_lookup_without_mutating_it()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = administrator.CreateCommand();
         command.CommandText =

@@ -69,6 +69,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 resolvedCorrelationId.ToString()));
         await factory._fixture.StartAsync();
         await factory._fixture.MigrateAsync();
+        return factory;
+    }
+
+    public static async Task<FoundationApiFactory> CreateWithAuthenticatedIdentityAsync(
+        Guid? actorUserId = null,
+        Guid? correlationId = null)
+    {
+        var factory = await CreateAsync(actorUserId, correlationId);
         await factory.SeedAuthenticatedActorAsync();
         return factory;
     }

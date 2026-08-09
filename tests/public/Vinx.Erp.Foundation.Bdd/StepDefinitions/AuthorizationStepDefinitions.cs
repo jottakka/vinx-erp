@@ -23,7 +23,7 @@ public sealed class AuthorizationStepDefinitions
     [Given("Ana is authenticated")]
     public async Task GivenAnaIsAuthenticated()
     {
-        _factory = await FoundationApiFactory.CreateAsync();
+        _factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
     }
 
     [When("she requests her capability map without a company identifier")]
@@ -54,7 +54,7 @@ public sealed class AuthorizationStepDefinitions
     [Given("Ana may assign roles in company {string}")]
     public async Task GivenAnaMayAssignRolesInCompany(string companyName)
     {
-        _factory = await FoundationApiFactory.CreateAsync();
+        _factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await using var administrator = Factory.Fixture.CreateAdministratorDbContext();
         var requestId = Guid.NewGuid();
         var group = new Group(Guid.NewGuid(), "Vinx Group", Factory.ActorUserId, requestId);
