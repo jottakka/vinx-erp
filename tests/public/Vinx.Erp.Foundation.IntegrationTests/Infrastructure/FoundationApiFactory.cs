@@ -451,9 +451,9 @@ internal sealed class CountingIdentityProvider(IIdentityProvider inner) : IIdent
 
     public int CallCount => Volatile.Read(ref _callCount);
 
-    public bool TryGetExternalIdentity(ClaimsPrincipal principal, out ExternalIdentityKey key)
+    public bool TryGetExternalIdentityProof(ClaimsPrincipal principal, out ExternalIdentityProof proof)
     {
         Interlocked.Increment(ref _callCount);
-        return inner.TryGetExternalIdentity(principal, out key);
+        return inner.TryGetExternalIdentityProof(principal, out proof);
     }
 }
