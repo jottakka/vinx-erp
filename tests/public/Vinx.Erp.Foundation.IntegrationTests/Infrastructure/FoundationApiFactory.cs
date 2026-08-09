@@ -329,9 +329,15 @@ internal sealed class JwtTestAuthority : IDisposable
 
         foreach (var entry in entries)
         {
-            yield return new Claim("amr", JsonSerializer.Serialize(entry), JsonClaimValueTypes.Json);
+            yield return new Claim("amr", SerializeAmrEntry(entry), JsonClaimValueTypes.Json);
         }
     }
+
+    private static string SerializeAmrEntry(AmrEntry entry) => JsonSerializer.Serialize(new
+    {
+        method = entry.Method,
+        timestamp = entry.Timestamp
+    });
 
     public HttpResponseMessage GetResponse(Uri requestUri)
     {
@@ -426,7 +432,11 @@ public sealed class TestAuthenticationHandler(
         identityClaims.Add(new Claim("iat", claims.IssuedAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
         identityClaims.Add(new Claim("exp", claims.ExpiresAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
         identityClaims.AddRange(claims.Amr.Select(entry =>
-            new Claim("amr", JsonSerializer.Serialize(entry), JsonClaimValueTypes.Json)));
+            new Claim("amr", JsonSerializer.Serialize(new
+            {
+                method = entry.Method,
+                timestamp = entry.Timestamp
+            }), JsonClaimValueTypes.Json)));
 
         var identity = new ClaimsIdentity(identityClaims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);

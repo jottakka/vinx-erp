@@ -162,12 +162,23 @@ public sealed class AuthorizationEndpointTests
         var amrClaims = factory.AuthenticatedJwtPrincipal?.FindAll("amr").ToList();
         Assert.NotNull(amrClaims);
         Assert.Equal(2, amrClaims.Count);
-        Assert.All(amrClaims, claim =>
+        var materializedAmr = amrClaims.Select(claim =>
         {
             Assert.Equal(JsonClaimValueTypes.Json, claim.ValueType);
             using var document = System.Text.Json.JsonDocument.Parse(claim.Value);
             Assert.Equal(System.Text.Json.JsonValueKind.Object, document.RootElement.ValueKind);
-        });
+            Assert.Equal(2, document.RootElement.EnumerateObject().Count());
+            Assert.True(document.RootElement.TryGetProperty("method", out var method));
+            Assert.Equal(System.Text.Json.JsonValueKind.String, method.ValueKind);
+            Assert.True(document.RootElement.TryGetProperty("timestamp", out var timestamp));
+            Assert.Equal(System.Text.Json.JsonValueKind.Number, timestamp.ValueKind);
+            Assert.False(document.RootElement.TryGetProperty("Method", out _));
+            Assert.False(document.RootElement.TryGetProperty("Timestamp", out _));
+            return (Method: method.GetString(), Timestamp: timestamp.GetInt64());
+        }).ToList();
+        var issuedAt = long.Parse(factory.AuthenticatedJwtPrincipal!.FindFirst("iat")!.Value);
+        Assert.Equal(["password", "email"], materializedAmr.Select(entry => entry.Method));
+        Assert.Equal([issuedAt - 10, issuedAt - 20], materializedAmr.Select(entry => entry.Timestamp));
         // JwtBearer removes the parent array, so this boundary cannot distinguish a top-level object from one array item.
     }
 
@@ -183,6 +194,7 @@ public sealed class AuthorizationEndpointTests
         var response = await client.GetAsync("/foundation/capabilities");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("company_context_required", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         Assert.Equal(1, factory.IdentityProviderCallCount);
     }
 
