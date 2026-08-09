@@ -61,6 +61,21 @@ different payload returns `idempotency_conflict`; a separate write that loses a
 business-database integrity race returns the redacted `integrity_conflict` and
 records a denied audit event. Neither response exposes database diagnostics.
 
+## Observabilidade e logging
+
+Todos os hosts configuram `AddVinxLogging`, que preserva `ILogger<T>` nativo e
+emite somente console JSON com timestamp UTC ISO 8601. O filtro reduz os logs
+rotineiros de `Microsoft.AspNetCore` para `Warning`, enquanto `TraceId` e
+`SpanId` acompanham o escopo quando houver uma `Activity`; tags e baggage não
+entram no logging.
+
+Hosts HTTP usam `UseVinxRequestCorrelation` antes dos endpoints. O middleware
+gera um `CorrelationId` UUID no servidor, registra-o no contexto da requisição,
+marca a `Activity` atual e o propaga por scope. Ele não aceita correlação do
+cliente, não registra a requisição e sempre descarta o scope, inclusive em
+exceções. Logs, métricas e auditoria nunca incluem JWT, refresh token,
+credencial, segredo, PII, conteúdo de arquivo, prompt ou payload bruto.
+
 ## Deletion strategy
 
 See Data and audit rules above; this section introduces no second deletion policy.
