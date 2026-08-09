@@ -26,6 +26,10 @@ and database protections deny forged or cross-company requests.
 
 `1.0`
 
+## Modelo de entidades
+
+Entidades mutáveis compartilham identidade, auditoria, exclusão lógica e versão de concorrência por classes-base do domínio, sem dependência do EF. O mapeamento permanece em `Persistence`, e somente entidades que pertencem a uma empresa implementam `ICompanyScoped`.
+
 ## Data and audit rules
 
 Business and configuration data use soft delete with `deleted_at`, `deleted_by_user_id` and `deleted_reason`; a restore is authorized and audited. Audit events are append-only and use retention rather than soft delete. Module data remains explicitly company-scoped; an authorized group-wide view is a union, never a tenant-less record.
