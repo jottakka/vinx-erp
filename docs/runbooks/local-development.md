@@ -28,6 +28,38 @@ The repository's Compose file declares only the shared `vinx-erp` network. It
 does not start a second PostgreSQL, Auth or Storage service alongside
 Supabase.
 
+## Verify private Storage provisioning
+
+Run the dedicated local-provider gate from the repository root:
+
+```bash
+./scripts/verify-supabase-storage.sh
+```
+
+The command starts and stops the project-local Supabase stack itself. It keeps
+the generated service-role key in process environment only, verifies the fixed
+`vinx-foundation-private` bucket is private and does not expose credentials to
+browser code.
+
+## Verify Foundation migrations and schema
+
+The Foundation migration checks use a fresh `postgres:17.9-alpine` container
+and do not use the local Supabase database or require a runtime database
+credential:
+
+```bash
+./scripts/verify-foundation-database.sh
+./scripts/verify-ef-negative-guards.sh
+```
+
+To deliberately refresh the reviewed schema artifact after a migration change,
+run the explicit write command and inspect its diff:
+
+```bash
+./scripts/generate-foundation-schema-snapshot.sh --write
+git diff -- docs/database/foundation-schema.snapshot.sql
+```
+
 ## Troubleshooting startup
 
 The first `npx supabase start` downloads the local Docker images and can take
