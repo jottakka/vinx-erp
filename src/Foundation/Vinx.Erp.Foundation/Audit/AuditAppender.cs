@@ -11,6 +11,7 @@ public sealed class AuditAppender(FoundationDbContext database)
             $"""
             SELECT audit.append_event(
                 {eventData.ActorUserId},
+                {ToDatabaseValue(eventData.Scope)},
                 {eventData.RequestedCompanyId},
                 {ToDatabaseValue(eventData.Source)},
                 {eventData.Action},
@@ -22,6 +23,13 @@ public sealed class AuditAppender(FoundationDbContext database)
                 {eventData.MetadataJson}::jsonb)
             """,
             cancellationToken);
+
+    private static string ToDatabaseValue(AuditScope scope) => scope switch
+    {
+        AuditScope.Global => "global",
+        AuditScope.Company => "company",
+        _ => throw new ArgumentOutOfRangeException(nameof(scope), scope, "Unsupported audit scope.")
+    };
 
     private static string ToDatabaseValue(AuditSource source) => source switch
     {

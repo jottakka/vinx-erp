@@ -88,38 +88,40 @@ public sealed class AuditPrivilegeTests
     }
 
     [Theory]
-    [InlineData("company_context_required", AuditOutcome.Success)]
-    [InlineData("another_action", AuditOutcome.Denied)]
-    public void Null_requested_company_is_rejected_unless_action_and_outcome_are_the_context_required_denial(
-        string action,
-        AuditOutcome outcome)
+    [InlineData(AuditScope.Global, true)]
+    [InlineData(AuditScope.Company, false)]
+    public void Audit_scope_rejects_invalid_requested_company_pair(
+        AuditScope scope,
+        bool hasRequestedCompany)
     {
         Assert.Throws<ArgumentException>(() => new AuditEvent(
             Guid.NewGuid(),
             Guid.NewGuid(),
-            null,
+            scope,
+            hasRequestedCompany ? Guid.NewGuid() : null,
             AuditSource.Web,
-            action,
+            "another_action",
             "authorization",
             null,
-            outcome,
+            AuditOutcome.Denied,
             Guid.NewGuid(),
             "redacted",
             "{}"));
     }
 
     [Fact]
-    public void Null_requested_company_is_allowed_for_the_context_required_denial()
+    public void Global_audit_event_allows_no_requested_company()
     {
         var auditEvent = new AuditEvent(
             Guid.NewGuid(),
             Guid.NewGuid(),
+            AuditScope.Global,
             null,
             AuditSource.Web,
-            "company_context_required",
+            "another_action",
             "authorization",
             null,
-            AuditOutcome.Denied,
+            AuditOutcome.Success,
             Guid.NewGuid(),
             "redacted",
             "{}");
@@ -180,6 +182,7 @@ public sealed class AuditPrivilegeTests
         var auditEvent = new AuditEvent(
             Guid.NewGuid(),
             Guid.NewGuid(),
+            AuditScope.Company,
             Guid.NewGuid(),
             AuditSource.Web,
             "foundation.test",

@@ -95,6 +95,7 @@ public sealed class RoleAssignmentService(
                             JsonSerializer.Serialize(result)));
                         await auditAppender.AppendAsync(new AuditEventData(
                             actor.UserId,
+                            AuditScope.Company,
                             command.CompanyId,
                             AuditSource.Web,
                             CommandName,
@@ -157,6 +158,7 @@ public sealed class RoleAssignmentService(
             await ApplyContextAsync(actor, companyId, cancellationToken);
             await auditAppender.AppendAsync(new AuditEventData(
                 actor.UserId,
+                AuditScope.Company,
                 companyId,
                 AuditSource.Web,
                 denial.ToStableCode(),

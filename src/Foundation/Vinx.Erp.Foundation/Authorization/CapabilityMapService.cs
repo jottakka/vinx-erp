@@ -98,6 +98,7 @@ public sealed class CapabilityMapService(
             await ApplyContextAsync(actor, companyId, cancellationToken);
             await auditAppender.AppendAsync(new AuditEventData(
                 actor.UserId,
+                denial == AuthorizationErrorCode.CompanyContextRequired ? AuditScope.Global : AuditScope.Company,
                 companyId,
                 AuditSource.Web,
                 denial.ToStableCode(),
