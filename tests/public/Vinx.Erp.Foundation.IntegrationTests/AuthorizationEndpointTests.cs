@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Net.Http.Headers;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.JsonWebTokens;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
@@ -147,9 +148,33 @@ public sealed class AuthorizationEndpointTests
     }
 
     [Fact]
-    public async Task Capability_map_accepts_a_valid_jwt_bearer_token_from_controlled_metadata_and_jwks()
+    public async Task Jwt_bearer_materializes_each_amr_array_item_as_a_json_claim_without_its_container()
     {
         await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            factory.CreateJwtToken(JwtTokenVariation.TwoAmrEntries));
+
+        var response = await client.GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var amrClaims = factory.AuthenticatedJwtPrincipal?.FindAll("amr").ToList();
+        Assert.NotNull(amrClaims);
+        Assert.Equal(2, amrClaims.Count);
+        Assert.All(amrClaims, claim =>
+        {
+            Assert.Equal(JsonClaimValueTypes.Json, claim.ValueType);
+            using var document = System.Text.Json.JsonDocument.Parse(claim.Value);
+            Assert.Equal(System.Text.Json.JsonValueKind.Object, document.RootElement.ValueKind);
+        });
+        // JwtBearer removes the parent array, so this boundary cannot distinguish a top-level object from one array item.
+    }
+
+    [Fact]
+    public async Task Capability_map_reaches_the_handler_for_a_valid_jwt_session_proof()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAndCountingIdentityProviderAsync();
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
             "Bearer",
@@ -158,14 +183,18 @@ public sealed class AuthorizationEndpointTests
         var response = await client.GetAsync("/foundation/capabilities");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(1, factory.IdentityProviderCallCount);
     }
 
     [Theory]
-    [InlineData(JwtTokenVariation.InvalidSignature)]
-    [InlineData(JwtTokenVariation.InvalidIssuer)]
-    [InlineData(JwtTokenVariation.InvalidAudience)]
-    [InlineData(JwtTokenVariation.Expired)]
-    public async Task Capability_map_rejects_jwt_bearer_tokens_that_fail_production_validation(
+    [InlineData(JwtTokenVariation.MissingSessionId)]
+    [InlineData(JwtTokenVariation.MalformedSessionId)]
+    [InlineData(JwtTokenVariation.MissingAmr)]
+    [InlineData(JwtTokenVariation.EmptyAmr)]
+    [InlineData(JwtTokenVariation.RefreshOnlyAmr)]
+    [InlineData(JwtTokenVariation.AuthenticatorAfterIssuedAt)]
+    [InlineData(JwtTokenVariation.IssuedAtAtOrAfterExpiresAt)]
+    public async Task Capability_map_rejects_a_valid_jwt_without_session_proof(
         JwtTokenVariation variation)
     {
         await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
@@ -177,6 +206,28 @@ public sealed class AuthorizationEndpointTests
         var response = await client.GetAsync("/foundation/capabilities");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Theory]
+    [InlineData(JwtTokenVariation.InvalidSignature)]
+    [InlineData(JwtTokenVariation.InvalidIssuer)]
+    [InlineData(JwtTokenVariation.InvalidAudience)]
+    [InlineData(JwtTokenVariation.Expired)]
+    public async Task Capability_map_rejects_jwt_bearer_tokens_that_fail_production_validation(
+        JwtTokenVariation variation)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAndCountingIdentityProviderAsync();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            factory.CreateJwtToken(variation));
+
+        var response = await client.GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, factory.IdentityProviderCallCount);
     }
 
     [Theory]
