@@ -92,6 +92,7 @@ Estimativa: 8 arquivos, 341–511 linhas manuais. Um subsistema: ponte de identi
 - Modificar: `src/Foundation/Vinx.Erp.Foundation/Identity/SupabaseIdentityProvider.cs`
 - Modificar: `src/Foundation/Vinx.Erp.Foundation/Identity/InternalIdentityResolver.cs`
 - Renomear/modificar: `tests/public/Vinx.Erp.Foundation.UnitTests/InternalIdentityResolverTests.cs` para `tests/public/Vinx.Erp.Foundation.UnitTests/SupabaseIdentityProviderTests.cs`
+- Modificar: `tests/public/Vinx.Erp.Foundation.IntegrationTests/Infrastructure/FoundationApiFactory.cs` somente para adequar `CountingIdentityProvider` ao método da porta alterada.
 
 **Consome:** fixtures RED da Task 1.
 
@@ -138,7 +139,7 @@ public interface IIdentityProvider
 
 - [ ] **Passo 3: Implementar mínimo.**
 
-  Manter `ExternalIdentityKey`; acrescentar `ExternalIdentityProof`; substituir método da porta. Em `SupabaseIdentityProvider`, exigir exatamente uma claim escalar para `iss`, `sub`, `session_id`, `iat` e `exp`; exigir uma ou mais claims `amr` com `ValueType == JsonClaimValueTypes.Json`. Cada claim AMR deve ser objeto JSON, com exatamente uma propriedade `method` string não vazia e exatamente uma `timestamp` `Int64`; campos extras são ignorados. Usar comparações ordinais, `Guid.TryParseExact(value, "D", out value)`, parse `Int64` invariável e `JsonDocument` local. Rejeitar `exp <= iat`, forma AMR mista ou escalar, e qualquer ambiguidade observável. Duplicidade da propriedade JSON `amr`, assim como objeto top-level versus array de um item, não é observável após o handler; não prometer sua detecção nesta porta. Retornar `false` em todo input adversarial e nunca registrar claims. Em `InternalIdentityResolver`, trocar somente `key` por `proof.Key`, preservando `AsNoTracking`, `SingleOrDefaultAsync` e `CancellationToken`.
+  Manter `ExternalIdentityKey`; acrescentar `ExternalIdentityProof`; substituir método da porta. Em `SupabaseIdentityProvider`, exigir exatamente uma claim escalar para `iss`, `sub`, `session_id`, `iat` e `exp`; exigir uma ou mais claims `amr` com `ValueType == JsonClaimValueTypes.Json`. Cada claim AMR deve ser objeto JSON, com exatamente uma propriedade `method` string não vazia e exatamente uma `timestamp` `Int64`; campos extras são ignorados. Usar comparações ordinais, `Guid.TryParseExact(value, "D", out value)`, parse `Int64` invariável e `JsonDocument` local. Rejeitar `exp <= iat`, forma AMR mista ou escalar, e qualquer ambiguidade observável. Duplicidade da propriedade JSON `amr`, assim como objeto top-level versus array de um item, não é observável após o handler; não prometer sua detecção nesta porta. Retornar `false` em todo input adversarial e nunca registrar claims. Em `InternalIdentityResolver`, trocar somente `key` por `proof.Key`, preservando `AsNoTracking`, `SingleOrDefaultAsync` e `CancellationToken`. Em `CountingIdentityProvider`, implementar o novo método e incrementar o contador antes de devolver prova válida; nenhuma outra fixture ou teste de integração muda nesta tarefa.
 
 - [ ] **Passo 4: Rodar GREEN focado.**
 
