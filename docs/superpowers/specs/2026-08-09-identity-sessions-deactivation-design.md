@@ -2,9 +2,8 @@
 
 ## Status
 
-Proposta para revisão antes do plano de implementação. Esta decisão detalha a
-fatia de sessões da issue #21, subordinada à issue #44. MFA e AAL permanecem
-na issue #18.
+Decisão aprovada em 09/08/2026. Esta decisão detalha a fatia de sessões da
+issue #21, subordinada à issue #44. MFA e AAL permanecem na issue #18.
 
 ## Objetivo
 
@@ -148,11 +147,13 @@ autoridade de plataforma não será introduzida nesta fatia.
 
 ## Entregas e ordem
 
-1. PR de sessão: adapter de claims, modelo EF, gate, operações próprias,
-   auditoria global mínima, migration, documentação e testes públicos.
-2. PR de desativação: capability de grupo, comando transacional, migration,
-   documentação e testes públicos.
-3. Depois de ambas mergeadas, a issue #18 implementa MFA step-up/AAL sobre a
+1. PR-base de auditoria global: escopo tipado, função, grants, snapshot e
+   rollback. Não introduz sessão, endpoint ou alteração de provider.
+2. PR de sessão: adapter de claims, modelo EF, gate e operações próprias,
+   sobre a auditoria global já entregue.
+3. PR de desativação: capability de grupo, comando transacional, migration,
+   documentação e testes públicos, sobre as duas PRs anteriores.
+4. Depois de todas mergeadas, a issue #18 implementa MFA step-up/AAL sobre a
    evidência de sessão já admitida.
 
 ## Critérios verificáveis
