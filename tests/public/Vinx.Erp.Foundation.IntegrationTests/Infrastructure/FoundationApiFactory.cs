@@ -186,7 +186,7 @@ internal sealed class JwtTestAuthority : IDisposable
         var signingKey = new RsaSecurityKey(
             variation == JwtTokenVariation.InvalidSignature ? _invalidSigningRsa : _signingRsa)
         {
-            KeyId = variation == JwtTokenVariation.InvalidSignature ? "unknown-key" : "test-key"
+            KeyId = "test-key"
         };
         var token = new JwtSecurityToken(
             issuer: variation == JwtTokenVariation.InvalidIssuer ? "https://other.supabase.co/auth/v1" : Issuer,
