@@ -161,7 +161,7 @@ ALTER TABLE ONLY foundation.employees FORCE ROW LEVEL SECURITY;
 CREATE TABLE foundation.external_identities (
     id uuid NOT NULL,
     user_id uuid NOT NULL,
-    provider character varying(100) NOT NULL,
+    issuer character varying(200) NOT NULL,
     subject character varying(400) NOT NULL,
     created_at timestamp with time zone NOT NULL
 );
@@ -530,9 +530,9 @@ CREATE UNIQUE INDEX ix_companies_group_id_name ON foundation.companies USING btr
 CREATE UNIQUE INDEX ix_employees_company_id_membership_id ON foundation.employees USING btree (company_id, membership_id) WHERE (deleted_at IS NULL);
 
 
--- Name: ix_external_identities_provider_subject; Type: INDEX; Schema: foundation; Owner: -
+-- Name: ix_external_identities_issuer_subject; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE UNIQUE INDEX ix_external_identities_provider_subject ON foundation.external_identities USING btree (provider, subject);
+CREATE UNIQUE INDEX ix_external_identities_issuer_subject ON foundation.external_identities USING btree (issuer, subject);
 
 
 -- Name: ix_external_identities_user_id; Type: INDEX; Schema: foundation; Owner: -

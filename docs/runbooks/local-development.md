@@ -28,6 +28,20 @@ The repository's Compose file declares only the shared `vinx-erp` network. It
 does not start a second PostgreSQL, Auth or Storage service alongside
 Supabase.
 
+## Configurar a API com Supabase Auth
+
+Defina somente estes nomes de variáveis no ambiente da API:
+
+- `FOUNDATION_RUNTIME_CONNECTION`
+- `SUPABASE_AUTH_ISSUER`
+- `SUPABASE_AUTH_AUDIENCE`
+- `SUPABASE_STORAGE_URL`
+- `SUPABASE_STORAGE_SERVICE_ROLE_KEY`
+
+O JWT deve ter `iss` e `sub` válidos para o emissor configurado. A API não
+cria usuários ou identidades externas no login; esse vínculo é administrado
+antes do acesso.
+
 ## Verify private Storage provisioning
 
 Run the dedicated local-provider gate from the repository root:

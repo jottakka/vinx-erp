@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
+using Vinx.Erp.Foundation.Domain;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -41,20 +42,27 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         var factory = new FoundationApiFactory(
             resolvedActorUserId,
             resolvedCorrelationId,
-            new TestPrincipalClaims(resolvedActorUserId.ToString(), resolvedCorrelationId.ToString()));
+            new TestPrincipalClaims(
+                "https://project.supabase.co/auth/v1",
+                "external-subject",
+                "same-address@example.test",
+                resolvedCorrelationId.ToString()));
         await factory._fixture.StartAsync();
         await factory._fixture.MigrateAsync();
+        await factory.SeedAuthenticatedActorAsync();
         return factory;
     }
 
     public static async Task<FoundationApiFactory> CreateWithClaimsAsync(
-        string? userIdClaim,
-        string? correlationIdClaim)
+        string? issuer,
+        string? subject,
+        string? email = "same-address@example.test",
+        string? correlationIdClaim = null)
     {
         var factory = new FoundationApiFactory(
             Guid.NewGuid(),
             Guid.NewGuid(),
-            new TestPrincipalClaims(userIdClaim, correlationIdClaim));
+            new TestPrincipalClaims(issuer, subject, email, correlationIdClaim));
         await factory._fixture.StartAsync();
         await factory._fixture.MigrateAsync();
         return factory;
@@ -65,6 +73,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         builder.UseSetting("FOUNDATION_RUNTIME_CONNECTION", _fixture.RuntimeConnectionString);
         builder.UseSetting("SUPABASE_STORAGE_URL", "http://127.0.0.1:54321");
         builder.UseSetting("SUPABASE_STORAGE_SERVICE_ROLE_KEY", "test-service-role-key");
+        builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.co/auth/v1");
+        builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<DbContextOptions<FoundationDbContext>>();
@@ -88,9 +98,26 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         await _fixture.DisposeAsync();
         await base.DisposeAsync();
     }
+
+    private async Task SeedAuthenticatedActorAsync()
+    {
+        await using var administrator = _fixture.CreateAdministratorDbContext();
+        administrator.AddRange(
+            new User(ActorUserId, "Ana", "same-address@example.test"),
+            new ExternalIdentity(
+                Guid.NewGuid(),
+                ActorUserId,
+                "https://project.supabase.co/auth/v1",
+                "external-subject"));
+        await administrator.SaveChangesAsync();
+    }
 }
 
-public sealed record TestPrincipalClaims(string? UserId, string? CorrelationId);
+public sealed record TestPrincipalClaims(
+    string? Issuer,
+    string? Subject,
+    string? Email,
+    string? CorrelationId);
 
 public sealed class TestAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
@@ -101,9 +128,19 @@ public sealed class TestAuthenticationHandler(
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var identityClaims = new List<Claim>();
-        if (claims.UserId is not null)
+        if (claims.Issuer is not null)
         {
-            identityClaims.Add(new Claim(ClaimTypes.NameIdentifier, claims.UserId));
+            identityClaims.Add(new Claim("iss", claims.Issuer));
+        }
+
+        if (claims.Subject is not null)
+        {
+            identityClaims.Add(new Claim("sub", claims.Subject));
+        }
+
+        if (claims.Email is not null)
+        {
+            identityClaims.Add(new Claim(ClaimTypes.Email, claims.Email));
         }
 
         if (claims.CorrelationId is not null)

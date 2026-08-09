@@ -24,7 +24,7 @@ public sealed class AuthorizationEndpointTests
         var auditEvent = await administrator.AuditEvents.SingleAsync();
         Assert.Equal(factory.ActorUserId, auditEvent.ActorUserId);
         Assert.Null(auditEvent.RequestedCompanyId);
-        Assert.Equal(factory.CorrelationId, auditEvent.CorrelationId);
+        Assert.NotEqual(Guid.Empty, auditEvent.CorrelationId);
         Assert.Equal(AuditOutcome.Denied, auditEvent.Outcome);
     }
 
@@ -70,16 +70,65 @@ public sealed class AuthorizationEndpointTests
         Assert.Equal(["Company", "Team"], capability.Scopes.OrderBy(scope => scope));
     }
 
-    [Theory]
-    [InlineData(null, "00000000-0000-0000-0000-000000000001")]
-    [InlineData("not-a-user-id", "00000000-0000-0000-0000-000000000001")]
-    [InlineData("00000000-0000-0000-0000-000000000001", null)]
-    [InlineData("00000000-0000-0000-0000-000000000001", "not-a-correlation-id")]
-    public async Task Capability_map_with_missing_or_malformed_actor_claims_returns_generic_unauthorized(
-        string? userIdClaim,
-        string? correlationIdClaim)
+    [Fact]
+    public async Task Capability_map_uses_the_internal_user_mapped_from_issuer_and_subject()
     {
-        await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(userIdClaim, correlationIdClaim);
+        await using var factory = await FoundationApiFactory.CreateAsync();
+        var companyId = await SeedGrantedMembershipAsync(factory);
+
+        var response = await factory.CreateClient().GetAsync($"/foundation/capabilities?companyId={companyId}");
+
+        response.EnsureSuccessStatusCode();
+        var capability = Assert.Single(await response.Content.ReadFromJsonAsync<List<CapabilityResponse>>() ?? []);
+        Assert.Equal("foundation.roles.assign", capability.Name);
+    }
+
+    [Fact]
+    public async Task Capability_map_rejects_an_unknown_external_identity_without_using_email()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(
+            "https://project.supabase.co/auth/v1",
+            "unknown-subject");
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        administrator.Users.Add(new User(factory.ActorUserId, "Ana", "same-address@example.test"));
+        await administrator.SaveChangesAsync();
+
+        var response = await factory.CreateClient().GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(1, await administrator.Users.CountAsync());
+        Assert.Empty(await administrator.ExternalIdentities.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Capability_map_rejects_an_identity_from_another_issuer()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(
+            "https://another-project.supabase.co/auth/v1",
+            "external-subject");
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        administrator.AddRange(
+            new User(factory.ActorUserId, "Ana", "same-address@example.test"),
+            new ExternalIdentity(
+                Guid.NewGuid(),
+                factory.ActorUserId,
+                "https://project.supabase.co/auth/v1",
+                "external-subject"));
+        await administrator.SaveChangesAsync();
+
+        var response = await factory.CreateClient().GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null, "external-subject")]
+    [InlineData("https://project.supabase.co/auth/v1", null)]
+    public async Task Capability_map_rejects_missing_external_identity_claims(
+        string? issuer,
+        string? subject)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(issuer, subject);
         var response = await factory.CreateClient().GetAsync("/foundation/capabilities");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
@@ -101,8 +150,7 @@ public sealed class AuthorizationEndpointTests
     {
         var companyId = await SeedCompanyAsync(factory);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var actor = new User(factory.ActorUserId, "Ana", "ana@example.test");
-        administrator.AddRange(actor, new Membership(
+        administrator.Add(new Membership(
             Guid.NewGuid(),
             companyId,
             factory.ActorUserId,
