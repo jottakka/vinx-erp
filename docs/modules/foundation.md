@@ -38,6 +38,11 @@ See Data and audit rules above; this section introduces no second deletion polic
 
 The first migration is `InitialFoundationBaseline`.
 
+The current database ownership boundary uses `vinx_migrator LOGIN NOINHERIT
+NOBYPASSRLS`, `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS` and
+`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`. These roles are distinct from
+the legacy Supabase `anon`, `authenticated` and `service_role` roles.
+
 ## Module responsibilities
 
 Each module defines its own use cases, state transitions and resource-level rules. It asks Foundation to evaluate the relevant named capability and scope, resolve configured alçadas, record an audit event, propagate correlation and use provider boundaries. It must not add a broad shared abstraction merely for future reuse.

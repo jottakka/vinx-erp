@@ -32,6 +32,30 @@ public sealed class ModuleContractDocumentationTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void LegacyInventoryUsesStableReviewSections()
+    {
+        var text = File.ReadAllText(Path.Combine(RepositoryRoot(), "docs/inventory/legacy-foundation-inventory.md"));
+
+        foreach (var heading in new[]
+        {
+            "## Tables",
+            "## Views",
+            "## Functions",
+            "## Policies",
+            "## Buckets",
+            "## Routed screens",
+            "### Services",
+            "### Edge Functions",
+            "### Direct integrations"
+        })
+        {
+            Assert.Contains(heading, text, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("src/lib/frasesMotivacionais.ts", text, StringComparison.Ordinal);
+    }
+
     private static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

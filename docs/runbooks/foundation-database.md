@@ -38,9 +38,15 @@ Task 7 used a disposable detached clone of
 legacy migration, service, DDL or data command was run. Discovery was limited
 to `rg` inside that explicit clone.
 
-The legacy authorization evidence is classified around `anon`,
-`authenticated` and `service_role`; it is reference evidence, not provider
-state. Any future isolated database check uses `postgres:17.9-alpine` and a
+The fixed current Foundation database roles are:
+
+- `vinx_migrator LOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+
+These current-repository roles are distinct from the legacy Supabase roles
+`anon`, `authenticated` and `service_role`, which are reference evidence only.
+Any future isolated database check uses `postgres:17.9-alpine` and a
 schema-only snapshot boundary:
 
 ```bash
