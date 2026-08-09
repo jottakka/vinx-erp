@@ -33,7 +33,7 @@ public sealed class AuditTransactionTests
     [Fact]
     public async Task Failed_denial_audit_returns_a_stable_audit_error_without_exposing_database_details()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await RevokeAuditAppendAsync(factory);
         using var telemetry = new AuthorizationTelemetryCollector();
         var client = factory.CreateClient();

@@ -23,7 +23,7 @@ public sealed class AuthorizationStepDefinitions
     [Given("Ana is authenticated")]
     public async Task GivenAnaIsAuthenticated()
     {
-        _factory = await FoundationApiFactory.CreateAsync();
+        _factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
     }
 
     [When("she requests her capability map without a company identifier")]
@@ -46,22 +46,27 @@ public sealed class AuthorizationStepDefinitions
         await using var administrator = Factory.Fixture.CreateAdministratorDbContext();
         var denial = await administrator.AuditEvents.SingleAsync(auditEvent => auditEvent.Outcome == AuditOutcome.Denied);
         Assert.Equal(Factory.ActorUserId, denial.ActorUserId);
-        Assert.Equal(Factory.CorrelationId, denial.CorrelationId);
+        Assert.NotEqual(Guid.Empty, denial.CorrelationId);
+        Assert.NotEqual(Factory.CorrelationId, denial.CorrelationId);
         Assert.Null(denial.RequestedCompanyId);
     }
 
     [Given("Ana may assign roles in company {string}")]
     public async Task GivenAnaMayAssignRolesInCompany(string companyName)
     {
-        _factory = await FoundationApiFactory.CreateAsync();
+        _factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await using var administrator = Factory.Fixture.CreateAdministratorDbContext();
         var requestId = Guid.NewGuid();
         var group = new Group(Guid.NewGuid(), "Vinx Group", Factory.ActorUserId, requestId);
         var company = new Company(Guid.NewGuid(), group.Id, companyName, Factory.ActorUserId, requestId);
         var otherCompany = new Company(Guid.NewGuid(), group.Id, "Vinx Serviços", Factory.ActorUserId, requestId);
-        var actor = new User(Factory.ActorUserId, "Ana", "ana@example.test");
         var target = new User(Guid.NewGuid(), "Bea", "bea@example.test");
-        var actorMembership = new Membership(Guid.NewGuid(), company.Id, actor.Id, Factory.ActorUserId, requestId);
+        var actorMembership = new Membership(
+            Guid.NewGuid(),
+            company.Id,
+            Factory.ActorUserId,
+            Factory.ActorUserId,
+            requestId);
         var targetMembership = new Membership(Guid.NewGuid(), otherCompany.Id, target.Id, Factory.ActorUserId, requestId);
         var administratorRole = new Role(Guid.NewGuid(), company.Id, "Foundation administrator", Factory.ActorUserId, requestId);
         var targetRole = new Role(Guid.NewGuid(), company.Id, "Operator", Factory.ActorUserId, requestId);
@@ -75,7 +80,6 @@ public sealed class AuthorizationStepDefinitions
             group,
             company,
             otherCompany,
-            actor,
             target,
             actorMembership,
             targetMembership,

@@ -6,20 +6,20 @@ public sealed class ExternalIdentity
     {
     }
 
-    public ExternalIdentity(Guid id, Guid userId, string provider, string subject)
+    public ExternalIdentity(Guid id, Guid userId, string issuer, string subject)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(issuer);
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
         Id = id;
         UserId = userId;
-        Provider = provider;
+        Issuer = issuer;
         Subject = subject;
         CreatedAt = DateTimeOffset.UtcNow;
     }
 
     public Guid Id { get; private set; }
     public Guid UserId { get; private set; }
-    public string Provider { get; private set; } = null!;
+    public string Issuer { get; private set; } = null!;
     public string Subject { get; private set; } = null!;
     public DateTimeOffset CreatedAt { get; private set; }
 

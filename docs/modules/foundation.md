@@ -22,6 +22,17 @@ The frontend receives effective capabilities only to shape menus, routes,
 buttons, columns and data. It is never the authorization authority. API, MCP
 and database protections deny forged or cross-company requests.
 
+## Identidade autenticada
+
+A API valida o JWT do Supabase Auth e resolve o ator interno exclusivamente
+pelo par imutável `issuer` + `subject` em `foundation.external_identities`.
+E-mail não participa da resolução e uma identidade externa desconhecida recebe
+`401`; a API não cria `User` nem `ExternalIdentity` durante uma requisição.
+O runtime possui somente `SELECT` nessa tabela para essa consulta.
+Configure a API com `SUPABASE_AUTH_ISSUER` e `SUPABASE_AUTH_AUDIENCE`;
+`FOUNDATION_RUNTIME_CONNECTION`, `SUPABASE_STORAGE_URL` e
+`SUPABASE_STORAGE_SERVICE_ROLE_KEY` continuam obrigatórias para a infraestrutura.
+
 ## Contract version
 
 `1.0`

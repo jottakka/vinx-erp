@@ -109,9 +109,9 @@ public sealed class ExternalIdentityConfiguration : IEntityTypeConfiguration<Ext
         builder.ToTable("external_identities");
         builder.HasKey(entity => entity.Id);
         builder.Property(entity => entity.Id).ValueGeneratedNever();
-        builder.Property(entity => entity.Provider).HasMaxLength(100).IsRequired();
+        builder.Property(entity => entity.Issuer).HasMaxLength(200).IsRequired();
         builder.Property(entity => entity.Subject).HasMaxLength(400).IsRequired();
-        builder.HasIndex(entity => new { entity.Provider, entity.Subject }).IsUnique();
+        builder.HasIndex(entity => new { entity.Issuer, entity.Subject }).IsUnique();
         builder.HasOne(entity => entity.User)
             .WithMany()
             .HasForeignKey(entity => entity.UserId)

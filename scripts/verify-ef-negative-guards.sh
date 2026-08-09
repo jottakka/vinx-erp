@@ -147,7 +147,7 @@ fi
 
 perl -0pi -e 's/(protected override void Up\(MigrationBuilder migrationBuilder\)\s*\{)/$1\n            migrationBuilder.Sql("SELECT 1 \/ 0");/' \
   "$broken_migration"
-if ! rg --quiet 'migrationBuilder\.Sql\("SELECT 1 / 0"\)' "$broken_migration"; then
+if ! grep --quiet --fixed-strings 'migrationBuilder.Sql("SELECT 1 / 0")' "$broken_migration"; then
   echo "The controlled BrokenMigration did not contain its deliberate failure." >&2
   exit 1
 fi

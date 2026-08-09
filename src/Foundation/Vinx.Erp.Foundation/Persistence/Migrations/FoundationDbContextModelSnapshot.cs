@@ -280,11 +280,11 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
-                    b.Property<string>("Provider")
+                    b.Property<string>("Issuer")
                         .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)")
-                        .HasColumnName("provider");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("issuer");
 
                     b.Property<string>("Subject")
                         .IsRequired()
@@ -302,9 +302,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.HasIndex("UserId")
                         .HasDatabaseName("ix_external_identities_user_id");
 
-                    b.HasIndex("Provider", "Subject")
+                    b.HasIndex("Issuer", "Subject")
                         .IsUnique()
-                        .HasDatabaseName("ix_external_identities_provider_subject");
+                        .HasDatabaseName("ix_external_identities_issuer_subject");
 
                     b.ToTable("external_identities", "foundation");
                 });

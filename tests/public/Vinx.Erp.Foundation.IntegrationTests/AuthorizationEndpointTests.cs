@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using Microsoft.EntityFrameworkCore;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -10,9 +11,9 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class AuthorizationEndpointTests
 {
     [Fact]
-    public async Task Capability_map_without_a_company_returns_the_stable_context_error_and_audits_the_denial()
+    public async Task Capability_map_uses_server_correlation_instead_of_a_client_claim()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var client = factory.CreateClient();
 
         var response = await client.GetAsync("/foundation/capabilities");
@@ -24,14 +25,15 @@ public sealed class AuthorizationEndpointTests
         var auditEvent = await administrator.AuditEvents.SingleAsync();
         Assert.Equal(factory.ActorUserId, auditEvent.ActorUserId);
         Assert.Null(auditEvent.RequestedCompanyId);
-        Assert.Equal(factory.CorrelationId, auditEvent.CorrelationId);
+        Assert.NotEqual(Guid.Empty, auditEvent.CorrelationId);
+        Assert.NotEqual(factory.CorrelationId, auditEvent.CorrelationId);
         Assert.Equal(AuditOutcome.Denied, auditEvent.Outcome);
     }
 
     [Fact]
     public async Task Capability_map_without_membership_returns_the_stable_membership_error()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var companyId = await SeedCompanyAsync(factory);
         var client = factory.CreateClient();
 
@@ -44,7 +46,7 @@ public sealed class AuthorizationEndpointTests
     [Fact]
     public async Task Capability_map_without_a_grant_returns_the_stable_capability_error()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var companyId = await SeedMembershipAsync(factory);
         var client = factory.CreateClient();
 
@@ -57,7 +59,7 @@ public sealed class AuthorizationEndpointTests
     [Fact]
     public async Task Capability_map_returns_distinct_scopes_grouped_by_capability_name()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var companyId = await SeedGrantedMembershipAsync(factory);
         var client = factory.CreateClient();
 
@@ -70,16 +72,121 @@ public sealed class AuthorizationEndpointTests
         Assert.Equal(["Company", "Team"], capability.Scopes.OrderBy(scope => scope));
     }
 
-    [Theory]
-    [InlineData(null, "00000000-0000-0000-0000-000000000001")]
-    [InlineData("not-a-user-id", "00000000-0000-0000-0000-000000000001")]
-    [InlineData("00000000-0000-0000-0000-000000000001", null)]
-    [InlineData("00000000-0000-0000-0000-000000000001", "not-a-correlation-id")]
-    public async Task Capability_map_with_missing_or_malformed_actor_claims_returns_generic_unauthorized(
-        string? userIdClaim,
-        string? correlationIdClaim)
+    [Fact]
+    public async Task Capability_map_uses_the_internal_user_mapped_from_issuer_and_subject()
     {
-        await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(userIdClaim, correlationIdClaim);
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var companyId = await SeedGrantedMembershipAsync(factory);
+
+        var response = await factory.CreateClient().GetAsync($"/foundation/capabilities?companyId={companyId}");
+
+        response.EnsureSuccessStatusCode();
+        var capability = Assert.Single(await response.Content.ReadFromJsonAsync<List<CapabilityResponse>>() ?? []);
+        Assert.Equal("foundation.roles.assign", capability.Name);
+    }
+
+    [Fact]
+    public async Task Capability_map_rejects_an_unknown_external_identity_without_using_email()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(
+            "https://project.supabase.co/auth/v1",
+            "unknown-subject");
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        administrator.Users.Add(new User(factory.ActorUserId, "Ana", "same-address@example.test"));
+        await administrator.SaveChangesAsync();
+
+        var response = await factory.CreateClient().GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(1, await administrator.Users.CountAsync());
+        Assert.Empty(await administrator.ExternalIdentities.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Capability_map_rejects_an_identity_from_another_issuer()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(
+            "https://another-project.supabase.co/auth/v1",
+            "external-subject");
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        administrator.AddRange(
+            new User(factory.ActorUserId, "Ana", "same-address@example.test"),
+            new ExternalIdentity(
+                Guid.NewGuid(),
+                factory.ActorUserId,
+                "https://project.supabase.co/auth/v1",
+                "external-subject"));
+        await administrator.SaveChangesAsync();
+
+        var response = await factory.CreateClient().GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Runtime_can_read_external_identity_lookup_without_mutating_it()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = administrator.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                has_table_privilege('vinx_runtime', 'foundation.external_identities', 'SELECT'),
+                has_table_privilege('vinx_runtime', 'foundation.external_identities', 'INSERT'),
+                has_table_privilege('vinx_runtime', 'foundation.external_identities', 'UPDATE'),
+                has_table_privilege('vinx_runtime', 'foundation.external_identities', 'DELETE')
+            """;
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.False(reader.GetBoolean(1));
+        Assert.False(reader.GetBoolean(2));
+        Assert.False(reader.GetBoolean(3));
+    }
+
+    [Fact]
+    public async Task Capability_map_accepts_a_valid_jwt_bearer_token_from_controlled_metadata_and_jwks()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            factory.CreateJwtToken(JwtTokenVariation.Valid));
+
+        var response = await client.GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(JwtTokenVariation.InvalidSignature)]
+    [InlineData(JwtTokenVariation.InvalidIssuer)]
+    [InlineData(JwtTokenVariation.InvalidAudience)]
+    [InlineData(JwtTokenVariation.Expired)]
+    public async Task Capability_map_rejects_jwt_bearer_tokens_that_fail_production_validation(
+        JwtTokenVariation variation)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            factory.CreateJwtToken(variation));
+
+        var response = await client.GetAsync("/foundation/capabilities");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null, "external-subject")]
+    [InlineData("https://project.supabase.co/auth/v1", null)]
+    public async Task Capability_map_rejects_missing_external_identity_claims(
+        string? issuer,
+        string? subject)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(issuer, subject);
         var response = await factory.CreateClient().GetAsync("/foundation/capabilities");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
@@ -101,8 +208,7 @@ public sealed class AuthorizationEndpointTests
     {
         var companyId = await SeedCompanyAsync(factory);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var actor = new User(factory.ActorUserId, "Ana", "ana@example.test");
-        administrator.AddRange(actor, new Membership(
+        administrator.Add(new Membership(
             Guid.NewGuid(),
             companyId,
             factory.ActorUserId,

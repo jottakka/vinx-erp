@@ -1,8 +1,8 @@
+using System.Diagnostics;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
-using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-using Vinx.Erp.ApiHost.Authentication;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
@@ -33,6 +33,16 @@ var storageOptions = new SupabaseStorageOptions(
     SupabaseStorageOptions.PrivateContainerId);
 storageOptions.Validate();
 
+var authIssuer = builder.Configuration["SUPABASE_AUTH_ISSUER"];
+var authAudience = builder.Configuration["SUPABASE_AUTH_AUDIENCE"];
+if (!Uri.TryCreate(authIssuer, UriKind.Absolute, out var authIssuerUri)
+    || string.IsNullOrWhiteSpace(authAudience))
+{
+    throw new InvalidOperationException("Supabase Auth configuration must be configured.");
+}
+
+var normalizedAuthIssuer = authIssuerUri.AbsoluteUri.TrimEnd('/');
+
 builder.Services.AddDbContext<FoundationDbContext>(options => options
     .UseNpgsql(runtimeConnection)
     .UseSnakeCaseNamingConvention()
@@ -40,35 +50,56 @@ builder.Services.AddDbContext<FoundationDbContext>(options => options
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
 builder.Services.AddScoped<RoleAssignmentService>();
+builder.Services.AddSingleton<IIdentityProvider>(new SupabaseIdentityProvider(normalizedAuthIssuer));
+builder.Services.AddScoped<InternalIdentityResolver>();
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddHttpClient<SupabaseFileStorage>(client => client.BaseAddress = storageOptions.BaseUri);
 builder.Services.AddScoped<FileStorage>(serviceProvider => serviceProvider.GetRequiredService<SupabaseFileStorage>());
 builder.Services.AddSingleton<AuthorizationTelemetry>();
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = "FoundationDeferred";
-    options.DefaultChallengeScheme = "FoundationDeferred";
-}).AddScheme<AuthenticationSchemeOptions, DeferredAuthenticationHandler>("FoundationDeferred", _ => { });
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.Authority = normalizedAuthIssuer;
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters.ValidIssuer = normalizedAuthIssuer;
+        options.TokenValidationParameters.ValidAudience = authAudience;
+        options.TokenValidationParameters.ValidateIssuer = true;
+        options.TokenValidationParameters.ValidateAudience = true;
+        options.TokenValidationParameters.ValidateIssuerSigningKey = true;
+        options.TokenValidationParameters.ValidateLifetime = true;
+    });
 builder.Services.AddAuthorization();
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
 var app = builder.Build();
 
+app.Use(async (context, next) =>
+{
+    var correlation = ServerCorrelationContext.Begin(context);
+    Activity.Current?.SetTag("vinx.correlation_id", correlation.CorrelationId.ToString());
+    await next(context);
+});
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapFoundationHealthEndpoints();
 app.MapGet("/foundation/capabilities", async (
     Guid? companyId,
+    HttpContext httpContext,
     ClaimsPrincipal principal,
+    InternalIdentityResolver identityResolver,
     CapabilityMapService service,
     CancellationToken cancellationToken) =>
 {
-    if (!ActorContext.TryFromAuthenticatedPrincipal(principal, out var actor))
+    var internalUserId = await identityResolver.ResolveAsync(principal, cancellationToken);
+    if (internalUserId is null)
     {
         return Results.Unauthorized();
     }
 
+    var actor = new ActorContext(
+        internalUserId.Value,
+        ServerCorrelationContext.Get(httpContext).CorrelationId);
     var result = await service.GetCapabilitiesAsync(actor, companyId, cancellationToken);
     return result.ToMinimalApiResult();
 }).RequireAuthorization();
