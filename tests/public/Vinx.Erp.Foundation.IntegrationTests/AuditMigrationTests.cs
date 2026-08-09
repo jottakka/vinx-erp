@@ -69,10 +69,10 @@ public sealed class AuditMigrationTests
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
         await fixture.MigrateAsync();
-        await using (var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString))
+        await using (var companyRuntime = new NpgsqlConnection(fixture.RuntimeConnectionString))
         {
-            await runtime.OpenAsync();
-            await AppendCurrentEventAsync(runtime, "company", Guid.NewGuid());
+            await companyRuntime.OpenAsync();
+            await AppendCurrentEventAsync(companyRuntime, "company", Guid.NewGuid());
         }
 
         await using var migrator = fixture.CreateMigratorDbContext();
@@ -86,13 +86,47 @@ public sealed class AuditMigrationTests
                 to_regprocedure('audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)') IS NULL,
                 NOT EXISTS (
                     SELECT 1 FROM pg_attribute
-                    WHERE attrelid = 'audit.audit_events'::regclass AND attname = 'scope')
+                    WHERE attrelid = 'audit.audit_events'::regclass AND attname = 'scope'),
+                pg_get_userbyid(appender.proowner),
+                appender.prosecdef,
+                appender.proconfig,
+                has_function_privilege(
+                    'vinx_runtime',
+                    'audit.append_event(uuid,uuid,text,text,text,uuid,text,uuid,text,jsonb)',
+                    'EXECUTE'),
+                NOT EXISTS (
+                    SELECT 1
+                    FROM aclexplode(COALESCE(appender.proacl, acldefault('f', appender.proowner))) AS privilege
+                    WHERE privilege.grantee = 0 AND privilege.privilege_type = 'EXECUTE'),
+                NOT has_schema_privilege('vinx_audit_owner', 'audit', 'CREATE'),
+                pg_get_constraintdef(table_constraint.oid) LIKE
+                    '%requested_company_id IS NOT NULL%company_context_required%denied%'
+            FROM pg_proc AS appender
+            CROSS JOIN pg_constraint AS table_constraint
+            WHERE appender.oid = 'audit.append_event(uuid,uuid,text,text,text,uuid,text,uuid,text,jsonb)'::regprocedure
+              AND table_constraint.conrelid = 'audit.audit_events'::regclass
+              AND table_constraint.conname = 'ck_audit_events_requested_company'
             """, administrator);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.True(reader.GetBoolean(0));
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
+        Assert.Equal("vinx_audit_owner", reader.GetString(3));
+        Assert.True(reader.GetBoolean(4));
+        Assert.Equal(["search_path=audit, pg_catalog"], reader.GetFieldValue<string[]>(5));
+        Assert.True(reader.GetBoolean(6));
+        Assert.True(reader.GetBoolean(7));
+        Assert.True(reader.GetBoolean(8));
+        Assert.True(reader.GetBoolean(9));
+
+        await reader.CloseAsync();
+        await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+        await AppendLegacyEventAsync(runtime, null, "company_context_required", "denied");
+        var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
+            await AppendLegacyEventAsync(runtime, null, "foundation.test", "success"));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
     }
 
     [Fact]
@@ -132,16 +166,24 @@ public sealed class AuditMigrationTests
     }
 
     private static async Task InsertLegacyEventAsync(NpgsqlConnection runtime, Guid? companyId, string action)
+        => await AppendLegacyEventAsync(runtime, companyId, action, "denied");
+
+    private static async Task AppendLegacyEventAsync(
+        NpgsqlConnection runtime,
+        Guid? companyId,
+        string action,
+        string outcome)
     {
         await using var command = new NpgsqlCommand(
             """
             SELECT audit.append_event(
                 @actor_user_id, @requested_company_id, 'web', @action, 'test', NULL,
-                'denied', @correlation_id, 'redacted', '{}'::jsonb)
+                @outcome, @correlation_id, 'redacted', '{}'::jsonb)
             """, runtime);
         command.Parameters.AddWithValue("actor_user_id", Guid.NewGuid());
         command.Parameters.AddWithValue("requested_company_id", (object?)companyId ?? DBNull.Value);
         command.Parameters.AddWithValue("action", action);
+        command.Parameters.AddWithValue("outcome", outcome);
         command.Parameters.AddWithValue("correlation_id", Guid.NewGuid());
         await command.ExecuteNonQueryAsync();
     }

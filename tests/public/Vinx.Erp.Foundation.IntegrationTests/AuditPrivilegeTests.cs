@@ -9,25 +9,24 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class AuditPrivilegeTests
 {
     [Fact]
-    public async Task Runtime_role_cannot_update_or_delete_audit_events()
+    public async Task Audit_append_only_trigger_rejects_a_table_writer_that_is_not_the_audit_owner()
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
         await fixture.MigrateAsync();
         var auditEventId = await SeedAuditEventAsync(fixture);
 
-        await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
-        await runtime.OpenAsync();
+        await using var writer = await OpenTableWriterAsync(fixture);
 
         await using var update = new NpgsqlCommand(
-            "UPDATE audit.audit_events SET action = 'changed' WHERE id = @id", runtime);
+            "UPDATE audit.audit_events SET action = 'changed' WHERE id = @id", writer);
         update.Parameters.AddWithValue("id", auditEventId);
         var updateException = await Assert.ThrowsAsync<PostgresException>(async () =>
             await update.ExecuteNonQueryAsync());
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, updateException.SqlState);
 
         await using var delete = new NpgsqlCommand(
-            "DELETE FROM audit.audit_events WHERE id = @id", runtime);
+            "DELETE FROM audit.audit_events WHERE id = @id", writer);
         delete.Parameters.AddWithValue("id", auditEventId);
         var deleteException = await Assert.ThrowsAsync<PostgresException>(async () =>
             await delete.ExecuteNonQueryAsync());
@@ -268,5 +267,30 @@ public sealed class AuditPrivilegeTests
         administrator.AuditEvents.Add(auditEvent);
         await administrator.SaveChangesAsync();
         return auditEvent.Id;
+    }
+
+    private static async Task<NpgsqlConnection> OpenTableWriterAsync(FoundationPostgresFixture fixture)
+    {
+        var roleName = $"audit_trigger_writer_{Guid.NewGuid():N}";
+        var password = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var grant = new NpgsqlCommand(
+            $"""
+            CREATE ROLE {roleName} LOGIN PASSWORD '{password}';
+            GRANT USAGE ON SCHEMA audit TO {roleName};
+            GRANT SELECT, UPDATE, DELETE ON TABLE audit.audit_events TO {roleName};
+            """, administrator))
+        {
+            await grant.ExecuteNonQueryAsync();
+        }
+
+        var connectionString = new NpgsqlConnectionStringBuilder(fixture.RuntimeConnectionString)
+        {
+            Username = roleName,
+            Password = password
+        }.ConnectionString;
+        var writer = new NpgsqlConnection(connectionString);
+        await writer.OpenAsync();
+        return writer;
     }
 }
