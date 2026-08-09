@@ -47,6 +47,36 @@ public sealed class RoleAssignmentServiceIntegrationTests
     }
 
     [Fact]
+    public async Task Reusing_a_role_assignment_with_a_new_request_returns_a_redacted_integrity_conflict_and_audits_the_denial()
+    {
+        await using var factory = await FoundationApiFactory.CreateAsync();
+        var scenario = await SeedScenarioAsync(factory);
+
+        var first = await InvokeAssignmentAsync(
+            factory,
+            scenario.CompanyId,
+            scenario.AssignableRoleId,
+            scenario.TargetMembershipId,
+            Guid.NewGuid());
+        var conflict = await InvokeAssignmentAsync(
+            factory,
+            scenario.CompanyId,
+            scenario.AssignableRoleId,
+            scenario.TargetMembershipId,
+            Guid.NewGuid());
+
+        Assert.Null(ErrorCode(first));
+        Assert.Equal("integrity_conflict", ErrorCode(conflict));
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var denial = await administrator.AuditEvents.SingleAsync(auditEvent =>
+            auditEvent.Outcome == AuditOutcome.Denied && auditEvent.Action == "integrity_conflict");
+        Assert.Equal("integrity_conflict", denial.Reason);
+        Assert.DoesNotContain("role_assignments", denial.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, await administrator.RoleAssignments.CountAsync(assignment =>
+            assignment.RoleId == scenario.AssignableRoleId && assignment.MembershipId == scenario.TargetMembershipId));
+    }
+
+    [Fact]
     public async Task Replaying_an_assignment_request_after_the_actor_loses_the_required_capability_is_denied_and_audited()
     {
         await using var factory = await FoundationApiFactory.CreateAsync();

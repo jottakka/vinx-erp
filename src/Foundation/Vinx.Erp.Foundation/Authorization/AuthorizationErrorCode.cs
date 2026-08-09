@@ -7,5 +7,6 @@ public enum AuthorizationErrorCode
     CapabilityDenied,
     ResourceNotFound,
     IdempotencyConflict,
+    IntegrityConflict,
     AuditUnavailable
 }

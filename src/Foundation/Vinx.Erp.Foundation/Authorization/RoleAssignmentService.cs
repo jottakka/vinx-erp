@@ -198,7 +198,11 @@ public sealed class RoleAssignmentService(
             await transaction.RollbackAsync(cancellationToken);
             if (record is null)
             {
-                return AuditUnavailable(AuditUnavailablePhase.ConcurrentReplay);
+                return await ReturnAuditedDenialAsync(
+                    actor,
+                    command.CompanyId,
+                    AuthorizationErrorCode.IntegrityConflict,
+                    cancellationToken);
             }
 
             if (!string.Equals(record.PayloadHash, payloadHash, StringComparison.Ordinal))

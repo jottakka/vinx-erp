@@ -30,6 +30,11 @@ and database protections deny forged or cross-company requests.
 
 Business and configuration data use soft delete with `deleted_at`, `deleted_by_user_id` and `deleted_reason`; a restore is authorized and audited. Audit events are append-only and use retention rather than soft delete. Module data remains explicitly company-scoped; an authorized group-wide view is a union, never a tenant-less record.
 
+Idempotent writes replay a matching request and payload. Reusing a request with a
+different payload returns `idempotency_conflict`; a separate write that loses a
+business-database integrity race returns the redacted `integrity_conflict` and
+records a denied audit event. Neither response exposes database diagnostics.
+
 ## Deletion strategy
 
 See Data and audit rules above; this section introduces no second deletion policy.
