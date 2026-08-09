@@ -19,6 +19,13 @@ interno, depois de validar o JWT, resolve `issuer` + `subject`, verifica a
 sessão EF e cria o ator interno. A sessão EF é autoridade para acesso ao
 VINX, não uma credencial e nem espelho da tabela `auth.sessions`.
 
+O pipeline obrigatório é `UseAuthentication`, `UseIdentityGate` e
+`UseAuthorization`. O gate encerra com `401` ou `503` antes de qualquer
+handler. Nenhum endpoint VINX protegido resolve identidade por conta própria;
+ele lê o `ActorContext` tipado que o gate guardou no `HttpContext`. Endpoint
+novo somente com `RequireAuthorization()` também passa pelo gate. Health e
+rotas declaradas `AllowAnonymous` não usam o ator interno.
+
 O adapter Supabase exige `session_id` UUID e uma lista `amr` válida. A data de
 autenticação da sessão é o menor timestamp das entradas `amr` cujo método não
 é `token_refresh`. Isso é um contrato explícito da configuração Supabase
@@ -55,7 +62,7 @@ barreira, pois é renovado a cada access token.
 
 `UserSession` é uma entidade global em `foundation.user_sessions`:
 
-- `Id`, `UserId`, `Issuer`, `ProviderSessionId`;
+- `Id`, `UserId`, `Issuer`, `ProviderSessionId` UUID;
 - `ProviderAuthenticatedAt`, `FirstSeenAt`, `TokenExpiresAt`;
 - `RevokedAt`, `RevokedByUserId`, `RevocationReason` e `RowVersion`.
 
@@ -67,8 +74,8 @@ revogada nunca é reativada. Runtime recebe somente privilégios necessários de
 ## Fluxo de acesso
 
 1. `JwtBearer` valida assinatura, issuer, audience e validade do token.
-2. `IIdentityProvider` extrai identidade externa, `session_id`, `amr` e `exp`
-   apenas de claims já validadas.
+2. `IIdentityProvider` extrai identidade externa, `session_id`, `amr`, `iat`
+   e `exp` apenas de claims já validadas.
 3. O gate resolve o `User` por `issuer` + `subject`, sem e-mail, e bloqueia
    usuário desativado.
 4. O gate busca a sessão por `issuer` + `provider_session_id`. Se ausente,
@@ -77,6 +84,21 @@ revogada nunca é reativada. Runtime recebe somente privilégios necessários de
    `401`. Falha de banco ou auditoria recebe `503 identity_gate_unavailable`.
 6. O gate guarda `ActorContext` no `HttpContext`; endpoints protegidos não
    resolvem identidade novamente nem aceitam correlação do cliente.
+
+`session_id` inválido é qualquer valor que não converte para UUID.
+`amr` inválido é claim ausente, não-array, vazio, item sem método não vazio,
+timestamp que não seja inteiro Unix representável, ausência de item diferente
+de `token_refresh` ou timestamp autenticador posterior a `iat`. O timestamp
+efetivo é o menor timestamp não-refresh. O adapter não registra claims nem
+tokens.
+
+`SessionsValidAfter` começa nulo. Revogação global usa `clock_timestamp()` do
+banco, avança o valor monotonicamente e admite somente timestamp efetivo
+estritamente maior. Igualdade e instante anterior são negados; autenticação no
+mesmo segundo exige novo login no segundo seguinte. Teste local obrigatório
+compara dois JWTs reais da mesma sessão, antes e depois de refresh: mesmo
+`session_id`, `iat` maior e timestamp efetivo inalterado. Tokens não entram em
+logs, fixtures ou Markdown.
 
 ## Operações e auditoria
 
@@ -87,17 +109,39 @@ A primeira PR expõe somente operações do próprio usuário:
 - revogar todas as sessões próprias, inclusive a corrente.
 
 Sessão de outro usuário parece inexistente (`404`) e a tentativa negada é
-auditada. Sessões são globais; por isso auditoria passa a representar escopo
-`global` ou `company`, sem usar empresa fictícia ou `Guid.Empty`.
+auditada. Sessões são globais; por isso `AuditEvent` e `AuditEventData` ganham
+`AuditScope` com valores `global` e `company`. A migration substitui
+`audit.append_event` para receber esse escopo e cria a constraint:
+`global` exige `requested_company_id IS NULL`; `company` exige empresa não
+nula. Não há empresa fictícia, `Guid.Empty` ou exceção por nome de ação.
+
+Os eventos globais estáveis são `identity_session_admitted`,
+`identity_session_revoked`, `identity_sessions_revoked`,
+`identity_session_revoke_denied` e `identity_user_deactivated`. Recurso é
+`user_session` ou `user`; metadata contém somente contagens e não inclui
+`provider_session_id`. Sucesso é inserido na mesma transação da mutação;
+falha da função reverte a mutação e retorna `503 identity_gate_unavailable`.
+Índices, snapshot, privilégios da função e testes append-only são atualizados
+na mesma migration.
 
 ## Desativação
 
-A segunda PR adiciona comando global de desativação. Ele exige capability
-`identity.user.deactivate` com escopo `group`, usa uma empresa do grupo como
-âncora de autorização, bloqueia auto-desativação e recusa alvo com vínculo
-ativo fora do grupo do ator. Desativação, avanço da barreira, revogação das
-sessões conhecidas e evento de auditoria são uma única transação. Falha ao
-auditar faz rollback e retorna `503 identity_gate_unavailable`.
+A segunda PR adiciona comando global de desativação. Como RLS por empresa não
+permite provar vínculos do alvo em outros grupos, o comando usa uma função SQL
+estreita `SECURITY DEFINER`, sem conceder leitura global ao runtime. EF mantém
+o modelo e chama somente esse comando crítico, prática já permitida para RLS.
+
+A função recebe empresa âncora, ator, alvo, motivo e correlação. Na mesma
+transação, ela valida membership ativo do ator na âncora, capability
+`identity.user.deactivate` com escopo exatamente `group`, deriva o grupo,
+bloqueia a linha do alvo, verifica todos os vínculos ativos do alvo sem RLS,
+bloqueia auto-desativação e recusa vínculo fora do grupo. Então desativa o
+usuário, avança a barreira, revoga sessões conhecidas e grava a auditoria
+global. Falha ao auditar faz rollback e retorna `503 identity_gate_unavailable`.
+
+O mesmo lock do usuário alvo é contrato obrigatório para criação e restauração
+futuras de membership. Não existe fluxo runtime dessas mutações nesta fatia;
+quando existir, ele deve adquirir o lock antes de validar ou gravar vínculo.
 
 Escopo `company` não concede poder para desativar usuário globalmente. Uma
 autoridade de plataforma não será introduzida nesta fatia.
@@ -118,8 +162,14 @@ autoridade de plataforma não será introduzida nesta fatia.
 - sessão anterior à barreira, inclusive ainda não observada pelo VINX, recebe
   `401`; autenticação posterior é admitida;
 - claim ausente ou malformada falha fechada e não grava dados;
+- rota protegida que só exige autorização não alcança o handler com identidade
+  desconhecida, sessão revogada ou usuário desativado;
+- auditoria global exige escopo coerente com empresa nula e preserva
+  append-only;
 - desativação bloqueia qualquer empresa na próxima chamada e registra ator,
   alvo, motivo e correlação;
+- comando de desativação nega grant `company`, vínculo do alvo fora do grupo
+  e corrida com criação ou restauração de vínculo;
 - indisponibilidade de auditoria não desativa nem revoga parcialmente;
 - todos os testes ficam em `tests/public`; `quality/private` não é lido nem
   executado.
