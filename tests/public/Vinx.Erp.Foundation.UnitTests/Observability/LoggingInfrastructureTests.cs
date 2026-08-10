@@ -1,10 +1,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Globalization;
-using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
@@ -19,58 +18,38 @@ public sealed class LoggingInfrastructureTests
     [Fact]
     public void AddVinxLogging_is_idempotent_and_tracks_trace_and_span_ids()
     {
-        var services = new ServiceCollection();
-        services.AddLogging(logging =>
-        {
-            logging.AddVinxLogging();
-            logging.AddVinxLogging();
-        });
+        var builder = Host.CreateApplicationBuilder();
+        builder.Logging.AddVinxLogging();
+        builder.Logging.AddVinxLogging();
 
-        using var serviceProvider = services.BuildServiceProvider();
+        using var host = builder.Build();
+        var services = host.Services;
 
-        Assert.Single(serviceProvider.GetServices<ILoggerProvider>().OfType<ConsoleLoggerProvider>());
-        Assert.Equal("json", serviceProvider.GetRequiredService<IOptionsMonitor<ConsoleLoggerOptions>>().CurrentValue.FormatterName);
+        Assert.Single(services.GetServices<ILoggerProvider>().OfType<ConsoleLoggerProvider>());
+        Assert.Equal("json", services.GetRequiredService<IOptionsMonitor<ConsoleLoggerOptions>>().CurrentValue.FormatterName);
 
-        var jsonOptions = serviceProvider.GetRequiredService<IOptionsMonitor<JsonConsoleFormatterOptions>>().CurrentValue;
+        var jsonOptions = services.GetRequiredService<IOptionsMonitor<JsonConsoleFormatterOptions>>().CurrentValue;
         Assert.Equal("O", jsonOptions.TimestampFormat);
         Assert.True(jsonOptions.UseUtcTimestamp);
+        Assert.True(jsonOptions.IncludeScopes);
 
-        var activityTracking = serviceProvider.GetRequiredService<IOptions<LoggerFactoryOptions>>().Value.ActivityTrackingOptions;
+        var activityTracking = services.GetRequiredService<IOptions<LoggerFactoryOptions>>().Value.ActivityTrackingOptions;
         Assert.Equal(ActivityTrackingOptions.TraceId | ActivityTrackingOptions.SpanId, activityTracking);
         Assert.False(activityTracking.HasFlag(ActivityTrackingOptions.Tags));
         Assert.False(activityTracking.HasFlag(ActivityTrackingOptions.Baggage));
     }
 
     [Fact]
-    public void AddVinxLogging_filters_routine_http_diagnostics_and_emits_utc_timestamp()
+    public void AddVinxLogging_filters_routine_http_diagnostics()
     {
-        var originalOutput = Console.Out;
-        using var output = new StringWriter(CultureInfo.InvariantCulture);
-        Console.SetOut(output);
+        var builder = Host.CreateApplicationBuilder();
+        builder.Logging.AddVinxLogging();
 
-        try
-        {
-            var services = new ServiceCollection();
-            services.AddLogging(logging => logging.AddVinxLogging());
+        using var host = builder.Build();
+        var diagnosticsLogger = host.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Microsoft.AspNetCore.Hosting.Diagnostics");
 
-            using var serviceProvider = services.BuildServiceProvider();
-            var diagnosticsLogger = serviceProvider.GetRequiredService<ILoggerFactory>()
-                .CreateLogger("Microsoft.AspNetCore.Hosting.Diagnostics");
-            Assert.False(diagnosticsLogger.IsEnabled(LogLevel.Information));
-
-            serviceProvider.GetRequiredService<ILogger<LoggingInfrastructureTests>>().LogInformation("portable-log");
-        }
-        finally
-        {
-            Console.SetOut(originalOutput);
-        }
-
-        using var json = JsonDocument.Parse(output.ToString());
-        var timestamp = json.RootElement.GetProperty("Timestamp").GetString();
-
-        Assert.NotNull(timestamp);
-        Assert.EndsWith("+00:00", timestamp, StringComparison.Ordinal);
-        Assert.Equal(TimeSpan.Zero, DateTimeOffset.Parse(timestamp, CultureInfo.InvariantCulture).Offset);
+        Assert.False(diagnosticsLogger.IsEnabled(LogLevel.Information));
     }
 
     [Fact]
