@@ -16,6 +16,18 @@ public sealed class AgentContractsTests
     }
 
     [Fact]
+    public void Run_request_exposes_only_untrusted_message_and_external_context()
+    {
+        var propertyNames = typeof(AgentRunRequest)
+            .GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            .Select(property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(new[] { "ExternalContext", "UserMessage" }, propertyNames);
+    }
+
+    [Fact]
     public void Task_profile_rejects_zero_tool_turns()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new AgentTaskProfile(
@@ -28,6 +40,24 @@ public sealed class AgentContractsTests
         var companyId = Guid.NewGuid();
 
         Assert.Equal(companyId, CreateContext(companyId).CompanyId);
+    }
+
+    [Fact]
+    public void Execution_context_rejects_empty_actor_user_id()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => CreateContext(new ActorContext(Guid.Empty, Guid.NewGuid())));
+    }
+
+    [Fact]
+    public void Execution_context_rejects_empty_actor_correlation_id()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => CreateContext(new ActorContext(Guid.NewGuid(), Guid.Empty)));
+    }
+
+    [Fact]
+    public void Context_item_rejects_nan_confidence()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new AgentContextItem("normalized", "safe", double.NaN));
     }
 
     [Fact]
@@ -108,8 +138,14 @@ public sealed class AgentContractsTests
             propertyNames);
     }
 
-    private static AgentExecutionContext CreateContext(Guid? companyId) => new(
+    private static AgentExecutionContext CreateContext(Guid? companyId) => CreateContext(
         new ActorContext(Guid.NewGuid(), Guid.NewGuid()),
+        companyId);
+
+    private static AgentExecutionContext CreateContext(ActorContext actor) => CreateContext(actor, null);
+
+    private static AgentExecutionContext CreateContext(ActorContext actor, Guid? companyId) => new(
+        actor,
         companyId,
         AgentChannel.Web,
         new HashSet<string>(StringComparer.Ordinal) { "paguai.read" },

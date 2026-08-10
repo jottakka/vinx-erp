@@ -15,6 +15,8 @@ public sealed record AgentExecutionContext
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(effectiveCapabilities);
         ArgumentNullException.ThrowIfNull(profile);
+        ArgumentOutOfRangeException.ThrowIfEqual(actor.UserId, Guid.Empty);
+        ArgumentOutOfRangeException.ThrowIfEqual(actor.CorrelationId, Guid.Empty);
 
         if (companyId == Guid.Empty)
         {
@@ -74,7 +76,7 @@ public sealed record AgentContextItem
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
 
-        if (confidence is < 0 or > 1)
+        if (confidence is { } value && (double.IsNaN(value) || value < 0 || value > 1))
         {
             throw new ArgumentOutOfRangeException(nameof(confidence), confidence, "Confidence must be between zero and one.");
         }
