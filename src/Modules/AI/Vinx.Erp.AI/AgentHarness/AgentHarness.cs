@@ -59,7 +59,6 @@ public sealed class AgentHarness
 
                 var turn = await model.CompleteAsync(
                     new AgentModelRequest(
-                        context.Profile,
                         request,
                         allowedDescriptors,
                         priorToolResults),

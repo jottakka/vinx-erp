@@ -13,12 +13,10 @@ public interface IAgentModel
 public sealed record AgentModelRequest
 {
     public AgentModelRequest(
-        AgentTaskProfile profile,
         AgentRunRequest request,
         IReadOnlyList<AgentToolDescriptor> allowedTools,
         IReadOnlyList<AgentToolResult> priorToolResults)
     {
-        ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(allowedTools);
         ArgumentNullException.ThrowIfNull(priorToolResults);
@@ -33,13 +31,11 @@ public sealed record AgentModelRequest
             throw new ArgumentException("Prior tool results cannot be null.", nameof(priorToolResults));
         }
 
-        Profile = profile;
         Request = request;
         AllowedTools = Array.AsReadOnly(allowedTools.ToArray());
         PriorToolResults = Array.AsReadOnly(priorToolResults.ToArray());
     }
 
-    public AgentTaskProfile Profile { get; }
     public AgentRunRequest Request { get; }
     public IReadOnlyList<AgentToolDescriptor> AllowedTools { get; }
     public IReadOnlyList<AgentToolResult> PriorToolResults { get; }

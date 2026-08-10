@@ -12,11 +12,11 @@
 
 - Work on a dedicated codex/agentic-v1-* branch; never write main.
 - Keep each PR at or below 25 changed implementation/documentation files and 800 manual lines; generated lockfiles count as files.
-- Delivery uses stacked PRs after the actual Task 1/2 estimates exceeded one reviewable PR: planning/spec (2 documentation files, about 480 manual lines); contracts (10 files, about 690 manual lines); policy (4 files, about 290 manual lines); trusted-scope guard (5 source/test/documentation files, about 250 manual lines); runner (at most 5 files, below 800 manual lines); architecture/docs (at most 9 files, about 280 manual lines). Provider, host, channel, OCR, approval, and remote MCP work stay in later PRs.
+- Delivery uses stacked PRs after the actual Task 1/2 estimates exceeded one reviewable PR: planning/spec (2 documentation files, about 480 manual lines); contracts (10 files, about 690 manual lines); policy (4 files, about 290 manual lines); trusted-scope guard (5 source/test/documentation files, about 250 manual lines); runner (at most 7 files, below 800 manual lines); architecture/docs (at most 9 files, about 280 manual lines). Provider, host, channel, OCR, approval, and remote MCP work stay in later PRs.
 - Create src/Modules/AI/Vinx.Erp.AI. It may reference Vinx.Erp.Foundation. Foundation, ApiHost, McpHost, WorkerHost, database schema, migrations, and provider configuration stay unchanged.
 - Use namespace Vinx.Erp.AI and subnamespaces AgentHarness, Models, Tools.
 - Add no NuGet package and no provider SDK.
-- Model, prompt, OCR item, WhatsApp item, tool argument never supplies actor, company, capability, correlation ID, task profile, risk, allowlist, or approval policy.
+- Model, prompt, OCR item, WhatsApp item, tool argument never supplies actor, company, capability, correlation ID, task profile, risk, allowlist, or approval policy. AgentModelRequest never receives the trusted execution context or task profile.
 - Store no prompt, response, token, attachment contents, OCR text, raw tool arguments, or provider payload in logs, observer events, fixtures, or Markdown.
 - Tool descriptor is job-oriented and MCP-compatible: name, version, JSON input/output schemas, required capability, risk, explicit-company requirement, idempotency requirement, MCP annotation hints.
 - Policy is server-side. Any non-read-only risk returns requires_confirmation before invocation. No mutating test tool is registered or invoked.
@@ -341,6 +341,8 @@ git commit -m "fix: bind agent tool scope"
 - Create: tests/public/Vinx.Erp.AI.UnitTests/AgentHarnessTests.cs
 - Modify: tests/public/Vinx.Erp.AI.UnitTests/Fixtures/AgentHarnessDoubles.cs
 - Modify: src/Modules/AI/Vinx.Erp.AI/Tools/AgentToolRegistry.cs
+- Modify: src/Modules/AI/Vinx.Erp.AI/Models/AgentModelContracts.cs
+- Modify: tests/public/Vinx.Erp.AI.UnitTests/AgentContractsTests.cs
 
 **Interfaces:**
 
@@ -393,7 +395,7 @@ Expected: compile failure because AgentHarness does not exist.
 
 1. Create linked cancellation source from caller token and context.Profile.Timeout.
 2. Emit Received event.
-3. Build AgentModelRequest from untrusted request, profile-allowed descriptors, prior tool results only.
+3. Build AgentModelRequest from untrusted request, profile-allowed descriptors, and prior tool results only; it never receives AgentExecutionContext or AgentTaskProfile.
 4. Ask model for one AgentModelTurn.
 5. Final turn emits Completed and returns AgentRunOutcome.Result.
 6. Tool turn resolves registry. Unknown tool returns Denied without invocation.

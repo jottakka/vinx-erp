@@ -193,7 +193,7 @@ public sealed class AgentContractsTests
             .ToArray();
 
         Assert.Equal(
-            new[] { "AllowedTools", "PriorToolResults", "Profile", "Request" },
+            new[] { "AllowedTools", "PriorToolResults", "Request" },
             propertyNames);
     }
 

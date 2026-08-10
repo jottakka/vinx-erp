@@ -30,7 +30,7 @@ The core exposes these contracts:
 - `AgentRunRequest`: untrusted normalized user message and external context items. It never supplies actor, company, capability, correlation, profile, or policy.
 - `AgentRunOutcome`: one of `result`, `requires_confirmation`, `denied`, `conflict`, `validation_error`, or `needs_clarification`; contains only safe user-facing text, tool name, and opaque identifiers needed by the caller.
 - `AgentTaskProfile`: approved task identity and limits, including a timeout supported by portable cancellation. Business code selects a profile, never a raw provider/model name.
-- `IAgentModel`: emits either a final assistant message or a typed tool proposal. The initial test double is test-only; production adapters come later.
+- `IAgentModel`: emits either a final assistant message or a typed tool proposal. Its request has normalized user/context content, approved tool descriptors, and prior results only; it never receives `AgentExecutionContext` or `AgentTaskProfile`. The initial test double is test-only; production adapters come later.
 - `IAgentTool`: exposes a job-oriented descriptor and executes in-process. Its descriptor carries tool name/version, input and output schemas, required capability, risk, explicit-company requirement, and idempotency requirement.
 - `IAgentToolRegistry`: immutable catalog that resolves only allowlisted tools for the task profile.
 - `IAgentRunPolicy`: decides before invocation. It holds maximum tool turns, timeout, allowlist, and write prohibition. It can allow a read, deny a call, request clarification for missing company, or require confirmation for a write.
@@ -77,7 +77,7 @@ OCR reaches the harness only as normalized content with source kind and confiden
 
 ### Provider and context collection boundary
 
-`IAgentModel` is protocol-neutral. Follow-up adapters implement OpenAI-compatible and Anthropic Messages protocols behind that interface. Provider/model selection belongs to `AgentTaskProfile` configuration, not business code.
+`IAgentModel` is protocol-neutral. Follow-up adapters implement OpenAI-compatible and Anthropic Messages protocols behind that interface. Provider/model selection belongs to server-side `AgentTaskProfile` configuration outside `AgentModelRequest`, not business code.
 
 OpenCode with DeepSeek v4 Flash is a future context-collection adapter behind a separate `IAgentContextCollector` boundary. The initial slice accepts normalized context rather than spawning OpenCode from a request path. This avoids unsupervised local process execution, provider credential handling, and prompt logging in the host.
 
