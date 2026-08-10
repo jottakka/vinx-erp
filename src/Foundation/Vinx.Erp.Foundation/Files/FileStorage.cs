@@ -12,9 +12,9 @@ public sealed record StorageObjectMetadata(
 
 public enum MalwareScanStatus
 {
-    Clean,
-    MalwareDetected,
-    Unavailable
+    Unavailable = 0,
+    Clean = 1,
+    MalwareDetected = 2
 }
 
 public sealed record StorageObjectInspection(

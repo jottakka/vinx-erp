@@ -42,18 +42,19 @@ modelo `FileRecord` nem o provedor Supabase Storage.
    `verification_failed`, sem URL de download. Em testes, um double pode
    devolver `clean` ou `malware_detected`; EICAR é apenas payload de teste.
 4. Confirmação repetida preserva resultado idempotente; corrida usa lock
-   transacional já revisado.
+   advisory de sessão por empresa e arquivo antes de uma única inspeção, sem
+   manter transação SQL aberta durante a leitura do storage.
 
 ## BDD
 
 | Classe | Dado / Quando / Então |
 |---|---|
 | Sucesso | Dado veredito limpo de um double de scanner, quando usuário autorizado confirma objeto íntegro, então há um único documento confirmado e auditado. |
-| Validação/erros | Dado comando declarativo inválido, quando o serviço o valida depois de autorização e auditoria, então recebe código estável, negação auditada, sem `FileRecord` e sem URL. |
+| Validação/erros | Dado comando declarativo inválido, quando o serviço autoriza e depois valida, então recebe código estável, a negação é auditada, e não há `FileRecord` nem URL. |
 | Acesso | Dado ausência de membership, capability ou empresa correta, quando cria intenção ou confirma, então operação é negada sem expor metadado de outro tenant. |
-| Estado/exceções | Dado `MalwareScanStatus.Unavailable`, malware ou falha de leitura, quando confirma, então documento fica em `verification_failed`, com motivo estável, e objeto não fica acessível. |
+| Estado/exceções | Dado `MalwareScanStatus.Unavailable`, valor padrão/desconhecido, malware ou falha de leitura, quando confirma, então somente `Clean` permite validar metadados; os demais estados falham fechados e o objeto não fica acessível. |
 | Double de teste | Dado payload EICAR no double de armazenamento, quando confirma, então o double devolve `MalwareDetected`; produção não procura EICAR. |
-| Concorrência | Dada confirmação repetida com mesmo `request_id`, quando concorrentes confirmam, então uma conclusão persiste e repetições retornam resultado idempotente. |
+| Concorrência | Dadas confirmações concorrentes com `request_id` igual ou distinto para o mesmo arquivo, quando confirmam, então ocorre uma única inspeção externa, uma conclusão persiste e repetições retornam resultados idempotentes. |
 
 ## Estimativa e entrega
 

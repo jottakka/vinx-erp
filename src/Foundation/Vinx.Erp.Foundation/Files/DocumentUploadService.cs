@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
@@ -16,10 +17,13 @@ namespace Vinx.Erp.Foundation.Files;
 public sealed class DocumentUploadService(
     FoundationDbContext database,
     FileStorage storage,
-    AuditAppender auditAppender)
+    AuditAppender auditAppender,
+    ILogger<DocumentUploadService> logger)
 {
     private const string IntentCommandName = "foundation.files.upload.intent";
     private const string ConfirmationCommandName = "foundation.files.upload.confirm";
+    private const string InspectionOperationName = "foundation.files.upload.inspect";
+    private const string AuditOperationName = "foundation.files.upload.audit";
     private const string UploadCapability = "foundation.files.upload";
     private const string ConfirmCapability = "foundation.files.confirm";
 
@@ -102,9 +106,10 @@ public sealed class DocumentUploadService(
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
             database.ChangeTracker.Clear();
+            LogUnexpectedFailure(exception, IntentCommandName, "upload_intent_unavailable");
             return DocumentUploadResult<DocumentUploadIntentResult>.Failure("upload_intent_unavailable", StatusCodes.Status503ServiceUnavailable);
         }
     }
@@ -123,24 +128,54 @@ public sealed class DocumentUploadService(
                 return preparation.Result;
             }
 
-            StorageObjectInspection inspection;
-            string? inspectionFailure = null;
+            var lockKey = ComputeConfirmationLockKey(command);
+            await database.Database.OpenConnectionAsync(cancellationToken);
+            var lockAcquired = false;
             try
             {
-                inspection = await storage.InspectObjectAsync(preparation.ProviderKey!, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch
-            {
-                inspection = null!;
-                inspectionFailure = "storage_read_failed";
-            }
+                await AcquireConfirmationLockAsync(lockKey, cancellationToken);
+                lockAcquired = true;
 
-            return await FinalizeConfirmationAsync(
-                actor, command, payloadHash, inspection, inspectionFailure, cancellationToken);
+                preparation = await PrepareConfirmationAsync(actor, command, payloadHash, cancellationToken);
+                if (preparation.Result is not null)
+                {
+                    return preparation.Result;
+                }
+
+                StorageObjectInspection inspection;
+                string? inspectionFailure = null;
+                try
+                {
+                    inspection = await storage.InspectObjectAsync(preparation.ProviderKey!, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    LogUnexpectedFailure(exception, InspectionOperationName, "storage_read_failed");
+                    inspection = null!;
+                    inspectionFailure = "storage_read_failed";
+                }
+
+                return await FinalizeConfirmationAsync(
+                    actor, command, payloadHash, inspection, inspectionFailure, cancellationToken);
+            }
+            finally
+            {
+                try
+                {
+                    if (lockAcquired)
+                    {
+                        await ReleaseConfirmationLockAsync(lockKey, CancellationToken.None);
+                    }
+                }
+                finally
+                {
+                    await database.Database.CloseConnectionAsync();
+                }
+            }
         }
         catch (DbUpdateException)
         {
@@ -151,9 +186,10 @@ public sealed class DocumentUploadService(
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
             database.ChangeTracker.Clear();
+            LogUnexpectedFailure(exception, ConfirmationCommandName, "upload_confirmation_unavailable");
             return DocumentUploadResult<DocumentUploadConfirmationResult>.Failure("upload_confirmation_unavailable", StatusCodes.Status503ServiceUnavailable);
         }
     }
@@ -237,8 +273,6 @@ public sealed class DocumentUploadService(
             return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
                 actor, command.CompanyId, "capability_denied", StatusCodes.Status403Forbidden, cancellationToken);
         }
-
-        await AcquireConfirmationLockAsync(command, cancellationToken);
 
         var existing = await FindIdempotencyAsync(actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, cancellationToken);
         if (existing is not null)
@@ -413,8 +447,9 @@ public sealed class DocumentUploadService(
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            LogUnexpectedFailure(exception, IntentCommandName, "upload_intent_unavailable");
             return DocumentUploadResult<DocumentUploadIntentResult>.Failure("upload_intent_unavailable", StatusCodes.Status503ServiceUnavailable);
         }
     }
@@ -446,8 +481,9 @@ public sealed class DocumentUploadService(
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            LogUnexpectedFailure(exception, AuditOperationName, "audit_unavailable");
             return DocumentUploadResult<T>.Failure("audit_unavailable", StatusCodes.Status503ServiceUnavailable);
         }
     }
@@ -473,6 +509,13 @@ public sealed class DocumentUploadService(
             new CorrelationContext(actor.CorrelationId).CorrelationId,
             reason,
             "{}"), cancellationToken);
+
+    private void LogUnexpectedFailure(Exception exception, string operation, string errorCode) =>
+        logger.LogError(
+            exception,
+            "Document upload operation {Operation} failed with code {ErrorCode}",
+            operation,
+            errorCode);
 
     private Task<Membership?> GetMembershipAsync(Guid actorUserId, Guid companyId, CancellationToken cancellationToken) =>
         database.Memberships.SingleOrDefaultAsync(
@@ -509,10 +552,17 @@ public sealed class DocumentUploadService(
          select capability.Id).AnyAsync(cancellationToken);
 
     private Task AcquireConfirmationLockAsync(
-        ConfirmDocumentUploadCommand command,
+        long lockKey,
         CancellationToken cancellationToken) =>
         database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT pg_advisory_xact_lock({ComputeConfirmationLockKey(command)})",
+            $"SELECT pg_advisory_lock({lockKey})",
+            cancellationToken);
+
+    private Task ReleaseConfirmationLockAsync(
+        long lockKey,
+        CancellationToken cancellationToken) =>
+        database.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_unlock({lockKey})",
             cancellationToken);
 
     private static long ComputeConfirmationLockKey(ConfirmDocumentUploadCommand command)

@@ -1,8 +1,11 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Files;
@@ -181,6 +184,8 @@ public sealed class DocumentUploadEndpointTests
     {
         var storage = new ControlledFileStorage { FailReads = true };
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        using var logs = new UploadLogProvider();
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logs);
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
 
@@ -191,6 +196,13 @@ public sealed class DocumentUploadEndpointTests
         response.EnsureSuccessStatusCode();
         Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
         Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
+        var failure = Assert.Single(logs.Entries, entry =>
+            entry.CategoryName == typeof(DocumentUploadService).FullName
+            && Equals(entry.Properties.GetValueOrDefault("Operation"), "foundation.files.upload.inspect"));
+        Assert.Equal(LogLevel.Error, failure.Level);
+        Assert.IsType<InvalidOperationException>(failure.Exception);
+        Assert.Equal("storage_read_failed", failure.Properties["ErrorCode"]);
+        Assert.Equal(["ErrorCode", "Operation"], failure.Properties.Keys.Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -444,7 +456,7 @@ public sealed class DocumentUploadEndpointTests
         var storage = new ControlledFileStorage
         {
             BlockInspection = true,
-            InspectionsToBlock = 8
+            InspectionsToBlock = 1
         };
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
         var scenario = await SeedScenarioAsync(factory);
@@ -460,6 +472,7 @@ public sealed class DocumentUploadEndpointTests
         var responses = await responsesTask;
 
         Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        Assert.Equal(1, storage.InspectionCount);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         Assert.Equal("confirmed", (await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).ProcessingState);
         Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.confirm").ToListAsync());
@@ -467,12 +480,12 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
-    public async Task Concurrent_confirmations_with_distinct_request_ids_reload_the_current_file_after_inspection()
+    public async Task Concurrent_confirmations_with_distinct_request_ids_inspect_once_and_replay_their_results()
     {
         var storage = new ControlledFileStorage
         {
             BlockInspection = true,
-            InspectionsToBlock = 2
+            InspectionsToBlock = 1
         };
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
         var scenario = await SeedScenarioAsync(factory);
@@ -488,22 +501,20 @@ public sealed class DocumentUploadEndpointTests
         var responsesTask = Task.WhenAll(requests.Select(request =>
             factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request)));
         await storage.WaitForInspectionAsync();
-        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
-        {
-            await administrator.Database.ExecuteSqlInterpolatedAsync(
-                $"UPDATE foundation.files SET checksum = {Checksum}, row_version = row_version + 1 WHERE id = {intent.FileId}");
-        }
-
         storage.ReleaseInspection();
         var responses = await responsesTask;
+        var replays = await Task.WhenAll(requests.Select(request =>
+            factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request)));
 
         var success = Assert.Single(responses, response => response.StatusCode == HttpStatusCode.OK);
-        Assert.Equal("verification_failed", (await success.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal("confirmed", (await success.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
         var conflict = Assert.Single(responses, response => response.StatusCode == HttpStatusCode.Conflict);
         Assert.Equal("integrity_conflict", (await conflict.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(responses.Select(response => response.StatusCode), replays.Select(response => response.StatusCode));
+        Assert.Equal(1, storage.InspectionCount);
 
         await using var verification = factory.Fixture.CreateAdministratorDbContext();
-        Assert.Equal("verification_failed", (await verification.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).ProcessingState);
+        Assert.Equal("confirmed", (await verification.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).ProcessingState);
         Assert.Single(await verification.IdempotencyRecords.Where(record =>
             requests.Select(request => request.RequestId).Contains(record.RequestId)).ToListAsync());
         Assert.Single(await verification.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.confirm").ToListAsync());
@@ -611,6 +622,7 @@ public sealed class DocumentUploadEndpointTests
         public bool BlockInspection { get; init; }
         public int InspectionsToBlock { get; init; } = 1;
         public MalwareScanStatus ConfiguredMalwareScanStatus { get; init; } = MalwareScanStatus.Clean;
+        public int InspectionCount => Volatile.Read(ref inspectionCount);
 
         public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(string providerKey, CancellationToken cancellationToken) =>
@@ -676,5 +688,46 @@ public sealed class DocumentUploadEndpointTests
         public void ReleaseInspection() => inspectionRelease.TrySetResult();
 
         private sealed record StoredObject(byte[] Content, string ContentType);
+    }
+
+    private sealed record CapturedUploadLog(
+        string CategoryName,
+        LogLevel Level,
+        Exception? Exception,
+        IReadOnlyDictionary<string, object?> Properties);
+
+    private sealed class UploadLogProvider : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<CapturedUploadLog> entries = new();
+
+        public IReadOnlyCollection<CapturedUploadLog> Entries => entries.ToArray();
+
+        public ILogger CreateLogger(string categoryName) => new UploadLogger(categoryName, entries);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class UploadLogger(
+            string categoryName,
+            ConcurrentQueue<CapturedUploadLog> entries) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                var properties = ((IEnumerable<KeyValuePair<string, object?>>)state!)
+                    .Where(pair => pair.Key != "{OriginalFormat}")
+                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                entries.Enqueue(new CapturedUploadLog(categoryName, logLevel, exception, properties));
+            }
+        }
     }
 }

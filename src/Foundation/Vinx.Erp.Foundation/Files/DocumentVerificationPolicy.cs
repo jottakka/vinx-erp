@@ -14,14 +14,14 @@ public static class DocumentVerificationPolicy
             return "object_key_mismatch";
         }
 
-        if (inspection.MalwareScanStatus == MalwareScanStatus.Unavailable)
+        switch (inspection.MalwareScanStatus)
         {
-            return "malware_scan_unavailable";
-        }
-
-        if (inspection.MalwareScanStatus == MalwareScanStatus.MalwareDetected)
-        {
-            return "malware_detected";
+            case MalwareScanStatus.Clean:
+                break;
+            case MalwareScanStatus.MalwareDetected:
+                return "malware_detected";
+            default:
+                return "malware_scan_unavailable";
         }
 
         if (stored.SizeBytes != record.SizeBytes)

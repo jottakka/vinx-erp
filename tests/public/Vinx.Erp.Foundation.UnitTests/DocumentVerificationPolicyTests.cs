@@ -39,6 +39,20 @@ public sealed class DocumentVerificationPolicyTests
         Assert.Equal("malware_scan_unavailable", DocumentVerificationPolicy.Validate(record, stored));
     }
 
+    [Theory]
+    [InlineData(default(MalwareScanStatus))]
+    [InlineData((MalwareScanStatus)int.MaxValue)]
+    public void Verification_fails_closed_for_non_explicit_malware_scan_statuses(
+        MalwareScanStatus malwareScanStatus)
+    {
+        var record = NewRecord();
+        var stored = new StorageObjectInspection(
+            new StorageObjectMetadata(record.ProviderKey, 128L, "application/pdf", Checksum),
+            malwareScanStatus);
+
+        Assert.Equal("malware_scan_unavailable", DocumentVerificationPolicy.Validate(record, stored));
+    }
+
     [Fact]
     public void Verification_rejects_metadata_for_a_different_storage_key_before_other_checks()
     {
