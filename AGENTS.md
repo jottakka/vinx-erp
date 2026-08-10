@@ -4,8 +4,8 @@
 
 - Nunca escreva diretamente na `main`; use uma branch `codex/*` e um pull request.
 - Cada PR deve entregar uma única fatia vertical revisável.
-- Antes de implementar, estime o diff e pare para propor issues filhas ou PRs empilhados quando houver mais de um subsistema independente, mais de 25 arquivos ou mais de 800 linhas manuais, ou quando reunir, ao mesmo tempo, banco, API, provedor externo e CI sem dependência indivisível.
-- Migrações, snapshots e lockfiles gerados não contam no limite de linhas, mas continuam no limite de arquivos e não justificam misturar responsabilidades. Exceções exigem aprovação explícita do responsável.
+- Antes de implementar, estime o diff e proponha issues filhas ou PRs empilhados quando houver mais de um subsistema independente, mais de 25 arquivos ou quando reunir, ao mesmo tempo, banco, API, provedor externo e CI sem dependência indivisível. O alvo de 800 linhas manuais orienta revisão e decomposição, mas não é bloqueio rígido: pode ser excedido quando a fatia continuar coesa e a justificativa for registrada na estimativa e no PR.
+- Migrações, snapshots e lockfiles gerados não contam no limite de linhas, mas continuam no limite de arquivos e não justificam misturar responsabilidades. Exceções aos demais limites exigem aprovação explícita do responsável.
 - Durante o desenvolvimento, execute testes públicos focados. Para mudanças de comportamento, execute a verificação pública completa uma vez antes do push; para documentação, use somente validações pertinentes.
 - Use uma revisão independente por PR. Adicione outra apenas quando houver risco relevante de segurança ou integridade.
 - Registre evidências temporárias no PR, não em relatórios versionados. Documente no repositório apenas decisões duráveis.
