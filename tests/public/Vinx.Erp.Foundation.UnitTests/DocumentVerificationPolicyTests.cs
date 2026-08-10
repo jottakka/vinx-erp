@@ -12,22 +12,26 @@ public sealed class DocumentVerificationPolicyTests
     public void Verification_accepts_matching_object_metadata()
     {
         var record = NewRecord();
-        var stored = new StorageObjectMetadata(record.ProviderKey, 128L, "application/pdf", Checksum);
+        var stored = new StorageObjectInspection(
+            new StorageObjectMetadata(record.ProviderKey, 128L, "application/pdf", Checksum),
+            MalwareDetected: false);
 
-        Assert.Null(DocumentVerificationPolicy.Validate(record, stored, malwareDetected: false));
+        Assert.Null(DocumentVerificationPolicy.Validate(record, stored));
     }
 
     [Fact]
     public void Verification_rejects_metadata_for_a_different_storage_key_before_other_checks()
     {
         var record = NewRecord();
-        var stored = new StorageObjectMetadata(
-            "quarantine/other/document",
-            127L,
-            "image/png",
-            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        var stored = new StorageObjectInspection(
+            new StorageObjectMetadata(
+                "quarantine/other/document",
+                127L,
+                "image/png",
+                "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+            MalwareDetected: false);
 
-        Assert.Equal("object_key_mismatch", DocumentVerificationPolicy.Validate(record, stored, malwareDetected: false));
+        Assert.Equal("object_key_mismatch", DocumentVerificationPolicy.Validate(record, stored));
     }
 
     [Theory]
@@ -43,9 +47,11 @@ public sealed class DocumentVerificationPolicyTests
         bool malwareDetected)
     {
         var record = NewRecord();
-        var stored = new StorageObjectMetadata(record.ProviderKey, sizeBytes, contentType, checksum);
+        var stored = new StorageObjectInspection(
+            new StorageObjectMetadata(record.ProviderKey, sizeBytes, contentType, checksum),
+            malwareDetected);
 
-        Assert.Equal(expectedError, DocumentVerificationPolicy.Validate(record, stored, malwareDetected));
+        Assert.Equal(expectedError, DocumentVerificationPolicy.Validate(record, stored));
     }
 
     private static FileRecord NewRecord() => new(
