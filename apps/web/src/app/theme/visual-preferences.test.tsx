@@ -1,5 +1,5 @@
 import { useColorScheme, useTheme } from "@mui/material/styles";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { vinxTheme } from "./create-vinx-theme";
@@ -99,6 +99,22 @@ describe("visual preferences", () => {
     expect(screen.getByTestId("surface-background")).toHaveTextContent(
       vinxTheme.palette.background.default,
     );
+  });
+
+  it("follows a later system scheme change while mode remains system", () => {
+    const system = createMatchMediaMock(false);
+    vi.stubGlobal("matchMedia", system.matchMedia);
+    renderHarness();
+
+    expect(screen.getByTestId("selected-mode")).toHaveTextContent("system");
+    expect(screen.getByTestId("surface-scheme")).toHaveTextContent("light");
+
+    act(() => {
+      system.emit(true);
+    });
+
+    expect(screen.getByTestId("selected-mode")).toHaveTextContent("system");
+    expect(screen.getByTestId("surface-scheme")).toHaveTextContent("dark");
   });
 
   it("restores compact density and an explicit mode in a fresh provider", async () => {

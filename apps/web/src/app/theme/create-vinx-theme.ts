@@ -13,7 +13,11 @@ function isModeKey(key: string) {
 
 function isSchemeKey(key: string) {
   return (
-    key === "mui-color-scheme" || key === "scheme" || key.endsWith("-scheme")
+    key === "mui-color-scheme" ||
+    key === "scheme" ||
+    key.endsWith("-scheme") ||
+    key.endsWith("-light") ||
+    key.endsWith("-dark")
   );
 }
 

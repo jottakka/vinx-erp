@@ -1,4 +1,10 @@
-import { FormControl, InputLabel, NativeSelect, Stack } from "@mui/material";
+import {
+  CssBaseline,
+  FormControl,
+  InputLabel,
+  NativeSelect,
+  Stack,
+} from "@mui/material";
 import { ThemeProvider, useColorScheme } from "@mui/material/styles";
 import { type ChangeEvent, type ReactNode, useState } from "react";
 import { createVinxStorageManager, vinxTheme } from "./create-vinx-theme";
@@ -23,6 +29,7 @@ export function VinxThemeProvider({ children }: VinxThemeProviderProps) {
       storageManager={vinxStorageManager}
       theme={vinxTheme}
     >
+      <CssBaseline enableColorScheme />
       {children}
     </ThemeProvider>
   );

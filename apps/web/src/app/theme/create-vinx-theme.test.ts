@@ -108,7 +108,7 @@ describe("vinx semantic theme", () => {
     ).toBe("system");
   });
 
-  it("returns MUI defaults for invalid color schemes in reads and subscriptions", () => {
+  it("returns MUI defaults for invalid MUI color-scheme keys in reads and subscriptions", () => {
     let listener: ((event: StorageEvent) => void) | undefined;
     const schemeWindow = {
       localStorage: {
@@ -121,20 +121,23 @@ describe("vinx semantic theme", () => {
       removeEventListener: () => {},
     } as unknown as Window;
     const manager = createVinxStorageManager({ key: "vinx.visual.v1" });
-    const schemeStorage = manager({
-      key: "scheme",
-      storageWindow: schemeWindow,
-    });
-    const changes: unknown[] = [];
 
-    expect(schemeStorage.get("light")).toBe("light");
-    schemeStorage.subscribe((value) => changes.push(value));
-    listener?.({
-      key: "vinx.visual.v1.scheme",
-      newValue: "unexpected",
-    } as StorageEvent);
+    for (const storageKey of ["scheme-light", "scheme-dark"]) {
+      const schemeStorage = manager({
+        key: storageKey,
+        storageWindow: schemeWindow,
+      });
+      const changes: unknown[] = [];
 
-    expect(changes).toEqual([undefined]);
+      expect(schemeStorage.get("light")).toBe("light");
+      schemeStorage.subscribe((value) => changes.push(value));
+      listener?.({
+        key: `vinx.visual.v1.${storageKey}`,
+        newValue: "unexpected",
+      } as StorageEvent);
+
+      expect(changes).toEqual([undefined]);
+    }
   });
 
   it("falls back to comfortable density when storage is malformed", () => {
