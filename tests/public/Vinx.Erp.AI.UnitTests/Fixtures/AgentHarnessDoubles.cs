@@ -100,6 +100,42 @@ internal sealed class RecordingAgentRunObserver : IAgentRunObserver
     }
 }
 
+internal sealed class BlockingAgentRunObserver(AgentRunPhase blockingPhase) : IAgentRunObserver
+{
+    private readonly object sync = new();
+    private readonly List<AgentRunEvent> events = [];
+
+    public TaskCompletionSource<bool> Started { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public IReadOnlyList<AgentRunEvent> Events
+    {
+        get
+        {
+            lock (sync)
+            {
+                return events.ToArray();
+            }
+        }
+    }
+
+    public async ValueTask ObserveAsync(
+        AgentRunEvent runEvent,
+        CancellationToken cancellationToken)
+    {
+        lock (sync)
+        {
+            events.Add(runEvent);
+        }
+
+        if (runEvent.Phase == blockingPhase)
+        {
+            Started.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+    }
+}
+
 internal sealed class RecordingAgentTool : IAgentTool
 {
     private readonly object sync = new();
@@ -138,7 +174,7 @@ internal sealed class RecordingAgentTool : IAgentTool
             JsonSerializer.SerializeToElement(new { ok = true }));
     }
 
-    public AgentToolDescriptor Descriptor { get; }
+    public AgentToolDescriptor Descriptor { get; private set; }
     public AgentToolValidationResult Validation { get; }
 
     public IReadOnlyList<AgentToolCall> Validations
@@ -161,6 +197,12 @@ internal sealed class RecordingAgentTool : IAgentTool
                 return invocations.ToArray();
             }
         }
+    }
+
+    public void ReplaceDescriptor(AgentToolDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        Descriptor = descriptor;
     }
 
     public AgentToolValidationResult Validate(AgentToolCall call)

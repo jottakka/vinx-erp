@@ -48,14 +48,26 @@ public sealed class AgentHarness
             cancellationToken,
             timeoutSource.Token);
 
-        await ObserveAsync(runId, context, AgentRunPhase.Received, null, null, cancellationToken);
-
         try
         {
+            await ObserveAsync(
+                runId,
+                context,
+                AgentRunPhase.Received,
+                null,
+                null,
+                executionSource.Token);
+
             while (true)
             {
                 executionSource.Token.ThrowIfCancellationRequested();
-                await ObserveAsync(runId, context, AgentRunPhase.ModelRequested, null, null, cancellationToken);
+                await ObserveAsync(
+                    runId,
+                    context,
+                    AgentRunPhase.ModelRequested,
+                    null,
+                    null,
+                    executionSource.Token);
 
                 var turn = await model.CompleteAsync(
                     new AgentModelRequest(
@@ -72,24 +84,53 @@ public sealed class AgentHarness
                         context,
                         new AgentRunOutcome(AgentRunOutcomeKind.Result, "result", assistantMessage, null),
                         null,
-                        cancellationToken);
+                        executionSource.Token);
                 }
 
                 var call = turn.ToolCall!;
-                if (!toolRegistry.TryGet(call.Name, out var tool))
+                if (!toolRegistry.TryGet(call.Name, out var registration))
                 {
-                    await ObserveAsync(runId, context, AgentRunPhase.ToolProposed, null, null, cancellationToken);
+                    await ObserveAsync(
+                        runId,
+                        context,
+                        AgentRunPhase.ToolProposed,
+                        null,
+                        null,
+                        executionSource.Token);
 
                     return await CompleteAsync(
                         runId,
                         context,
                         new AgentRunOutcome(AgentRunOutcomeKind.Denied, "tool_unknown", null, null),
                         null,
-                        cancellationToken);
+                        executionSource.Token);
                 }
 
-                var descriptor = tool.Descriptor;
-                await ObserveAsync(runId, context, AgentRunPhase.ToolProposed, descriptor, null, cancellationToken);
+                var descriptor = registration.Descriptor;
+                var tool = registration.Tool;
+                executionSource.Token.ThrowIfCancellationRequested();
+                var policyDecision = policy.Evaluate(context, descriptor);
+                await ObserveAsync(
+                    runId,
+                    context,
+                    AgentRunPhase.ToolProposed,
+                    descriptor,
+                    null,
+                    executionSource.Token);
+
+                if (policyDecision.OutcomeKind != AgentRunOutcomeKind.Result)
+                {
+                    return await CompleteAsync(
+                        runId,
+                        context,
+                        new AgentRunOutcome(
+                            policyDecision.OutcomeKind,
+                            policyDecision.SafeCode,
+                            null,
+                            descriptor.Name),
+                        descriptor,
+                        executionSource.Token);
+                }
 
                 if (toolTurns >= context.Profile.MaxToolTurns)
                 {
@@ -102,23 +143,7 @@ public sealed class AgentHarness
                             null,
                             descriptor.Name),
                         descriptor,
-                        cancellationToken);
-                }
-
-                executionSource.Token.ThrowIfCancellationRequested();
-                var policyDecision = policy.Evaluate(context, descriptor);
-                if (policyDecision.OutcomeKind != AgentRunOutcomeKind.Result)
-                {
-                    return await CompleteAsync(
-                        runId,
-                        context,
-                        new AgentRunOutcome(
-                            policyDecision.OutcomeKind,
-                            policyDecision.SafeCode,
-                            null,
-                            descriptor.Name),
-                        descriptor,
-                        cancellationToken);
+                        executionSource.Token);
                 }
 
                 executionSource.Token.ThrowIfCancellationRequested();
@@ -129,7 +154,7 @@ public sealed class AgentHarness
                     AgentRunPhase.ToolValidated,
                     descriptor,
                     validation.IsValid ? null : AgentRunOutcomeKind.ValidationError,
-                    cancellationToken);
+                    executionSource.Token);
 
                 if (!validation.IsValid)
                 {
@@ -142,10 +167,16 @@ public sealed class AgentHarness
                             null,
                             descriptor.Name),
                         descriptor,
-                        cancellationToken);
+                        executionSource.Token);
                 }
 
-                await ObserveAsync(runId, context, AgentRunPhase.ToolInvoked, descriptor, null, cancellationToken);
+                await ObserveAsync(
+                    runId,
+                    context,
+                    AgentRunPhase.ToolInvoked,
+                    descriptor,
+                    null,
+                    executionSource.Token);
                 executionSource.Token.ThrowIfCancellationRequested();
 
                 var toolResult = await tool.InvokeAsync(
@@ -161,12 +192,11 @@ public sealed class AgentHarness
             timeoutSource.IsCancellationRequested &&
             !cancellationToken.IsCancellationRequested)
         {
-            return await CompleteAsync(
-                runId,
-                context,
-                new AgentRunOutcome(AgentRunOutcomeKind.ValidationError, "agent_timeout", null, null),
+            return new AgentRunOutcome(
+                AgentRunOutcomeKind.ValidationError,
+                "agent_timeout",
                 null,
-                cancellationToken);
+                null);
         }
     }
 

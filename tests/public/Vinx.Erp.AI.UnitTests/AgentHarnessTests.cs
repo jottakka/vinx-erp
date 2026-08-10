@@ -239,6 +239,26 @@ public sealed class AgentHarnessTests
     }
 
     [Fact]
+    public async Task Run_maps_timeout_during_observation_without_emitting_completed()
+    {
+        var observer = new BlockingAgentRunObserver(AgentRunPhase.ModelRequested);
+        var harness = CreateHarness(
+            new ScriptedAgentModel(ScriptedAgentModel.Final("unused")),
+            observer,
+            new RecordingAgentTool("paguai.read"));
+
+        var outcome = await harness.RunAsync(
+                CreateContext(Guid.NewGuid(), timeout: TimeSpan.FromMilliseconds(50)),
+                CreateRequest("read"),
+                CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(AgentRunOutcomeKind.ValidationError, outcome.Kind);
+        Assert.Equal("agent_timeout", outcome.SafeCode);
+        Assert.DoesNotContain(observer.Events, runEvent => runEvent.Phase == AgentRunPhase.Completed);
+    }
+
+    [Fact]
     public async Task Run_propagates_caller_cancellation_without_invoking_tool()
     {
         var model = new BlockingAgentModel();
@@ -255,6 +275,27 @@ public sealed class AgentHarnessTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
         Assert.Empty(tool.Invocations);
+    }
+
+    [Fact]
+    public async Task Run_propagates_caller_cancellation_during_observation()
+    {
+        var observer = new BlockingAgentRunObserver(AgentRunPhase.ModelRequested);
+        var harness = CreateHarness(
+            new ScriptedAgentModel(ScriptedAgentModel.Final("unused")),
+            observer,
+            new RecordingAgentTool("paguai.read"));
+        using var cancellation = new CancellationTokenSource();
+
+        var run = harness.RunAsync(
+            CreateContext(Guid.NewGuid(), timeout: TimeSpan.FromSeconds(1)),
+            CreateRequest("read"),
+            cancellation.Token);
+        await observer.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        Assert.DoesNotContain(observer.Events, runEvent => runEvent.Phase == AgentRunPhase.Completed);
     }
 
     [Fact]
@@ -294,6 +335,59 @@ public sealed class AgentHarnessTests
     }
 
     [Fact]
+    public async Task Run_applies_policy_before_turn_cap_without_validating_denied_tool()
+    {
+        var allowedTool = new RecordingAgentTool("paguai.read");
+        var deniedTool = new RecordingAgentTool("paguai.private");
+        var harness = CreateHarness(
+            new ScriptedAgentModel(
+                ScriptedAgentModel.Tool("paguai.read", "{}"),
+                ScriptedAgentModel.Tool("paguai.private", "{}")),
+            new RecordingAgentRunObserver(),
+            allowedTool,
+            deniedTool);
+
+        var outcome = await harness.RunAsync(
+            CreateContext(Guid.NewGuid(), maxToolTurns: 1),
+            CreateRequest("read"),
+            CancellationToken.None);
+
+        Assert.Equal(AgentRunOutcomeKind.Denied, outcome.Kind);
+        Assert.Equal("tool_not_allowed", outcome.SafeCode);
+        Assert.Single(allowedTool.Validations);
+        Assert.Single(allowedTool.Invocations);
+        Assert.Empty(deniedTool.Validations);
+        Assert.Empty(deniedTool.Invocations);
+    }
+
+    [Fact]
+    public async Task Run_uses_registry_descriptor_snapshot_after_tool_descriptor_changes()
+    {
+        var tool = new RecordingAgentTool("paguai.read");
+        var observer = new RecordingAgentRunObserver();
+        var harness = CreateHarness(
+            new ScriptedAgentModel(
+                ScriptedAgentModel.Tool("paguai.read", "{}"),
+                ScriptedAgentModel.Final("done")),
+            observer,
+            tool);
+        tool.ReplaceDescriptor(CreateDescriptor("paguai.changed", AgentToolRisk.Irreversible));
+
+        var outcome = await harness.RunAsync(
+            CreateContext(Guid.NewGuid()),
+            CreateRequest("read"),
+            CancellationToken.None);
+
+        Assert.Equal(AgentRunOutcomeKind.Result, outcome.Kind);
+        Assert.Equal("done", outcome.AssistantMessage);
+        Assert.Single(tool.Validations);
+        Assert.Single(tool.Invocations);
+        Assert.Contains(observer.Events, runEvent =>
+            runEvent.ToolName == "paguai.read" && runEvent.ToolRisk == AgentToolRisk.ReadOnly);
+        Assert.DoesNotContain(observer.Events, runEvent => runEvent.ToolName == "paguai.changed");
+    }
+
+    [Fact]
     public async Task Run_observer_receives_only_safe_metadata()
     {
         const string userMessage = "ocr-secret-content";
@@ -319,10 +413,24 @@ public sealed class AgentHarnessTests
     [Fact]
     public async Task Run_keeps_concurrent_execution_contexts_isolated()
     {
-        var model = new CallbackAgentModel((request, _) => Task.FromResult(
-            request.PriorToolResults.Count == 0
-                ? ScriptedAgentModel.Tool("paguai.read", "{}")
-                : ScriptedAgentModel.Final("done")));
+        var firstTurnsArrived = 0;
+        var bothFirstTurnsArrived = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var model = new CallbackAgentModel(async (request, cancellationToken) =>
+        {
+            if (request.PriorToolResults.Count != 0)
+            {
+                return ScriptedAgentModel.Final("done");
+            }
+
+            if (Interlocked.Increment(ref firstTurnsArrived) == 2)
+            {
+                bothFirstTurnsArrived.TrySetResult(true);
+            }
+
+            await bothFirstTurnsArrived.Task.WaitAsync(cancellationToken);
+            return ScriptedAgentModel.Tool("paguai.read", "{}");
+        });
         var tool = new RecordingAgentTool("paguai.read");
         var observer = new RecordingAgentRunObserver();
         var harness = CreateHarness(model, observer, tool);
@@ -338,6 +446,7 @@ public sealed class AgentHarnessTests
             harness.RunAsync(CreateContext(companyB, actorId: actorB, correlationId: correlationB), CreateRequest("b"), CancellationToken.None));
 
         Assert.All(outcomes, outcome => Assert.Equal(AgentRunOutcomeKind.Result, outcome.Kind));
+        Assert.Equal(2, firstTurnsArrived);
         var invocations = tool.Invocations.Select(invocation => (
             invocation.ExecutionContext.Actor.UserId,
             invocation.ExecutionContext.CompanyId,
@@ -382,6 +491,26 @@ public sealed class AgentHarnessTests
                 new HashSet<string>(allowedTools ?? ["paguai.read"], StringComparer.Ordinal)));
 
     private static AgentRunRequest CreateRequest(string message) => new(message, []);
+
+    private static AgentToolDescriptor CreateDescriptor(string name, AgentToolRisk risk)
+    {
+        var schema = JsonSerializer.SerializeToElement(new { type = "object" });
+
+        return new AgentToolDescriptor(
+            name,
+            "2.0",
+            schema,
+            schema,
+            "paguai.changed",
+            risk,
+            true,
+            false,
+            new AgentMcpAnnotations(
+                ReadOnlyHint: risk == AgentToolRisk.ReadOnly,
+                DestructiveHint: risk != AgentToolRisk.ReadOnly,
+                IdempotentHint: false,
+                OpenWorldHint: false));
+    }
 
     public enum PolicyFailure
     {

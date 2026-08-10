@@ -5,19 +5,27 @@ namespace Vinx.Erp.AI.Tools;
 
 public sealed class AgentToolRegistry
 {
-    private readonly FrozenDictionary<string, IAgentTool> tools;
+    private readonly FrozenDictionary<string, AgentToolRegistration> registrations;
 
     public AgentToolRegistry(IEnumerable<IAgentTool> tools)
     {
         ArgumentNullException.ThrowIfNull(tools);
 
-        this.tools = tools.ToFrozenDictionary(
-            tool => tool.Descriptor.Name,
+        var snapshots = tools
+            .Select(tool =>
+            {
+                ArgumentNullException.ThrowIfNull(tool);
+                return new AgentToolRegistration(tool, tool.Descriptor);
+            })
+            .ToArray();
+
+        registrations = snapshots.ToFrozenDictionary(
+            registration => registration.Descriptor.Name,
             StringComparer.Ordinal);
 
         Descriptors = Array.AsReadOnly(
-            this.tools.Values
-                .Select(tool => tool.Descriptor)
+            registrations.Values
+                .Select(registration => registration.Descriptor)
                 .OrderBy(descriptor => descriptor.Name, StringComparer.Ordinal)
                 .ToArray());
     }
@@ -26,10 +34,25 @@ public sealed class AgentToolRegistry
 
     public bool TryGet(
         string name,
-        [NotNullWhen(true)] out IAgentTool? tool)
+        [NotNullWhen(true)] out AgentToolRegistration? registration)
     {
         ArgumentNullException.ThrowIfNull(name);
 
-        return tools.TryGetValue(name, out tool);
+        return registrations.TryGetValue(name, out registration);
     }
+}
+
+public sealed class AgentToolRegistration
+{
+    internal AgentToolRegistration(IAgentTool tool, AgentToolDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+        ArgumentNullException.ThrowIfNull(descriptor);
+
+        Tool = tool;
+        Descriptor = descriptor;
+    }
+
+    public IAgentTool Tool { get; }
+    public AgentToolDescriptor Descriptor { get; }
 }
