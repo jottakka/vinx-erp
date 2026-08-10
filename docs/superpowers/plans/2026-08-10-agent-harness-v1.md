@@ -12,7 +12,7 @@
 
 - Work on a dedicated codex/agentic-v1-* branch; never write main.
 - Keep each PR at or below 25 changed implementation/documentation files and 800 manual lines; generated lockfiles count as files.
-- Delivery uses stacked PRs after the actual Task 1/2 estimates exceeded one reviewable PR: planning/spec (2 documentation files, about 480 manual lines); contracts (10 files, about 690 manual lines); policy (4 files, about 290 manual lines); runner plus architecture/docs (estimated below 800 manual lines). Provider, host, channel, OCR, approval, and remote MCP work stay in later PRs.
+- Delivery uses stacked PRs after the actual Task 1/2 estimates exceeded one reviewable PR: planning/spec (2 documentation files, about 480 manual lines); contracts (10 files, about 690 manual lines); policy (4 files, about 290 manual lines); trusted-scope guard (4 source/test/documentation files, about 160 manual lines); runner (at most 5 files, below 800 manual lines); architecture/docs (at most 9 files, about 280 manual lines). Provider, host, channel, OCR, approval, and remote MCP work stay in later PRs.
 - Create src/Modules/AI/Vinx.Erp.AI. It may reference Vinx.Erp.Foundation. Foundation, ApiHost, McpHost, WorkerHost, database schema, migrations, and provider configuration stay unchanged.
 - Use namespace Vinx.Erp.AI and subnamespaces AgentHarness, Models, Tools.
 - Add no NuGet package and no provider SDK.
@@ -49,7 +49,9 @@
 1. **Planning/spec:** design and implementation plan only.
 2. **Contracts:** AI project, immutable trusted/untrusted contracts, model/tool contracts, and contract tests.
 3. **Policy:** immutable registry and server-side policy only; stacks on Contracts.
-4. **Runner/docs:** deterministic harness, architecture boundary test, module contract, ADR, and verification matrix; stacks on Policy.
+4. **Trusted-scope guard:** model tool arguments remove company-scope aliases before a tool can receive them; stacks on Policy.
+5. **Runner:** deterministic harness and unit tests; stacks on the trusted-scope guard.
+6. **Architecture/docs:** architecture boundary test, module contract, ADR, and verification matrix; stacks on Runner.
 
 Each stacked PR receives its own focused verification and independent review. The final full public gate covers the completed stack.
 
@@ -157,7 +159,7 @@ public enum AgentRunOutcomeKind
 }
 ~~~
 
-Use this outcome shape so Task 3 can return the fields asserted by its tests:
+Use this outcome shape so Task 4 can return the fields asserted by its tests:
 
 ~~~csharp
 public sealed record AgentRunOutcome(
@@ -285,13 +287,60 @@ git add src/Modules/AI/Vinx.Erp.AI/Tools tests/public/Vinx.Erp.AI.UnitTests/Agen
 git commit -m "feat: enforce agent tool policy"
 ~~~
 
-### Task 3: Implement deterministic harness loop and safe observation
+### Task 3: Harden trusted execution bounds and company scope
+
+**Files:**
+
+- Modify: src/Modules/AI/Vinx.Erp.AI/Tools/AgentToolContracts.cs
+- Modify: src/Modules/AI/Vinx.Erp.AI/AgentHarness/AgentContracts.cs
+- Modify: tests/public/Vinx.Erp.AI.UnitTests/AgentContractsTests.cs
+- Modify: docs/superpowers/specs/2026-08-10-agent-harness-v1-design.md
+- Modify: docs/superpowers/plans/2026-08-10-agent-harness-v1.md
+
+**Interfaces:**
+
+- Consumes: AgentToolCall raw model arguments.
+- Produces: an AgentToolCall that cannot carry a top-level company-scope alias into an in-process tool.
+
+- [ ] **Step 1: Write failing contract tests**
+
+Test that `empresa_id`, `empresaId`, `company_id`, and `companyId` are removed case-insensitively while ordinary arguments and nested business values remain unchanged. The test must create the call from model-originated JSON and inspect only the normalized call exposed to the harness/tool. Also test that `AgentTaskProfile` rejects a timeout above the portable `CancellationTokenSource.CancelAfter` maximum.
+
+- [ ] **Step 2: Run test and verify RED**
+
+~~~bash
+dotnet test tests/public/Vinx.Erp.AI.UnitTests/Vinx.Erp.AI.UnitTests.csproj --no-restore --filter FullyQualifiedName~AgentContractsTests
+~~~
+
+Expected: the new scope-normalization case fails before the contract change.
+
+- [ ] **Step 3: Normalize server-bound scope**
+
+`AgentToolCall` removes only top-level aliases that could establish company scope before exposing `Arguments`. `AgentTaskProfile` rejects a timeout the runner cannot schedule portably. The external MCP adapter, implemented later, resolves its explicit `empresa_id` into trusted `AgentExecutionContext.CompanyId` before it creates an internal tool call. No model/tool argument can replace that trusted context.
+
+- [ ] **Step 4: Run test and verify GREEN**
+
+~~~bash
+dotnet test tests/public/Vinx.Erp.AI.UnitTests/Vinx.Erp.AI.UnitTests.csproj --no-restore --filter FullyQualifiedName~AgentContractsTests
+~~~
+
+Expected: contract tests pass with no warnings.
+
+- [ ] **Step 5: Commit**
+
+~~~bash
+git add src/Modules/AI/Vinx.Erp.AI/AgentHarness/AgentContracts.cs src/Modules/AI/Vinx.Erp.AI/Tools/AgentToolContracts.cs tests/public/Vinx.Erp.AI.UnitTests/AgentContractsTests.cs docs/superpowers/specs/2026-08-10-agent-harness-v1-design.md docs/superpowers/plans/2026-08-10-agent-harness-v1.md
+git commit -m "fix: bind agent tool scope"
+~~~
+
+### Task 4: Implement deterministic harness loop and safe observation
 
 **Files:**
 
 - Create: src/Modules/AI/Vinx.Erp.AI/AgentHarness/AgentHarness.cs
 - Create: tests/public/Vinx.Erp.AI.UnitTests/AgentHarnessTests.cs
 - Modify: tests/public/Vinx.Erp.AI.UnitTests/Fixtures/AgentHarnessDoubles.cs
+- Modify: src/Modules/AI/Vinx.Erp.AI/Tools/AgentToolRegistry.cs
 
 **Interfaces:**
 
@@ -330,7 +379,7 @@ public async Task Run_returns_confirmation_without_invoking_write_tool()
 }
 ~~~
 
-Add test cases for allowed read then final reply, missing company, missing capability, unknown tool, invalid arguments, model-proposed empresa_id ignored, injection text ignored by policy, timeout, caller cancellation, turn cap, safe observer shape, and concurrent actor/company/correlation isolation.
+Add test cases for allowed read then final reply, missing company, missing capability, unknown tool, invalid arguments, model-proposed empresa_id ignored, injection text ignored by policy, timeout, caller cancellation, turn cap, safe observer shape, and concurrent actor/company/correlation isolation. Prove that `Validate` is not called for an unknown, denied, company-missing, capability-missing, or confirmation-required proposal.
 
 - [ ] **Step 2: Run test and verify RED**
 
@@ -344,15 +393,15 @@ Expected: compile failure because AgentHarness does not exist.
 
 1. Create linked cancellation source from caller token and context.Profile.Timeout.
 2. Emit Received event.
-3. Build AgentModelRequest from untrusted request, allowed descriptors, prior tool results only.
+3. Build AgentModelRequest from untrusted request, profile-allowed descriptors, prior tool results only.
 4. Ask model for one AgentModelTurn.
 5. Final turn emits Completed and returns AgentRunOutcome.Result.
 6. Tool turn resolves registry. Unknown tool returns Denied without invocation.
-7. IAgentTool.Validate invalid arguments returns ValidationError without invocation.
-8. Policy result other than Result returns typed outcome without invocation.
-9. Invoke only allowed read tool with AgentToolInvocation built from trusted AgentExecutionContext; append result and increment turn count.
+7. Evaluate policy before semantic tool validation. A policy result other than Result returns typed outcome without validation or invocation.
+8. IAgentTool.Validate invalid arguments returns ValidationError without invocation.
+9. Invoke only allowed read tool with AgentToolInvocation built from trusted AgentExecutionContext; append every tool result, including unsuccessful results, and increment turn count without automatic retry.
 10. Before another tool invocation, exhausted MaxToolTurns returns ValidationError code tool_turn_limit_exceeded.
-11. Internal timeout returns ValidationError code agent_timeout. Caller cancellation rethrows.
+11. Internal timeout returns ValidationError code agent_timeout. Caller cancellation wins a concurrent timeout and rethrows. Observer, model, and tool unexpected failures propagate without being relabeled as validation errors.
 
 Observer receives fixed phase/outcome metadata only. It never receives AgentRunRequest.UserMessage, AgentContextItem.Content, model text, JsonElement arguments, or AgentToolResult payload.
 
@@ -372,7 +421,7 @@ git add src/Modules/AI/Vinx.Erp.AI/AgentHarness tests/public/Vinx.Erp.AI.UnitTes
 git commit -m "feat: run supervised agent harness"
 ~~~
 
-### Task 4: Lock module boundary and delivery evidence
+### Task 5: Lock module boundary and delivery evidence
 
 **Files:**
 
@@ -443,11 +492,11 @@ git add tests/public/Vinx.Erp.ArchitectureTests docs/modules/ai.md docs/adr/0005
 git commit -m "docs: record agent harness boundary"
 ~~~
 
-### Task 5: Final verification and review gate
+### Task 6: Final verification and review gate
 
 **Files:**
 
-- Verify: all files changed by Tasks 1–4.
+- Verify: all files changed by Tasks 1–5.
 
 **Interfaces:**
 

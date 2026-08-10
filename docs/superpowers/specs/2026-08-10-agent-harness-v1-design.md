@@ -29,7 +29,7 @@ The core exposes these contracts:
 - `AgentExecutionContext`: trusted server-side actor, server correlation ID, channel, optional explicit company, effective capabilities, and approved task profile.
 - `AgentRunRequest`: untrusted normalized user message and external context items. It never supplies actor, company, capability, correlation, profile, or policy.
 - `AgentRunOutcome`: one of `result`, `requires_confirmation`, `denied`, `conflict`, `validation_error`, or `needs_clarification`; contains only safe user-facing text, tool name, and opaque identifiers needed by the caller.
-- `AgentTaskProfile`: approved task identity and limits. Business code selects a profile, never a raw provider/model name.
+- `AgentTaskProfile`: approved task identity and limits, including a timeout supported by portable cancellation. Business code selects a profile, never a raw provider/model name.
 - `IAgentModel`: emits either a final assistant message or a typed tool proposal. The initial test double is test-only; production adapters come later.
 - `IAgentTool`: exposes a job-oriented descriptor and executes in-process. Its descriptor carries tool name/version, input and output schemas, required capability, risk, explicit-company requirement, and idempotency requirement.
 - `IAgentToolRegistry`: immutable catalog that resolves only allowlisted tools for the task profile.
@@ -44,7 +44,7 @@ The descriptor follows MCP concepts but is not an MCP transport implementation. 
 2. The adapter calls `AgentHarness.RunAsync` with an `AgentExecutionContext` and `AgentRunRequest`.
 3. The harness asks `IAgentModel` for a typed decision.
 4. A final decision returns `result` without a tool call.
-5. For a tool proposal, the harness validates the catalog/profile allowlist, descriptor, explicit company, policy, and capability context before any invocation.
+5. For a tool proposal, the harness resolves the catalog/descriptor, evaluates profile allowlist, explicit company, capability, and risk policy, then performs semantic tool validation only for an allowed read. No denied or confirmation-required proposal reaches tool validation or invocation.
 6. A write returns `requires_confirmation`; the harness never invokes it. Issue #126 later supplies durable approval creation and consumption.
 7. An allowed read invokes the in-process tool and returns its typed result to the model. The harness repeats only while the policy's tool-turn cap has not been reached.
 8. The observer receives redacted state transitions and outcome metadata.
@@ -52,6 +52,8 @@ The descriptor follows MCP concepts but is not an MCP transport implementation. 
 ### Company and identity rules
 
 The harness never resolves a user, company, correlation ID, capability, or profile from a prompt, tool argument, or model proposal. `ActorContext` and the optional company come only from `AgentExecutionContext`. A tool marked `RequiresExplicitCompany` cannot run when the trusted company is absent; the outcome is `needs_clarification` and the tool is not invoked.
+
+`AgentToolCall` removes top-level `empresa_id`, `empresaId`, `company_id`, and `companyId` aliases before an in-process tool sees its arguments. An external MCP adapter has a different boundary: it accepts an explicit `empresa_id`, authorizes it, and then constructs `AgentExecutionContext.CompanyId` before it creates the internal tool call. It never forwards that value as a model-controlled argument.
 
 The harness does not implement `whoAmI`. Issue #125 owns membership and capability discovery. The first core receives effective capability names as trusted server-side context from its future host adapter; it never accepts them from user content.
 
@@ -64,6 +66,8 @@ Tool descriptors are job-oriented, not CRUD. Policy is server-side and has prece
 - Tool outside profile allowlist or missing capability: returns `denied`.
 - Invalid proposal schema: returns `validation_error`.
 - Reused idempotency key with incompatible payload: `conflict` is reserved for the later domain/approval adapter.
+
+Unexpected observer, model, and tool failures propagate to the host; they are not mislabeled as user validation errors. A tool result with `IsSuccess == false` is returned to the model, consumes a tool turn, and is never retried automatically. Caller cancellation propagates even when it races with the internal timeout.
 
 ### Untrusted content
 
@@ -87,7 +91,7 @@ Hosts later map events to Foundation audit and structured logs. A mutation's dur
 
 ## First implementation slice
 
-The first PR is intentionally small: `Vinx.Erp.AI`, contracts, deterministic runner, immutable in-process registry/policy, safe observer boundary, module documentation, verification matrix, and unit tests. It does not wire DI into a host because no authenticated agent endpoint exists yet.
+The initial delivery is a small stack: contracts, policy, trusted-scope guard, deterministic runner, then architecture/documentation evidence. It does not wire DI into a host because no authenticated agent endpoint exists yet.
 
 Acceptance cases:
 
@@ -104,11 +108,15 @@ Acceptance cases:
 
 ## Delivery sequence
 
-1. PR 1: AI module harness core and unit tests.
-2. PR 2: approved task profile configuration and real OpenAI-compatible/Anthropic adapters, using external-boundary test doubles.
-3. PR 3: `whoAmI`, effective identity/capability adapter, durable approval adapter, and one Paguai read/draft vertical slice.
-4. PR 4: authenticated API/UI harness adapter and WhatsApp channel adapter with its own webhook/outbox work.
-5. PR 5: remote MCP host, OAuth, Streamable HTTP, tool discovery, and compatibility checks for Claude/GPT clients.
+1. PR 1: AI module contracts and unit tests.
+2. PR 2: immutable registry and server-side policy.
+3. PR 3: trusted-scope and timeout guard.
+4. PR 4: deterministic runner and unit tests.
+5. PR 5: architecture boundary and durable delivery evidence.
+6. PR 6: approved task profile configuration and real OpenAI-compatible/Anthropic adapters, using external-boundary test doubles.
+7. PR 7: `whoAmI`, effective identity/capability adapter, durable approval adapter, and one Paguai read/draft vertical slice.
+8. PR 8: authenticated API/UI harness adapter and WhatsApp channel adapter with its own webhook/outbox work.
+9. PR 9: remote MCP host, OAuth, Streamable HTTP, tool discovery, and compatibility checks for Claude/GPT clients.
 
 The remote MCP host is deliberately later, but every internal tool contract is MCP-compatible from PR 1.
 
