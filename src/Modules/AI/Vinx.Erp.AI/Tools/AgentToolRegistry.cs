@@ -34,6 +34,22 @@ public sealed class AgentToolRegistry
 
     public bool TryGet(
         string name,
+        [NotNullWhen(true)] out IAgentTool? tool)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        if (TryGetRegistration(name, out var registration))
+        {
+            tool = registration.Tool;
+            return true;
+        }
+
+        tool = null;
+        return false;
+    }
+
+    internal bool TryGetRegistration(
+        string name,
         [NotNullWhen(true)] out AgentToolRegistration? registration)
     {
         ArgumentNullException.ThrowIfNull(name);
@@ -42,7 +58,7 @@ public sealed class AgentToolRegistry
     }
 }
 
-public sealed class AgentToolRegistration
+internal sealed class AgentToolRegistration
 {
     internal AgentToolRegistration(IAgentTool tool, AgentToolDescriptor descriptor)
     {

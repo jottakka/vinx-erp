@@ -25,7 +25,7 @@ public sealed class AgentToolRegistryTests
         var registry = new AgentToolRegistry([tool]);
 
         Assert.True(registry.TryGet("paguai.read", out var resolved));
-        Assert.Same(tool, resolved.Tool);
+        Assert.Same(tool, resolved);
         Assert.False(registry.TryGet("PAGUAI.READ", out _));
     }
 
@@ -40,12 +40,12 @@ public sealed class AgentToolRegistryTests
         source.Add(new RecordingAgentTool("paguai.other"));
 
         Assert.True(registry.TryGet("paguai.read", out var resolved));
-        Assert.Same(tool, resolved.Tool);
+        Assert.Same(tool, resolved);
         Assert.False(registry.TryGet("paguai.other", out _));
     }
 
     [Fact]
-    public void Registry_lookup_preserves_descriptor_captured_at_construction()
+    public void Registry_descriptors_preserve_snapshot_captured_at_construction()
     {
         var tool = new RecordingAgentTool("paguai.read");
         var registry = new AgentToolRegistry([tool]);
@@ -54,9 +54,9 @@ public sealed class AgentToolRegistryTests
             AgentToolRisk.Irreversible,
             requiresExplicitCompany: true));
 
-        Assert.True(registry.TryGet("paguai.read", out var resolved));
-        Assert.Equal("paguai.read", resolved.Descriptor.Name);
-        Assert.Equal(AgentToolRisk.ReadOnly, resolved.Descriptor.Risk);
+        var descriptor = Assert.Single(registry.Descriptors);
+        Assert.Equal("paguai.read", descriptor.Name);
+        Assert.Equal(AgentToolRisk.ReadOnly, descriptor.Risk);
     }
 
     [Fact]

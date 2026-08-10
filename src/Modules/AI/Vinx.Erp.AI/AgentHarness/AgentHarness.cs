@@ -88,7 +88,7 @@ public sealed class AgentHarness
                 }
 
                 var call = turn.ToolCall!;
-                if (!toolRegistry.TryGet(call.Name, out var registration))
+                if (!toolRegistry.TryGetRegistration(call.Name, out var registration))
                 {
                     await ObserveAsync(
                         runId,
