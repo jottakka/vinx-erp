@@ -29,18 +29,18 @@ The core exposes these contracts:
 - `AgentExecutionContext`: trusted server-side actor, server correlation ID, channel, optional explicit company, effective capabilities, and approved task profile.
 - `AgentRunRequest`: untrusted normalized user message and external context items. It never supplies actor, company, capability, correlation, profile, or policy.
 - `AgentRunOutcome`: one of `result`, `requires_confirmation`, `denied`, `conflict`, `validation_error`, or `needs_clarification`; contains only safe user-facing text, tool name, and opaque identifiers needed by the caller.
-- `AgentTaskProfile`: approved task identity and limits, including a timeout supported by portable cancellation. Business code selects a profile, never a raw provider/model name.
+- `AgentTaskProfile`: approved task identity and limits, including a timeout supported by portable cancellation. AI owns its contract and configuration; a host/application layer selects an approved profile after Foundation supplies trusted identity, company, and capability context. Business code never selects a raw provider/model name.
 - `IAgentModel`: emits either a final assistant message or a typed tool proposal. Its request has normalized user/context content, approved tool descriptors, and prior results only; it never receives `AgentExecutionContext` or `AgentTaskProfile`. The initial test double is test-only; production adapters come later.
 - `IAgentTool`: exposes a job-oriented descriptor and executes in-process. Its descriptor carries tool name/version, input and output schemas, required capability, risk, explicit-company requirement, and idempotency requirement.
 - `IAgentToolRegistry`: immutable catalog that resolves only allowlisted tools for the task profile.
 - `IAgentRunPolicy`: decides before invocation. It holds maximum tool turns, timeout, allowlist, and write prohibition. It can allow a read, deny a call, request clarification for missing company, or require confirmation for a write.
 - `IAgentRunObserver`: receives safe lifecycle metadata. It receives no raw prompt, token, attachment content, OCR text, or provider payload.
 
-The descriptor follows MCP concepts but is not an MCP transport implementation. It keeps `inputSchema` and `outputSchema` as versioned JSON documents, enabling a later `McpHost` adapter without changing the harness contract. In this slice, the resolved tool owns semantic argument validation; a generic JSON Schema engine belongs to the remote MCP adapter work.
+The descriptor is MCP-oriented and adapter-ready, not a complete external MCP contract or transport implementation. It keeps `inputSchema` and `outputSchema` as versioned JSON documents, enabling a later `McpHost` adapter without changing the harness contract. That adapter adds authenticated actor context, explicit `empresa_id`, audit and correlation policy, idempotency, and the confirmation lifecycle required by ADR 0003. In this slice, the resolved tool owns semantic argument validation; a generic JSON Schema engine belongs to the remote MCP adapter work.
 
 ### Data flow
 
-1. A channel adapter authenticates the caller, resolves the internal actor, creates a server correlation ID, computes effective capabilities, and normalizes message/OCR data into `AgentContextItem` records.
+1. A host-owned channel adapter authenticates the caller, receives trusted identity, company, and capability context from Foundation, selects an approved `AgentTaskProfile`, and normalizes message/OCR data into `AgentContextItem` records.
 2. The adapter calls `AgentHarness.RunAsync` with an `AgentExecutionContext` and `AgentRunRequest`.
 3. The harness asks `IAgentModel` for a typed decision.
 4. A final decision returns `result` without a tool call.
@@ -118,7 +118,7 @@ Acceptance cases:
 8. PR 8: authenticated API/UI harness adapter and WhatsApp channel adapter with its own webhook/outbox work.
 9. PR 9: remote MCP host, OAuth, Streamable HTTP, tool discovery, and compatibility checks for Claude/GPT clients.
 
-The remote MCP host is deliberately later, but every internal tool contract is MCP-compatible from PR 1.
+The remote MCP host is deliberately later. Internal tool contracts are MCP-oriented and adapter-ready from PR 1; they do not claim completeness as an external MCP contract.
 
 ## Verification
 

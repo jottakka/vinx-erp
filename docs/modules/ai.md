@@ -4,9 +4,9 @@ O módulo AI contém a execução agêntica supervisionada. Ele não é uma fron
 
 ## Ownership
 
-AI é responsável pelo agent harness, perfis de tarefa, contratos e adaptadores de modelos, eventos seguros de execução e futuros adaptadores de canal do agente. Adaptadores reais de provedor e canais, incluindo UI e WhatsApp, serão entregues por fatias posteriores.
+AI é responsável pelos contratos neutros de canal, comportamento do agent harness, contrato e configuração de perfis de tarefa, adaptadores de modelos e eventos seguros de execução. Hosts são responsáveis pelos adaptadores concretos de UI, WhatsApp, HTTP e transporte MCP.
 
-Foundation é responsável por identidade do ator, capabilities efetivas, auditoria, correlação e idempotência. O módulo AI consome esse contexto confiável e não o recria a partir de texto, arquivos ou respostas do modelo.
+Foundation é responsável por identidade do ator, empresa, capabilities efetivas, auditoria, correlação e idempotência. Depois desse contexto confiável ser fornecido, uma camada de host/aplicação seleciona um perfil aprovado. O módulo AI não recria contexto nem perfil a partir de texto, arquivos ou respostas do modelo.
 
 ## Company scope
 
@@ -21,6 +21,8 @@ O request enviado ao modelo contém somente a solicitação não confiável e en
 ## Limites da V1
 
 A primeira fatia contém contratos, policy e runner em processo, com testes públicos. Ela não contém banco ou persistência de AI, deleção, migração, SDK ou adaptador de provedor real, host, WhatsApp ou MCP remoto.
+
+Os contratos internos de tools são orientados a MCP e preparados para adaptação, mas não formam um contrato MCP externo completo. O host MCP futuro adicionará ator autenticado, `empresa_id` explícito, auditoria e correlação, idempotência e ciclo de confirmação conforme o ADR 0003.
 
 ## Deletion strategy
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Goal:** Deliver deterministic in-process Agent Harness core in new AI module. It processes trusted execution context, normalized user request, MCP-compatible internal tool contracts. It exposes no host, provider, mutation, or remote MCP endpoint.
+**Goal:** Deliver deterministic in-process Agent Harness core in new AI module. It processes trusted execution context, normalized user request, and MCP-oriented, adapter-ready internal tool contracts. It exposes no host, provider, mutation, or remote MCP endpoint.
 
 **Architecture:** Vinx.Erp.AI references Foundation only for ActorContext. AgentHarness receives trusted AgentExecutionContext separately from untrusted AgentRunRequest; it asks protocol-neutral model for final reply or one tool call at a time, applies deterministic policy, invokes only allowed read tools, emits safe lifecycle events. API, WhatsApp, provider, approval, OCR, remote MCP adapters stay outside this plan.
 
@@ -18,7 +18,7 @@
 - Add no NuGet package and no provider SDK.
 - Model, prompt, OCR item, WhatsApp item, tool argument never supplies actor, company, capability, correlation ID, task profile, risk, allowlist, or approval policy. AgentModelRequest never receives the trusted execution context or task profile.
 - Store no prompt, response, token, attachment contents, OCR text, raw tool arguments, or provider payload in logs, observer events, fixtures, or Markdown.
-- Tool descriptor is job-oriented and MCP-compatible: name, version, JSON input/output schemas, required capability, risk, explicit-company requirement, idempotency requirement, MCP annotation hints.
+- Tool descriptor is job-oriented, MCP-oriented, and adapter-ready: name, version, JSON input/output schemas, required capability, risk, explicit-company requirement, idempotency requirement, and MCP annotation hints. It is not the complete external MCP contract.
 - Policy is server-side. Any non-read-only risk returns requires_confirmation before invocation. No mutating test tool is registered or invoked.
 - Tool requiring explicit company returns needs_clarification when AgentExecutionContext.CompanyId is null.
 - Caller cancellation propagates. Internal profile timeout returns validation_error without another tool invocation.
@@ -171,7 +171,7 @@ public sealed record AgentRunOutcome(
 
 Reject null/blank IDs, blank user text, empty tool names, unsupported enums, non-positive turn limits, and non-positive timeouts. Use JsonElement values cloned from source documents; contracts must not retain disposable JsonDocument instances.
 
-AgentModelRequest contains only profile, normalized request, allowed descriptors, and prior tool results. It must not contain ActorContext, company, capabilities, correlation ID, or observer event data.
+AgentModelRequest contains only the normalized request, allowed descriptors, and prior tool results. It must not contain AgentTaskProfile, ActorContext, company, capabilities, correlation ID, or observer event data.
 
 AgentToolDescriptor contains Name, Version, InputSchema, OutputSchema, RequiredCapability, Risk, RequiresExplicitCompany, RequiresIdempotencyKey, and MCP annotations. IAgentTool.Validate returns typed validation result. IAgentTool.InvokeAsync receives AgentToolInvocation, whose company comes only from AgentExecutionContext.
 
@@ -475,11 +475,11 @@ Expected: module-contract documentation test fails because docs/modules/ai.md do
 
 - [ ] **Step 3: Create durable documentation**
 
-docs/modules/ai.md contains all standard headings. It states AI owns harness, task profiles, provider adapters, safe run events, future agent channel adapters. Foundation owns actor identity, capabilities, audit, correlation, idempotency. Commands require trusted company; model/user content never establishes scope. Contract version 1.0. First slice has no persisted AI data, deletion workflow, or migration.
+docs/modules/ai.md contains all standard headings. It states AI owns channel-neutral contracts, harness behavior, task profiles, provider adapters, and safe run events. Hosts own concrete UI, WhatsApp, HTTP, and MCP transport adapters. Foundation owns actor identity, capabilities, audit, correlation, and idempotency. A host/application layer selects an approved profile after Foundation supplies trusted identity, company, and capability context. Commands require trusted company; model/user content never establishes scope. Contract version 1.0. First slice has no persisted AI data, deletion workflow, or migration.
 
-docs/adr/0005-agent-harness-core.md records separate AI module, MCP-compatible internal tool contracts, no remote MCP host/provider SDK in this slice.
+docs/adr/0005-agent-harness-core.md records separate AI module, MCP-oriented and adapter-ready internal tool contracts, no remote MCP host/provider SDK in this slice. Remote MCP later adds authenticated actor, explicit empresa_id, audit/correlation, idempotency, and confirmation lifecycle from ADR 0003.
 
-docs/verification/127-agent-harness-test-cases.md maps issue #127 BDD categories to exact public tests: final reply, read tool, missing company, denied capability/allowlist, confirmation barrier, model company override, untrusted injection, timeout/cancel, safe observation, concurrency isolation. State deferred #125, #126, #28, #48, #52, #40.
+docs/verification/127-agent-harness-test-cases.md maps issue #127 BDD categories to exact public tests: final reply, read tool, missing company, denied capability/allowlist, confirmation barrier, model company override, untrusted injection, timeout/cancel, turn limit, safe observation, concurrency isolation. State deferred #125, #126, #28, #48, #52, #40.
 
 - [ ] **Step 4: Run test and verify GREEN**
 

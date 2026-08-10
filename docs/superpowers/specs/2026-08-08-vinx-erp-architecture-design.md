@@ -181,8 +181,10 @@ The confirmation token is single-use, short lived and bound to actor, company,
 action and payload hash. In the first release AI may read, summarize and
 draft. A human confirms financial/external actions.
 
-`Foundation.AI` selects an approved task profile instead of provider/model
-names in business code. Store metadata, hashes, policy/prompt versions,
+Aligned with ADR 0005, the AI module owns the task-profile contract and
+configuration. A host/application layer selects an approved profile after
+Foundation supplies trusted identity, company and capability context; business
+code never selects provider/model names. Store metadata, hashes, policy/prompt versions,
 cost and outcomes, not raw prompts/responses by default. Never send secrets.
 Financial and medical data may be sent only through an explicitly approved
 profile; retention mode is visible in that profile. Do not use persistent
