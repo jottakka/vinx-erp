@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-test("shows the health route", async ({ page }) => {
+test("shows the public login fallback", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "Vinx ERP" })).toBeVisible();
-  await expect(page.getByText("Healthy", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "Entrar" })).toBeVisible();
 });
