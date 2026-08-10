@@ -108,6 +108,7 @@ test("dark, light and emulated system modes expose semantic computed palette rol
     .selectOption("dark");
   const dark = await readSemanticSurface(page);
   expect(dark.backgroundRole).not.toBe("");
+  expect(dark.backgroundRole).not.toBe(light.backgroundRole);
   expect(dark.background).not.toBe(light.background);
 
   await page.emulateMedia({ colorScheme: "dark" });
@@ -156,7 +157,7 @@ test("login and the temporary protected entry have no automated WCAG AA violatio
   expect(protectedResults.violations).toEqual([]);
 });
 
-test("keyboard-only login and forced colors retain named controls and visible focus", async ({
+test("keyboard-only login and forced colors retain named controls and focus lands on submit", async ({
   page,
 }) => {
   await page.emulateMedia({ forcedColors: "active" });

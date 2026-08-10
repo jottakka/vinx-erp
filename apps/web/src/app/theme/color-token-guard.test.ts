@@ -19,13 +19,23 @@ function shouldScanSourceFile(filePath: string) {
 
 function violations(source: string) {
   const findings: string[] = [];
+  const namedCssColor =
+    /\b(?:aliceblue|antiquewhite|aqua|aquamarine|azure|beige|bisque|black|blanchedalmond|blue|blueviolet|brown|burlywood|cadetblue|chartreuse|chocolate|coral|cornflowerblue|cornsilk|crimson|cyan|darkblue|darkcyan|darkgoldenrod|darkgray|darkgreen|darkgrey|darkkhaki|darkmagenta|darkolivegreen|darkorange|darkorchid|darkred|darksalmon|darkseagreen|darkslateblue|darkslategray|darkslategrey|darkturquoise|darkviolet|deeppink|deepskyblue|dimgray|dimgrey|dodgerblue|firebrick|floralwhite|forestgreen|fuchsia|gainsboro|ghostwhite|gold|goldenrod|gray|green|greenyellow|grey|honeydew|hotpink|indianred|indigo|ivory|khaki|lavender|lavenderblush|lawngreen|lemonchiffon|lightblue|lightcoral|lightcyan|lightgoldenrodyellow|lightgray|lightgreen|lightgrey|lightpink|lightsalmon|lightseagreen|lightskyblue|lightslategray|lightslategrey|lightsteelblue|lightyellow|lime|limegreen|linen|magenta|maroon|mediumaquamarine|mediumblue|mediumorchid|mediumpurple|mediumseagreen|mediumslateblue|mediumspringgreen|mediumturquoise|mediumvioletred|midnightblue|mintcream|mistyrose|moccasin|navajowhite|navy|oldlace|olive|olivedrab|orange|orangered|orchid|palegoldenrod|palegreen|paleturquoise|palevioletred|papayawhip|peachpuff|peru|pink|plum|powderblue|purple|rebeccapurple|red|rosybrown|royalblue|saddlebrown|salmon|sandybrown|seagreen|seashell|sienna|silver|skyblue|slateblue|slategray|slategrey|snow|springgreen|steelblue|tan|teal|thistle|tomato|turquoise|violet|wheat|white|whitesmoke|yellow|yellowgreen)\b/i;
 
   if (/(?:^|[^\w])#[\da-f]{3,8}\b/i.test(source)) {
     findings.push("hex color");
   }
 
-  if (/\b(?:rgb|rgba|hsl|hsla|hwb|oklch|lab|lch|color)\s*\(/i.test(source)) {
+  if (
+    /\b(?:rgb|rgba|hsl|hsla|hwb|oklch|lab|lch|color|color-mix)\s*\(/i.test(
+      source,
+    )
+  ) {
     findings.push("color function");
+  }
+
+  if (namedCssColor.test(source)) {
+    findings.push("named color");
   }
 
   if (/\b(?:linear|radial|conic)-gradient\s*\(/i.test(source)) {
@@ -46,7 +56,7 @@ function violations(source: string) {
   }
 
   if (
-    /(?:from\s+["'][^"']*palette-primitives|import\s*\(\s*["'][^"']*palette-primitives)/i.test(
+    /(?:from\s+["'][^"']*palette-primitives|import\s*\(\s*["'][^"']*palette-primitives|require\s*\(\s*["'][^"']*palette-primitives)/i.test(
       source,
     )
   ) {
@@ -71,6 +81,27 @@ describe("semantic color boundary", () => {
     );
 
     expect(findings).toEqual(["../../features/orders.ts: hex color"]);
+  });
+
+  it("detects named CSS colors without matching Portuguese color labels", () => {
+    expect(violations('const styles = { color: "red" };')).toContain(
+      "named color",
+    );
+    expect(violations('const fields = { label: "Cor" };')).not.toContain(
+      "named color",
+    );
+  });
+
+  it("detects color-mix functions", () => {
+    expect(
+      violations("background: color-mix(in srgb, var(--a), white 20%);"),
+    ).toContain("color function");
+  });
+
+  it("detects CommonJS palette primitive imports", () => {
+    expect(
+      violations('const palette = require("../palette-primitives");'),
+    ).toContain("private palette primitive import");
   });
 
   it("keeps literal colors private to the theme primitives", () => {

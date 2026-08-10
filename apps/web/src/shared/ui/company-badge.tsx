@@ -16,6 +16,7 @@ export function CompanyBadge({ id, name }: CompanyBadgeProps) {
     <Paper
       aria-label={`Empresa ${name}`}
       data-monogram={monogram}
+      role="group"
       sx={{
         alignItems: "center",
         borderColor: accent.main,
