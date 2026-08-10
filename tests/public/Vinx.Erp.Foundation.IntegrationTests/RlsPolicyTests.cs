@@ -107,13 +107,31 @@ public sealed class RlsPolicyTests
         var userB = new User(Guid.NewGuid(), "Bea", "bea@example.test");
         var membershipA = new Membership(Guid.NewGuid(), companyA.Id, userA.Id, actorId, requestId);
         var membershipB = new Membership(Guid.NewGuid(), companyB.Id, userB.Id, actorId, requestId);
-        var fileA = new FileRecord(
-            Guid.NewGuid(), companyA.Id, membershipA.Id, "internal", "checksum-a", "a/test.txt", true, actorId, requestId);
-        var fileB = new FileRecord(
-            Guid.NewGuid(), companyB.Id, membershipB.Id, "internal", "checksum-b", "b/test.txt", true, actorId, requestId);
+        var fileA = NewFileRecord(companyA.Id, membershipA.Id, "a/test.txt", actorId, requestId);
+        var fileB = NewFileRecord(companyB.Id, membershipB.Id, "b/test.txt", actorId, requestId);
 
         administrator.AddRange(userA, userB, membershipA, membershipB, fileA, fileB);
         await administrator.SaveChangesAsync();
         return (companyA, companyB, fileB);
     }
+
+    private static FileRecord NewFileRecord(
+        Guid companyId,
+        Guid membershipId,
+        string fileName,
+        Guid actorId,
+        Guid requestId) => new(
+        Guid.NewGuid(),
+        companyId,
+        membershipId,
+        fileName,
+        ".txt",
+        1L,
+        "text/plain",
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "internal",
+        "test",
+        DateTimeOffset.UtcNow.AddDays(30),
+        actorId,
+        requestId);
 }
