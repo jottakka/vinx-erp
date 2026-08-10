@@ -300,7 +300,7 @@ git commit -m "feat: enforce agent tool policy"
 **Interfaces:**
 
 - Consumes: AgentToolCall raw model arguments.
-- Produces: an AgentToolCall that cannot carry a top-level company-scope alias into an in-process tool.
+- Produces: an AgentToolCall that cannot carry a recognized company-scope alias at any JSON depth into an in-process tool.
 
 - [ ] **Step 1: Write failing contract tests**
 
