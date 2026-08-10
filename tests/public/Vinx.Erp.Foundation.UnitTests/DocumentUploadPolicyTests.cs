@@ -35,4 +35,25 @@ public sealed class DocumentUploadPolicyTests
 
         Assert.Equal("checksum_too_long", DocumentUploadPolicy.Validate("invoice.pdf", "application/pdf", 128L, checksum));
     }
+
+    [Theory]
+    [InlineData("", "user_upload", "classification_required")]
+    [InlineData("financial", "", "origin_required")]
+    public void Intent_policy_rejects_required_classification_and_origin(
+        string classification,
+        string origin,
+        string expectedError)
+    {
+        Assert.Equal(
+            expectedError,
+            DocumentUploadPolicy.ValidateIntentMetadata(classification, origin, DateTimeOffset.UtcNow.AddDays(1)));
+    }
+
+    [Fact]
+    public void Intent_policy_rejects_retention_that_is_not_in_the_future()
+    {
+        Assert.Equal(
+            "retention_invalid",
+            DocumentUploadPolicy.ValidateIntentMetadata("financial", "user_upload", DateTimeOffset.UtcNow.AddMinutes(-1)));
+    }
 }

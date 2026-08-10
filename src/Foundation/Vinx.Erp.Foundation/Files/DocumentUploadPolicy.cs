@@ -74,6 +74,34 @@ public static class DocumentUploadPolicy
             : null;
     }
 
+    public static string? ValidateIntentMetadata(
+        string? classification,
+        string? origin,
+        DateTimeOffset retentionUntil)
+    {
+        if (string.IsNullOrWhiteSpace(classification))
+        {
+            return "classification_required";
+        }
+
+        if (classification.Length > 100)
+        {
+            return "classification_too_long";
+        }
+
+        if (string.IsNullOrWhiteSpace(origin))
+        {
+            return "origin_required";
+        }
+
+        if (origin.Length > 100)
+        {
+            return "origin_too_long";
+        }
+
+        return retentionUntil <= DateTimeOffset.UtcNow ? "retention_invalid" : null;
+    }
+
     private static bool IsSha256Checksum(string? checksum)
     {
         const string prefix = "sha256:";

@@ -115,6 +115,59 @@ public sealed class SupabaseFileStorageTests
         Assert.Null(typeof(StorageObjectMetadata).GetProperty("CreatedAt"));
     }
 
+    [Fact]
+    public async Task Inspection_reads_the_private_object_and_reports_the_Eicar_marker_without_exposing_content()
+    {
+        var payload = Encoding.ASCII.GetBytes(
+            "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*");
+        using var handler = new RequestSequenceHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal(
+                "/storage/v1/object/vinx-foundation-private/quarantine/company/document",
+                request.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payload)
+                {
+                    Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf") }
+                }
+            };
+        });
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
+        var storage = new SupabaseFileStorage(
+            client,
+            new SupabaseStorageOptions(
+                client.BaseAddress,
+                "not-a-credential",
+                SupabaseStorageOptions.PrivateContainerId));
+
+        var inspection = await storage.InspectObjectAsync("quarantine/company/document", CancellationToken.None);
+
+        Assert.True(inspection.MalwareDetected);
+        Assert.Equal(payload.LongLength, inspection.Metadata.SizeBytes);
+        Assert.Equal("application/pdf", inspection.Metadata.ContentType);
+    }
+
+    [Fact]
+    public async Task Inspection_rejects_an_object_larger_than_the_hard_25MiB_limit()
+    {
+        using var handler = new RequestSequenceHandler(request => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[DocumentUploadPolicy.MaxSizeBytes + 1])
+            {
+                Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf") }
+            }
+        });
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
+        var storage = new SupabaseFileStorage(
+            client,
+            new SupabaseStorageOptions(client.BaseAddress, "not-a-credential", SupabaseStorageOptions.PrivateContainerId));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => storage.InspectObjectAsync("quarantine/company/document", CancellationToken.None));
+    }
+
     private static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(json, Encoding.UTF8, "application/json")

@@ -6,15 +6,15 @@ public static class DocumentVerificationPolicy
 {
     public static string? Validate(
         FileRecord record,
-        StorageObjectMetadata stored,
-        bool malwareDetected)
+        StorageObjectInspection inspection)
     {
+        var stored = inspection.Metadata;
         if (!string.Equals(stored.Key, record.ProviderKey, StringComparison.Ordinal))
         {
             return "object_key_mismatch";
         }
 
-        if (malwareDetected)
+        if (inspection.MalwareDetected)
         {
             return "malware_detected";
         }

@@ -36,12 +36,14 @@ public sealed class FileRecordLifecycleTests
     }
 
     [Fact]
-    public void Verified_document_remains_in_quarantine_until_a_later_confirmation_slice()
+    public void Verified_document_can_be_confirmed_only_after_verification()
     {
         var record = NewRecord();
 
-        Invoke(record, "MarkVerified", Guid.NewGuid(), Guid.NewGuid());
-        Assert.Equal("verified", record.ProcessingState);
+        record.MarkVerified(Guid.NewGuid(), Guid.NewGuid());
+        record.MarkConfirmed(Guid.NewGuid(), Guid.NewGuid());
+
+        Assert.Equal("confirmed", record.ProcessingState);
         Assert.True(record.IsQuarantined);
     }
 
