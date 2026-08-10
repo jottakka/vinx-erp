@@ -43,6 +43,8 @@ public sealed class SessionMigrationTests
                 has_schema_privilege('vinx_identity_owner', 'foundation', 'USAGE'),
                 has_schema_privilege('vinx_identity_owner', 'foundation', 'CREATE'),
                 has_table_privilege('vinx_identity_owner', 'foundation.users', 'SELECT'),
+                has_column_privilege('vinx_identity_owner', 'foundation.users', 'sessions_valid_after', 'UPDATE'),
+                has_column_privilege('vinx_runtime', 'foundation.users', 'sessions_valid_after', 'UPDATE'),
                 EXISTS (
                     SELECT 1
                     FROM pg_constraint
@@ -75,7 +77,41 @@ public sealed class SessionMigrationTests
         Assert.False(reader.GetBoolean(13));
         Assert.True(reader.GetBoolean(14));
         Assert.True(reader.GetBoolean(15));
-        Assert.True(reader.GetBoolean(16));
+        Assert.False(reader.GetBoolean(16));
+        Assert.True(reader.GetBoolean(17));
+        Assert.True(reader.GetBoolean(18));
+    }
+
+    [Fact]
+    public async Task Runtime_can_lock_an_existing_user_and_read_its_session_barrier_through_the_function()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var userId = Guid.NewGuid();
+        var sessionsValidAfter = DateTimeOffset.Parse("2026-08-10T12:00:00+00:00");
+
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var setup = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.users (id, display_name, email, created_at, sessions_valid_after)
+            VALUES (@id, 'Lock runtime', 'runtime-lock@example.test', clock_timestamp(), @sessions_valid_after)
+            """, administrator))
+        {
+            setup.Parameters.AddWithValue("id", userId);
+            setup.Parameters.AddWithValue("sessions_valid_after", sessionsValidAfter);
+            await setup.ExecuteNonQueryAsync();
+        }
+
+        await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT sessions_valid_after FROM foundation.lock_user_for_session_admission(@user_id)", runtime);
+        command.Parameters.AddWithValue("user_id", userId);
+
+        var actual = await command.ExecuteScalarAsync();
+
+        Assert.Equal(sessionsValidAfter.UtcDateTime, Assert.IsType<DateTime>(actual));
     }
 
     [Fact]
@@ -328,23 +364,68 @@ public sealed class SessionMigrationTests
                     SELECT 1
                     FROM pg_index AS index
                     WHERE index.indexrelid = 'foundation.ix_user_sessions_issuer_provider_session_id'::regclass
-                      AND index.indisunique),
+                      AND index.indisunique
+                      AND ARRAY(
+                          SELECT attribute.attname::text
+                          FROM unnest(index.indkey) WITH ORDINALITY AS key_column(attnum, ordinal_position)
+                          INNER JOIN pg_attribute AS attribute
+                              ON attribute.attrelid = index.indrelid
+                              AND attribute.attnum = key_column.attnum
+                          ORDER BY key_column.ordinal_position) = ARRAY['issuer', 'provider_session_id']),
                 EXISTS (
                     SELECT 1
                     FROM pg_index AS index
-                    WHERE index.indexrelid = 'foundation.ix_user_sessions_user_id_revoked_at'::regclass),
+                    WHERE index.indexrelid = 'foundation.ix_user_sessions_user_id_revoked_at'::regclass
+                      AND NOT index.indisunique
+                      AND ARRAY(
+                          SELECT attribute.attname::text
+                          FROM unnest(index.indkey) WITH ORDINALITY AS key_column(attnum, ordinal_position)
+                          INNER JOIN pg_attribute AS attribute
+                              ON attribute.attrelid = index.indrelid
+                              AND attribute.attnum = key_column.attnum
+                          ORDER BY key_column.ordinal_position) = ARRAY['user_id', 'revoked_at']),
                 EXISTS (
                     SELECT 1
                     FROM pg_constraint AS foreign_key
                     WHERE foreign_key.conrelid = 'foundation.user_sessions'::regclass
                       AND foreign_key.conname = 'fk_user_sessions_users_user_id'
-                      AND foreign_key.confdeltype = 'r'),
+                      AND foreign_key.confdeltype = 'r'
+                      AND foreign_key.confrelid = 'foundation.users'::regclass
+                      AND ARRAY(
+                          SELECT attribute.attname::text
+                          FROM unnest(foreign_key.conkey) WITH ORDINALITY AS key_column(attnum, ordinal_position)
+                          INNER JOIN pg_attribute AS attribute
+                              ON attribute.attrelid = foreign_key.conrelid
+                              AND attribute.attnum = key_column.attnum
+                          ORDER BY key_column.ordinal_position) = ARRAY['user_id']
+                      AND ARRAY(
+                          SELECT attribute.attname::text
+                          FROM unnest(foreign_key.confkey) WITH ORDINALITY AS key_column(attnum, ordinal_position)
+                          INNER JOIN pg_attribute AS attribute
+                              ON attribute.attrelid = foreign_key.confrelid
+                              AND attribute.attnum = key_column.attnum
+                          ORDER BY key_column.ordinal_position) = ARRAY['id']),
                 EXISTS (
                     SELECT 1
                     FROM pg_constraint AS foreign_key
                     WHERE foreign_key.conrelid = 'foundation.user_sessions'::regclass
                       AND foreign_key.conname = 'fk_user_sessions_users_revoked_by_user_id'
-                      AND foreign_key.confdeltype = 'r')
+                      AND foreign_key.confdeltype = 'r'
+                      AND foreign_key.confrelid = 'foundation.users'::regclass
+                      AND ARRAY(
+                          SELECT attribute.attname::text
+                          FROM unnest(foreign_key.conkey) WITH ORDINALITY AS key_column(attnum, ordinal_position)
+                          INNER JOIN pg_attribute AS attribute
+                              ON attribute.attrelid = foreign_key.conrelid
+                              AND attribute.attnum = key_column.attnum
+                          ORDER BY key_column.ordinal_position) = ARRAY['revoked_by_user_id']
+                      AND ARRAY(
+                          SELECT attribute.attname::text
+                          FROM unnest(foreign_key.confkey) WITH ORDINALITY AS key_column(attnum, ordinal_position)
+                          INNER JOIN pg_attribute AS attribute
+                              ON attribute.attrelid = foreign_key.confrelid
+                              AND attribute.attnum = key_column.attnum
+                          ORDER BY key_column.ordinal_position) = ARRAY['id'])
             """, administrator);
         await using var reader = await command.ExecuteReaderAsync();
 

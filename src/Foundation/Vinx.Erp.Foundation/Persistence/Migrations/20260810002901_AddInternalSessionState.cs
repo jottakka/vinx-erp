@@ -90,6 +90,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 REVOKE ALL ON TABLE foundation.users FROM vinx_runtime;
                 GRANT USAGE, CREATE ON SCHEMA foundation TO vinx_identity_owner;
                 GRANT SELECT ON TABLE foundation.users TO vinx_identity_owner;
+                GRANT UPDATE (sessions_valid_after) ON TABLE foundation.users TO vinx_identity_owner;
 
                 CREATE FUNCTION foundation.lock_user_for_session_admission(p_user_id uuid)
                 RETURNS TABLE (sessions_valid_after timestamp with time zone)
@@ -142,6 +143,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     FROM PUBLIC, vinx_runtime;
                 DROP FUNCTION foundation.lock_user_for_session_admission(uuid);
                 RESET ROLE;
+                REVOKE UPDATE (sessions_valid_after) ON TABLE foundation.users FROM vinx_identity_owner;
                 REVOKE SELECT ON TABLE foundation.users FROM vinx_identity_owner;
                 REVOKE USAGE ON SCHEMA foundation FROM vinx_identity_owner;
                 REVOKE ALL ON TABLE foundation.user_sessions FROM PUBLIC, vinx_runtime;

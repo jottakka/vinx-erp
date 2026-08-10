@@ -88,9 +88,11 @@ A fronteira atual de ownership usa `vinx_migrator LOGIN NOINHERIT
 NOBYPASSRLS`, `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`,
 `vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
 `vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O último possui somente
-`USAGE` em `foundation` e `SELECT` em `foundation.users` para a função de
-admissão de sessão da identidade. Essas roles são distintas das roles legadas
-do Supabase: `anon`, `authenticated` e `service_role`.
+`USAGE` em `foundation`, `SELECT` em `foundation.users` e `UPDATE` apenas na
+coluna `sessions_valid_after`, necessário para o `FOR UPDATE` da função de
+admissão de sessão. O runtime não recebe esse `UPDATE` nem leitura direta de
+`users`. Essas roles são distintas das roles legadas do Supabase: `anon`,
+`authenticated` e `service_role`.
 
 ## Module responsibilities
 
