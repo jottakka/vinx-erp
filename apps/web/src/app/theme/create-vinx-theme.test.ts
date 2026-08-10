@@ -32,6 +32,10 @@ function contrastRatio(foreground: string, background: string) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+const palettes = [
+  vinxTheme.colorSchemes.light.palette,
+  vinxTheme.colorSchemes.dark.palette,
+];
 const light = vinxTheme.colorSchemes.light.palette;
 
 describe("vinx semantic theme", () => {
@@ -47,19 +51,20 @@ describe("vinx semantic theme", () => {
     expect(vinxTheme.colorSchemes.light.palette.navigation).toBeDefined();
   });
 
-  it("uses valid contrast pairs for text, focus and company slots", () => {
+  it("uses valid contrast pairs for text, focus and every company slot", () => {
     expect(
       contrastRatio(light.text.primary, light.background.default),
     ).toBeGreaterThanOrEqual(4.5);
     expect(
       contrastRatio(light.primary.main, light.background.default),
     ).toBeGreaterThanOrEqual(3);
-    expect(
-      contrastRatio(
-        light.companyAccent.alpha.contrastText,
-        light.companyAccent.alpha.main,
-      ),
-    ).toBeGreaterThanOrEqual(4.5);
+    for (const palette of palettes) {
+      for (const slot of Object.values(palette.companyAccent)) {
+        expect(
+          contrastRatio(slot.contrastText, slot.main),
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 
   it("returns MUI defaults when storage is blocked or contains an invalid mode", () => {
@@ -137,6 +142,39 @@ describe("vinx semantic theme", () => {
       } as StorageEvent);
 
       expect(changes).toEqual([undefined]);
+    }
+  });
+
+  it("preserves arbitrary values for unrelated storage keys", () => {
+    const values = new Map<string, string>();
+    const listeners = new Map<string, (event: StorageEvent) => void>();
+    const storageWindow = {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+      addEventListener: (_type: string, listener: EventListener) => {
+        listeners.set("current", listener as (event: StorageEvent) => void);
+      },
+      removeEventListener: () => {},
+    } as unknown as Window;
+    const manager = createVinxStorageManager({ key: "vinx.visual.v1" });
+
+    for (const storageKey of ["audit-mode", "report-light", "report-dark"]) {
+      const prefixedKey = `vinx.visual.v1.${storageKey}`;
+      const arbitraryValue = `${storageKey}-arbitrary`;
+      values.set(prefixedKey, arbitraryValue);
+      const storage = manager({ key: storageKey, storageWindow });
+      const changes: unknown[] = [];
+
+      expect(storage.get("fallback")).toBe(arbitraryValue);
+      storage.subscribe((value) => changes.push(value));
+      listeners.get("current")?.({
+        key: prefixedKey,
+        newValue: arbitraryValue,
+      } as StorageEvent);
+
+      expect(changes).toEqual([arbitraryValue]);
     }
   });
 

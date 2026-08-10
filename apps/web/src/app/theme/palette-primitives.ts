@@ -68,7 +68,7 @@ export const lightPalette: PalettePrimitives = {
     },
     neutral: {
       light: "#829ab1",
-      main: "#627d98",
+      main: "#5f7891",
       dark: "#486581",
       contrastText: "#ffffff",
     },

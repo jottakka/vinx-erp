@@ -4,21 +4,17 @@ import { darkPalette, lightPalette } from "./palette-primitives";
 
 const supportedModes = new Set(["light", "dark", "system"]);
 const supportedSchemes = new Set(["light", "dark"]);
+const modeKeys = new Set(["mui-mode", "mode"]);
+const schemeKeys = new Set(["mui-color-scheme", "scheme-light", "scheme-dark"]);
 
 function noop() {}
 
 function isModeKey(key: string) {
-  return key === "mui-mode" || key === "mode" || key.endsWith("-mode");
+  return modeKeys.has(key);
 }
 
 function isSchemeKey(key: string) {
-  return (
-    key === "mui-color-scheme" ||
-    key === "scheme" ||
-    key.endsWith("-scheme") ||
-    key.endsWith("-light") ||
-    key.endsWith("-dark")
-  );
+  return schemeKeys.has(key);
 }
 
 export function createVinxStorageManager({
