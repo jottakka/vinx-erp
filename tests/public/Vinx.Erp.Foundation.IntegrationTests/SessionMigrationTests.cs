@@ -105,13 +105,42 @@ public sealed class SessionMigrationTests
 
         await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
         await runtime.OpenAsync();
+        await using var runtimeTransaction = await runtime.BeginTransactionAsync();
         await using var command = new NpgsqlCommand(
-            "SELECT sessions_valid_after FROM foundation.lock_user_for_session_admission(@user_id)", runtime);
+            "SELECT sessions_valid_after FROM foundation.lock_user_for_session_admission(@user_id)",
+            runtime,
+            runtimeTransaction);
         command.Parameters.AddWithValue("user_id", userId);
 
         var actual = await command.ExecuteScalarAsync();
 
         Assert.Equal(sessionsValidAfter.UtcDateTime, Assert.IsType<DateTime>(actual));
+
+        await using var updater = await fixture.OpenAdministratorConnectionAsync();
+        await using var observer = await fixture.OpenAdministratorConnectionAsync();
+        var blockedAdvance = AdvanceSessionsValidAfterAsync(updater, userId);
+        var lockReleased = false;
+        try
+        {
+            using var lockWaitCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await WaitForTransactionIdLockAsync(
+                observer,
+                updater.ProcessID,
+                lockWaitCancellation.Token);
+
+            await runtimeTransaction.RollbackAsync();
+            lockReleased = true;
+            await blockedAdvance;
+        }
+        finally
+        {
+            if (!lockReleased)
+            {
+                await runtimeTransaction.RollbackAsync();
+            }
+
+            await AwaitOperationAsync(blockedAdvance);
+        }
     }
 
     [Fact]
@@ -339,7 +368,16 @@ public sealed class SessionMigrationTests
             SELECT
                 to_regprocedure('foundation.lock_user_for_session_admission(uuid)') IS NULL,
                 NOT has_schema_privilege('vinx_identity_owner', 'foundation', 'USAGE'),
-                NOT has_table_privilege('vinx_identity_owner', 'foundation.users', 'SELECT')
+                NOT has_table_privilege('vinx_identity_owner', 'foundation.users', 'SELECT'),
+                NOT has_table_privilege('vinx_identity_owner', 'foundation.users', 'UPDATE'),
+                NOT EXISTS (
+                    SELECT 1
+                    FROM pg_attribute AS attribute
+                    CROSS JOIN LATERAL aclexplode(attribute.attacl) AS privilege
+                    WHERE attribute.attrelid = 'foundation.users'::regclass
+                      AND NOT attribute.attisdropped
+                      AND privilege.grantee = 'vinx_identity_owner'::regrole
+                      AND privilege.privilege_type = 'UPDATE')
             """, administrator);
         await using var reader = await command.ExecuteReaderAsync();
 
@@ -347,6 +385,8 @@ public sealed class SessionMigrationTests
         Assert.True(reader.GetBoolean(0));
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
+        Assert.True(reader.GetBoolean(3));
+        Assert.True(reader.GetBoolean(4));
     }
 
     [Fact]
@@ -470,6 +510,42 @@ public sealed class SessionMigrationTests
         await command.ExecuteNonQueryAsync();
     }
 
+    private static async Task WaitForTransactionIdLockAsync(
+        NpgsqlConnection observer,
+        int blockedBackendProcessId,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_locks
+                WHERE pid = @backend_pid
+                      AND locktype = 'transactionid'
+                      AND mode = 'ShareLock'
+                      AND NOT granted)
+                """, observer);
+            command.Parameters.AddWithValue("backend_pid", blockedBackendProcessId);
+            if ((bool)(await command.ExecuteScalarAsync() ?? false))
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException("The barrier advance did not block on the runtime transaction.");
+    }
+
     private static async Task CreateDowngradePauseTriggerAsync(NpgsqlConnection administrator)
     {
         await using var command = new NpgsqlCommand(
@@ -554,6 +630,17 @@ public sealed class SessionMigrationTests
             await migrationTask;
         }
         catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.CheckViolation)
+        {
+        }
+    }
+
+    private static async Task AwaitOperationAsync(Task operation)
+    {
+        try
+        {
+            await operation;
+        }
+        catch (PostgresException)
         {
         }
     }
