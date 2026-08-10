@@ -54,11 +54,11 @@ modelo `FileRecord` nem o provedor Supabase Storage.
 
 ## Estimativa e entrega
 
-- 13 arquivos não-teste: 11 da PR #107, esta especificação e o manifesto de
-  verificação atualizado. Testes e configuração ficam fora da contagem por
-  decisão do responsável.
-- Aproximadamente 1.050 linhas manuais, incluindo código, documentação e
-  testes de regressão. O alvo de 800 linhas é excedido de modo justificado:
+- 14 arquivos não-teste: 11 da PR #107, esta especificação, o plano e o
+  manifesto de verificação atualizado. Testes e configuração ficam fora da
+  contagem por decisão do responsável.
+- Aproximadamente 1.250 linhas manuais, incluindo código e documentação. O
+  alvo de 800 linhas é excedido de modo justificado:
   uma única fatia de segurança reentrega o upload já revisado e evita uma
   transição insegura entre PRs.
 - Uma migration e seu designer são reaplicados; as 1.250 linhas geradas do
