@@ -103,6 +103,37 @@ public sealed class InternalSessionAdmissionServiceTests
         }
     }
 
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    public async Task Known_session_not_newer_than_barrier_is_denied_and_audited(
+        int authenticationOffsetSeconds)
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var userId = await SeedUserAsync(fixture);
+        var barrier = DateTimeOffset.Parse("2026-08-09T12:00:00+00:00");
+        var proof = NewProof(barrier.AddSeconds(authenticationOffsetSeconds));
+        await SeedSessionAsync(fixture, userId, proof, revoke: false);
+        await SetBarrierAsync(fixture, userId, barrier);
+
+        var admission = await AdmitAsync(fixture, userId, proof, AuditSource.Mcp, Guid.NewGuid());
+
+        Assert.Equal(SessionAdmissionState.Denied, admission.Result.State);
+        Assert.Equal("authentication_not_after_barrier", admission.Result.Reason);
+        Assert.DoesNotContain(admission.Logs, entry =>
+            entry.Properties.TryGetValue("Result", out var result)
+            && result?.ToString() == "active");
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var audits = await administrator.AuditEvents.ToListAsync();
+        var denial = Assert.Single(audits);
+        Assert.Equal("identity_session_admission_denied", denial.Action);
+        Assert.Equal(AuditOutcome.Denied, denial.Outcome);
+        Assert.Equal("authentication_not_after_barrier", denial.Reason);
+        Assert.Equal(AuditSource.Mcp, denial.Source);
+        Assert.Null(denial.ResourceId);
+        Assert.Single(await administrator.UserSessions.ToListAsync());
+    }
+
     [Fact]
     public async Task Revoked_session_is_denied_and_audited_without_a_resource_identifier()
     {

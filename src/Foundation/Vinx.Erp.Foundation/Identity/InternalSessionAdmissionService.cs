@@ -46,13 +46,6 @@ public sealed class InternalSessionAdmissionService(
                 return LogUnavailable(new InvalidOperationException("The locked internal user does not exist."));
             }
 
-            var existing = await FindSessionAsync(proof, cancellationToken);
-            if (existing is not null)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                return await ExistingSessionResultAsync(existing, userId, source, correlationId, cancellationToken);
-            }
-
             if (lockedUser.SessionsValidAfter is { } sessionsValidAfter
                 && proof.ProviderAuthenticatedAt <= sessionsValidAfter)
             {
@@ -64,6 +57,13 @@ public sealed class InternalSessionAdmissionService(
                     AuthenticationNotAfterBarrier,
                     LogLevel.Debug,
                     cancellationToken);
+            }
+
+            var existing = await FindSessionAsync(proof, cancellationToken);
+            if (existing is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await ExistingSessionResultAsync(existing, userId, source, correlationId, cancellationToken);
             }
 
             var session = new UserSession(
@@ -117,7 +117,29 @@ public sealed class InternalSessionAdmissionService(
     {
         try
         {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            var lockedUser = await LockUserAsync(userId, transaction, cancellationToken);
+            if (!lockedUser.Exists)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return LogUnavailable(new InvalidOperationException("The locked internal user does not exist."));
+            }
+
+            if (lockedUser.SessionsValidAfter is { } sessionsValidAfter
+                && proof.ProviderAuthenticatedAt <= sessionsValidAfter)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await AuditDeniedAsync(
+                    userId,
+                    source,
+                    correlationId,
+                    AuthenticationNotAfterBarrier,
+                    LogLevel.Debug,
+                    cancellationToken);
+            }
+
             var existing = await FindSessionAsync(proof, cancellationToken);
+            await transaction.RollbackAsync(cancellationToken);
             if (existing is null)
             {
                 return LogUnavailable(exception);
