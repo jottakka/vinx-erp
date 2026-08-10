@@ -433,7 +433,7 @@ public sealed class AgentHarnessTests
     }
 
     [Fact]
-    public async Task Run_uses_registry_descriptor_snapshot_after_tool_descriptor_changes()
+    public async Task Run_denies_tool_after_registered_descriptor_changes()
     {
         var tool = new RecordingAgentTool("paguai.read");
         var observer = new RecordingAgentRunObserver();
@@ -450,12 +450,10 @@ public sealed class AgentHarnessTests
             CreateRequest("read"),
             CancellationToken.None);
 
-        Assert.Equal(AgentRunOutcomeKind.Result, outcome.Kind);
-        Assert.Equal("done", outcome.AssistantMessage);
-        Assert.Single(tool.Validations);
-        Assert.Single(tool.Invocations);
-        Assert.Contains(observer.Events, runEvent =>
-            runEvent.ToolName == "paguai.read" && runEvent.ToolRisk == AgentToolRisk.ReadOnly);
+        Assert.Equal(AgentRunOutcomeKind.Denied, outcome.Kind);
+        Assert.Equal("tool_unknown", outcome.SafeCode);
+        Assert.Empty(tool.Validations);
+        Assert.Empty(tool.Invocations);
         Assert.DoesNotContain(observer.Events, runEvent => runEvent.ToolName == "paguai.changed");
     }
 

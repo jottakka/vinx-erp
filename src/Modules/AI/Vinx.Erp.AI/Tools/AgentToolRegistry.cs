@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
 
 namespace Vinx.Erp.AI.Tools;
 
@@ -54,7 +55,13 @@ public sealed class AgentToolRegistry
     {
         ArgumentNullException.ThrowIfNull(name);
 
-        return registrations.TryGetValue(name, out registration);
+        if (registrations.TryGetValue(name, out registration) && registration.HasCurrentDescriptor)
+        {
+            return true;
+        }
+
+        registration = null;
+        return false;
     }
 }
 
@@ -71,4 +78,25 @@ internal sealed class AgentToolRegistration
 
     public IAgentTool Tool { get; }
     public AgentToolDescriptor Descriptor { get; }
+
+    internal bool HasCurrentDescriptor
+    {
+        get
+        {
+            var current = Tool.Descriptor;
+
+            return string.Equals(current.Name, Descriptor.Name, StringComparison.Ordinal)
+                && string.Equals(current.Version, Descriptor.Version, StringComparison.Ordinal)
+                && JsonElement.DeepEquals(current.InputSchema, Descriptor.InputSchema)
+                && JsonElement.DeepEquals(current.OutputSchema, Descriptor.OutputSchema)
+                && string.Equals(
+                    current.RequiredCapability,
+                    Descriptor.RequiredCapability,
+                    StringComparison.Ordinal)
+                && current.Risk == Descriptor.Risk
+                && current.RequiresExplicitCompany == Descriptor.RequiresExplicitCompany
+                && current.RequiresIdempotencyKey == Descriptor.RequiresIdempotencyKey
+                && current.McpAnnotations == Descriptor.McpAnnotations;
+        }
+    }
 }

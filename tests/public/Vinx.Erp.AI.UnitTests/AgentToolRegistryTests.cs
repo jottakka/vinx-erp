@@ -60,6 +60,45 @@ public sealed class AgentToolRegistryTests
     }
 
     [Fact]
+    public void Registry_refuses_resolution_after_registered_descriptor_changes()
+    {
+        var tool = new RecordingAgentTool("paguai.read");
+        var registry = new AgentToolRegistry([tool]);
+
+        tool.ReplaceDescriptor(CreateDescriptor(
+            AgentToolRisk.Irreversible,
+            requiresExplicitCompany: true));
+
+        Assert.False(registry.TryGet("paguai.read", out _));
+    }
+
+    [Fact]
+    public void Registry_resolves_tool_after_registered_descriptor_is_replaced_with_equivalent_value()
+    {
+        var tool = new RecordingAgentTool("paguai.read");
+        var registry = new AgentToolRegistry([tool]);
+        var captured = tool.Descriptor;
+
+        tool.ReplaceDescriptor(new AgentToolDescriptor(
+            captured.Name,
+            captured.Version,
+            captured.InputSchema,
+            captured.OutputSchema,
+            captured.RequiredCapability,
+            captured.Risk,
+            captured.RequiresExplicitCompany,
+            captured.RequiresIdempotencyKey,
+            new AgentMcpAnnotations(
+                captured.McpAnnotations.ReadOnlyHint,
+                captured.McpAnnotations.DestructiveHint,
+                captured.McpAnnotations.IdempotentHint,
+                captured.McpAnnotations.OpenWorldHint)));
+
+        Assert.True(registry.TryGet("paguai.read", out var resolved));
+        Assert.Same(tool, resolved);
+    }
+
+    [Fact]
     public void Policy_denies_tool_outside_profile_before_other_checks()
     {
         var context = CreateContext(companyId: null, capabilities: [], allowedTools: []);
