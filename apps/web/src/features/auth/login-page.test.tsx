@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -7,31 +7,34 @@ import { createMockSessionGateway } from "./mock-session-gateway";
 import type { BootstrapSnapshot, MockSessionGateway } from "./session-contract";
 import { SessionProvider } from "./session-provider";
 
-function PrototypePage({ onMount }: { onMount?: () => void }) {
-  onMount?.();
+function PrototypePage() {
   return <h1>Protótipo autenticado</h1>;
 }
 
-function renderLogin(
-  gateway: MockSessionGateway,
-  onProtectedMount?: () => void,
-) {
-  const router = createMemoryRouter(
+function createLoginRouter() {
+  return createMemoryRouter(
     [
       { element: <LoginPage />, path: "/login" },
       {
-        element: <PrototypePage onMount={onProtectedMount} />,
+        element: <PrototypePage />,
         path: "/protected",
       },
     ],
     { initialEntries: ["/login"] },
   );
+}
 
-  return render(
+function renderLogin(
+  gateway: MockSessionGateway,
+  router = createLoginRouter(),
+) {
+  const rendered = render(
     <SessionProvider gateway={gateway}>
       <RouterProvider router={router} />
     </SessionProvider>,
   );
+
+  return { ...rendered, router };
 }
 
 describe("LoginPage", () => {
@@ -63,9 +66,8 @@ describe("LoginPage", () => {
     ).toBeVisible();
   });
 
-  it("prevents repeated sign-in from creating duplicate protected navigation", async () => {
+  it("transitions to the protected route exactly once after deferred repeated sign-in", async () => {
     const user = userEvent.setup();
-    const protectedMount = vi.fn();
     let resolveLogin!: (snapshot: BootstrapSnapshot) => void;
     const login = vi.fn(
       () =>
@@ -78,15 +80,24 @@ describe("LoginPage", () => {
       login,
       logout: async () => {},
     };
+    const router = createLoginRouter();
+    const protectedTransitions = vi.fn();
+    const navigate = vi.spyOn(router, "navigate");
+    const unsubscribe = router.subscribe((state) => {
+      if (state.location.pathname === "/protected") {
+        protectedTransitions();
+      }
+    });
 
-    renderLogin(gateway, protectedMount);
+    renderLogin(gateway, router);
 
     const enterButton = await screen.findByRole("button", { name: "Entrar" });
     await user.click(enterButton);
     await user.click(enterButton);
 
     expect(login).toHaveBeenCalledTimes(1);
-    expect(protectedMount).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalledWith("/protected", { replace: true });
+    expect(protectedTransitions).not.toHaveBeenCalled();
 
     resolveLogin({
       companies: [],
@@ -94,7 +105,16 @@ describe("LoginPage", () => {
       user: { id: "maria", name: "Maria" },
     });
 
-    await screen.findByRole("heading", { name: "Protótipo autenticado" });
-    expect(protectedMount).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/protected");
+    });
+    expect(
+      navigate.mock.calls.filter(
+        ([destination, options]) =>
+          destination === "/protected" && options?.replace === true,
+      ),
+    ).toHaveLength(1);
+    expect(protectedTransitions).toHaveBeenCalledTimes(1);
+    unsubscribe();
   });
 });
