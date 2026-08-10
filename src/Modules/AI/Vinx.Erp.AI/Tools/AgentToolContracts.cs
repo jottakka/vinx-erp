@@ -89,29 +89,49 @@ public sealed record AgentToolCall
 
     private static JsonElement RemoveCompanyScopeArguments(JsonElement arguments)
     {
-        if (arguments.ValueKind != JsonValueKind.Object)
-        {
-            return arguments.Clone();
-        }
-
         using var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer))
         {
-            writer.WriteStartObject();
-
-            foreach (var property in arguments.EnumerateObject())
-            {
-                if (!IsCompanyScopeAlias(property.Name))
-                {
-                    property.WriteTo(writer);
-                }
-            }
-
-            writer.WriteEndObject();
+            WriteWithoutCompanyScope(arguments, writer);
         }
 
         using var normalized = JsonDocument.Parse(buffer.ToArray());
         return normalized.RootElement.Clone();
+    }
+
+    private static void WriteWithoutCompanyScope(JsonElement value, Utf8JsonWriter writer)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            writer.WriteStartObject();
+
+            foreach (var property in value.EnumerateObject())
+            {
+                if (!IsCompanyScopeAlias(property.Name))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteWithoutCompanyScope(property.Value, writer);
+                }
+            }
+
+            writer.WriteEndObject();
+            return;
+        }
+
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            writer.WriteStartArray();
+
+            foreach (var item in value.EnumerateArray())
+            {
+                WriteWithoutCompanyScope(item, writer);
+            }
+
+            writer.WriteEndArray();
+            return;
+        }
+
+        value.WriteTo(writer);
     }
 
     private static bool IsCompanyScopeAlias(string name) =>

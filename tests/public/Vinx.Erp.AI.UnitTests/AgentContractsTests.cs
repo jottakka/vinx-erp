@@ -139,26 +139,48 @@ public sealed class AgentContractsTests
     }
 
     [Fact]
-    public void Tool_call_preserves_nested_company_fields()
+    public void Tool_call_removes_nested_company_scope_aliases_and_preserves_business_fields()
     {
         using var arguments = JsonDocument.Parse("""
             {
               "filter": {
                 "empresa_id": "business-value-1",
-                "empresaId": "business-value-2",
-                "company_id": "business-value-3",
-                "companyId": "business-value-4"
+                "status": "open",
+                "details": {
+                  "empresaId": "business-value-2",
+                  "documentNumber": "INV-42"
+                },
+                "items": [
+                  {
+                    "company_id": "business-value-3",
+                    "sku": "SKU-1"
+                  },
+                  {
+                    "metadata": {
+                      "companyId": "business-value-4",
+                      "quantity": 2
+                    }
+                  }
+                ]
               }
             }
             """);
 
         var call = new AgentToolCall("paguai.read", arguments.RootElement);
         var filter = call.Arguments.GetProperty("filter");
+        var details = filter.GetProperty("details");
+        var items = filter.GetProperty("items");
+        var firstItem = items[0];
+        var metadata = items[1].GetProperty("metadata");
 
-        Assert.Equal("business-value-1", filter.GetProperty("empresa_id").GetString());
-        Assert.Equal("business-value-2", filter.GetProperty("empresaId").GetString());
-        Assert.Equal("business-value-3", filter.GetProperty("company_id").GetString());
-        Assert.Equal("business-value-4", filter.GetProperty("companyId").GetString());
+        Assert.False(filter.TryGetProperty("empresa_id", out _));
+        Assert.Equal("open", filter.GetProperty("status").GetString());
+        Assert.False(details.TryGetProperty("empresaId", out _));
+        Assert.Equal("INV-42", details.GetProperty("documentNumber").GetString());
+        Assert.False(firstItem.TryGetProperty("company_id", out _));
+        Assert.Equal("SKU-1", firstItem.GetProperty("sku").GetString());
+        Assert.False(metadata.TryGetProperty("companyId", out _));
+        Assert.Equal(2, metadata.GetProperty("quantity").GetInt32());
     }
 
     [Fact]
