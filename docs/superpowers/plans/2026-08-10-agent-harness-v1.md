@@ -432,6 +432,7 @@ git commit -m "feat: run supervised agent harness"
 - Create: tests/public/Vinx.Erp.ArchitectureTests/AiDependencyTests.cs
 - Modify: tests/public/Vinx.Erp.ArchitectureTests/Vinx.Erp.ArchitectureTests.csproj
 - Modify: tests/public/Vinx.Erp.ArchitectureTests/ModuleContractDocumentationTests.cs
+- Generate: tests/public/Vinx.Erp.ArchitectureTests/packages.lock.json
 - Create: docs/modules/ai.md
 - Create: docs/adr/0005-agent-harness-core.md
 - Create: docs/verification/127-agent-harness-test-cases.md

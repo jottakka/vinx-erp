@@ -176,6 +176,12 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "vinx.erp.ai": {
+        "type": "Project",
+        "dependencies": {
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
       "vinx.erp.foundation": {
         "type": "Project",
         "dependencies": {
