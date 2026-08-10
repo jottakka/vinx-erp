@@ -11,8 +11,10 @@ modelo `FileRecord` nem o provedor Supabase Storage.
 
 - A nova branch parte de `main` e reaplica, sem alteração, os commits
   `a22eec4`, `dbcc710`, `ff9dc69` e `e89a9d8` antes das correções.
-- A equivalência da base reaplicada será comprovada por `git range-diff` e por
-  comparação dos blobs dos arquivos alterados antes do commit corretivo.
+- A equivalência da base reaplicada será comprovada por `git range-diff` e
+  `git patch-id --stable` de cada commit. Arquivos também alterados por mudanças
+  pré-existentes de logging/sessão na `main` preservam esses hunks; identidade
+  de patch, e não blob integral, prova a reentrega do código revisado.
 - `DataAnnotations` validam somente limites estruturais do comando de
   intenção. A validação é invocada dentro de `DocumentUploadService`, depois
   de empresa, membership e capability, para manter o erro negado auditável.

@@ -14,7 +14,7 @@
 - Não tocar Paguai, vínculos da #39, UI, MCP, e-mail, WhatsApp, Kanban, evento novo ou provider de storage/scanner novo.
 - Preservar FileRecord, FileStorage e Supabase Storage; sem migration adicional além da migration já revisada da PR #107.
 - Testes e configuração não contam na estimativa do responsável; arquivos não-teste estimados: 14. Linhas manuais estimadas: aproximadamente 1.250; migration designer gerado: 1.250 linhas separadas.
-- Código de upload reaplicado deve ter árvore idêntica à de e89a9d8 antes dos commits corretivos. Toda divergência final deve pertencer exclusivamente aos commits de correção desta especificação.
+- Cada patch de upload reaplicado deve ter o mesmo patch-id de seu commit em e89a9d8 antes dos commits corretivos. Arquivos com hunks pré-existentes de logging/sessão na main preservam esses hunks; toda divergência de patch de upload pertence exclusivamente aos commits corretivos desta especificação.
 - Validação rejeitada deve continuar auditada. Não chamar AddValidation() nem deixar Minimal API rejeitar o corpo antes de DocumentUploadService.
 - Sem scanner real, confirmar falha fechada com malware_scan_unavailable; nenhum documento novo é confirmado ou recebe URL de download em produção até a #104.
 
@@ -60,13 +60,20 @@ Expected: quatro commits novos, cada um com trailer cherry picked from; nenhum c
 Run:
 
 ~~~bash
-git diff --exit-code e89a9d8 HEAD -- $(git diff --name-only c8aa401 e89a9d8)
+for pair in \
+  'a22eec46c739d1c5f4e5e27bcbfdd2e0586e856d HEAD~3' \
+  'dbcc710bea97105c59925c03be910e03950b9342 HEAD~2' \
+  'ff9dc691e6b69ef5a6cb74e45085bd24f2b4e8e6 HEAD~1' \
+  'e89a9d89357189f9034d77c0bff137d0805bbaa9 HEAD'; do
+  set -- $pair
+  test "$(git show --format= "$1" | git patch-id --stable | cut -d' ' -f1)" = "$(git show --format= "$2" | git patch-id --stable | cut -d' ' -f1)"
+done
 git range-diff c8aa401...e89a9d8 HEAD~4...HEAD
 dotnet test tests/public/Vinx.Erp.Foundation.UnitTests/Vinx.Erp.Foundation.UnitTests.csproj --filter 'FullyQualifiedName~DocumentUploadPolicyTests|FullyQualifiedName~DocumentVerificationPolicyTests|FullyQualifiedName~FileRecordLifecycleTests|FullyQualifiedName~SupabaseFileStorageTests'
 dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj --filter 'FullyQualifiedName~DocumentUploadEndpointTests'
 ~~~
 
-Expected: diff vazio, range-diff sem mudança de patch e testes existentes verdes. Se arquivo divergir, abortar correção e resolver somente conflito com evidência equivalente antes de seguir.
+Expected: quatro patch-ids iguais, range-diff sem mudança de patch e testes existentes verdes. As diferenças integrais esperadas em Program.cs e FoundationSchemaTests.cs são hunks pré-existentes da main de logging/sessão; nunca removê-los para igualar blobs.
 
 ### Task 2: Validar contrato com DataAnnotations sem perder auditoria
 
