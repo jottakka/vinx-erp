@@ -245,6 +245,43 @@ public sealed class SessionMigrationTests
     }
 
     [Fact]
+    public async Task Successful_self_revocation_downgrade_removes_function_and_owner_session_grants()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(BeforeSelfSessionRevocation);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                to_regprocedure('foundation.revoke_all_user_sessions(uuid)') IS NULL,
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'user_id', 'SELECT'),
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'revoked_at', 'SELECT'),
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'revoked_at', 'UPDATE'),
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'revoked_by_user_id', 'UPDATE'),
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'revocation_reason', 'UPDATE')
+            """, administrator);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.True(reader.GetBoolean(2));
+        Assert.True(reader.GetBoolean(3));
+        Assert.True(reader.GetBoolean(4));
+        Assert.True(reader.GetBoolean(5));
+    }
+
+    [Fact]
     public async Task Runtime_can_lock_an_existing_user_and_read_its_session_barrier_through_the_function()
     {
         await using var fixture = new FoundationPostgresFixture();

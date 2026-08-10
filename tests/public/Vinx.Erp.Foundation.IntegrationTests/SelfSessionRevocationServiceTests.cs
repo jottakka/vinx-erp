@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Vinx.Erp.Foundation.Audit;
@@ -110,6 +111,33 @@ public sealed class SelfSessionRevocationServiceTests
     }
 
     [Fact]
+    public async Task Audit_failure_logs_one_safe_structured_error()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var userId = await SeedUserAsync(fixture);
+        var correlationId = Guid.NewGuid();
+        await SeedActiveSessionAsync(fixture, userId);
+        await RevokeAuditAppendAsync(fixture);
+        var logger = new SelfSessionRevocationLogCapture();
+
+        var result = await RevokeAsync(fixture, userId, correlationId, logger);
+
+        Assert.Equal(SelfSessionRevocationState.Unavailable, result.State);
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Error, entry.Level);
+        Assert.NotNull(entry.Exception);
+        Assert.NotNull(entry.Exception!.StackTrace);
+        Assert.Equal("session_revocation", entry.Properties["Operation"]);
+        Assert.Equal("identity", entry.Properties["Module"]);
+        Assert.Equal("unavailable", entry.Properties["Result"]);
+        Assert.Equal("database_or_audit_unavailable", entry.Properties["Reason"]);
+        Assert.Equal(["Module", "Operation", "Reason", "Result"], entry.Properties.Keys.OrderBy(key => key));
+        Assert.DoesNotContain("CorrelationId", entry.Properties.Keys);
+        Assert.DoesNotContain(userId.ToString(), entry.Properties.Values.Select(value => value?.ToString()));
+        Assert.DoesNotContain(correlationId.ToString(), entry.Properties.Values.Select(value => value?.ToString()));
+    }
+
+    [Fact]
     public async Task Concurrent_revocations_create_one_success_audit_and_one_no_change()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -161,10 +189,14 @@ public sealed class SelfSessionRevocationServiceTests
     private static async Task<SelfSessionRevocationResult> RevokeAsync(
         FoundationPostgresFixture fixture,
         Guid userId,
-        Guid correlationId)
+        Guid correlationId,
+        ILogger<SelfSessionRevocationService>? logger = null)
     {
         await using var runtime = fixture.CreateRuntimeDbContext();
-        var service = new SelfSessionRevocationService(runtime, new AuditAppender(runtime));
+        var service = new SelfSessionRevocationService(
+            runtime,
+            new AuditAppender(runtime),
+            logger ?? NullLogger<SelfSessionRevocationService>.Instance);
         return await service.RevokeAllAsync(
             new ActorContext(userId, correlationId),
             AuditSource.Web,
@@ -187,5 +219,32 @@ public sealed class SelfSessionRevocationServiceTests
             "REVOKE EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) FROM vinx_runtime;",
             administrator);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private sealed record CapturedLog(
+        LogLevel Level,
+        Exception? Exception,
+        IReadOnlyDictionary<string, object?> Properties);
+
+    private sealed class SelfSessionRevocationLogCapture : ILogger<SelfSessionRevocationService>
+    {
+        public List<CapturedLog> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var properties = ((IEnumerable<KeyValuePair<string, object?>>)state!)
+                .Where(pair => pair.Key != "{OriginalFormat}")
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            Entries.Add(new CapturedLog(logLevel, exception, properties));
+        }
     }
 }

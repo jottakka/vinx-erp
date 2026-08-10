@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Persistence;
@@ -8,10 +9,15 @@ namespace Vinx.Erp.Foundation.Identity;
 
 public sealed class SelfSessionRevocationService(
     FoundationDbContext database,
-    AuditAppender auditAppender)
+    AuditAppender auditAppender,
+    ILogger<SelfSessionRevocationService> logger)
 {
+    private const string Operation = "session_revocation";
+    private const string Module = "identity";
     private const string RevokedAction = "identity_sessions_revoked";
     private const string RevocationMetadata = "{{\"revoked_session_count\":{0}}}";
+    private const string UnavailableReason = "database_or_audit_unavailable";
+    private const string EventTemplate = "Session revocation {Operation} {Module} {Result} {Reason}";
 
     public async Task<SelfSessionRevocationResult> RevokeAllAsync(
         ActorContext actor,
@@ -50,9 +56,16 @@ public sealed class SelfSessionRevocationService(
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
             database.ChangeTracker.Clear();
+            logger.LogError(
+                exception,
+                EventTemplate,
+                Operation,
+                Module,
+                "unavailable",
+                UnavailableReason);
             return SelfSessionRevocationResult.Unavailable();
         }
     }
