@@ -32,3 +32,15 @@
 ## Documentação
 
 - Escreva documentação em português, com linguagem clara e compacta, mantendo apenas detalhes importantes e duráveis.
+
+## Memória operacional
+
+- Projectmem e Basic Memory são aids de desenvolvimento opcionais e opt-in.
+  Leia docs/runbooks/projectmem.md e docs/runbooks/basic-memory.md antes de
+  usá-los.
+- Git, Markdown, testes, ADRs revisados e o estado vivo do GitHub continuam
+  canônicos; abra a fonte citada antes de agir sobre memória.
+- Para issues externas, siga o manifesto dry-run em
+  docs/runbooks/github-memory-import.md. Não copie corpos nem habilite escrita
+  automática. Nenhuma skill nova deve ser adicionada sem uso repetido e
+  motivo documentado.

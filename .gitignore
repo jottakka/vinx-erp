@@ -13,3 +13,13 @@ playwright-report/
 test-results/
 *.feature.cs
 supabase/.temp/
+
+.cache/basic-memory/
+.cache/basic-memory-recovery/
+.cache/basic-memory-doctor.*
+
+.projectmem/events.jsonl
+.projectmem/.current_issue
+.projectmem/watch.pid
+.projectmem/watch.log
+.projectmem/structure.json
