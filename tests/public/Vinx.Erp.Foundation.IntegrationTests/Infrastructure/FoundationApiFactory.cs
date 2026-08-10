@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Data.Common;
 using System.IdentityModel.Tokens.Jwt;
 using System.Globalization;
 using System.Net;
@@ -11,6 +12,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -34,6 +36,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly TestPrincipalClaims _principalClaims;
     private readonly JwtTestAuthority? _jwtAuthority;
     private readonly CountingIdentityProvider? _countingIdentityProvider;
+    private readonly GateDatabaseFailurePoint? _databaseFailurePoint;
     private readonly bool _useJwtBearer;
 
     private FoundationApiFactory(
@@ -41,13 +44,15 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Guid correlationId,
         TestPrincipalClaims principalClaims,
         JwtTestAuthority? jwtAuthority = null,
-        CountingIdentityProvider? countingIdentityProvider = null)
+        CountingIdentityProvider? countingIdentityProvider = null,
+        GateDatabaseFailurePoint? databaseFailurePoint = null)
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
         _principalClaims = principalClaims;
         _jwtAuthority = jwtAuthority;
         _countingIdentityProvider = countingIdentityProvider;
+        _databaseFailurePoint = databaseFailurePoint;
         _useJwtBearer = jwtAuthority is not null;
     }
 
@@ -115,6 +120,21 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         return await CreateWithJwtBearerAsync(useCountingIdentityProvider: true);
     }
 
+    public static async Task<FoundationApiFactory> CreateWithJwtBearerAndDatabaseFailureAsync(
+        GateDatabaseFailurePoint databaseFailurePoint)
+    {
+        var factory = new FoundationApiFactory(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            CreateTestPrincipalClaims(null, null, null, null),
+            new JwtTestAuthority(),
+            databaseFailurePoint: databaseFailurePoint);
+        await factory._fixture.StartAsync();
+        await factory._fixture.MigrateAsync();
+        await factory.SeedAuthenticatedActorAsync();
+        return factory;
+    }
+
     private static async Task<FoundationApiFactory> CreateWithJwtBearerAsync(bool useCountingIdentityProvider)
     {
         var identityProvider = useCountingIdentityProvider
@@ -145,7 +165,9 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             services.AddDbContext<FoundationDbContext>((_, options) => options
                 .UseNpgsql(_fixture.RuntimeConnectionString)
                 .UseSnakeCaseNamingConvention()
-                .AddInterceptors(new RowVersionInterceptor()));
+                .AddInterceptors(
+                    new RowVersionInterceptor(),
+                    new GateDatabaseFailureInterceptor(_databaseFailurePoint)));
             if (_useJwtBearer)
             {
                 if (_countingIdentityProvider is not null)
@@ -455,5 +477,42 @@ internal sealed class CountingIdentityProvider(IIdentityProvider inner) : IIdent
     {
         Interlocked.Increment(ref _callCount);
         return inner.TryGetExternalIdentityProof(principal, out proof);
+    }
+}
+
+public enum GateDatabaseFailurePoint
+{
+    Resolution
+}
+
+internal sealed class GateDatabaseFailureInterceptor(GateDatabaseFailurePoint? failurePoint) : DbCommandInterceptor
+{
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        ThrowWhenConfigured(command);
+        return result;
+    }
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowWhenConfigured(command);
+        return ValueTask.FromResult(result);
+    }
+
+    private void ThrowWhenConfigured(DbCommand command)
+    {
+        var failsResolution = failurePoint == GateDatabaseFailurePoint.Resolution
+            && command.CommandText.Contains("external_identities", StringComparison.Ordinal);
+        if (failsResolution)
+        {
+            throw new InvalidOperationException("Configured database failure for the identity gate test.");
+        }
     }
 }

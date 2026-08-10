@@ -23,7 +23,11 @@ public sealed class AuthorizationEndpointTests
         Assert.Equal("company_context_required", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
 
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var auditEvent = await administrator.AuditEvents.SingleAsync();
+        var auditEvents = await administrator.AuditEvents.OrderBy(auditEvent => auditEvent.Action).ToListAsync();
+        var admission = Assert.Single(auditEvents, auditEvent => auditEvent.Action == "identity_session_admitted");
+        var auditEvent = Assert.Single(auditEvents, auditEvent => auditEvent.Action == "company_context_required");
+        Assert.Equal(factory.ActorUserId, admission.ActorUserId);
+        Assert.Equal(AuditSource.Web, admission.Source);
         Assert.Equal(factory.ActorUserId, auditEvent.ActorUserId);
         Assert.Null(auditEvent.RequestedCompanyId);
         Assert.NotEqual(Guid.Empty, auditEvent.CorrelationId);

@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -52,6 +51,7 @@ builder.Services.AddScoped<CapabilityMapService>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddSingleton<IIdentityProvider>(new SupabaseIdentityProvider(normalizedAuthIssuer));
 builder.Services.AddScoped<InternalIdentityResolver>();
+builder.Services.AddScoped<InternalSessionAdmissionService>();
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddHttpClient<SupabaseFileStorage>(client => client.BaseAddress = storageOptions.BaseUri);
 builder.Services.AddScoped<FileStorage>(serviceProvider => serviceProvider.GetRequiredService<SupabaseFileStorage>());
@@ -75,27 +75,21 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 var app = builder.Build();
 
 app.UseVinxRequestCorrelation();
+app.UseRouting();
 app.UseAuthentication();
+app.UseMiddleware<InternalSessionGateMiddleware>();
 app.UseAuthorization();
 app.MapFoundationHealthEndpoints();
 app.MapGet("/foundation/capabilities", async (
     Guid? companyId,
     HttpContext httpContext,
-    ClaimsPrincipal principal,
-    InternalIdentityResolver identityResolver,
     CapabilityMapService service,
     CancellationToken cancellationToken) =>
 {
-    var internalUserId = await identityResolver.ResolveAsync(principal, cancellationToken);
-    if (internalUserId is null)
-    {
-        return Results.Unauthorized();
-    }
-
-    var actor = new ActorContext(
-        internalUserId.Value,
-        ServerCorrelationContext.Get(httpContext).CorrelationId);
-    var result = await service.GetCapabilitiesAsync(actor, companyId, cancellationToken);
+    var result = await service.GetCapabilitiesAsync(
+        httpContext.GetRequiredActorContext(),
+        companyId,
+        cancellationToken);
     return result.ToMinimalApiResult();
 }).RequireAuthorization();
 app.Run();
