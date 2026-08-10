@@ -43,10 +43,12 @@ Estimativa: 17–21 arquivos totais, 680–790 linhas manuais. Migration, design
 - Criar: src/Foundation/Vinx.Erp.Foundation/Identity/SelfSessionRevocationService.cs
 - Criar: src/Foundation/Vinx.Erp.Foundation/Identity/SelfSessionRevocationResult.cs
 - Criar: migration EF AddSessionGateAndSelfRevocation e designer correspondente
-- Modificar: src/Foundation/Vinx.Erp.Foundation/Persistence/Migrations/FoundationDbContextModelSnapshot.cs
 - Modificar: docs/database/foundation-schema.snapshot.sql
 - Modificar: tests/public/Vinx.Erp.Foundation.IntegrationTests/SessionMigrationTests.cs
 - Criar: tests/public/Vinx.Erp.Foundation.IntegrationTests/SelfSessionRevocationServiceTests.cs
+
+A migration é somente SQL para função, owner e grants; por isso
+`FoundationDbContextModelSnapshot.cs` permanece deliberadamente inalterado.
 
 **Interfaces:**
 - Consome ActorContext, FoundationDbContext, AuditAppender, AuditSource e CancellationToken.
@@ -65,7 +67,7 @@ public sealed record SelfSessionRevocationResult(SelfSessionRevocationState Stat
 
 - [ ] **Passo 1: Escrever testes RED de migration e serviço.**
 
-Cobrir função foundation.revoke_all_user_sessions(uuid): bloqueia a linha de users, usa um único clock_timestamp(), avança a barreira somente se existir sessão ativa, revoga todas as linhas ativas do próprio usuário com motivo fixo self_revoke_all e retorna a contagem. Uma NoChange não altera nem reduz a barreira. Testar grants: runtime só executa a função; owner de identidade recebe as colunas necessárias; runtime continua sem UPDATE direto. Testar sucesso com duas sessões, no-op posterior, falha de audit.append_event com rollback e duas chamadas concorrentes com uma única auditoria de sucesso; depois da NoChange, uma prova antiga com session_id ainda não observado deve ser negada pela barreira.
+Cobrir função foundation.revoke_all_user_sessions(uuid): bloqueia a linha de users, usa um único clock_timestamp(), avança a barreira somente se existir sessão ativa, revoga todas as linhas ativas do próprio usuário com motivo fixo self_revoke_all e retorna a contagem. Uma NoChange não altera nem reduz a barreira. Testar grants: runtime só executa a função; owner de identidade recebe as colunas necessárias; runtime continua sem UPDATE direto. Testar sucesso com duas sessões, no-op posterior, falha de audit.append_event com rollback e duas chamadas concorrentes com uma única auditoria de sucesso; depois da NoChange, uma prova antiga com session_id ainda não observado deve ser negada pela barreira. Comparar metadata JSON semanticamente, pois jsonb pode normalizar espaços e ordem. Nos races de downgrade da migration de estado interno, migrar primeiro para BeforeSelfSessionRevocation antes de armar a pausa e só então mirar BeforeInternalSessionState; isso isola o lock histórico do DROP novo.
 
 - [ ] **Passo 2: Rodar RED.**
 
