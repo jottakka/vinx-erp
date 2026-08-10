@@ -86,6 +86,7 @@ describe("LoginPage", () => {
     await user.click(enterButton);
 
     expect(login).toHaveBeenCalledTimes(1);
+    expect(protectedMount).not.toHaveBeenCalled();
 
     resolveLogin({
       companies: [],

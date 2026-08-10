@@ -1,14 +1,22 @@
 import {
+  createBootstrapSnapshot,
   mockSessionProfiles,
   unavailableDevelopmentProfileMessage,
 } from "./mock-session-fixtures";
 import type { BootstrapSnapshot, MockSessionGateway } from "./session-contract";
 
+export type MockSessionGatewayOptions = {
+  beforeLogin?: () => Promise<void>;
+  beforeLogout?: () => Promise<void>;
+};
+
 function copyBootstrap(snapshot: BootstrapSnapshot): BootstrapSnapshot {
   return structuredClone(snapshot);
 }
 
-export function createMockSessionGateway(): MockSessionGateway {
+export function createMockSessionGateway(
+  options: MockSessionGatewayOptions = {},
+): MockSessionGateway {
   let currentBootstrap: BootstrapSnapshot | null = null;
 
   return {
@@ -19,10 +27,12 @@ export function createMockSessionGateway(): MockSessionGateway {
         throw new Error(unavailableDevelopmentProfileMessage);
       }
 
-      currentBootstrap = copyBootstrap(profile);
+      await options.beforeLogin?.();
+      currentBootstrap = copyBootstrap(createBootstrapSnapshot(profile));
       return copyBootstrap(currentBootstrap);
     },
     async logout() {
+      await options.beforeLogout?.();
       currentBootstrap = null;
     },
     async getBootstrap() {
