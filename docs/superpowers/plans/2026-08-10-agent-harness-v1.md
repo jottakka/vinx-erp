@@ -41,7 +41,7 @@
 | tests/public/Vinx.Erp.AI.UnitTests | xUnit tests and test-only doubles. |
 | tests/public/Vinx.Erp.ArchitectureTests/AiDependencyTests.cs | AI module host-dependency boundary. |
 | docs/modules/ai.md | Durable module contract. |
-| docs/adr/0005-agent-harness-core.md | Internal MCP-compatible core decision. |
+| docs/adr/0005-agent-harness-core.md | Internal MCP-oriented, adapter-ready core decision. |
 | docs/verification/127-agent-harness-test-cases.md | Issue #127 to public-test mapping. |
 
 ## PR Boundaries
