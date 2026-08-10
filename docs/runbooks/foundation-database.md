@@ -43,6 +43,14 @@ The fixed current Foundation database roles are:
 - `vinx_migrator LOGIN NOINHERIT NOBYPASSRLS`
 - `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`
 - `vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+
+`vinx_identity_owner` possui somente `USAGE` em `foundation`, `SELECT` em
+`foundation.users` e `UPDATE` somente em `sessions_valid_after`, enquanto
+existir a função de admissão de sessão. O último é o privilégio mínimo para o
+`FOR UPDATE` da função `SECURITY DEFINER`; `vinx_runtime` não o recebe e não
+tem leitura direta de `users`. `vinx_migrator` pode assumir o owner apenas
+durante DDL.
 
 These current-repository roles are distinct from the legacy Supabase roles
 `anon`, `authenticated` and `service_role`, which are reference evidence only.

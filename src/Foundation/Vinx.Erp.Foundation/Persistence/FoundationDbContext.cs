@@ -11,6 +11,7 @@ public sealed class FoundationDbContext(DbContextOptions<FoundationDbContext> op
     public DbSet<Unit> Units => Set<Unit>();
     public DbSet<Team> Teams => Set<Team>();
     public DbSet<User> Users => Set<User>();
+    public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<ExternalIdentity> ExternalIdentities => Set<ExternalIdentity>();
     public DbSet<Membership> Memberships => Set<Membership>();
     public DbSet<Employee> Employees => Set<Employee>();

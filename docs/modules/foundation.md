@@ -32,6 +32,13 @@ O runtime possui somente `SELECT` nessa tabela para essa consulta.
 Antes dessa resolução, `session_id` deve ser UUID e `amr` deve conter
 autenticação não `token_refresh`; ausência ou malformação falha fechada com
 `401`. A prova não persiste token nem dado pessoal.
+
+`InternalSessionAdmissionService` é a fatia interna ainda não registrada em
+hosts: bloqueia o usuário por função SQL, grava uma sessão EF só quando a
+autenticação é estritamente posterior à barreira e registra auditoria global
+na mesma transação. Repetição ativa não cria auditoria; barreira, revogação e
+colisão produzem negação auditada sem identificador externo. O próximo gate
+HTTP decidirá entre `401` e `503` a partir desse resultado.
 Configure a API com `SUPABASE_AUTH_ISSUER` e `SUPABASE_AUTH_AUDIENCE`;
 `FOUNDATION_RUNTIME_CONNECTION`, `SUPABASE_STORAGE_URL` e
 `SUPABASE_STORAGE_SERVICE_ROLE_KEY` continuam obrigatórias para a infraestrutura.
@@ -84,10 +91,15 @@ See Data and audit rules above; this section introduces no second deletion polic
 
 The first migration is `InitialFoundationBaseline`.
 
-The current database ownership boundary uses `vinx_migrator LOGIN NOINHERIT
-NOBYPASSRLS`, `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS` and
-`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`. These roles are distinct from
-the legacy Supabase `anon`, `authenticated` and `service_role` roles.
+A fronteira atual de ownership usa `vinx_migrator LOGIN NOINHERIT
+NOBYPASSRLS`, `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`,
+`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
+`vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O último possui somente
+`USAGE` em `foundation`, `SELECT` em `foundation.users` e `UPDATE` apenas na
+coluna `sessions_valid_after`, necessário para o `FOR UPDATE` da função de
+admissão de sessão. O runtime não recebe esse `UPDATE` nem leitura direta de
+`users`. Essas roles são distintas das roles legadas do Supabase: `anon`,
+`authenticated` e `service_role`.
 
 ## Module responsibilities
 

@@ -180,9 +180,18 @@ public sealed class AuditMigrationTests
         await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
         await runtime.OpenAsync();
 
-        var downgradeTask = migrator.Database.MigrateAsync(BeforeAuditScope);
+        Task? downgradeTask = null;
         try
         {
+            var sessionDowngradeTask = migrator.Database.MigrateAsync(AddAuditScope);
+            var sessionDowngradeCompletion = await Task.WhenAny(
+                sessionDowngradeTask,
+                Task.Delay(TimeSpan.FromSeconds(5)));
+            Assert.Same(sessionDowngradeTask, sessionDowngradeCompletion);
+            await sessionDowngradeTask;
+            await migrator.Database.MigrateAsync();
+
+            downgradeTask = migrator.Database.MigrateAsync(BeforeAuditScope);
             using var pauseSignalCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await WaitForPendingAdvisoryLockAsync(administrator, pauseSignalCancellation.Token);
 
@@ -210,7 +219,11 @@ public sealed class AuditMigrationTests
         finally
         {
             await ReleasePauseLockAsync(coordinator);
-            await AwaitDowngradeAsync(downgradeTask);
+            if (downgradeTask is not null)
+            {
+                await AwaitDowngradeAsync(downgradeTask);
+            }
+
             await DropDowngradePauseTriggerAsync(administrator);
         }
     }
@@ -270,7 +283,13 @@ public sealed class AuditMigrationTests
             LANGUAGE plpgsql
             AS $function$
             BEGIN
-                PERFORM pg_advisory_xact_lock({AuditDownPauseLockKey});
+                IF current_user = 'vinx_audit_owner'
+                   AND to_regprocedure(
+                       'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)') IS NOT NULL
+                   AND to_regprocedure(
+                       'audit.append_event(uuid,uuid,text,text,text,uuid,text,uuid,text,jsonb)') IS NULL THEN
+                    PERFORM pg_advisory_xact_lock({AuditDownPauseLockKey});
+                END IF;
             END;
             $function$;
 
