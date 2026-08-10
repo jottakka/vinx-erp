@@ -74,7 +74,8 @@ public sealed class AgentHarness
                         request,
                         allowedDescriptors,
                         priorToolResults),
-                    executionSource.Token);
+                    executionSource.Token)
+                    .WaitAsync(executionSource.Token);
                 executionSource.Token.ThrowIfCancellationRequested();
 
                 if (turn.AssistantMessage is { } assistantMessage)
@@ -181,7 +182,8 @@ public sealed class AgentHarness
 
                 var toolResult = await tool.InvokeAsync(
                     new AgentToolInvocation(runId, context, call),
-                    executionSource.Token);
+                    executionSource.Token)
+                    .WaitAsync(executionSource.Token);
                 executionSource.Token.ThrowIfCancellationRequested();
 
                 priorToolResults.Add(toolResult);
@@ -218,23 +220,25 @@ public sealed class AgentHarness
         return outcome;
     }
 
-    private ValueTask ObserveAsync(
+    private Task ObserveAsync(
         Guid runId,
         AgentExecutionContext context,
         AgentRunPhase phase,
         AgentToolDescriptor? descriptor,
         AgentRunOutcomeKind? outcome,
         CancellationToken cancellationToken) => observer.ObserveAsync(
-            new AgentRunEvent(
-                runId,
-                context.Actor.UserId,
-                context.CompanyId,
-                context.Actor.CorrelationId,
-                context.Channel,
-                context.Profile.Id,
-                descriptor?.Name,
-                descriptor?.Risk,
-                phase,
-                outcome),
-            cancellationToken);
+                new AgentRunEvent(
+                    runId,
+                    context.Actor.UserId,
+                    context.CompanyId,
+                    context.Actor.CorrelationId,
+                    context.Channel,
+                    context.Profile.Id,
+                    descriptor?.Name,
+                    descriptor?.Risk,
+                    phase,
+                    outcome),
+                cancellationToken)
+            .AsTask()
+            .WaitAsync(cancellationToken);
 }

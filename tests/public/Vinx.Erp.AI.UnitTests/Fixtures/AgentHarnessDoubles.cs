@@ -71,6 +71,22 @@ internal sealed class BlockingAgentModel : IAgentModel
     }
 }
 
+internal sealed class NonCooperativeAgentModel : IAgentModel
+{
+    private readonly TaskCompletionSource<AgentModelTurn> completion = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task<AgentModelTurn> CompleteAsync(
+        AgentModelRequest request,
+        CancellationToken cancellationToken)
+    {
+        Started.TrySetResult(true);
+        return completion.Task;
+    }
+}
+
 internal sealed class RecordingAgentRunObserver : IAgentRunObserver
 {
     private readonly object sync = new();
@@ -133,6 +149,43 @@ internal sealed class BlockingAgentRunObserver(AgentRunPhase blockingPhase) : IA
             Started.TrySetResult(true);
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
+    }
+}
+
+internal sealed class NonCooperativeAgentRunObserver(AgentRunPhase blockingPhase) : IAgentRunObserver
+{
+    private readonly object sync = new();
+    private readonly List<AgentRunEvent> events = [];
+    private readonly TaskCompletionSource<bool> completion = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public IReadOnlyList<AgentRunEvent> Events
+    {
+        get
+        {
+            lock (sync)
+            {
+                return events.ToArray();
+            }
+        }
+    }
+
+    public ValueTask ObserveAsync(AgentRunEvent runEvent, CancellationToken cancellationToken)
+    {
+        lock (sync)
+        {
+            events.Add(runEvent);
+        }
+
+        if (runEvent.Phase == blockingPhase)
+        {
+            Started.TrySetResult(true);
+            return new ValueTask(completion.Task);
+        }
+
+        return ValueTask.CompletedTask;
     }
 }
 
@@ -227,5 +280,33 @@ internal sealed class RecordingAgentTool : IAgentTool
         }
 
         return Task.FromResult(result);
+    }
+}
+
+internal sealed class NonCooperativeAgentTool : IAgentTool
+{
+    private readonly RecordingAgentTool recordingTool;
+    private readonly TaskCompletionSource<AgentToolResult> completion = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    private int invocationCount;
+
+    public NonCooperativeAgentTool(string name)
+    {
+        recordingTool = new RecordingAgentTool(name);
+    }
+
+    public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public int InvocationCount => Volatile.Read(ref invocationCount);
+    public AgentToolDescriptor Descriptor => recordingTool.Descriptor;
+
+    public AgentToolValidationResult Validate(AgentToolCall call) => recordingTool.Validate(call);
+
+    public Task<AgentToolResult> InvokeAsync(
+        AgentToolInvocation invocation,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref invocationCount);
+        Started.TrySetResult(true);
+        return completion.Task;
     }
 }
