@@ -14,7 +14,15 @@ public sealed class AgentToolRegistry
         this.tools = tools.ToFrozenDictionary(
             tool => tool.Descriptor.Name,
             StringComparer.Ordinal);
+
+        Descriptors = Array.AsReadOnly(
+            this.tools.Values
+                .Select(tool => tool.Descriptor)
+                .OrderBy(descriptor => descriptor.Name, StringComparer.Ordinal)
+                .ToArray());
     }
+
+    public IReadOnlyList<AgentToolDescriptor> Descriptors { get; }
 
     public bool TryGet(
         string name,
