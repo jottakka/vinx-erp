@@ -46,7 +46,7 @@ The descriptor is MCP-oriented and adapter-ready, not a complete external MCP co
 4. A final decision returns `result` without a tool call.
 5. For a tool proposal, the harness resolves the catalog/descriptor, evaluates profile allowlist, explicit company, capability, and risk policy, then performs semantic tool validation only for an allowed read. No denied or confirmation-required proposal reaches tool validation or invocation.
 6. A write returns `requires_confirmation`; the harness never invokes it. Issue #126 later supplies durable approval creation and consumption.
-7. An allowed read invokes the in-process tool and returns its typed result to the model. The harness repeats only while the policy's tool-turn cap has not been reached.
+7. An allowed read invokes the in-process tool and returns its typed result to the model. The harness repeats only while the profile's tool-turn limit has not been reached.
 8. The observer receives redacted state transitions and outcome metadata.
 
 ### Company and identity rules
