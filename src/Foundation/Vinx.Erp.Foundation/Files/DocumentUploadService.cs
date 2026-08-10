@@ -194,23 +194,26 @@ public sealed class DocumentUploadService(
                 : ConfirmationPreparation.Completed(DeserializeConfirmationResult(existing.ResultJson));
         }
 
-        var file = await database.Files.SingleOrDefaultAsync(candidate =>
+        var preparedFile = await database.Files.SingleOrDefaultAsync(candidate =>
             candidate.CompanyId == command.CompanyId && candidate.Id == command.FileId,
             cancellationToken);
+        var providerKey = preparedFile?.ProviderKey;
+        var processingState = preparedFile?.ProcessingState;
         await transaction.RollbackAsync(cancellationToken);
-        if (file is null)
+        database.ChangeTracker.Clear();
+        if (providerKey is null)
         {
             return ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
                 actor, command.CompanyId, "resource_not_found", StatusCodes.Status404NotFound, cancellationToken));
         }
 
-        if (!string.Equals(file.ProcessingState, FileRecord.QuarantinedState, StringComparison.Ordinal))
+        if (!string.Equals(processingState, FileRecord.QuarantinedState, StringComparison.Ordinal))
         {
             return ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
                 actor, command.CompanyId, "integrity_conflict", StatusCodes.Status409Conflict, cancellationToken));
         }
 
-        return ConfirmationPreparation.ForInspection(file.ProviderKey);
+        return ConfirmationPreparation.ForInspection(providerKey);
     }
 
     private async Task<DocumentUploadResult<DocumentUploadConfirmationResult>> FinalizeConfirmationAsync(
