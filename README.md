@@ -21,3 +21,14 @@ Run [public verification](docs/runbooks/public-verification.md) before a pull
 request. GitHub Free may not offer the private-repository branch protections
 needed to enforce every desired rule, so agents never push or merge `main`;
 the repository owner performs reviewed merges deliberately.
+
+## Ordem de entrega atual
+
+A preparação local desta issue #11 não cria um frontend de produto. A fundação
+de autorização segue em [#19](https://github.com/jottakka/vinx-erp/issues/19),
+[#20](https://github.com/jottakka/vinx-erp/issues/20) e
+[#68](https://github.com/jottakka/vinx-erp/issues/68). Com esses contratos
+disponíveis, o primeiro consumidor de frontend é
+[#16](https://github.com/jottakka/vinx-erp/issues/16), seguido do bootstrap em
+[#90](https://github.com/jottakka/vinx-erp/issues/90). Essa ordem evita que o
+browser invente escopo de empresa, autorização ou acesso direto a providers.
