@@ -180,7 +180,6 @@ CREATE TABLE foundation.files (
     classification character varying(100) NOT NULL,
     checksum character varying(128) NOT NULL,
     provider_key character varying(1000) NOT NULL,
-    is_quarantined boolean NOT NULL,
     created_by_user_id uuid NOT NULL,
     updated_by_user_id uuid NOT NULL,
     request_id uuid NOT NULL,
@@ -189,7 +188,15 @@ CREATE TABLE foundation.files (
     deleted_at timestamp with time zone,
     deleted_by_user_id uuid,
     deleted_reason character varying(500),
-    row_version bigint DEFAULT 1 NOT NULL
+    row_version bigint DEFAULT 1 NOT NULL,
+    extension character varying(20) NOT NULL,
+    failure_reason character varying(200),
+    mime_type character varying(100) NOT NULL,
+    origin character varying(100) NOT NULL,
+    original_file_name character varying(255) NOT NULL,
+    processing_state character varying(30) NOT NULL,
+    retention_until timestamp with time zone NOT NULL,
+    size_bytes bigint NOT NULL
 );
 
 ALTER TABLE ONLY foundation.files FORCE ROW LEVEL SECURITY;
