@@ -161,6 +161,72 @@ public sealed class InternalSessionAdmissionServiceTests
     }
 
     [Fact]
+    public async Task Concurrent_cross_user_admissions_resolve_the_unique_insert_race_without_leaking_the_owner()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var firstUserId = await SeedUserAsync(fixture, "first-race-user@example.test");
+        var secondUserId = await SeedUserAsync(fixture, "second-race-user@example.test");
+        var proof = NewProof();
+        var firstCorrelationId = Guid.NewGuid();
+        var secondCorrelationId = Guid.NewGuid();
+        await InstallSessionInsertRaceBarrierAsync(fixture);
+        await using var coordinator = await fixture.OpenAdministratorConnectionAsync();
+        await AcquireRaceCoordinatorLockAsync(coordinator);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        try
+        {
+            var firstAdmission = AdmitAsync(
+                fixture,
+                firstUserId,
+                proof,
+                AuditSource.Web,
+                firstCorrelationId,
+                cancellation.Token);
+            var secondAdmission = AdmitAsync(
+                fixture,
+                secondUserId,
+                proof,
+                AuditSource.Mcp,
+                secondCorrelationId,
+                cancellation.Token);
+
+            await WaitForRaceArrivalsAsync(coordinator, cancellation.Token);
+            await ReleaseRaceCoordinatorLockAsync(coordinator);
+            var attempts = await Task.WhenAll(firstAdmission, secondAdmission);
+            var firstAttempt = (UserId: firstUserId, Source: AuditSource.Web, CorrelationId: firstCorrelationId, Admission: attempts[0]);
+            var secondAttempt = (UserId: secondUserId, Source: AuditSource.Mcp, CorrelationId: secondCorrelationId, Admission: attempts[1]);
+            var allAttempts = new[] { firstAttempt, secondAttempt };
+            var admitted = Assert.Single(allAttempts, attempt => attempt.Admission.Result.State == SessionAdmissionState.Admitted);
+            var denied = Assert.Single(allAttempts, attempt => attempt.Admission.Result.State == SessionAdmissionState.Denied);
+
+            Assert.Equal("session_identity_mismatch", denied.Admission.Result.Reason);
+            await using var administrator = fixture.CreateAdministratorDbContext();
+            var session = await administrator.UserSessions.SingleAsync();
+            var audits = await administrator.AuditEvents.ToListAsync();
+            var success = Assert.Single(audits, audit => audit.Action == "identity_session_admitted");
+            var denial = Assert.Single(audits, audit => audit.Action == "identity_session_admission_denied");
+
+            Assert.Equal(admitted.UserId, session.UserId);
+            Assert.Equal(admitted.UserId, success.ActorUserId);
+            Assert.Equal(session.Id, success.ResourceId);
+            Assert.Equal(denied.UserId, denial.ActorUserId);
+            Assert.Equal(denied.Source, denial.Source);
+            Assert.Equal(denied.CorrelationId, denial.CorrelationId);
+            Assert.Equal(AuditOutcome.Denied, denial.Outcome);
+            Assert.Equal("session_identity_mismatch", denial.Reason);
+            Assert.Null(denial.ResourceId);
+            Assert.Equal("{}", denial.MetadataJson);
+            Assert.NotEqual(session.Id, denial.ResourceId);
+        }
+        finally
+        {
+            await ReleaseRaceCoordinatorLockAsync(coordinator);
+            await RemoveSessionInsertRaceBarrierAsync(fixture);
+        }
+    }
+
+    [Fact]
     public async Task Audit_failure_rolls_back_a_new_session_and_returns_unavailable()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -203,6 +269,43 @@ public sealed class InternalSessionAdmissionServiceTests
 
         Assert.Equal(SessionAdmissionState.Unavailable, admission.Result.State);
         Assert.Contains(admission.Logs, entry => entry.Level == LogLevel.Error && entry.Exception is not null);
+    }
+
+    [Fact]
+    public async Task Database_failure_logs_a_sanitized_error_without_identity_values()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var userId = await SeedUserAsync(fixture);
+        var proof = NewProof();
+        var correlationId = Guid.NewGuid();
+        await InstallSensitiveSessionInsertFailureAsync(fixture);
+
+        try
+        {
+            var admission = await AdmitAsync(fixture, userId, proof, AuditSource.Web, correlationId);
+
+            Assert.Equal(SessionAdmissionState.Unavailable, admission.Result.State);
+            var entry = Assert.Single(admission.Logs);
+            Assert.Equal(LogLevel.Error, entry.Level);
+            Assert.NotNull(entry.Exception);
+            Assert.Null(entry.Exception!.InnerException);
+            Assert.Equal("session_admission", entry.Properties["Operation"]);
+            Assert.Equal("identity", entry.Properties["Module"]);
+            Assert.Equal("unavailable", entry.Properties["Result"]);
+            Assert.Equal("database_or_audit_unavailable", entry.Properties["Reason"]);
+            Assert.Equal(["Module", "Operation", "Reason", "Result"], entry.Properties.Keys.OrderBy(key => key));
+            Assert.Equal(correlationId, entry.Scopes.Single()["CorrelationId"]);
+            Assert.DoesNotContain("CorrelationId", entry.Properties.Keys);
+
+            var rendered = string.Join("\n", entry.RenderedMessage, entry.Exception.Message, entry.Exception.ToString());
+            Assert.DoesNotContain(proof.ProviderSessionId.ToString(), rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain(proof.Key.Issuer, rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain(proof.Key.Subject, rendered, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await RemoveSensitiveSessionInsertFailureAsync(fixture);
+        }
     }
 
     [Fact]
@@ -346,6 +449,115 @@ public sealed class InternalSessionAdmissionServiceTests
         await command.ExecuteNonQueryAsync();
     }
 
+    private static async Task InstallSessionInsertRaceBarrierAsync(FoundationPostgresFixture fixture)
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            CREATE OR REPLACE FUNCTION foundation.coordinate_session_insert_race_for_test()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                PERFORM pg_advisory_lock_shared(190753, 2);
+                PERFORM pg_advisory_lock(190753, 1);
+                PERFORM pg_advisory_unlock(190753, 1);
+                PERFORM pg_advisory_unlock_shared(190753, 2);
+                RETURN NEW;
+            END;
+            $$;
+
+            CREATE TRIGGER tr_coordinate_session_insert_race_for_test
+            BEFORE INSERT ON foundation.user_sessions
+            FOR EACH ROW
+            EXECUTE FUNCTION foundation.coordinate_session_insert_race_for_test();
+            """, administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task RemoveSessionInsertRaceBarrierAsync(FoundationPostgresFixture fixture)
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            DROP TRIGGER IF EXISTS tr_coordinate_session_insert_race_for_test ON foundation.user_sessions;
+            DROP FUNCTION IF EXISTS foundation.coordinate_session_insert_race_for_test();
+            """, administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task AcquireRaceCoordinatorLockAsync(NpgsqlConnection coordinator)
+    {
+        await using var command = new NpgsqlCommand("SELECT pg_advisory_lock(190753, 1);", coordinator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task ReleaseRaceCoordinatorLockAsync(NpgsqlConnection coordinator)
+    {
+        await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(190753, 1);", coordinator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task WaitForRaceArrivalsAsync(NpgsqlConnection coordinator, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT count(*)
+                FROM pg_locks
+                WHERE locktype = 'advisory'
+                  AND classid = 190753
+                  AND objid = 2
+                  AND objsubid = 2
+                  AND mode = 'ShareLock'
+                  AND granted
+                """, coordinator);
+            var count = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+            if (count == 2)
+            {
+                return;
+            }
+
+            await Task.Delay(50, cancellationToken);
+        }
+
+        throw new Xunit.Sdk.XunitException("The two session inserts did not reach the race barrier.");
+    }
+
+    private static async Task InstallSensitiveSessionInsertFailureAsync(FoundationPostgresFixture fixture)
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            CREATE OR REPLACE FUNCTION foundation.fail_session_insert_with_identity_for_test()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                RAISE EXCEPTION 'provider session % issuer % subject subject-not-persisted', NEW.provider_session_id, NEW.issuer;
+            END;
+            $$;
+
+            CREATE TRIGGER tr_fail_session_insert_with_identity_for_test
+            BEFORE INSERT ON foundation.user_sessions
+            FOR EACH ROW
+            EXECUTE FUNCTION foundation.fail_session_insert_with_identity_for_test();
+            """, administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task RemoveSensitiveSessionInsertFailureAsync(FoundationPostgresFixture fixture)
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            DROP TRIGGER IF EXISTS tr_fail_session_insert_with_identity_for_test ON foundation.user_sessions;
+            DROP FUNCTION IF EXISTS foundation.fail_session_insert_with_identity_for_test();
+            """, administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
     private static async Task<AdmissionAttempt> AdmitAsync(
         FoundationPostgresFixture fixture,
         Guid userId,
@@ -372,6 +584,7 @@ public sealed class InternalSessionAdmissionServiceTests
     private sealed record CapturedLog(
         LogLevel Level,
         Exception? Exception,
+        string RenderedMessage,
         IReadOnlyDictionary<string, object?> Properties,
         IReadOnlyList<IReadOnlyDictionary<string, object?>> Scopes);
 
@@ -413,7 +626,7 @@ public sealed class InternalSessionAdmissionServiceTests
                         capturedScopes.Add(values.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
                     }
                 }, scopes);
-                provider.Entries.Add(new CapturedLog(logLevel, exception, properties, scopes));
+                provider.Entries.Add(new CapturedLog(logLevel, exception, formatter(state, exception), properties, scopes));
             }
         }
     }

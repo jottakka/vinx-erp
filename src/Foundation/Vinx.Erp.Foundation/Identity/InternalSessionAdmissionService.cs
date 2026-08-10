@@ -253,7 +253,13 @@ public sealed class InternalSessionAdmissionService(
         }
         else
         {
-            logger.LogError(exception, EventTemplate, Operation, Module, "unavailable", UnavailableReason);
+            logger.LogError(
+                new SessionAdmissionUnavailableException(),
+                EventTemplate,
+                Operation,
+                Module,
+                "unavailable",
+                UnavailableReason);
         }
 
         return SessionAdmissionResult.Unavailable();
@@ -261,6 +267,14 @@ public sealed class InternalSessionAdmissionService(
 
     private static bool IsUniqueViolation(DbUpdateException exception) =>
         exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
+
+    private sealed class SessionAdmissionUnavailableException : Exception
+    {
+        public SessionAdmissionUnavailableException()
+            : base("Internal session admission is unavailable.")
+        {
+        }
+    }
 
     private readonly record struct LockedUser(bool Exists, DateTimeOffset? SessionsValidAfter);
 }
