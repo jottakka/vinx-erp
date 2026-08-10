@@ -10,6 +10,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="../../../src/Modules/AI/Vinx.Erp.AI/Vinx.Erp.AI.csproj" />
     <ProjectReference Include="../../../src/Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
   </ItemGroup>
 </Project>
