@@ -58,7 +58,7 @@ public sealed class DocumentUploadService(
                         actor, command.CompanyId, "idempotency_conflict", StatusCodes.Status409Conflict, cancellationToken);
                 }
 
-                return await CreateIntentReplayAsync(existing.ResultJson, cancellationToken);
+                return await CreateIntentReplayAsync(actor, command.CompanyId, existing.ResultJson, cancellationToken);
             }
 
             var validationError = DocumentUploadPolicy.Validate(
@@ -68,7 +68,8 @@ public sealed class DocumentUploadService(
             if (validationError is not null)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return DocumentUploadResult<DocumentUploadIntentResult>.Failure(validationError, StatusCodes.Status400BadRequest);
+                return await ReturnAuditedDenialAsync<DocumentUploadIntentResult>(
+                    actor, command.CompanyId, validationError, StatusCodes.Status400BadRequest, cancellationToken);
             }
 
             var file = new FileRecord(
@@ -119,57 +120,17 @@ public sealed class DocumentUploadService(
         var payloadHash = ComputeConfirmationPayloadHash(command);
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-            await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
-            var membership = await GetMembershipAsync(actor.UserId, command.CompanyId, cancellationToken);
-            if (membership is null)
+            var preparation = await PrepareConfirmationAsync(actor, command, payloadHash, cancellationToken);
+            if (preparation.Result is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
-                    actor, command.CompanyId, "membership_required", StatusCodes.Status403Forbidden, cancellationToken);
-            }
-
-            if (!await HasCapabilityAsync(command.CompanyId, membership.Id, ConfirmCapability, cancellationToken))
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
-                    actor, command.CompanyId, "capability_denied", StatusCodes.Status403Forbidden, cancellationToken);
-            }
-
-            var existing = await FindIdempotencyAsync(actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, cancellationToken);
-            if (existing is not null)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                if (!string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal))
-                {
-                    return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
-                        actor, command.CompanyId, "idempotency_conflict", StatusCodes.Status409Conflict, cancellationToken);
-                }
-
-                return DeserializeConfirmationResult(existing.ResultJson);
-            }
-
-            var file = await database.Files.SingleOrDefaultAsync(candidate =>
-                candidate.CompanyId == command.CompanyId && candidate.Id == command.FileId,
-                cancellationToken);
-            if (file is null)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
-                    actor, command.CompanyId, "resource_not_found", StatusCodes.Status404NotFound, cancellationToken);
-            }
-
-            if (!string.Equals(file.ProcessingState, FileRecord.QuarantinedState, StringComparison.Ordinal))
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
-                    actor, command.CompanyId, "integrity_conflict", StatusCodes.Status409Conflict, cancellationToken);
+                return preparation.Result;
             }
 
             StorageObjectInspection inspection;
+            string? inspectionFailure = null;
             try
             {
-                inspection = await storage.InspectObjectAsync(file.ProviderKey, cancellationToken);
+                inspection = await storage.InspectObjectAsync(preparation.ProviderKey!, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -177,27 +138,12 @@ public sealed class DocumentUploadService(
             }
             catch
             {
-                return await CompleteVerificationFailureAsync(
-                    transaction, actor, command, payloadHash, file, "storage_read_failed", cancellationToken);
+                inspection = null!;
+                inspectionFailure = "storage_read_failed";
             }
 
-            var verificationError = DocumentVerificationPolicy.Validate(file, inspection);
-            if (verificationError is not null)
-            {
-                return await CompleteVerificationFailureAsync(
-                    transaction, actor, command, payloadHash, file, verificationError, cancellationToken);
-            }
-
-            file.MarkVerified(actor.UserId, command.RequestId);
-            file.MarkConfirmed(actor.UserId, command.RequestId);
-            var result = new DocumentUploadConfirmationResult(file.Id, file.ProcessingState);
-            database.IdempotencyRecords.Add(NewIdempotencyRecord(
-                actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, payloadHash, result));
-            await AppendAuditAsync(
-                actor, command.CompanyId, ConfirmationCommandName, "file", file.Id, AuditOutcome.Success, null, cancellationToken);
-            await database.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-            return DocumentUploadResult<DocumentUploadConfirmationResult>.Success(result);
+            return await FinalizeConfirmationAsync(
+                actor, command, payloadHash, inspection, inspectionFailure, cancellationToken);
         }
         catch (DbUpdateException)
         {
@@ -213,6 +159,128 @@ public sealed class DocumentUploadService(
             database.ChangeTracker.Clear();
             return DocumentUploadResult<DocumentUploadConfirmationResult>.Failure("upload_confirmation_unavailable", StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    private async Task<ConfirmationPreparation> PrepareConfirmationAsync(
+        ActorContext actor,
+        ConfirmDocumentUploadCommand command,
+        string payloadHash,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+        var membership = await GetMembershipAsync(actor.UserId, command.CompanyId, cancellationToken);
+        if (membership is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                actor, command.CompanyId, "membership_required", StatusCodes.Status403Forbidden, cancellationToken));
+        }
+
+        if (!await HasCapabilityAsync(command.CompanyId, membership.Id, ConfirmCapability, cancellationToken))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                actor, command.CompanyId, "capability_denied", StatusCodes.Status403Forbidden, cancellationToken));
+        }
+
+        var existing = await FindIdempotencyAsync(actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, cancellationToken);
+        if (existing is not null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return !string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal)
+                ? ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                    actor, command.CompanyId, "idempotency_conflict", StatusCodes.Status409Conflict, cancellationToken))
+                : ConfirmationPreparation.Completed(DeserializeConfirmationResult(existing.ResultJson));
+        }
+
+        var file = await database.Files.SingleOrDefaultAsync(candidate =>
+            candidate.CompanyId == command.CompanyId && candidate.Id == command.FileId,
+            cancellationToken);
+        await transaction.RollbackAsync(cancellationToken);
+        if (file is null)
+        {
+            return ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                actor, command.CompanyId, "resource_not_found", StatusCodes.Status404NotFound, cancellationToken));
+        }
+
+        if (!string.Equals(file.ProcessingState, FileRecord.QuarantinedState, StringComparison.Ordinal))
+        {
+            return ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                actor, command.CompanyId, "integrity_conflict", StatusCodes.Status409Conflict, cancellationToken));
+        }
+
+        return ConfirmationPreparation.ForInspection(file.ProviderKey);
+    }
+
+    private async Task<DocumentUploadResult<DocumentUploadConfirmationResult>> FinalizeConfirmationAsync(
+        ActorContext actor,
+        ConfirmDocumentUploadCommand command,
+        string payloadHash,
+        StorageObjectInspection inspection,
+        string? inspectionFailure,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+        var membership = await GetMembershipAsync(actor.UserId, command.CompanyId, cancellationToken);
+        if (membership is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                actor, command.CompanyId, "membership_required", StatusCodes.Status403Forbidden, cancellationToken);
+        }
+
+        if (!await HasCapabilityAsync(command.CompanyId, membership.Id, ConfirmCapability, cancellationToken))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                actor, command.CompanyId, "capability_denied", StatusCodes.Status403Forbidden, cancellationToken);
+        }
+
+        var existing = await FindIdempotencyAsync(actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, cancellationToken);
+        if (existing is not null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return !string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal)
+                ? await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                    actor, command.CompanyId, "idempotency_conflict", StatusCodes.Status409Conflict, cancellationToken)
+                : DeserializeConfirmationResult(existing.ResultJson);
+        }
+
+        var file = await database.Files.SingleOrDefaultAsync(candidate =>
+            candidate.CompanyId == command.CompanyId && candidate.Id == command.FileId,
+            cancellationToken);
+        if (file is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                actor, command.CompanyId, "resource_not_found", StatusCodes.Status404NotFound, cancellationToken);
+        }
+
+        if (!string.Equals(file.ProcessingState, FileRecord.QuarantinedState, StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return await ReturnConcurrentConfirmationReplayAsync(actor, command, payloadHash, cancellationToken);
+        }
+
+        var verificationError = inspectionFailure ?? DocumentVerificationPolicy.Validate(file, inspection);
+        if (verificationError is not null)
+        {
+            return await CompleteVerificationFailureAsync(
+                transaction, actor, command, payloadHash, file, verificationError, cancellationToken);
+        }
+
+        file.MarkVerified(actor.UserId, command.RequestId);
+        file.MarkConfirmed(actor.UserId, command.RequestId);
+        var result = new DocumentUploadConfirmationResult(file.Id, file.ProcessingState);
+        database.IdempotencyRecords.Add(NewIdempotencyRecord(
+            actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, payloadHash, result));
+        await AppendAuditAsync(
+            actor, command.CompanyId, ConfirmationCommandName, "file", file.Id, AuditOutcome.Success, null, cancellationToken);
+        await database.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return DocumentUploadResult<DocumentUploadConfirmationResult>.Success(result);
     }
 
     private async Task<DocumentUploadResult<DocumentUploadConfirmationResult>> CompleteVerificationFailureAsync(
@@ -254,7 +322,7 @@ public sealed class DocumentUploadService(
                 actor, command.CompanyId, "idempotency_conflict", StatusCodes.Status409Conflict, cancellationToken);
         }
 
-        return await CreateIntentReplayAsync(existing.ResultJson, cancellationToken);
+        return await CreateIntentReplayAsync(actor, command.CompanyId, existing.ResultJson, cancellationToken);
     }
 
     private async Task<DocumentUploadResult<DocumentUploadConfirmationResult>> ReturnConcurrentConfirmationReplayAsync(
@@ -294,13 +362,39 @@ public sealed class DocumentUploadService(
     }
 
     private async Task<DocumentUploadResult<DocumentUploadIntentResult>> CreateIntentReplayAsync(
+        ActorContext actor,
+        Guid companyId,
         string resultJson,
         CancellationToken cancellationToken)
     {
         var storedResult = JsonSerializer.Deserialize<StoredIntentResult>(resultJson);
-        return storedResult is null
-            ? DocumentUploadResult<DocumentUploadIntentResult>.Failure("upload_intent_unavailable", StatusCodes.Status503ServiceUnavailable)
-            : await CreateIntentResultAsync(storedResult, cancellationToken);
+        if (storedResult is null)
+        {
+            return DocumentUploadResult<DocumentUploadIntentResult>.Failure(
+                "upload_intent_unavailable", StatusCodes.Status503ServiceUnavailable);
+        }
+
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        await ApplyContextAsync(actor, companyId, cancellationToken);
+        var file = await database.Files.SingleOrDefaultAsync(candidate =>
+            candidate.CompanyId == companyId && candidate.Id == storedResult.FileId,
+            cancellationToken);
+        await transaction.RollbackAsync(cancellationToken);
+        if (file is null)
+        {
+            return await ReturnAuditedDenialAsync<DocumentUploadIntentResult>(
+                actor, companyId, "resource_not_found", StatusCodes.Status404NotFound, cancellationToken);
+        }
+
+        if (!string.Equals(file.ProcessingState, FileRecord.QuarantinedState, StringComparison.Ordinal))
+        {
+            return await ReturnAuditedDenialAsync<DocumentUploadIntentResult>(
+                actor, companyId, "integrity_conflict", StatusCodes.Status409Conflict, cancellationToken);
+        }
+
+        return await CreateIntentResultAsync(
+            new StoredIntentResult(file.Id, file.ProcessingState, file.ProviderKey),
+            cancellationToken);
     }
 
     private async Task<DocumentUploadResult<DocumentUploadIntentResult>> CreateIntentResultAsync(
@@ -432,15 +526,40 @@ public sealed class DocumentUploadService(
     }
 
     private static string ComputeIntentPayloadHash(CreateDocumentUploadIntentCommand command) =>
-        ComputeHash(string.Join("|",
-            command.CompanyId.ToString("N"), command.FileName, command.MimeType, command.SizeBytes,
-            command.Checksum, command.Classification, command.Origin, command.RetentionUntil.UtcDateTime.Ticks));
+        ComputeHash(JsonSerializer.Serialize(new IntentIdempotencyPayload(
+            command.CompanyId,
+            command.FileName,
+            command.MimeType,
+            command.SizeBytes,
+            command.Checksum,
+            command.Classification,
+            command.Origin,
+            command.RetentionUntil.UtcDateTime.Ticks)));
 
     private static string ComputeConfirmationPayloadHash(ConfirmDocumentUploadCommand command) =>
-        ComputeHash($"{command.CompanyId:N}|{command.FileId:N}");
+        ComputeHash(JsonSerializer.Serialize(new ConfirmationIdempotencyPayload(command.CompanyId, command.FileId)));
 
     private static string ComputeHash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private sealed record StoredIntentResult(Guid FileId, string ProcessingState, string ProviderKey);
+    private sealed record IntentIdempotencyPayload(
+        Guid CompanyId,
+        string FileName,
+        string MimeType,
+        long SizeBytes,
+        string Checksum,
+        string Classification,
+        string Origin,
+        long RetentionUtcTicks);
+    private sealed record ConfirmationIdempotencyPayload(Guid CompanyId, Guid FileId);
+    private sealed record ConfirmationPreparation(
+        string? ProviderKey,
+        DocumentUploadResult<DocumentUploadConfirmationResult>? Result)
+    {
+        public static ConfirmationPreparation ForInspection(string providerKey) => new(providerKey, null);
+
+        public static ConfirmationPreparation Completed(DocumentUploadResult<DocumentUploadConfirmationResult> result) =>
+            new(null, result);
+    }
 }

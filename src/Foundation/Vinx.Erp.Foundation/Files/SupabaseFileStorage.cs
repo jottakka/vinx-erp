@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Buffers;
 using System.Text.Json;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -11,6 +12,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
     private const int ObjectListPageSize = 1000;
     private static readonly TimeSpan MaximumDownloadUrlLifetime = TimeSpan.FromMinutes(2);
     private static readonly byte[] EicarMarker = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"u8.ToArray();
+    private static readonly int[] EicarFailureTable = CreateFailureTable(EicarMarker);
 
     public async Task EnsurePrivateContainerAsync(CancellationToken cancellationToken)
     {
@@ -76,17 +78,51 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         options.Validate();
         using var request = new HttpRequestMessage(HttpMethod.Get, ObjectPath(string.Empty, providerKey));
         AddAuthenticationHeaders(request);
-        using var response = await httpClient.SendAsync(request, cancellationToken);
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
         response.EnsureSuccessStatusCode();
         var contentType = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
-        var content = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        return new StorageObjectInspection(
-            new StorageObjectMetadata(
-                providerKey,
-                content.LongLength,
-                contentType,
-                $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}"),
-            content.AsSpan().IndexOf(EicarMarker) >= 0);
+        if (response.Content.Headers.ContentLength is long declaredLength
+            && declaredLength > DocumentUploadPolicy.MaxSizeBytes)
+        {
+            throw new InvalidOperationException("Storage object exceeds the maximum inspection size.");
+        }
+
+        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var buffer = ArrayPool<byte>.Shared.Rent(81920);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        try
+        {
+            long sizeBytes = 0;
+            var eicarIndex = 0;
+            var malwareDetected = false;
+            int read;
+            while ((read = await content.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
+            {
+                sizeBytes = checked(sizeBytes + read);
+                if (sizeBytes > DocumentUploadPolicy.MaxSizeBytes)
+                {
+                    throw new InvalidOperationException("Storage object exceeds the maximum inspection size.");
+                }
+
+                hash.AppendData(buffer, 0, read);
+                malwareDetected |= ContainsEicarMarker(buffer.AsSpan(0, read), ref eicarIndex);
+            }
+
+            return new StorageObjectInspection(
+                new StorageObjectMetadata(
+                    providerKey,
+                    sizeBytes,
+                    contentType,
+                    $"sha256:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}"),
+                malwareDetected);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
     }
 
     public async Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
@@ -252,6 +288,52 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         {
             throw new ArgumentOutOfRangeException(nameof(lifetime));
         }
+    }
+
+    private static bool ContainsEicarMarker(ReadOnlySpan<byte> content, ref int markerIndex)
+    {
+        var detected = false;
+        foreach (var value in content)
+        {
+            while (markerIndex > 0 && value != EicarMarker[markerIndex])
+            {
+                markerIndex = EicarFailureTable[markerIndex - 1];
+            }
+
+            if (value == EicarMarker[markerIndex])
+            {
+                markerIndex++;
+                if (markerIndex == EicarMarker.Length)
+                {
+                    detected = true;
+                    markerIndex = EicarFailureTable[markerIndex - 1];
+                }
+            }
+        }
+
+        return detected;
+    }
+
+    private static int[] CreateFailureTable(ReadOnlySpan<byte> marker)
+    {
+        var table = new int[marker.Length];
+        for (var index = 1; index < marker.Length; index++)
+        {
+            var candidate = table[index - 1];
+            while (candidate > 0 && marker[index] != marker[candidate])
+            {
+                candidate = table[candidate - 1];
+            }
+
+            if (marker[index] == marker[candidate])
+            {
+                candidate++;
+            }
+
+            table[index] = candidate;
+        }
+
+        return table;
     }
 
     private sealed record CreateBucketRequest(string Id, string Name, bool Public);

@@ -149,6 +149,25 @@ public sealed class SupabaseFileStorageTests
         Assert.Equal("application/pdf", inspection.Metadata.ContentType);
     }
 
+    [Fact]
+    public async Task Inspection_rejects_an_object_larger_than_the_hard_25MiB_limit()
+    {
+        using var handler = new RequestSequenceHandler(request => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[DocumentUploadPolicy.MaxSizeBytes + 1])
+            {
+                Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf") }
+            }
+        });
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
+        var storage = new SupabaseFileStorage(
+            client,
+            new SupabaseStorageOptions(client.BaseAddress, "not-a-credential", SupabaseStorageOptions.PrivateContainerId));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => storage.InspectObjectAsync("quarantine/company/document", CancellationToken.None));
+    }
+
     private static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(json, Encoding.UTF8, "application/json")

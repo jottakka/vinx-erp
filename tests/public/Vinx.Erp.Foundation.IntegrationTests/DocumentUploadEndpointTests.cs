@@ -69,6 +69,11 @@ public sealed class DocumentUploadEndpointTests
         Assert.Equal(expectedCode, (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         Assert.Empty(await administrator.Files.ToListAsync());
+        var denial = await administrator.AuditEvents.SingleAsync();
+        Assert.Equal(expectedCode, denial.Action);
+        Assert.Equal("{}", denial.MetadataJson);
+        Assert.DoesNotContain(fileName, denial.MetadataJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(checksum, denial.MetadataJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -228,6 +233,24 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
+    public async Task Delimiter_collision_in_intent_payload_returns_idempotency_conflict()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId) with { Classification = "financial|restricted", Origin = "user_upload" };
+
+        var first = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+        var collision = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/upload-intentions",
+            request with { Classification = "financial", Origin = "restricted|user_upload" });
+
+        first.EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Conflict, collision.StatusCode);
+        Assert.Equal("idempotency_conflict", (await collision.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Fact]
     public async Task Repeated_intent_replays_metadata_but_generates_a_fresh_upload_url_without_a_second_audit()
     {
         var storage = new ControlledFileStorage();
@@ -247,6 +270,98 @@ public sealed class DocumentUploadEndpointTests
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.intent").ToListAsync());
         Assert.Single(await administrator.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Intent_replay_after_confirmation_does_not_issue_an_upload_url()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId);
+        var intent = await PostIntentAsync(factory, request);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var confirmation = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+        confirmation.EnsureSuccessStatusCode();
+
+        var replay = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        Assert.Equal(HttpStatusCode.Conflict, replay.StatusCode);
+        Assert.Equal("integrity_conflict", (await replay.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Fact]
+    public async Task Intent_replay_after_verification_failure_does_not_issue_an_upload_url()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId) with { SizeBytes = EicarPayload.Length, Checksum = ComputeChecksum(EicarPayload) };
+        var intent = await PostIntentAsync(factory, request);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, EicarPayload, file.MimeType);
+        var confirmation = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+        confirmation.EnsureSuccessStatusCode();
+
+        var replay = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        Assert.Equal(HttpStatusCode.Conflict, replay.StatusCode);
+        Assert.Equal("integrity_conflict", (await replay.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Fact]
+    public async Task Intent_replay_after_soft_delete_does_not_issue_an_upload_url()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId);
+        var intent = await PostIntentAsync(factory, request);
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var file = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+            file.MarkDeleted("test", factory.ActorUserId, Guid.NewGuid());
+            await administrator.SaveChangesAsync();
+        }
+
+        var replay = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
+        Assert.Equal("resource_not_found", (await replay.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Fact]
+    public async Task Confirmation_reauthorizes_after_private_inspection_finishes()
+    {
+        var storage = new ControlledFileStorage { BlockInspection = true };
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var confirmationTask = factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+        await storage.WaitForInspectionAsync();
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            administrator.RoleAssignments.Remove(await administrator.RoleAssignments.SingleAsync());
+            await administrator.SaveChangesAsync();
+        }
+        storage.ReleaseInspection();
+
+        var response = await confirmationTask;
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("capability_denied", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var auditReader = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal("quarantined", (await auditReader.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).ProcessingState);
     }
 
     [Fact]
@@ -302,7 +417,12 @@ public sealed class DocumentUploadEndpointTests
 
     private static async Task<UploadIntentResponse> CreateIntentAsync(FoundationApiFactory factory, Guid companyId)
     {
-        var response = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", NewIntent(companyId));
+        return await PostIntentAsync(factory, NewIntent(companyId));
+    }
+
+    private static async Task<UploadIntentResponse> PostIntentAsync(FoundationApiFactory factory, UploadIntentRequest request)
+    {
+        var response = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
     }
@@ -382,8 +502,11 @@ public sealed class DocumentUploadEndpointTests
     private sealed class ControlledFileStorage : FileStorage
     {
         private readonly Dictionary<string, StoredObject> _objects = new(StringComparer.Ordinal);
+        private readonly TaskCompletionSource inspectionStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource inspectionRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _uploadUrlCount;
         public bool FailReads { get; init; }
+        public bool BlockInspection { get; init; }
 
         public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(string providerKey, CancellationToken cancellationToken) =>
@@ -405,11 +528,17 @@ public sealed class DocumentUploadEndpointTests
                 ComputeChecksum(stored.Content)));
         }
 
-        public Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken)
+        public async Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken)
         {
             if (FailReads)
             {
                 throw new InvalidOperationException("storage_read_failed");
+            }
+
+            if (BlockInspection)
+            {
+                inspectionStarted.TrySetResult();
+                await inspectionRelease.Task.WaitAsync(cancellationToken);
             }
 
             var stored = _objects[providerKey];
@@ -418,9 +547,9 @@ public sealed class DocumentUploadEndpointTests
                 stored.Content.LongLength,
                 stored.ContentType,
                 ComputeChecksum(stored.Content));
-            return Task.FromResult(new StorageObjectInspection(
+            return new StorageObjectInspection(
                 metadata,
-                stored.Content.AsSpan().IndexOf(EicarPayload) >= 0));
+                stored.Content.AsSpan().IndexOf(EicarPayload) >= 0);
         }
 
         public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(string providerKey, TimeSpan lifetime, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -429,6 +558,10 @@ public sealed class DocumentUploadEndpointTests
 
         public void Put(string providerKey, byte[] content, string contentType) =>
             _objects[providerKey] = new StoredObject(content, contentType);
+
+        public Task WaitForInspectionAsync() => inspectionStarted.Task;
+
+        public void ReleaseInspection() => inspectionRelease.TrySetResult();
 
         private sealed record StoredObject(byte[] Content, string ContentType);
     }
