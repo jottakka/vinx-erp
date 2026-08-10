@@ -36,7 +36,7 @@ The core exposes these contracts:
 - `IAgentRunPolicy`: decides before invocation. It holds maximum tool turns, timeout, allowlist, and write prohibition. It can allow a read, deny a call, request clarification for missing company, or require confirmation for a write.
 - `IAgentRunObserver`: receives safe lifecycle metadata. It receives no raw prompt, token, attachment content, OCR text, or provider payload.
 
-The descriptor follows MCP concepts but is not an MCP transport implementation. It keeps `inputSchema` and `outputSchema` as versioned JSON documents, enabling a later `McpHost` adapter without changing the harness contract.
+The descriptor follows MCP concepts but is not an MCP transport implementation. It keeps `inputSchema` and `outputSchema` as versioned JSON documents, enabling a later `McpHost` adapter without changing the harness contract. In this slice, the resolved tool owns semantic argument validation; a generic JSON Schema engine belongs to the remote MCP adapter work.
 
 ### Data flow
 
@@ -99,7 +99,7 @@ Acceptance cases:
 6. A company ID proposed by the model cannot replace the trusted company in `AgentExecutionContext`.
 7. Instructions embedded in untrusted OCR/context cannot change profile, policy, allowlist, capability, or company.
 8. The observer receives safe state events without message/OCR/provider contents.
-9. A model that exceeds the profile's tool-turn limit, timeout, or cancellation boundary returns `validation_error` and does not invoke another tool.
+9. A model that exceeds the profile's tool-turn limit or timeout returns `validation_error` and does not invoke another tool; caller cancellation propagates without invoking another tool.
 10. Concurrent runs do not mix actor, company, or correlation data.
 
 ## Delivery sequence
