@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved for the first implementation slice on 2026-08-10. This design implements issue #127 while keeping remote MCP hosting, OAuth, WhatsApp transport, OCR storage, `whoAmI`, and durable approval flows in their own issues.
+Approved for the first implementation slice on 2026-08-10 and reviewed with Sol. This design implements issue #127 while keeping remote MCP hosting, OAuth, WhatsApp transport, OCR storage, `whoAmI`, and durable approval flows in their own issues.
 
 ## Goal
 
@@ -10,7 +10,7 @@ Build the internal harness that runs a supervised agent request consistently for
 
 ## Scope boundary
 
-The first slice is an in-process `Vinx.Erp.Foundation.AI` harness. It does not expose an HTTP endpoint, start an MCP server, call a real provider, persist a conversation, upload a file, or execute a domain mutation.
+The first slice is an in-process `Vinx.Erp.AI` harness. It does not expose an HTTP endpoint, start an MCP server, call a real provider, persist a conversation, upload a file, or execute a domain mutation.
 
 It delivers an executable core with one read-only in-process tool in tests, deterministic model/test doubles, and typed outcomes. This proves the boundary needed before real provider, channel, and MCP-host adapters exist.
 
@@ -18,39 +18,40 @@ It delivers an executable core with one read-only in-process tool in tests, dete
 
 ### Location
 
-Place the harness in `src/Foundation/Vinx.Erp.Foundation/AI/` under namespace `Vinx.Erp.Foundation.AI`.
+Place the harness in `src/Modules/AI/Vinx.Erp.AI/` under namespace `Vinx.Erp.AI`. It references `Vinx.Erp.Foundation` for trusted actor and cross-cutting contracts.
 
-`Vinx.Erp.Foundation` already owns identity, capabilities, audit, correlation, idempotency, provider boundaries, and cross-cutting contracts. A separate assembly would add project wiring without a current domain boundary. The Foundation assembly must remain independent from `ApiHost`, `McpHost`, and `WorkerHost`.
+AI is a declared module in the modular-monolith architecture. Keeping the harness in its own assembly prevents Foundation from owning AI lifecycle logic while preserving Foundation's independence from `ApiHost`, `McpHost`, and `WorkerHost`. Hosts remain future adapters and do not become harness dependencies.
 
 ### Harness contracts
 
 The core exposes these contracts:
 
-- `AgentRunRequest`: internal actor, server correlation ID, channel, optional explicit company, normalized context items, and task profile.
+- `AgentExecutionContext`: trusted server-side actor, server correlation ID, channel, optional explicit company, effective capabilities, and approved task profile.
+- `AgentRunRequest`: untrusted normalized user message and external context items. It never supplies actor, company, capability, correlation, profile, or policy.
 - `AgentRunOutcome`: one of `result`, `requires_confirmation`, `denied`, `conflict`, `validation_error`, or `needs_clarification`; contains only safe user-facing text, tool name, and opaque identifiers needed by the caller.
 - `AgentTaskProfile`: approved task identity and limits. Business code selects a profile, never a raw provider/model name.
 - `IAgentModel`: emits either a final assistant message or a typed tool proposal. The initial test double is test-only; production adapters come later.
 - `IAgentTool`: exposes a job-oriented descriptor and executes in-process. Its descriptor carries tool name/version, input and output schemas, required capability, risk, explicit-company requirement, and idempotency requirement.
-- `IAgentToolCatalog`: resolves only allowlisted tools for the task profile.
-- `IAgentPolicy`: decides before invocation. It can allow a read, deny a call, request clarification for missing company, or require confirmation for a write.
+- `IAgentToolRegistry`: immutable catalog that resolves only allowlisted tools for the task profile.
+- `IAgentRunPolicy`: decides before invocation. It holds maximum tool turns, timeout, allowlist, and write prohibition. It can allow a read, deny a call, request clarification for missing company, or require confirmation for a write.
 - `IAgentRunObserver`: receives safe lifecycle metadata. It receives no raw prompt, token, attachment content, OCR text, or provider payload.
 
 The descriptor follows MCP concepts but is not an MCP transport implementation. It keeps `inputSchema` and `outputSchema` as versioned JSON documents, enabling a later `McpHost` adapter without changing the harness contract.
 
 ### Data flow
 
-1. A channel adapter authenticates the caller, resolves the internal actor, creates a server correlation ID, and normalizes message/OCR data into `AgentContextItem` records.
-2. The adapter calls `AgentHarness.RunAsync` with an approved `AgentTaskProfile` and `AgentRunRequest`.
+1. A channel adapter authenticates the caller, resolves the internal actor, creates a server correlation ID, computes effective capabilities, and normalizes message/OCR data into `AgentContextItem` records.
+2. The adapter calls `AgentHarness.RunAsync` with an `AgentExecutionContext` and `AgentRunRequest`.
 3. The harness asks `IAgentModel` for a typed decision.
 4. A final decision returns `result` without a tool call.
 5. For a tool proposal, the harness validates the catalog/profile allowlist, descriptor, explicit company, policy, and capability context before any invocation.
 6. A write returns `requires_confirmation`; the harness never invokes it. Issue #126 later supplies durable approval creation and consumption.
-7. An allowed read invokes the in-process tool, returns its typed result to the model once, then returns the model's final response. The task profile caps tool turns.
+7. An allowed read invokes the in-process tool and returns its typed result to the model. The harness repeats only while the policy's tool-turn cap has not been reached.
 8. The observer receives redacted state transitions and outcome metadata.
 
 ### Company and identity rules
 
-The harness never resolves a user from a prompt, tool argument, or model proposal. `ActorContext` comes from a validated host boundary. A tool marked `RequiresExplicitCompany` cannot run when `CompanyId` is absent; the outcome is `needs_clarification` and the tool is not invoked.
+The harness never resolves a user, company, correlation ID, capability, or profile from a prompt, tool argument, or model proposal. `ActorContext` and the optional company come only from `AgentExecutionContext`. A tool marked `RequiresExplicitCompany` cannot run when the trusted company is absent; the outcome is `needs_clarification` and the tool is not invoked.
 
 The harness does not implement `whoAmI`. Issue #125 owns membership and capability discovery. The first core receives effective capability names as trusted server-side context from its future host adapter; it never accepts them from user content.
 
@@ -86,7 +87,7 @@ Hosts later map events to Foundation audit and structured logs. A mutation's dur
 
 ## First implementation slice
 
-The first PR is intentionally small: contracts, deterministic runner, in-process catalog/policy, safe observer boundary, and unit tests. It does not wire DI into a host because no authenticated agent endpoint exists yet.
+The first PR is intentionally small: `Vinx.Erp.AI`, contracts, deterministic runner, immutable in-process registry/policy, safe observer boundary, module documentation, verification matrix, and unit tests. It does not wire DI into a host because no authenticated agent endpoint exists yet.
 
 Acceptance cases:
 
@@ -95,12 +96,15 @@ Acceptance cases:
 3. A proposal for a company-scoped tool without company returns `needs_clarification` and does not invoke the tool.
 4. A write proposal returns `requires_confirmation` and does not invoke the tool.
 5. A tool outside the profile allowlist or without capability returns `denied` and does not invoke the tool.
-6. The observer receives safe state events without message/OCR/provider contents.
-7. A model that exceeds the profile's tool-turn limit returns `validation_error` and does not invoke another tool.
+6. A company ID proposed by the model cannot replace the trusted company in `AgentExecutionContext`.
+7. Instructions embedded in untrusted OCR/context cannot change profile, policy, allowlist, capability, or company.
+8. The observer receives safe state events without message/OCR/provider contents.
+9. A model that exceeds the profile's tool-turn limit, timeout, or cancellation boundary returns `validation_error` and does not invoke another tool.
+10. Concurrent runs do not mix actor, company, or correlation data.
 
 ## Delivery sequence
 
-1. PR 1: Foundation AI harness core and unit tests.
+1. PR 1: AI module harness core and unit tests.
 2. PR 2: approved task profile configuration and real OpenAI-compatible/Anthropic adapters, using external-boundary test doubles.
 3. PR 3: `whoAmI`, effective identity/capability adapter, durable approval adapter, and one Paguai read/draft vertical slice.
 4. PR 4: authenticated API/UI harness adapter and WhatsApp channel adapter with its own webhook/outbox work.
@@ -110,6 +114,6 @@ The remote MCP host is deliberately later, but every internal tool contract is M
 
 ## Verification
 
-The first PR uses xUnit unit tests with test-only deterministic model, tool, catalog, policy, and observer implementations. Tests follow red-green-refactor and assert outcomes and non-invocation behavior rather than mocks alone.
+The first PR uses xUnit unit tests with test-only deterministic model, tool, registry, policy, and observer implementations. Tests follow red-green-refactor and assert outcomes and non-invocation behavior rather than mocks alone.
 
-Focused validation runs the Foundation unit test project. Before merge, run `./scripts/verify-public.sh`, `git diff --check`, a public code-format check, and an independent review. No builder opens, lists, or runs `quality/private`.
+Focused validation runs the AI unit test project. Before merge, run `./scripts/verify-public.sh`, `git diff --check`, a public code-format check, and an independent review. No builder opens, lists, or runs `quality/private`.
