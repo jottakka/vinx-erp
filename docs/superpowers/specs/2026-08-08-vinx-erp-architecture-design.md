@@ -23,7 +23,7 @@ continue in their respective GitHub issues.
 
 | Concern | Decision |
 |---|---|
-| Frontend | React 19, TypeScript, Vite, React Router, TanStack Query, React Hook Form, Zod, MUI, TanStack Table/Virtual and PWA delivery. |
+| Frontend | React 19, TypeScript, Vite, React Router, TanStack Query, React Hook Form, Zod, MUI, TanStack Table/Virtual, Vitest, Testing Library, MSW and Playwright. V1 funciona somente online; não entrega PWA nem cache offline. |
 | Backend | .NET 10 LTS, ASP.NET Core Minimal APIs grouped by module, EF Core with Npgsql and explicit validation. |
 | Database | Managed Supabase PostgreSQL initially, using standard PostgreSQL schemas and migrations. |
 | Identity | Supabase Auth behind the ASP.NET Core BFF; e-mail/password plus real TOTP initially; corporate OIDC/SAML later through an adapter. |
@@ -39,7 +39,7 @@ continue in their respective GitHub issues.
 The solution has three entry hosts, not microservices:
 
 ```text
-React PWA -> Api.Host -> Modules -> PostgreSQL / provider adapters
+React web -> Api.Host -> Modules -> PostgreSQL / provider adapters
 MCP client -> Mcp.Host -> Modules -> PostgreSQL / provider adapters
 Workers    -> Worker.Host -> Modules -> PostgreSQL / provider adapters
 ```
@@ -89,6 +89,14 @@ AutoMapper, Dapper, Redis, Kafka, Kubernetes or microservices during
 groundwork. Add an interface only for an actual provider boundary, alternate
 implementation or independently testable volatile dependency.
 
+### Operação online-only do frontend
+
+A V1 não registra respostas autenticadas, comandos pendentes ou dados de
+domínio para uso offline. Não há service worker, fila de escrita ou reenvio
+automático após reconexão. A interface pode indicar indisponibilidade usando
+os sinais do navegador e falhas confirmadas da API; ao recuperar conexão, ela
+revalida dados autorizados antes de atualizar a tela.
+
 ## Multi-company authorization
 
 - A user has explicit active memberships and independently assigned roles in
@@ -101,8 +109,9 @@ implementation or independently testable volatile dependency.
 - The API returns effective capabilities for the active context. The frontend
   uses them to hide menus, routes, controls, columns and data but never makes
   the security decision.
-- Switching company clears cached data and capability state before displaying
-  the new context. Deep links to forbidden routes deny before loading data.
+- Switching company clears only in-memory query and capability state before
+  displaying the new context; this state is never persisted as offline cache.
+  Deep links to forbidden routes deny before loading data.
 - API, MCP and database each check the applicable boundary. PostgreSQL RLS
   isolates tenants; database commands independently protect high-risk actions
   such as payment approval/confirmation, medical document access and exports.
