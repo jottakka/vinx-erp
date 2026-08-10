@@ -81,11 +81,44 @@ public sealed record AgentToolCall
         }
 
         Name = name;
-        Arguments = arguments.Clone();
+        Arguments = RemoveCompanyScopeArguments(arguments);
     }
 
     public string Name { get; }
     public JsonElement Arguments { get; }
+
+    private static JsonElement RemoveCompanyScopeArguments(JsonElement arguments)
+    {
+        if (arguments.ValueKind != JsonValueKind.Object)
+        {
+            return arguments.Clone();
+        }
+
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+
+            foreach (var property in arguments.EnumerateObject())
+            {
+                if (!IsCompanyScopeAlias(property.Name))
+                {
+                    property.WriteTo(writer);
+                }
+            }
+
+            writer.WriteEndObject();
+        }
+
+        using var normalized = JsonDocument.Parse(buffer.ToArray());
+        return normalized.RootElement.Clone();
+    }
+
+    private static bool IsCompanyScopeAlias(string name) =>
+        name.Equals("empresa_id", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("empresaId", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("company_id", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("companyId", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed record AgentToolInvocation

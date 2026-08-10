@@ -68,6 +68,26 @@ public sealed class AgentContractsTests
     }
 
     [Fact]
+    public void Task_profile_rejects_timeout_above_portable_cancel_after_limit()
+    {
+        var timeout = TimeSpan.FromMilliseconds(int.MaxValue) + TimeSpan.FromTicks(1);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new AgentTaskProfile(
+            "support.read", 1, timeout, new HashSet<string>()));
+    }
+
+    [Fact]
+    public void Task_profile_accepts_portable_cancel_after_limit()
+    {
+        var timeout = TimeSpan.FromMilliseconds(int.MaxValue);
+
+        var profile = new AgentTaskProfile(
+            "support.read", 1, timeout, new HashSet<string>());
+
+        Assert.Equal(timeout, profile.Timeout);
+    }
+
+    [Fact]
     public void Task_profile_rejects_blank_allowed_tool_name()
     {
         Assert.Throws<ArgumentException>(() => new AgentTaskProfile(
@@ -96,6 +116,49 @@ public sealed class AgentContractsTests
 
         Assert.Equal("object", descriptor.InputSchema.GetProperty("type").GetString());
         Assert.Equal("object", descriptor.OutputSchema.GetProperty("type").GetString());
+    }
+
+    [Theory]
+    [InlineData("EmPrEsA_Id")]
+    [InlineData("eMpReSaId")]
+    [InlineData("CoMpAnY_iD")]
+    [InlineData("cOmPaNyId")]
+    public void Tool_call_removes_top_level_company_scope_alias_case_insensitively(string alias)
+    {
+        using var arguments = JsonDocument.Parse($$"""
+            {
+              "{{alias}}": "model-supplied-company",
+              "query": "open invoices"
+            }
+            """);
+
+        var call = new AgentToolCall("paguai.read", arguments.RootElement);
+
+        Assert.False(call.Arguments.TryGetProperty(alias, out _));
+        Assert.Equal("open invoices", call.Arguments.GetProperty("query").GetString());
+    }
+
+    [Fact]
+    public void Tool_call_preserves_nested_company_fields()
+    {
+        using var arguments = JsonDocument.Parse("""
+            {
+              "filter": {
+                "empresa_id": "business-value-1",
+                "empresaId": "business-value-2",
+                "company_id": "business-value-3",
+                "companyId": "business-value-4"
+              }
+            }
+            """);
+
+        var call = new AgentToolCall("paguai.read", arguments.RootElement);
+        var filter = call.Arguments.GetProperty("filter");
+
+        Assert.Equal("business-value-1", filter.GetProperty("empresa_id").GetString());
+        Assert.Equal("business-value-2", filter.GetProperty("empresaId").GetString());
+        Assert.Equal("business-value-3", filter.GetProperty("company_id").GetString());
+        Assert.Equal("business-value-4", filter.GetProperty("companyId").GetString());
     }
 
     [Fact]

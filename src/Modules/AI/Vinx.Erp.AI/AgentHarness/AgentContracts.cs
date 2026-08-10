@@ -112,6 +112,14 @@ public sealed record AgentTaskProfile
             throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "Timeout must be positive.");
         }
 
+        if (timeout > TimeSpan.FromMilliseconds(int.MaxValue))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeout),
+                timeout,
+                "Timeout exceeds the portable cancellation limit.");
+        }
+
         if (allowedTools.Any(string.IsNullOrWhiteSpace))
         {
             throw new ArgumentException("Allowed tool names cannot be blank.", nameof(allowedTools));
