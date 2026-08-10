@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -13,6 +12,7 @@ using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.AddVinxLogging();
 var runtimeConnection = builder.Configuration["FOUNDATION_RUNTIME_CONNECTION"];
 if (string.IsNullOrWhiteSpace(runtimeConnection))
 {
@@ -74,12 +74,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var app = builder.Build();
 
-app.Use(async (context, next) =>
-{
-    var correlation = ServerCorrelationContext.Begin(context);
-    Activity.Current?.SetTag("vinx.correlation_id", correlation.CorrelationId.ToString());
-    await next(context);
-});
+app.UseVinxRequestCorrelation();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapFoundationHealthEndpoints();
