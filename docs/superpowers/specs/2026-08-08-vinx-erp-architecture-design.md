@@ -239,11 +239,17 @@ changed artifact: BDD/module docs for behavior, OpenAPI for API contracts, MCP
 manifest/schema for tools, ADR for architectural/security/provider choices,
 migration notes for data changes and runbooks for operational changes.
 
-Basic Memory is not installed in this environment. If installed later, it is
-only a disposable local index derived from Markdown and is never canonical.
+Basic Memory is an external, disposable local index derived only from
+Git-tracked Markdown under `docs/`; it is never canonical. Projectmem is a
+separate, optional development-agent pilot for concise operational history
+(`issue`, `attempt`, `fix`, `decision`, and `note`). It runs outside the product
+solution and must not enter `ApiHost`, `McpHost`, `WorkerHost`, the database,
+frontend, migrations, or production images. Both tools must remain outside the
+ERP data and authorization boundaries and may not contain secrets, prompts,
+PII, medical content, customer data, or private verification material.
 Graphify is deferred until the repository has enough code/dependency surface
-to justify code-graph maintenance. Neither tool may contain secrets or replace
-the repository documentation.
+to justify code-graph maintenance. None of these tools may contain secrets or
+replace the repository documentation.
 
 Create a reusable project skill only after a workflow is repeated or is
 high-risk and stable. Likely candidates after real usage are module creation,
