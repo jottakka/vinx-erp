@@ -10,9 +10,9 @@
 
 ## Global Constraints
 
-- Work on branch codex/agentic-v1-harness; never write main.
-- Keep first PR at or below 25 changed implementation/documentation files and 800 manual lines; generated lockfiles count as files.
-- Estimated first PR: 22 implementation/documentation files plus this plan/spec, and 550–700 manual lines. Split provider, host, channel, OCR, approval, and remote MCP work into later PRs.
+- Work on a dedicated codex/agentic-v1-* branch; never write main.
+- Keep each PR at or below 25 changed implementation/documentation files and 800 manual lines; generated lockfiles count as files.
+- Delivery uses stacked PRs after the actual Task 1/2 estimates exceeded one reviewable PR: planning/spec (2 documentation files, about 480 manual lines); contracts (10 files, about 690 manual lines); policy (4 files, about 290 manual lines); runner plus architecture/docs (estimated below 800 manual lines). Provider, host, channel, OCR, approval, and remote MCP work stay in later PRs.
 - Create src/Modules/AI/Vinx.Erp.AI. It may reference Vinx.Erp.Foundation. Foundation, ApiHost, McpHost, WorkerHost, database schema, migrations, and provider configuration stay unchanged.
 - Use namespace Vinx.Erp.AI and subnamespaces AgentHarness, Models, Tools.
 - Add no NuGet package and no provider SDK.
@@ -43,6 +43,15 @@
 | docs/modules/ai.md | Durable module contract. |
 | docs/adr/0005-agent-harness-core.md | Internal MCP-compatible core decision. |
 | docs/verification/127-agent-harness-test-cases.md | Issue #127 to public-test mapping. |
+
+## PR Boundaries
+
+1. **Planning/spec:** design and implementation plan only.
+2. **Contracts:** AI project, immutable trusted/untrusted contracts, model/tool contracts, and contract tests.
+3. **Policy:** immutable registry and server-side policy only; stacks on Contracts.
+4. **Runner/docs:** deterministic harness, architecture boundary test, module contract, ADR, and verification matrix; stacks on Policy.
+
+Each stacked PR receives its own focused verification and independent review. The final full public gate covers the completed stack.
 
 ### Task 1: Create AI module and immutable contracts
 
