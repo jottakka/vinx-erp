@@ -59,14 +59,9 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
         await ExecuteBootstrapAsync(connection);
     }
 
-    public async Task<bool> MigratorCanSetAuditOwnerAsync()
-    {
-        await using var connection = new NpgsqlConnection(MigratorConnectionString);
-        await connection.OpenAsync();
-        await using var command = new NpgsqlCommand("SET ROLE vinx_audit_owner; RESET ROLE;", connection);
-        await command.ExecuteNonQueryAsync();
-        return true;
-    }
+    public Task<bool> MigratorCanSetAuditOwnerAsync() => MigratorCanSetRoleAsync("vinx_audit_owner");
+
+    public Task<bool> MigratorCanSetIdentityOwnerAsync() => MigratorCanSetRoleAsync("vinx_identity_owner");
 
     public async Task MigrateAsync()
     {
@@ -94,6 +89,15 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
         var script = await reader.ReadToEndAsync();
         await using var command = new NpgsqlCommand(script, connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task<bool> MigratorCanSetRoleAsync(string roleName)
+    {
+        await using var connection = new NpgsqlConnection(MigratorConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand($"SET ROLE {roleName}; RESET ROLE;", connection);
+        await command.ExecuteNonQueryAsync();
+        return true;
     }
 
     private static async Task SetPasswordAsync(NpgsqlConnection connection, string roleName, string password)

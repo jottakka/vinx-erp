@@ -40,6 +40,9 @@ public sealed class SessionMigrationTests
                 lock_function.prosecdef,
                 lock_function.proconfig,
                 pg_get_userbyid(lock_function.proowner),
+                has_schema_privilege('vinx_identity_owner', 'foundation', 'USAGE'),
+                has_schema_privilege('vinx_identity_owner', 'foundation', 'CREATE'),
+                has_table_privilege('vinx_identity_owner', 'foundation.users', 'SELECT'),
                 EXISTS (
                     SELECT 1
                     FROM pg_constraint
@@ -67,9 +70,12 @@ public sealed class SessionMigrationTests
         Assert.True(reader.GetBoolean(8));
         Assert.True(reader.GetBoolean(9));
         Assert.Equal(["search_path=foundation, pg_catalog"], reader.GetFieldValue<string[]>(10));
-        Assert.Equal("vinx_migrator", reader.GetString(11));
+        Assert.Equal("vinx_identity_owner", reader.GetString(11));
         Assert.True(reader.GetBoolean(12));
-        Assert.True(reader.GetBoolean(13));
+        Assert.False(reader.GetBoolean(13));
+        Assert.True(reader.GetBoolean(14));
+        Assert.True(reader.GetBoolean(15));
+        Assert.True(reader.GetBoolean(16));
     }
 
     [Fact]
@@ -172,6 +178,24 @@ public sealed class SessionMigrationTests
         var revocationException = await Assert.ThrowsAsync<PostgresException>(async () =>
             await partialRevocation.ExecuteNonQueryAsync());
         Assert.Equal(PostgresErrorCodes.CheckViolation, revocationException.SqlState);
+
+        await using var missingReason = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.user_sessions (
+                id, user_id, issuer, provider_session_id, provider_authenticated_at, token_expires_at,
+                revoked_at, revoked_by_user_id, revocation_reason)
+            VALUES (
+                @id, @user_id, 'https://project.supabase.co/auth/v1', @provider_session_id,
+                '2026-08-09T12:00:00+00:00', '2026-08-09T13:00:00+00:00',
+                '2026-08-09T12:30:00+00:00', @revoked_by_user_id, NULL)
+            """, runtime);
+        missingReason.Parameters.AddWithValue("id", Guid.NewGuid());
+        missingReason.Parameters.AddWithValue("user_id", userId);
+        missingReason.Parameters.AddWithValue("provider_session_id", Guid.NewGuid());
+        missingReason.Parameters.AddWithValue("revoked_by_user_id", userId);
+        var missingReasonException = await Assert.ThrowsAsync<PostgresException>(async () =>
+            await missingReason.ExecuteNonQueryAsync());
+        Assert.Equal(PostgresErrorCodes.CheckViolation, missingReasonException.SqlState);
     }
 
     [Fact]
@@ -200,7 +224,7 @@ public sealed class SessionMigrationTests
         try
         {
             using var lockSignalCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await WaitForSessionTableLockAsync(administrator, lockSignalCancellation.Token);
+            await WaitForDowngradeLocksAsync(administrator, lockSignalCancellation.Token);
 
             var insertTask = InsertSessionAsync(runtime, userId);
             var firstCompleted = await Task.WhenAny(insertTask, Task.Delay(TimeSpan.FromMilliseconds(500)));
@@ -217,6 +241,118 @@ public sealed class SessionMigrationTests
             await AwaitMigrationAsync(downgradeTask);
             await DropDowngradePauseTriggerAsync(administrator);
         }
+    }
+
+    [Fact]
+    public async Task Downgrade_blocks_a_concurrent_session_barrier_advance_while_its_exclusive_locks_are_held()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var userId = Guid.NewGuid();
+
+        await using (var administratorContext = fixture.CreateAdministratorDbContext())
+        {
+            administratorContext.Users.Add(new User(userId, "Barreira concorrente", "barrier-concurrency@example.test"));
+            await administratorContext.SaveChangesAsync();
+        }
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await CreateDowngradePauseTriggerAsync(administrator);
+        await using var coordinator = await fixture.OpenAdministratorConnectionAsync();
+        await AcquirePauseLockAsync(coordinator);
+        await using var migrator = fixture.CreateMigratorDbContext();
+
+        var downgradeTask = migrator.Database.MigrateAsync(BeforeInternalSessionState);
+        try
+        {
+            using var lockSignalCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await WaitForDowngradeLocksAsync(administrator, lockSignalCancellation.Token);
+
+            var advanceBarrierTask = AdvanceSessionsValidAfterAsync(administrator, userId);
+            var firstCompleted = await Task.WhenAny(advanceBarrierTask, Task.Delay(TimeSpan.FromMilliseconds(500)));
+
+            Assert.NotSame(advanceBarrierTask, firstCompleted);
+
+            await ReleasePauseLockAsync(coordinator);
+            await downgradeTask;
+            var exception = await Assert.ThrowsAsync<PostgresException>(async () => await advanceBarrierTask);
+            Assert.Equal(PostgresErrorCodes.UndefinedColumn, exception.SqlState);
+        }
+        finally
+        {
+            await ReleasePauseLockAsync(coordinator);
+            await AwaitMigrationAsync(downgradeTask);
+            await DropDowngradePauseTriggerAsync(administrator);
+        }
+    }
+
+    [Fact]
+    public async Task Successful_downgrade_removes_the_identity_owner_session_grants()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(BeforeInternalSessionState);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                to_regprocedure('foundation.lock_user_for_session_admission(uuid)') IS NULL,
+                NOT has_schema_privilege('vinx_identity_owner', 'foundation', 'USAGE'),
+                NOT has_table_privilege('vinx_identity_owner', 'foundation.users', 'SELECT')
+            """, administrator);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.True(reader.GetBoolean(2));
+    }
+
+    [Fact]
+    public async Task Migration_exposes_the_required_session_indexes_and_restrictive_foreign_keys()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM pg_index AS index
+                    WHERE index.indexrelid = 'foundation.ix_user_sessions_issuer_provider_session_id'::regclass
+                      AND index.indisunique),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_index AS index
+                    WHERE index.indexrelid = 'foundation.ix_user_sessions_user_id_revoked_at'::regclass),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint AS foreign_key
+                    WHERE foreign_key.conrelid = 'foundation.user_sessions'::regclass
+                      AND foreign_key.conname = 'fk_user_sessions_users_user_id'
+                      AND foreign_key.confdeltype = 'r'),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint AS foreign_key
+                    WHERE foreign_key.conrelid = 'foundation.user_sessions'::regclass
+                      AND foreign_key.conname = 'fk_user_sessions_users_revoked_by_user_id'
+                      AND foreign_key.confdeltype = 'r')
+            """, administrator);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.True(reader.GetBoolean(2));
+        Assert.True(reader.GetBoolean(3));
     }
 
     private static async Task InsertSessionAsync(
@@ -238,6 +374,18 @@ public sealed class SessionMigrationTests
         command.Parameters.AddWithValue("provider_session_id", Guid.NewGuid());
         command.Parameters.AddWithValue("provider_authenticated_at", DateTimeOffset.Parse(providerAuthenticatedAt));
         command.Parameters.AddWithValue("token_expires_at", DateTimeOffset.Parse(tokenExpiresAt));
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task AdvanceSessionsValidAfterAsync(NpgsqlConnection administrator, Guid userId)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE foundation.users
+            SET sessions_valid_after = clock_timestamp()
+            WHERE id = @user_id
+            """, administrator);
+        command.Parameters.AddWithValue("user_id", userId);
         await command.ExecuteNonQueryAsync();
     }
 
@@ -288,7 +436,7 @@ public sealed class SessionMigrationTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private static async Task WaitForSessionTableLockAsync(
+    private static async Task WaitForDowngradeLocksAsync(
         NpgsqlConnection administrator,
         CancellationToken cancellationToken)
     {
@@ -296,15 +444,16 @@ public sealed class SessionMigrationTests
         {
             await using var command = new NpgsqlCommand(
                 """
-                SELECT EXISTS (
-                    SELECT 1
+                SELECT count(*) = 2
+                FROM (
+                    SELECT DISTINCT relation.relname
                     FROM pg_locks AS lock
                     INNER JOIN pg_class AS relation ON relation.oid = lock.relation
                     INNER JOIN pg_namespace AS schema ON schema.oid = relation.relnamespace
                     WHERE schema.nspname = 'foundation'
-                      AND relation.relname = 'user_sessions'
+                      AND relation.relname IN ('user_sessions', 'users')
                       AND lock.mode = 'AccessExclusiveLock'
-                      AND lock.granted)
+                      AND lock.granted) AS locked_relations
                 """, administrator);
             if ((bool)(await command.ExecuteScalarAsync() ?? false))
             {
@@ -314,7 +463,7 @@ public sealed class SessionMigrationTests
             await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken);
         }
 
-        throw new Xunit.Sdk.XunitException("The downgrade did not acquire the session table lock.");
+        throw new Xunit.Sdk.XunitException("The downgrade did not acquire both session-state table locks.");
     }
 
     private static async Task AwaitMigrationAsync(Task migrationTask)
@@ -323,7 +472,7 @@ public sealed class SessionMigrationTests
         {
             await migrationTask;
         }
-        catch (PostgresException)
+        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.CheckViolation)
         {
         }
     }

@@ -1087,7 +1087,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_user_sessions_authenticated_before_expiration", "provider_authenticated_at < token_expires_at");
 
-                            t.HasCheckConstraint("ck_user_sessions_revocation_complete", "(revoked_at IS NULL AND revoked_by_user_id IS NULL AND revocation_reason IS NULL) OR (revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL AND btrim(revocation_reason) <> '')");
+                            t.HasCheckConstraint("ck_user_sessions_revocation_complete", "(revoked_at IS NULL AND revoked_by_user_id IS NULL AND revocation_reason IS NULL) OR (revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL AND revocation_reason IS NOT NULL AND btrim(revocation_reason) <> '')");
                         });
                 });
 

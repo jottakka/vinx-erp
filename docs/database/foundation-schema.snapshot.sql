@@ -370,7 +370,7 @@ CREATE TABLE foundation.user_sessions (
     revocation_reason character varying(500),
     row_version bigint DEFAULT 1 NOT NULL,
     CONSTRAINT ck_user_sessions_authenticated_before_expiration CHECK ((provider_authenticated_at < token_expires_at)),
-    CONSTRAINT ck_user_sessions_revocation_complete CHECK ((((revoked_at IS NULL) AND (revoked_by_user_id IS NULL) AND (revocation_reason IS NULL)) OR ((revoked_at IS NOT NULL) AND (revoked_by_user_id IS NOT NULL) AND (btrim((revocation_reason)::text) <> ''::text))))
+    CONSTRAINT ck_user_sessions_revocation_complete CHECK ((((revoked_at IS NULL) AND (revoked_by_user_id IS NULL) AND (revocation_reason IS NULL)) OR ((revoked_at IS NOT NULL) AND (revoked_by_user_id IS NOT NULL) AND (revocation_reason IS NOT NULL) AND (btrim((revocation_reason)::text) <> ''::text))))
 );
 
 

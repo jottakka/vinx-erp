@@ -47,7 +47,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 {
                     table.PrimaryKey("pk_user_sessions", x => x.id);
                     table.CheckConstraint("ck_user_sessions_authenticated_before_expiration", "provider_authenticated_at < token_expires_at");
-                    table.CheckConstraint("ck_user_sessions_revocation_complete", "(revoked_at IS NULL AND revoked_by_user_id IS NULL AND revocation_reason IS NULL) OR (revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL AND btrim(revocation_reason) <> '')");
+                    table.CheckConstraint("ck_user_sessions_revocation_complete", "(revoked_at IS NULL AND revoked_by_user_id IS NULL AND revocation_reason IS NULL) OR (revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL AND revocation_reason IS NOT NULL AND btrim(revocation_reason) <> '')");
                     table.ForeignKey(
                         name: "fk_user_sessions_users_revoked_by_user_id",
                         column: x => x.revoked_by_user_id,
@@ -88,6 +88,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 REVOKE ALL ON TABLE foundation.user_sessions FROM PUBLIC, vinx_runtime;
                 GRANT SELECT, INSERT ON TABLE foundation.user_sessions TO vinx_runtime;
                 REVOKE ALL ON TABLE foundation.users FROM vinx_runtime;
+                GRANT USAGE, CREATE ON SCHEMA foundation TO vinx_identity_owner;
+                GRANT SELECT ON TABLE foundation.users TO vinx_identity_owner;
 
                 CREATE FUNCTION foundation.lock_user_for_session_admission(p_user_id uuid)
                 RETURNS TABLE (sessions_valid_after timestamp with time zone)
@@ -109,7 +111,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 GRANT EXECUTE ON FUNCTION foundation.lock_user_for_session_admission(uuid)
                     TO vinx_runtime;
                 ALTER FUNCTION foundation.lock_user_for_session_admission(uuid)
-                    OWNER TO vinx_migrator;
+                    OWNER TO vinx_identity_owner;
+                REVOKE CREATE ON SCHEMA foundation FROM vinx_identity_owner;
                 """);
         }
 
@@ -134,9 +137,13 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 END;
                 $block$;
 
+                SET ROLE vinx_identity_owner;
                 REVOKE ALL ON FUNCTION foundation.lock_user_for_session_admission(uuid)
                     FROM PUBLIC, vinx_runtime;
                 DROP FUNCTION foundation.lock_user_for_session_admission(uuid);
+                RESET ROLE;
+                REVOKE SELECT ON TABLE foundation.users FROM vinx_identity_owner;
+                REVOKE USAGE ON SCHEMA foundation FROM vinx_identity_owner;
                 REVOKE ALL ON TABLE foundation.user_sessions FROM PUBLIC, vinx_runtime;
                 """);
 

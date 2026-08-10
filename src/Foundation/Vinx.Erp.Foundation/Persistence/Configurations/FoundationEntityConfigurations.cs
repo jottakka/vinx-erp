@@ -115,7 +115,7 @@ public sealed class UserSessionConfiguration : IEntityTypeConfiguration<UserSess
             table.HasCheckConstraint(
                 "ck_user_sessions_revocation_complete",
                 "(revoked_at IS NULL AND revoked_by_user_id IS NULL AND revocation_reason IS NULL) OR " +
-                "(revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL AND btrim(revocation_reason) <> '')");
+                "(revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL AND revocation_reason IS NOT NULL AND btrim(revocation_reason) <> '')");
         });
         builder.HasKey(entity => entity.Id);
         builder.Property(entity => entity.Id).ValueGeneratedNever();

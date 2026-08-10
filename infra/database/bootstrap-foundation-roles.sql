@@ -17,14 +17,21 @@ BEGIN
     ELSE
         CREATE ROLE vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE;
     END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vinx_identity_owner') THEN
+        ALTER ROLE vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    ELSE
+        CREATE ROLE vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    END IF;
 END
 $$;
 
 GRANT vinx_audit_owner TO vinx_migrator WITH INHERIT FALSE, SET TRUE;
+GRANT vinx_identity_owner TO vinx_migrator WITH INHERIT FALSE, SET TRUE;
 
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA public TO vinx_migrator;
-REVOKE ALL ON SCHEMA public FROM vinx_runtime, vinx_audit_owner;
+REVOKE ALL ON SCHEMA public FROM vinx_runtime, vinx_audit_owner, vinx_identity_owner;
 
 DO $$
 DECLARE
@@ -33,7 +40,7 @@ BEGIN
     EXECUTE format('GRANT CONNECT ON DATABASE %I TO vinx_migrator, vinx_runtime', database_name);
     EXECUTE format('GRANT CREATE ON DATABASE %I TO vinx_migrator', database_name);
     EXECUTE format(
-        'REVOKE CREATE ON DATABASE %I FROM vinx_runtime, vinx_audit_owner',
+        'REVOKE CREATE ON DATABASE %I FROM vinx_runtime, vinx_audit_owner, vinx_identity_owner',
         database_name);
 END
 $$;
