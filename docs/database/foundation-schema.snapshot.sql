@@ -69,6 +69,22 @@ END;
 $$;
 
 
+-- Name: lock_user_for_session_admission(uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.lock_user_for_session_admission(p_user_id uuid) RETURNS TABLE(sessions_valid_after timestamp with time zone)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'foundation', 'pg_catalog'
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT user_record.sessions_valid_after
+    FROM foundation.users AS user_record
+    WHERE user_record.id = p_user_id
+    FOR UPDATE;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -339,13 +355,34 @@ CREATE TABLE foundation.units (
 ALTER TABLE ONLY foundation.units FORCE ROW LEVEL SECURITY;
 
 
+-- Name: user_sessions; Type: TABLE; Schema: foundation; Owner: -
+
+CREATE TABLE foundation.user_sessions (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    issuer character varying(200) NOT NULL,
+    provider_session_id uuid NOT NULL,
+    provider_authenticated_at timestamp with time zone NOT NULL,
+    first_seen_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    token_expires_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    revoked_by_user_id uuid,
+    revocation_reason character varying(500),
+    row_version bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT ck_user_sessions_authenticated_before_expiration CHECK ((provider_authenticated_at < token_expires_at)),
+    CONSTRAINT ck_user_sessions_revocation_complete CHECK ((((revoked_at IS NULL) AND (revoked_by_user_id IS NULL) AND (revocation_reason IS NULL)) OR ((revoked_at IS NOT NULL) AND (revoked_by_user_id IS NOT NULL) AND (btrim((revocation_reason)::text) <> ''::text))))
+);
+
+
 -- Name: users; Type: TABLE; Schema: foundation; Owner: -
 
 CREATE TABLE foundation.users (
     id uuid NOT NULL,
     display_name character varying(200) NOT NULL,
     email character varying(320) NOT NULL,
-    created_at timestamp with time zone NOT NULL
+    created_at timestamp with time zone NOT NULL,
+    row_version bigint DEFAULT 1 NOT NULL,
+    sessions_valid_after timestamp with time zone
 );
 
 
@@ -487,6 +524,12 @@ ALTER TABLE ONLY foundation.units
     ADD CONSTRAINT pk_units PRIMARY KEY (id);
 
 
+-- Name: user_sessions pk_user_sessions; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.user_sessions
+    ADD CONSTRAINT pk_user_sessions PRIMARY KEY (id);
+
+
 -- Name: users pk_users; Type: CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.users
@@ -596,6 +639,21 @@ CREATE INDEX ix_teams_company_id_unit_id ON foundation.teams USING btree (compan
 -- Name: ix_units_company_id_name; Type: INDEX; Schema: foundation; Owner: -
 
 CREATE UNIQUE INDEX ix_units_company_id_name ON foundation.units USING btree (company_id, name) WHERE (deleted_at IS NULL);
+
+
+-- Name: ix_user_sessions_issuer_provider_session_id; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE UNIQUE INDEX ix_user_sessions_issuer_provider_session_id ON foundation.user_sessions USING btree (issuer, provider_session_id);
+
+
+-- Name: ix_user_sessions_revoked_by_user_id; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE INDEX ix_user_sessions_revoked_by_user_id ON foundation.user_sessions USING btree (revoked_by_user_id);
+
+
+-- Name: ix_user_sessions_user_id_revoked_at; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE INDEX ix_user_sessions_user_id_revoked_at ON foundation.user_sessions USING btree (user_id, revoked_at);
 
 
 -- Name: ix_users_email; Type: INDEX; Schema: foundation; Owner: -
@@ -714,6 +772,18 @@ ALTER TABLE ONLY foundation.teams
 
 ALTER TABLE ONLY foundation.units
     ADD CONSTRAINT fk_units_companies_company_id FOREIGN KEY (company_id) REFERENCES foundation.companies(id) ON DELETE RESTRICT;
+
+
+-- Name: user_sessions fk_user_sessions_users_revoked_by_user_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.user_sessions
+    ADD CONSTRAINT fk_user_sessions_users_revoked_by_user_id FOREIGN KEY (revoked_by_user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
+
+
+-- Name: user_sessions fk_user_sessions_users_user_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.user_sessions
+    ADD CONSTRAINT fk_user_sessions_users_user_id FOREIGN KEY (user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
 
 
 -- Name: companies; Type: ROW SECURITY; Schema: foundation; Owner: -

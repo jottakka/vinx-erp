@@ -98,7 +98,43 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(entity => entity.Id).ValueGeneratedNever();
         builder.Property(entity => entity.DisplayName).HasMaxLength(200).IsRequired();
         builder.Property(entity => entity.Email).HasMaxLength(320).IsRequired();
+        builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasDefaultValue(1L);
         builder.HasIndex(entity => entity.Email).IsUnique();
+    }
+}
+
+public sealed class UserSessionConfiguration : IEntityTypeConfiguration<UserSession>
+{
+    public void Configure(EntityTypeBuilder<UserSession> builder)
+    {
+        builder.ToTable("user_sessions", table =>
+        {
+            table.HasCheckConstraint(
+                "ck_user_sessions_authenticated_before_expiration",
+                "provider_authenticated_at < token_expires_at");
+            table.HasCheckConstraint(
+                "ck_user_sessions_revocation_complete",
+                "(revoked_at IS NULL AND revoked_by_user_id IS NULL AND revocation_reason IS NULL) OR " +
+                "(revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL AND btrim(revocation_reason) <> '')");
+        });
+        builder.HasKey(entity => entity.Id);
+        builder.Property(entity => entity.Id).ValueGeneratedNever();
+        builder.Property(entity => entity.Issuer).HasMaxLength(200).IsRequired();
+        builder.Property(entity => entity.FirstSeenAt)
+            .HasDefaultValueSql("clock_timestamp()")
+            .ValueGeneratedOnAdd();
+        builder.Property(entity => entity.RevocationReason).HasMaxLength(500);
+        builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasDefaultValue(1L);
+        builder.HasIndex(entity => new { entity.Issuer, entity.ProviderSessionId }).IsUnique();
+        builder.HasIndex(entity => new { entity.UserId, entity.RevokedAt });
+        builder.HasOne(entity => entity.User)
+            .WithMany()
+            .HasForeignKey(entity => entity.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(entity => entity.RevokedByUser)
+            .WithMany()
+            .HasForeignKey(entity => entity.RevokedByUserId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 

@@ -1,6 +1,6 @@
 namespace Vinx.Erp.Foundation.Domain;
 
-public sealed class User
+public sealed class User : IConcurrencyVersioned
 {
     private User()
     {
@@ -20,4 +20,6 @@ public sealed class User
     public string DisplayName { get; private set; } = null!;
     public string Email { get; private set; } = null!;
     public DateTimeOffset CreatedAt { get; private set; }
+    public DateTimeOffset? SessionsValidAfter { get; private set; }
+    public long RowVersion { get; private set; }
 }

@@ -23,7 +23,9 @@ public sealed class FoundationSchemaTests
         ("foundation", "role_assignments", "SELECT"),
         ("foundation", "role_assignments", "UPDATE"),
         ("foundation", "role_capabilities", "SELECT"),
-        ("foundation", "roles", "SELECT")
+        ("foundation", "roles", "SELECT"),
+        ("foundation", "user_sessions", "INSERT"),
+        ("foundation", "user_sessions", "SELECT")
     ];
 
     private static readonly string[] ExpectedTables =
@@ -42,6 +44,7 @@ public sealed class FoundationSchemaTests
         "foundation.roles",
         "foundation.teams",
         "foundation.units",
+        "foundation.user_sessions",
         "foundation.users"
     ];
 
@@ -166,6 +169,10 @@ public sealed class FoundationSchemaTests
                 has_function_privilege(
                     'vinx_runtime',
                     'audit.reject_audit_event_mutation()',
+                    'EXECUTE'),
+                has_function_privilege(
+                    'vinx_runtime',
+                    'foundation.lock_user_for_session_admission(uuid)',
                     'EXECUTE')
             """, connection);
         await using var reader = await command.ExecuteReaderAsync();
@@ -181,6 +188,7 @@ public sealed class FoundationSchemaTests
         Assert.False(reader.GetBoolean(7));
         Assert.True(reader.GetBoolean(8));
         Assert.False(reader.GetBoolean(9));
+        Assert.True(reader.GetBoolean(10));
     }
 
     [Fact]

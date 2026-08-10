@@ -992,6 +992,17 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("character varying(320)")
                         .HasColumnName("email");
 
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("row_version");
+
+                    b.Property<DateTimeOffset?>("SessionsValidAfter")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sessions_valid_after");
+
                     b.HasKey("Id")
                         .HasName("pk_users");
 
@@ -1000,6 +1011,81 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasDatabaseName("ix_users_email");
 
                     b.ToTable("users", "foundation");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.UserSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("FirstSeenAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_seen_at")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.Property<string>("Issuer")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("issuer");
+
+                    b.Property<DateTimeOffset>("ProviderAuthenticatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("provider_authenticated_at");
+
+                    b.Property<Guid>("ProviderSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("provider_session_id");
+
+                    b.Property<string>("RevocationReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("revocation_reason");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<Guid?>("RevokedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("revoked_by_user_id");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("row_version");
+
+                    b.Property<DateTimeOffset>("TokenExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("token_expires_at");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_user_sessions");
+
+                    b.HasIndex("RevokedByUserId")
+                        .HasDatabaseName("ix_user_sessions_revoked_by_user_id");
+
+                    b.HasIndex("Issuer", "ProviderSessionId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_user_sessions_issuer_provider_session_id");
+
+                    b.HasIndex("UserId", "RevokedAt")
+                        .HasDatabaseName("ix_user_sessions_user_id_revoked_at");
+
+                    b.ToTable("user_sessions", "foundation", t =>
+                        {
+                            t.HasCheckConstraint("ck_user_sessions_authenticated_before_expiration", "provider_authenticated_at < token_expires_at");
+
+                            t.HasCheckConstraint("ck_user_sessions_revocation_complete", "(revoked_at IS NULL AND revoked_by_user_id IS NULL AND revocation_reason IS NULL) OR (revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL AND btrim(revocation_reason) <> '')");
+                        });
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Company", b =>
@@ -1201,6 +1287,26 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasConstraintName("fk_units_companies_company_id");
 
                     b.Navigation("Company");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.UserSession", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.User", "RevokedByUser")
+                        .WithMany()
+                        .HasForeignKey("RevokedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_user_sessions_users_revoked_by_user_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_user_sessions_users_user_id");
+
+                    b.Navigation("RevokedByUser");
+
+                    b.Navigation("User");
                 });
 #pragma warning restore 612, 618
         }
