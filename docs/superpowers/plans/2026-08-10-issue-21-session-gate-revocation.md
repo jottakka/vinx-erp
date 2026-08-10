@@ -37,7 +37,7 @@ Estimativa: 17–21 arquivos totais, 680–790 linhas manuais. Migration, design
 
 ---
 
-### Tarefa 1: Revogar sessões próprias de forma atômica no banco
+### Task 1: Revogar sessões próprias de forma atômica no banco
 
 **Arquivos:**
 - Criar: src/Foundation/Vinx.Erp.Foundation/Identity/SelfSessionRevocationService.cs
@@ -93,7 +93,7 @@ git add src/Foundation/Vinx.Erp.Foundation/Identity src/Foundation/Vinx.Erp.Foun
 git commit -m "feat(identity): revoke own sessions atomically"
 ~~~
 
-### Tarefa 2: Aplicar gate interno a endpoints protegidos
+### Task 2: Aplicar gate interno a endpoints protegidos
 
 **Arquivos:**
 - Criar: src/Foundation/Vinx.Erp.Foundation/Identity/InternalSessionGateMiddleware.cs
@@ -149,7 +149,7 @@ git add src/Foundation/Vinx.Erp.Foundation/Identity src/Hosts/Vinx.Erp.ApiHost/P
 git commit -m "feat(identity): gate protected requests by session"
 ~~~
 
-### Tarefa 3: Expor revoke-all e registrar evidência pública
+### Task 3: Expor revoke-all e registrar evidência pública
 
 **Arquivos:**
 - Modificar: src/Hosts/Vinx.Erp.ApiHost/Program.cs
