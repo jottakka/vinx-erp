@@ -415,6 +415,49 @@ public sealed class DocumentUploadEndpointTests
         Assert.Single(await administrator.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
     }
 
+    [Fact]
+    public async Task Concurrent_confirmations_with_distinct_request_ids_reload_the_current_file_after_inspection()
+    {
+        var storage = new ControlledFileStorage
+        {
+            BlockInspection = true,
+            InspectionsToBlock = 2
+        };
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var requests = new[]
+        {
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId),
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId)
+        };
+
+        var responsesTask = Task.WhenAll(requests.Select(request =>
+            factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request)));
+        await storage.WaitForInspectionAsync();
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            await administrator.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE foundation.files SET checksum = {Checksum}, row_version = row_version + 1 WHERE id = {intent.FileId}");
+        }
+
+        storage.ReleaseInspection();
+        var responses = await responsesTask;
+
+        var success = Assert.Single(responses, response => response.StatusCode == HttpStatusCode.OK);
+        Assert.Equal("verification_failed", (await success.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var conflict = Assert.Single(responses, response => response.StatusCode == HttpStatusCode.Conflict);
+        Assert.Equal("integrity_conflict", (await conflict.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+
+        await using var verification = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal("verification_failed", (await verification.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).ProcessingState);
+        Assert.Single(await verification.IdempotencyRecords.Where(record =>
+            requests.Select(request => request.RequestId).Contains(record.RequestId)).ToListAsync());
+        Assert.Single(await verification.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.confirm").ToListAsync());
+    }
+
     private static UploadIntentRequest NewIntent(Guid companyId) => new(
         companyId, Guid.NewGuid(), "invoice.pdf", "application/pdf", SafePayload.Length, ComputeChecksum(SafePayload),
         "financial", "user_upload", DateTimeOffset.UtcNow.AddDays(30));
