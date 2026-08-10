@@ -12,7 +12,7 @@
 
 - Work on a dedicated codex/agentic-v1-* branch; never write main.
 - Keep each PR at or below 25 changed implementation/documentation files and 800 manual lines; generated lockfiles count as files.
-- Delivery uses stacked PRs after the actual Task 1/2 estimates exceeded one reviewable PR: planning/spec (2 documentation files, about 480 manual lines); contracts (10 files, about 690 manual lines); policy (4 files, about 290 manual lines); trusted-scope guard (4 source/test/documentation files, about 160 manual lines); runner (at most 5 files, below 800 manual lines); architecture/docs (at most 9 files, about 280 manual lines). Provider, host, channel, OCR, approval, and remote MCP work stay in later PRs.
+- Delivery uses stacked PRs after the actual Task 1/2 estimates exceeded one reviewable PR: planning/spec (2 documentation files, about 480 manual lines); contracts (10 files, about 690 manual lines); policy (4 files, about 290 manual lines); trusted-scope guard (5 source/test/documentation files, about 250 manual lines); runner (at most 5 files, below 800 manual lines); architecture/docs (at most 9 files, about 280 manual lines). Provider, host, channel, OCR, approval, and remote MCP work stay in later PRs.
 - Create src/Modules/AI/Vinx.Erp.AI. It may reference Vinx.Erp.Foundation. Foundation, ApiHost, McpHost, WorkerHost, database schema, migrations, and provider configuration stay unchanged.
 - Use namespace Vinx.Erp.AI and subnamespaces AgentHarness, Models, Tools.
 - Add no NuGet package and no provider SDK.
@@ -49,7 +49,7 @@
 1. **Planning/spec:** design and implementation plan only.
 2. **Contracts:** AI project, immutable trusted/untrusted contracts, model/tool contracts, and contract tests.
 3. **Policy:** immutable registry and server-side policy only; stacks on Contracts.
-4. **Trusted-scope guard:** model tool arguments remove company-scope aliases before a tool can receive them; stacks on Policy.
+4. **Trusted-scope guard:** model tool arguments remove company-scope aliases at every JSON depth before a tool can receive them; stacks on Policy.
 5. **Runner:** deterministic harness and unit tests; stacks on the trusted-scope guard.
 6. **Architecture/docs:** architecture boundary test, module contract, ADR, and verification matrix; stacks on Runner.
 
@@ -304,7 +304,7 @@ git commit -m "feat: enforce agent tool policy"
 
 - [ ] **Step 1: Write failing contract tests**
 
-Test that `empresa_id`, `empresaId`, `company_id`, and `companyId` are removed case-insensitively while ordinary arguments and nested business values remain unchanged. The test must create the call from model-originated JSON and inspect only the normalized call exposed to the harness/tool. Also test that `AgentTaskProfile` rejects a timeout above the portable `CancellationTokenSource.CancelAfter` maximum.
+Test that `empresa_id`, `empresaId`, `company_id`, and `companyId` are removed case-insensitively at every JSON depth while unrelated business values remain unchanged. The test must include objects inside arrays, create the call from model-originated JSON, and inspect only the normalized call exposed to the harness/tool. Also test that `AgentTaskProfile` rejects a timeout above the portable `CancellationTokenSource.CancelAfter` maximum.
 
 - [ ] **Step 2: Run test and verify RED**
 
@@ -316,7 +316,7 @@ Expected: the new scope-normalization case fails before the contract change.
 
 - [ ] **Step 3: Normalize server-bound scope**
 
-`AgentToolCall` removes only top-level aliases that could establish company scope before exposing `Arguments`. `AgentTaskProfile` rejects a timeout the runner cannot schedule portably. The external MCP adapter, implemented later, resolves its explicit `empresa_id` into trusted `AgentExecutionContext.CompanyId` before it creates an internal tool call. No model/tool argument can replace that trusted context.
+`AgentToolCall` removes recognized aliases that could establish company scope at every JSON depth before exposing `Arguments`. `AgentTaskProfile` rejects a timeout the runner cannot schedule portably. The external MCP adapter, implemented later, resolves its explicit `empresa_id` into trusted `AgentExecutionContext.CompanyId` before it creates an internal tool call. No model/tool argument can replace that trusted context.
 
 - [ ] **Step 4: Run test and verify GREEN**
 

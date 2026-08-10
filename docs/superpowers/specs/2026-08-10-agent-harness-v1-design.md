@@ -53,7 +53,7 @@ The descriptor follows MCP concepts but is not an MCP transport implementation. 
 
 The harness never resolves a user, company, correlation ID, capability, or profile from a prompt, tool argument, or model proposal. `ActorContext` and the optional company come only from `AgentExecutionContext`. A tool marked `RequiresExplicitCompany` cannot run when the trusted company is absent; the outcome is `needs_clarification` and the tool is not invoked.
 
-`AgentToolCall` removes top-level `empresa_id`, `empresaId`, `company_id`, and `companyId` aliases before an in-process tool sees its arguments. An external MCP adapter has a different boundary: it accepts an explicit `empresa_id`, authorizes it, and then constructs `AgentExecutionContext.CompanyId` before it creates the internal tool call. It never forwards that value as a model-controlled argument.
+`AgentToolCall` removes `empresa_id`, `empresaId`, `company_id`, and `companyId` aliases case-insensitively at every JSON depth before an in-process tool sees its arguments. An external MCP adapter has a different boundary: it accepts an explicit `empresa_id`, authorizes it, and then constructs `AgentExecutionContext.CompanyId` before it creates the internal tool call. It never forwards that value as a model-controlled argument.
 
 The harness does not implement `whoAmI`. Issue #125 owns membership and capability discovery. The first core receives effective capability names as trusted server-side context from its future host adapter; it never accepts them from user content.
 
