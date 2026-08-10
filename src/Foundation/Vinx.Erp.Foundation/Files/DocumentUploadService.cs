@@ -238,6 +238,8 @@ public sealed class DocumentUploadService(
                 actor, command.CompanyId, "capability_denied", StatusCodes.Status403Forbidden, cancellationToken);
         }
 
+        await AcquireConfirmationLockAsync(command, cancellationToken);
+
         var existing = await FindIdempotencyAsync(actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, cancellationToken);
         if (existing is not null)
         {
@@ -505,6 +507,21 @@ public sealed class DocumentUploadService(
              && grant.CompanyId == companyId
              && capability.Name == capabilityName
          select capability.Id).AnyAsync(cancellationToken);
+
+    private Task AcquireConfirmationLockAsync(
+        ConfirmDocumentUploadCommand command,
+        CancellationToken cancellationToken) =>
+        database.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock({ComputeConfirmationLockKey(command)})",
+            cancellationToken);
+
+    private static long ComputeConfirmationLockKey(ConfirmDocumentUploadCommand command)
+    {
+        Span<byte> input = stackalloc byte[32];
+        command.CompanyId.TryWriteBytes(input[..16]);
+        command.FileId.TryWriteBytes(input[16..]);
+        return BitConverter.ToInt64(SHA256.HashData(input));
+    }
 
     private static IdempotencyRecord NewIdempotencyRecord<T>(
         Guid actorUserId,
