@@ -116,10 +116,9 @@ public sealed class SupabaseFileStorageTests
     }
 
     [Fact]
-    public async Task Inspection_reads_the_private_object_and_reports_the_Eicar_marker_without_exposing_content()
+    public async Task Inspection_recalculates_metadata_and_reports_an_unavailable_malware_scan()
     {
-        var payload = Encoding.ASCII.GetBytes(
-            "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*");
+        var payload = Encoding.UTF8.GetBytes("document payload");
         using var handler = new RequestSequenceHandler(request =>
         {
             Assert.Equal(HttpMethod.Get, request.Method);
@@ -144,7 +143,7 @@ public sealed class SupabaseFileStorageTests
 
         var inspection = await storage.InspectObjectAsync("quarantine/company/document", CancellationToken.None);
 
-        Assert.True(inspection.MalwareDetected);
+        Assert.Equal(MalwareScanStatus.Unavailable, inspection.MalwareScanStatus);
         Assert.Equal(payload.LongLength, inspection.Metadata.SizeBytes);
         Assert.Equal("application/pdf", inspection.Metadata.ContentType);
     }

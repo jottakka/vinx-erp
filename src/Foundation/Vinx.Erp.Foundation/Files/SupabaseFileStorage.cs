@@ -11,8 +11,6 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
 {
     private const int ObjectListPageSize = 1000;
     private static readonly TimeSpan MaximumDownloadUrlLifetime = TimeSpan.FromMinutes(2);
-    private static readonly byte[] EicarMarker = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"u8.ToArray();
-    private static readonly int[] EicarFailureTable = CreateFailureTable(EicarMarker);
 
     public async Task EnsurePrivateContainerAsync(CancellationToken cancellationToken)
     {
@@ -96,8 +94,6 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         try
         {
             long sizeBytes = 0;
-            var eicarIndex = 0;
-            var malwareDetected = false;
             int read;
             while ((read = await content.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
             {
@@ -108,7 +104,6 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
                 }
 
                 hash.AppendData(buffer, 0, read);
-                malwareDetected |= ContainsEicarMarker(buffer.AsSpan(0, read), ref eicarIndex);
             }
 
             return new StorageObjectInspection(
@@ -117,7 +112,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
                     sizeBytes,
                     contentType,
                     $"sha256:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}"),
-                malwareDetected);
+                MalwareScanStatus.Unavailable);
         }
         finally
         {
@@ -288,52 +283,6 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         {
             throw new ArgumentOutOfRangeException(nameof(lifetime));
         }
-    }
-
-    private static bool ContainsEicarMarker(ReadOnlySpan<byte> content, ref int markerIndex)
-    {
-        var detected = false;
-        foreach (var value in content)
-        {
-            while (markerIndex > 0 && value != EicarMarker[markerIndex])
-            {
-                markerIndex = EicarFailureTable[markerIndex - 1];
-            }
-
-            if (value == EicarMarker[markerIndex])
-            {
-                markerIndex++;
-                if (markerIndex == EicarMarker.Length)
-                {
-                    detected = true;
-                    markerIndex = EicarFailureTable[markerIndex - 1];
-                }
-            }
-        }
-
-        return detected;
-    }
-
-    private static int[] CreateFailureTable(ReadOnlySpan<byte> marker)
-    {
-        var table = new int[marker.Length];
-        for (var index = 1; index < marker.Length; index++)
-        {
-            var candidate = table[index - 1];
-            while (candidate > 0 && marker[index] != marker[candidate])
-            {
-                candidate = table[candidate - 1];
-            }
-
-            if (marker[index] == marker[candidate])
-            {
-                candidate++;
-            }
-
-            table[index] = candidate;
-        }
-
-        return table;
     }
 
     private sealed record CreateBucketRequest(string Id, string Name, bool Public);

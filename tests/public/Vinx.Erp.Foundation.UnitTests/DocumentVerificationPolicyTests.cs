@@ -9,14 +9,34 @@ public sealed class DocumentVerificationPolicyTests
     private const string Checksum = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     [Fact]
+    public void Inspection_contract_exposes_an_antimalware_status()
+    {
+        var property = typeof(StorageObjectInspection).GetProperty("MalwareScanStatus");
+
+        Assert.NotNull(property);
+        Assert.Equal("MalwareScanStatus", property!.PropertyType.Name);
+    }
+
+    [Fact]
     public void Verification_accepts_matching_object_metadata()
     {
         var record = NewRecord();
         var stored = new StorageObjectInspection(
             new StorageObjectMetadata(record.ProviderKey, 128L, "application/pdf", Checksum),
-            MalwareDetected: false);
+            MalwareScanStatus.Clean);
 
         Assert.Null(DocumentVerificationPolicy.Validate(record, stored));
+    }
+
+    [Fact]
+    public void Verification_rejects_an_unavailable_malware_scan()
+    {
+        var record = NewRecord();
+        var stored = new StorageObjectInspection(
+            new StorageObjectMetadata(record.ProviderKey, 128L, "application/pdf", Checksum),
+            MalwareScanStatus.Unavailable);
+
+        Assert.Equal("malware_scan_unavailable", DocumentVerificationPolicy.Validate(record, stored));
     }
 
     [Fact]
@@ -29,27 +49,27 @@ public sealed class DocumentVerificationPolicyTests
                 127L,
                 "image/png",
                 "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
-            MalwareDetected: false);
+            MalwareScanStatus.Clean);
 
         Assert.Equal("object_key_mismatch", DocumentVerificationPolicy.Validate(record, stored));
     }
 
     [Theory]
-    [InlineData("size_mismatch", 127L, "application/pdf", Checksum, false)]
-    [InlineData("checksum_mismatch", 128L, "application/pdf", "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", false)]
-    [InlineData("content_type_mismatch", 128L, "image/png", Checksum, false)]
-    [InlineData("malware_detected", 128L, "application/pdf", Checksum, true)]
+    [InlineData("size_mismatch", 127L, "application/pdf", Checksum, MalwareScanStatus.Clean)]
+    [InlineData("checksum_mismatch", 128L, "application/pdf", "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", MalwareScanStatus.Clean)]
+    [InlineData("content_type_mismatch", 128L, "image/png", Checksum, MalwareScanStatus.Clean)]
+    [InlineData("malware_detected", 128L, "application/pdf", Checksum, MalwareScanStatus.MalwareDetected)]
     public void Verification_rejects_invalid_or_unsafe_object_metadata(
         string expectedError,
         long sizeBytes,
         string contentType,
         string checksum,
-        bool malwareDetected)
+        MalwareScanStatus malwareScanStatus)
     {
         var record = NewRecord();
         var stored = new StorageObjectInspection(
             new StorageObjectMetadata(record.ProviderKey, sizeBytes, contentType, checksum),
-            malwareDetected);
+            malwareScanStatus);
 
         Assert.Equal(expectedError, DocumentVerificationPolicy.Validate(record, stored));
     }

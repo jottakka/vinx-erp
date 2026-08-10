@@ -14,7 +14,12 @@ public static class DocumentVerificationPolicy
             return "object_key_mismatch";
         }
 
-        if (inspection.MalwareDetected)
+        if (inspection.MalwareScanStatus == MalwareScanStatus.Unavailable)
+        {
+            return "malware_scan_unavailable";
+        }
+
+        if (inspection.MalwareScanStatus == MalwareScanStatus.MalwareDetected)
         {
             return "malware_detected";
         }

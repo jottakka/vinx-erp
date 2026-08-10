@@ -10,9 +10,16 @@ public sealed record StorageObjectMetadata(
     string ContentType,
     string Checksum);
 
+public enum MalwareScanStatus
+{
+    Clean,
+    MalwareDetected,
+    Unavailable
+}
+
 public sealed record StorageObjectInspection(
     StorageObjectMetadata Metadata,
-    bool MalwareDetected);
+    MalwareScanStatus MalwareScanStatus);
 
 public sealed record StorageObjectSummary(string Key, DateTimeOffset? CreatedAt);
 

@@ -151,6 +151,32 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
+    public async Task Unavailable_malware_scan_marks_the_file_failed_and_records_a_failure_without_a_download_url()
+    {
+        var storage = new ControlledFileStorage { ConfiguredMalwareScanStatus = MalwareScanStatus.Unavailable };
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var failed = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("malware_scan_unavailable", failed.FailureReason);
+        var audit = await administrator.AuditEvents.SingleAsync(candidate => candidate.Action == "foundation.files.upload.confirm");
+        Assert.Equal(AuditOutcome.Failure, audit.Outcome);
+        Assert.Equal("malware_scan_unavailable", audit.Reason);
+        Assert.Null(typeof(ConfirmationResponse).GetProperty("DownloadUrl"));
+        Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
+    }
+
+    [Fact]
     public async Task Storage_read_failure_after_upload_marks_the_file_failed_without_a_download_endpoint()
     {
         var storage = new ControlledFileStorage { FailReads = true };
@@ -584,6 +610,7 @@ public sealed class DocumentUploadEndpointTests
         public bool FailReads { get; init; }
         public bool BlockInspection { get; init; }
         public int InspectionsToBlock { get; init; } = 1;
+        public MalwareScanStatus ConfiguredMalwareScanStatus { get; init; } = MalwareScanStatus.Clean;
 
         public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(string providerKey, CancellationToken cancellationToken) =>
@@ -630,7 +657,11 @@ public sealed class DocumentUploadEndpointTests
                 ComputeChecksum(stored.Content));
             return new StorageObjectInspection(
                 metadata,
-                stored.Content.AsSpan().IndexOf(EicarPayload) >= 0);
+                ConfiguredMalwareScanStatus == MalwareScanStatus.Unavailable
+                    ? MalwareScanStatus.Unavailable
+                    : stored.Content.AsSpan().IndexOf(EicarPayload) >= 0
+                        ? MalwareScanStatus.MalwareDetected
+                        : MalwareScanStatus.Clean);
         }
 
         public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(string providerKey, TimeSpan lifetime, CancellationToken cancellationToken) => throw new NotSupportedException();
