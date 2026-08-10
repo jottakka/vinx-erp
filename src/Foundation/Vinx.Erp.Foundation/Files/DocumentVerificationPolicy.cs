@@ -9,6 +9,11 @@ public static class DocumentVerificationPolicy
         StorageObjectMetadata stored,
         bool malwareDetected)
     {
+        if (!string.Equals(stored.Key, record.ProviderKey, StringComparison.Ordinal))
+        {
+            return "object_key_mismatch";
+        }
+
         if (malwareDetected)
         {
             return "malware_detected";

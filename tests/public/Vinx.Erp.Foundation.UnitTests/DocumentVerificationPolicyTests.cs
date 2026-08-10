@@ -12,9 +12,22 @@ public sealed class DocumentVerificationPolicyTests
     public void Verification_accepts_matching_object_metadata()
     {
         var record = NewRecord();
-        var stored = new StorageObjectMetadata(record.ProviderKey, 128L, "application/pdf", Checksum, DateTimeOffset.UtcNow);
+        var stored = new StorageObjectMetadata(record.ProviderKey, 128L, "application/pdf", Checksum);
 
         Assert.Null(DocumentVerificationPolicy.Validate(record, stored, malwareDetected: false));
+    }
+
+    [Fact]
+    public void Verification_rejects_metadata_for_a_different_storage_key_before_other_checks()
+    {
+        var record = NewRecord();
+        var stored = new StorageObjectMetadata(
+            "quarantine/other/document",
+            127L,
+            "image/png",
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+
+        Assert.Equal("object_key_mismatch", DocumentVerificationPolicy.Validate(record, stored, malwareDetected: false));
     }
 
     [Theory]
@@ -30,7 +43,7 @@ public sealed class DocumentVerificationPolicyTests
         bool malwareDetected)
     {
         var record = NewRecord();
-        var stored = new StorageObjectMetadata(record.ProviderKey, sizeBytes, contentType, checksum, DateTimeOffset.UtcNow);
+        var stored = new StorageObjectMetadata(record.ProviderKey, sizeBytes, contentType, checksum);
 
         Assert.Equal(expectedError, DocumentVerificationPolicy.Validate(record, stored, malwareDetected));
     }

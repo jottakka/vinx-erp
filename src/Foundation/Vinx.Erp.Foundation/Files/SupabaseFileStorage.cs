@@ -8,7 +8,8 @@ namespace Vinx.Erp.Foundation.Files;
 
 public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOptions options) : FileStorage
 {
-    private static readonly TimeSpan MaximumApplicationUrlLifetime = TimeSpan.FromMinutes(2);
+    private const int ObjectListPageSize = 1000;
+    private static readonly TimeSpan MaximumDownloadUrlLifetime = TimeSpan.FromMinutes(2);
 
     public async Task EnsurePrivateContainerAsync(CancellationToken cancellationToken)
     {
@@ -42,13 +43,11 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
             $"Supabase Storage container provisioning failed with create status {(int)createResponse.StatusCode}, lookup status {(int)lookupResponse.StatusCode}, container {options.ContainerId}.");
     }
 
-    public async Task<SignedStorageUrl> CreateSignedUploadUrlAsync(
+    public async Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(
         string providerKey,
-        TimeSpan lifetime,
         CancellationToken cancellationToken)
     {
         ValidateObjectKey(providerKey);
-        ValidateLifetime(lifetime);
         options.Validate();
 
         using var request = new HttpRequestMessage(
@@ -61,7 +60,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         using var response = await httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         var url = await ReadUrlAsync(response.Content, cancellationToken);
-        return new SignedStorageUrl(url, DateTimeOffset.UtcNow.Add(lifetime));
+        return new SignedStorageUploadUrl(url);
     }
 
     public async Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken)
@@ -78,8 +77,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
             providerKey,
             content.LongLength,
             contentType,
-            $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}",
-            DateTimeOffset.UtcNow);
+            $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}");
     }
 
     public async Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
@@ -88,7 +86,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         CancellationToken cancellationToken)
     {
         ValidateObjectKey(providerKey);
-        ValidateLifetime(lifetime);
+        ValidateDownloadLifetime(lifetime);
         options.Validate();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, ObjectPath("sign", providerKey))
@@ -108,34 +106,29 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
     {
         ValidateObjectKey(prefix, allowEmpty: true);
         options.Validate();
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            new Uri(options.BaseUri, $"storage/v1/object/list/{Uri.EscapeDataString(options.ContainerId)}"))
+        var offset = 0;
+        var summaries = new List<StorageObjectSummary>();
+        while (true)
         {
-            Content = JsonContent.Create(new { prefix, limit = 1000, offset = 0 })
-        };
-        AddAuthenticationHeaders(request);
-        using var response = await httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        var objects = await response.Content.ReadFromJsonAsync<JsonElement[]>(cancellationToken: cancellationToken)
-            ?? [];
-        return objects.Select(item =>
-        {
-            var name = item.TryGetProperty("name", out var nameProperty)
-                ? nameProperty.GetString()
-                : null;
-            var createdAt = item.TryGetProperty("created_at", out var createdAtProperty)
-                && DateTimeOffset.TryParse(
-                    createdAtProperty.GetString(),
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.AssumeUniversal,
-                    out var parsed)
-                ? parsed
-                : DateTimeOffset.UtcNow;
-            return new StorageObjectSummary(
-                string.IsNullOrWhiteSpace(name) ? throw new InvalidOperationException("Storage object name is missing.") : name,
-                createdAt);
-        }).ToArray();
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri(options.BaseUri, $"storage/v1/object/list/{Uri.EscapeDataString(options.ContainerId)}"))
+            {
+                Content = JsonContent.Create(new { prefix, limit = ObjectListPageSize, offset })
+            };
+            AddAuthenticationHeaders(request);
+            using var response = await httpClient.SendAsync(request, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            var objects = await response.Content.ReadFromJsonAsync<JsonElement[]>(cancellationToken: cancellationToken)
+                ?? [];
+            summaries.AddRange(objects.Select(ToStorageObjectSummary));
+            if (objects.Length < ObjectListPageSize)
+            {
+                return summaries;
+            }
+
+            offset = checked(offset + objects.Length);
+        }
     }
 
     public async Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken)
@@ -226,9 +219,27 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         }
     }
 
-    private static void ValidateLifetime(TimeSpan lifetime)
+    private static StorageObjectSummary ToStorageObjectSummary(JsonElement item)
     {
-        if (lifetime <= TimeSpan.Zero || lifetime > MaximumApplicationUrlLifetime)
+        var name = item.TryGetProperty("name", out var nameProperty)
+            ? nameProperty.GetString()
+            : null;
+        var createdAt = item.TryGetProperty("created_at", out var createdAtProperty)
+            && DateTimeOffset.TryParse(
+                createdAtProperty.GetString(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal,
+                out var parsed)
+            ? parsed
+            : (DateTimeOffset?)null;
+        return new StorageObjectSummary(
+            string.IsNullOrWhiteSpace(name) ? throw new InvalidOperationException("Storage object name is missing.") : name,
+            createdAt);
+    }
+
+    private static void ValidateDownloadLifetime(TimeSpan lifetime)
+    {
+        if (lifetime <= TimeSpan.Zero || lifetime > MaximumDownloadUrlLifetime)
         {
             throw new ArgumentOutOfRangeException(nameof(lifetime));
         }

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Vinx.Erp.Foundation.Files;
 using Xunit;
 
@@ -45,6 +46,7 @@ public sealed class SupabaseFileStorageTests
                 Assert.Equal(
                     "/storage/v1/object/upload/sign/vinx-foundation-private/quarantine/company/document",
                     request.RequestUri!.AbsolutePath);
+                Assert.Equal("{\"upsert\":false}", ReadBody(request));
                 return JsonResponse("{\"signedURL\":\"/signed-upload\"}");
             },
             request =>
@@ -59,7 +61,15 @@ public sealed class SupabaseFileStorageTests
             {
                 Assert.Equal(HttpMethod.Post, request.Method);
                 Assert.Equal("/storage/v1/object/list/vinx-foundation-private", request.RequestUri!.AbsolutePath);
-                return JsonResponse("[{\"name\":\"quarantine/company/document\",\"created_at\":\"2026-08-10T00:00:00Z\"}]");
+                Assert.Equal("{\"prefix\":\"quarantine\",\"limit\":1000,\"offset\":0}", ReadBody(request));
+                return JsonResponse(ObjectPage(0, 1000));
+            },
+            request =>
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                Assert.Equal("/storage/v1/object/list/vinx-foundation-private", request.RequestUri!.AbsolutePath);
+                Assert.Equal("{\"prefix\":\"quarantine\",\"limit\":1000,\"offset\":1000}", ReadBody(request));
+                return JsonResponse(ObjectPage(1000, 1));
             },
             request =>
             {
@@ -77,8 +87,7 @@ public sealed class SupabaseFileStorageTests
                 "not-a-credential",
                 SupabaseStorageOptions.PrivateContainerId));
 
-        var upload = await storage.CreateSignedUploadUrlAsync(
-            "quarantine/company/document", TimeSpan.FromMinutes(1), CancellationToken.None);
+        var upload = await storage.CreateSignedUploadUrlAsync("quarantine/company/document", CancellationToken.None);
         var download = await storage.CreateSignedDownloadUrlAsync(
             "quarantine/company/document", TimeSpan.FromMinutes(1), CancellationToken.None);
         var objects = await storage.ListObjectsAsync("quarantine", CancellationToken.None);
@@ -86,13 +95,39 @@ public sealed class SupabaseFileStorageTests
 
         Assert.Equal("https://storage.example.test/signed-upload", upload.Url.AbsoluteUri);
         Assert.Equal("https://storage.example.test/signed-download", download.Url.AbsoluteUri);
-        Assert.Equal("quarantine/company/document", Assert.Single(objects).Key);
+        Assert.Equal(1001, objects.Count);
+        Assert.Equal("quarantine/company/0000", objects[0].Key);
+        Assert.Equal("quarantine/company/1000", objects[^1].Key);
+    }
+
+    [Fact]
+    public void Upload_contract_does_not_accept_a_caller_selected_lifetime()
+    {
+        var method = typeof(FileStorage).GetMethod(nameof(FileStorage.CreateSignedUploadUrlAsync));
+
+        Assert.NotNull(method);
+        Assert.Equal(2, method.GetParameters().Length);
+    }
+
+    [Fact]
+    public void Object_metadata_contract_does_not_claim_an_unavailable_creation_time()
+    {
+        Assert.Null(typeof(StorageObjectMetadata).GetProperty("CreatedAt"));
     }
 
     private static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(json, Encoding.UTF8, "application/json")
     };
+
+    private static string ObjectPage(int start, int count) => JsonSerializer.Serialize(
+        Enumerable.Range(start, count)
+            .Select(index => new { name = $"quarantine/company/{index:D4}", created_at = "2026-08-10T00:00:00Z" }));
+
+    private static string ReadBody(HttpRequestMessage request) => request.Content!
+        .ReadAsStringAsync()
+        .GetAwaiter()
+        .GetResult();
 
     private sealed class SequencedResponseHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
     {

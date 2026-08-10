@@ -3,6 +3,10 @@ namespace Vinx.Erp.Foundation.Files;
 public static class DocumentUploadPolicy
 {
     public const long MaxSizeBytes = 25 * 1024 * 1024;
+    public const int MaxFileNameLength = 255;
+    public const int MaxExtensionLength = 20;
+    public const int MaxMimeTypeLength = 100;
+    public const int MaxChecksumLength = 128;
 
     private static readonly IReadOnlyDictionary<string, string[]> MimeExtensions =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -23,9 +27,19 @@ public static class DocumentUploadPolicy
             return "file_name_required";
         }
 
+        if (fileName.Length > MaxFileNameLength)
+        {
+            return "file_name_too_long";
+        }
+
         if (string.IsNullOrWhiteSpace(mimeType))
         {
             return "mime_required";
+        }
+
+        if (mimeType.Length > MaxMimeTypeLength)
+        {
+            return "mime_type_too_long";
         }
 
         if (sizeBytes <= 0)
@@ -38,12 +52,22 @@ public static class DocumentUploadPolicy
             return "file_too_large";
         }
 
+        if (checksum?.Length > MaxChecksumLength)
+        {
+            return "checksum_too_long";
+        }
+
         if (!IsSha256Checksum(checksum))
         {
             return "checksum_invalid";
         }
 
         var extension = Path.GetExtension(fileName);
+        if (extension.Length > MaxExtensionLength)
+        {
+            return "extension_too_long";
+        }
+
         return !MimeExtensions.TryGetValue(mimeType, out var allowedExtensions)
             || !allowedExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase)
             ? "mime_extension_mismatch"
