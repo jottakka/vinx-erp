@@ -32,6 +32,13 @@ O runtime possui somente `SELECT` nessa tabela para essa consulta.
 Antes dessa resolução, `session_id` deve ser UUID e `amr` deve conter
 autenticação não `token_refresh`; ausência ou malformação falha fechada com
 `401`. A prova não persiste token nem dado pessoal.
+
+`InternalSessionAdmissionService` é a fatia interna ainda não registrada em
+hosts: bloqueia o usuário por função SQL, grava uma sessão EF só quando a
+autenticação é estritamente posterior à barreira e registra auditoria global
+na mesma transação. Repetição ativa não cria auditoria; barreira, revogação e
+colisão produzem negação auditada sem identificador externo. O próximo gate
+HTTP decidirá entre `401` e `503` a partir desse resultado.
 Configure a API com `SUPABASE_AUTH_ISSUER` e `SUPABASE_AUTH_AUDIENCE`;
 `FOUNDATION_RUNTIME_CONNECTION`, `SUPABASE_STORAGE_URL` e
 `SUPABASE_STORAGE_SERVICE_ROLE_KEY` continuam obrigatórias para a infraestrutura.

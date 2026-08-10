@@ -1,13 +1,13 @@
 # Matriz pública — admissão interna de sessões
 
-Esta matriz cobre a primeira PR parcial de #21. O gate HTTP e `revoke-all`
-ficam na PR empilhada seguinte; por isso acesso HTTP é N/A nesta entrega.
+Cobertura da microfatia interna da issue #21. Gate HTTP, endpoint e revogação
+global própria permanecem em PR posterior.
 
-| Classe BDD | Intenção | Testes públicos | Situação |
-|---|---|---|---|
-| Sucesso | Nova prova cria uma sessão e auditoria; repetição fica ativa. | `InternalSessionAdmissionServiceTests` | Planejado nesta PR. |
-| Validação e erros | Datas inválidas, barreira anterior/igual e vínculo incompatível são negados. | `UserSessionTests`, `InternalSessionAdmissionServiceTests` | Planejado nesta PR. |
-| Acesso ao banco | Runtime possui somente `SELECT`/`INSERT` em `user_sessions`, executa a função de lock e não lê `users`. | `FoundationSchemaTests`, `SessionMigrationTests` | Planejado nesta PR. |
-| Acesso HTTP | Gate comum bloqueia antes do handler. | — | N/A nesta microfatia: será coberto na próxima PR de #21. |
-| Estado e exceções | Sessão revogada é negada; perda de auditoria reverte tudo; erro técnico preserva exceção apenas no log. | `InternalSessionAdmissionServiceTests` | Planejado nesta PR. |
-| Concorrência | Duas admissões convergem em uma sessão; colisão entre usuários é segura; downgrade não perde uma mutação concorrente. | `InternalSessionAdmissionServiceTests`, `SessionMigrationTests` | Planejado nesta PR. |
+| Classe | Cobertura pública desta PR |
+|---|---|
+| Sucesso | Prova nova cria uma sessão e uma auditoria global; repetição fica ativa sem novo evento. |
+| Validação e erros | Barreira estrita em `-1`, `0` e `+1` segundo; sessão revogada; usuário interno ausente e cancelamento. |
+| Acesso | Função de lock e grants mínimos são cobertos por `SessionMigrationTests`; HTTP é N/A nesta microfatia. |
+| Estado e exceções | Falha de auditoria em sucesso ou negação retorna indisponibilidade e não deixa sessão nem evento parcial. |
+| Concorrência | Duas admissões do mesmo usuário deixam uma sessão e uma auditoria; colisão entre usuários é negada sem recurso. |
+| Observabilidade | Sucesso em `Information`, negação em `Debug`, colisão em `Warning`, falha em `Error` com exceção, propriedades seguras e correlação apenas no scope. |

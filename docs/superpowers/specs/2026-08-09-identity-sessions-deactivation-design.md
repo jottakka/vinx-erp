@@ -5,6 +5,11 @@
 Decisão aprovada em 09/08/2026. Esta decisão detalha a fatia de sessões da
 issue #21, subordinada à issue #44. MFA e AAL permanecem na issue #18.
 
+A entrega atual cobre somente a admissão interna da sessão: estado EF, lock
+atômico, auditoria global e logs operacionais. Ela não registra o serviço no
+host e não altera o gate HTTP; revogação, desativação e endpoints continuam
+nas fatias posteriores.
+
 ## Objetivo
 
 Fazer o VINX negar, na próxima chamada autenticada, uma sessão revogada ou um
@@ -115,13 +120,19 @@ auditada. Sessões são globais; por isso `AuditEvent` e `AuditEventData` ganham
 nula. Não há empresa fictícia, `Guid.Empty` ou exceção por nome de ação.
 
 Os eventos globais estáveis são `identity_session_admitted`,
-`identity_session_revoked`, `identity_sessions_revoked`,
+`identity_session_admission_denied`, `identity_session_revoked`, `identity_sessions_revoked`,
 `identity_session_revoke_denied` e `identity_user_deactivated`. Recurso é
 `user_session` ou `user`; metadata contém somente contagens e não inclui
 `provider_session_id`. Sucesso é inserido na mesma transação da mutação;
 falha da função reverte a mutação e retorna `503 identity_gate_unavailable`.
 Índices, snapshot, privilégios da função e testes append-only são atualizados
 na mesma migration.
+
+Na admissão, barreira temporal, sessão revogada e colisão de identidade usam
+`identity_session_admission_denied`, resultado `denied`, razão estável e
+metadata `{}`. A colisão entre usuários não informa recurso nem identidade do
+outro usuário. Falha ao gravar auditoria reverte a nova sessão e resulta em
+indisponibilidade; falha técnica não cria uma segunda auditoria.
 
 ## Desativação
 
