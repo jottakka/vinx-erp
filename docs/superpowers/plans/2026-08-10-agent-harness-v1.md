@@ -12,7 +12,7 @@
 
 - Work on a dedicated codex/agentic-v1-* branch; never write main.
 - Keep each PR at or below 25 changed implementation/documentation files and 800 manual lines; generated lockfiles count as files.
-- Delivery uses stacked PRs after the actual Task 1/2 estimates exceeded one reviewable PR: planning/spec (2 documentation files, about 480 manual lines); contracts (10 files, about 690 manual lines); policy (4 files, about 290 manual lines); trusted-scope guard (5 source/test/documentation files, about 250 manual lines); runner (at most 7 files, below 800 manual lines); architecture/docs (at most 9 files, about 280 manual lines). Provider, host, channel, OCR, approval, and remote MCP work stay in later PRs.
+- Delivery uses stacked PRs after the actual Task 1/2 estimates exceeded one reviewable PR: planning/spec (2 documentation files, about 480 manual lines); contracts (10 files, about 690 manual lines); policy (4 files, about 290 manual lines); trusted-scope guard (5 source/test/documentation files, about 250 manual lines); runner (8 implementation/documentation files, 784 manual additions); architecture/docs (at most 9 files, about 280 manual lines). Provider, host, channel, OCR, approval, and remote MCP work stay in later PRs.
 - Create src/Modules/AI/Vinx.Erp.AI. It may reference Vinx.Erp.Foundation. Foundation, ApiHost, McpHost, WorkerHost, database schema, migrations, and provider configuration stay unchanged.
 - Use namespace Vinx.Erp.AI and subnamespaces AgentHarness, Models, Tools.
 - Add no NuGet package and no provider SDK.
@@ -343,6 +343,8 @@ git commit -m "fix: bind agent tool scope"
 - Modify: src/Modules/AI/Vinx.Erp.AI/Tools/AgentToolRegistry.cs
 - Modify: src/Modules/AI/Vinx.Erp.AI/Models/AgentModelContracts.cs
 - Modify: tests/public/Vinx.Erp.AI.UnitTests/AgentContractsTests.cs
+- Modify: docs/superpowers/specs/2026-08-10-agent-harness-v1-design.md
+- Modify: docs/superpowers/plans/2026-08-10-agent-harness-v1.md
 
 **Interfaces:**
 
