@@ -10,6 +10,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
 {
     private const int ObjectListPageSize = 1000;
     private static readonly TimeSpan MaximumDownloadUrlLifetime = TimeSpan.FromMinutes(2);
+    private static readonly byte[] EicarMarker = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"u8.ToArray();
 
     public async Task EnsurePrivateContainerAsync(CancellationToken cancellationToken)
     {
@@ -65,6 +66,12 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
 
     public async Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken)
     {
+        var inspection = await InspectObjectAsync(providerKey, cancellationToken);
+        return inspection.Metadata;
+    }
+
+    public async Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken)
+    {
         ValidateObjectKey(providerKey);
         options.Validate();
         using var request = new HttpRequestMessage(HttpMethod.Get, ObjectPath(string.Empty, providerKey));
@@ -73,11 +80,13 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         response.EnsureSuccessStatusCode();
         var contentType = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
         var content = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        return new StorageObjectMetadata(
-            providerKey,
-            content.LongLength,
-            contentType,
-            $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}");
+        return new StorageObjectInspection(
+            new StorageObjectMetadata(
+                providerKey,
+                content.LongLength,
+                contentType,
+                $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}"),
+            content.AsSpan().IndexOf(EicarMarker) >= 0);
     }
 
     public async Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(

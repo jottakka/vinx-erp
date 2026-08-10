@@ -23,6 +23,7 @@ using JsonClaimValueTypes = Microsoft.IdentityModel.JsonWebTokens.JsonClaimValue
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Domain;
+using Vinx.Erp.Foundation.Files;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -34,6 +35,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly TestPrincipalClaims _principalClaims;
     private readonly JwtTestAuthority? _jwtAuthority;
     private readonly CountingIdentityProvider? _countingIdentityProvider;
+    private readonly FileStorage? _testFileStorage;
     private readonly bool _useJwtBearer;
 
     private FoundationApiFactory(
@@ -41,13 +43,15 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Guid correlationId,
         TestPrincipalClaims principalClaims,
         JwtTestAuthority? jwtAuthority = null,
-        CountingIdentityProvider? countingIdentityProvider = null)
+        CountingIdentityProvider? countingIdentityProvider = null,
+        FileStorage? testFileStorage = null)
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
         _principalClaims = principalClaims;
         _jwtAuthority = jwtAuthority;
         _countingIdentityProvider = countingIdentityProvider;
+        _testFileStorage = testFileStorage;
         _useJwtBearer = jwtAuthority is not null;
     }
 
@@ -64,7 +68,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     public static async Task<FoundationApiFactory> CreateAsync(
         Guid? actorUserId = null,
-        Guid? correlationId = null)
+        Guid? correlationId = null,
+        FileStorage? fileStorage = null)
     {
         var resolvedActorUserId = actorUserId ?? Guid.NewGuid();
         var resolvedCorrelationId = correlationId ?? Guid.NewGuid();
@@ -75,7 +80,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 "https://project.supabase.co/auth/v1",
                 "external-subject",
                 "same-address@example.test",
-                resolvedCorrelationId.ToString()));
+                resolvedCorrelationId.ToString()),
+            testFileStorage: fileStorage);
         await factory._fixture.StartAsync();
         await factory._fixture.MigrateAsync();
         return factory;
@@ -83,9 +89,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     public static async Task<FoundationApiFactory> CreateWithAuthenticatedIdentityAsync(
         Guid? actorUserId = null,
-        Guid? correlationId = null)
+        Guid? correlationId = null,
+        FileStorage? fileStorage = null)
     {
-        var factory = await CreateAsync(actorUserId, correlationId);
+        var factory = await CreateAsync(actorUserId, correlationId, fileStorage);
         await factory.SeedAuthenticatedActorAsync();
         return factory;
     }
@@ -146,6 +153,11 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 .UseNpgsql(_fixture.RuntimeConnectionString)
                 .UseSnakeCaseNamingConvention()
                 .AddInterceptors(new RowVersionInterceptor()));
+            if (_testFileStorage is not null)
+            {
+                services.RemoveAll<FileStorage>();
+                services.AddSingleton(_testFileStorage);
+            }
             if (_useJwtBearer)
             {
                 if (_countingIdentityProvider is not null)
