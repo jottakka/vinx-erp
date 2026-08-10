@@ -61,10 +61,7 @@ public sealed class DocumentUploadService(
                 return await CreateIntentReplayAsync(actor, command.CompanyId, existing.ResultJson, cancellationToken);
             }
 
-            var validationError = DocumentUploadPolicy.Validate(
-                command.FileName, command.MimeType, command.SizeBytes, command.Checksum)
-                ?? DocumentUploadPolicy.ValidateIntentMetadata(
-                    command.Classification, command.Origin, command.RetentionUntil);
+            var validationError = DocumentUploadIntentCommandValidation.Validate(command);
             if (validationError is not null)
             {
                 await transaction.RollbackAsync(cancellationToken);

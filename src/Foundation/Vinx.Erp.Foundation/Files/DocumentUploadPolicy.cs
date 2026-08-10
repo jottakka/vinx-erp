@@ -7,6 +7,8 @@ public static class DocumentUploadPolicy
     public const int MaxExtensionLength = 20;
     public const int MaxMimeTypeLength = 100;
     public const int MaxChecksumLength = 128;
+    public const int MaxClassificationLength = 100;
+    public const int MaxOriginLength = 100;
 
     private static readonly IReadOnlyDictionary<string, string[]> MimeExtensions =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -84,7 +86,7 @@ public static class DocumentUploadPolicy
             return "classification_required";
         }
 
-        if (classification.Length > 100)
+        if (classification.Length > MaxClassificationLength)
         {
             return "classification_too_long";
         }
@@ -94,7 +96,7 @@ public static class DocumentUploadPolicy
             return "origin_required";
         }
 
-        if (origin.Length > 100)
+        if (origin.Length > MaxOriginLength)
         {
             return "origin_too_long";
         }

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -74,6 +75,30 @@ public sealed class DocumentUploadEndpointTests
         Assert.Equal("{}", denial.MetadataJson);
         Assert.DoesNotContain(fileName, denial.MetadataJson, StringComparison.Ordinal);
         Assert.DoesNotContain(checksum, denial.MetadataJson, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("", "file_name_required")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "file_name_too_long")]
+    public async Task Declaratively_invalid_file_name_is_audited_without_creating_a_file(
+        string fileName,
+        string expectedCode)
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId) with { FileName = fileName };
+
+        var response = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(expectedCode, (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.Files.ToListAsync());
+        var denial = await administrator.AuditEvents.SingleAsync();
+        Assert.Equal(AuditOutcome.Denied, denial.Outcome);
+        Assert.Equal(expectedCode, denial.Action);
+        Assert.Equal(expectedCode, denial.Reason);
     }
 
     [Fact]
