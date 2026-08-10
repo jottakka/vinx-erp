@@ -370,6 +370,7 @@ public sealed class SessionMigrationTests
                 NOT has_schema_privilege('vinx_identity_owner', 'foundation', 'USAGE'),
                 NOT has_table_privilege('vinx_identity_owner', 'foundation.users', 'SELECT'),
                 NOT has_table_privilege('vinx_identity_owner', 'foundation.users', 'UPDATE'),
+                NOT has_any_column_privilege('vinx_identity_owner', 'foundation.users', 'UPDATE'),
                 NOT EXISTS (
                     SELECT 1
                     FROM pg_attribute AS attribute
@@ -387,6 +388,7 @@ public sealed class SessionMigrationTests
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
         Assert.True(reader.GetBoolean(4));
+        Assert.True(reader.GetBoolean(5));
     }
 
     [Fact]
