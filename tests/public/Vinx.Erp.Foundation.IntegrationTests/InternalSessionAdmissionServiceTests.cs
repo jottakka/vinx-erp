@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -132,6 +133,43 @@ public sealed class InternalSessionAdmissionServiceTests
         Assert.Equal(AuditSource.Mcp, denial.Source);
         Assert.Null(denial.ResourceId);
         Assert.Single(await administrator.UserSessions.ToListAsync());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task Unique_race_replay_revalidates_an_equal_or_newer_barrier_before_returning_active(
+        int barrierOffsetSeconds)
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var userId = await SeedUserAsync(fixture);
+        var proof = NewProof();
+        await SeedSessionAsync(fixture, userId, proof, revoke: false);
+        await SetBarrierAsync(fixture, userId, proof.ProviderAuthenticatedAt.AddSeconds(barrierOffsetSeconds));
+        var correlationId = Guid.NewGuid();
+
+        var replay = await ResolveUniqueRaceAsync(fixture, userId, proof, AuditSource.Mcp, correlationId);
+
+        Assert.Equal(SessionAdmissionState.Denied, replay.Result.State);
+        Assert.Equal("authentication_not_after_barrier", replay.Result.Reason);
+        Assert.DoesNotContain(replay.Logs, entry =>
+            entry.Properties.TryGetValue("Result", out var result)
+            && result?.ToString() == "active");
+        var log = Assert.Single(replay.Logs);
+        Assert.Equal(LogLevel.Debug, log.Level);
+        Assert.Equal("session_admission", log.Properties["Operation"]);
+        Assert.Equal("identity", log.Properties["Module"]);
+        Assert.Equal("denied", log.Properties["Result"]);
+        Assert.Equal("authentication_not_after_barrier", log.Properties["Reason"]);
+        Assert.Equal(["Module", "Operation", "Reason", "Result"], log.Properties.Keys.OrderBy(key => key));
+
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        Assert.Single(await administrator.UserSessions.ToListAsync());
+        var denial = Assert.Single(await administrator.AuditEvents.ToListAsync());
+        Assert.Equal("identity_session_admission_denied", denial.Action);
+        Assert.Equal(AuditOutcome.Denied, denial.Outcome);
+        Assert.Equal("authentication_not_after_barrier", denial.Reason);
+        Assert.Null(denial.ResourceId);
     }
 
     [Fact]
@@ -607,6 +645,32 @@ public sealed class InternalSessionAdmissionServiceTests
             new AuditAppender(runtime),
             loggerFactory.CreateLogger<InternalSessionAdmissionService>());
         var result = await service.AdmitAsync(userId, proof, source, correlationId, cancellationToken);
+        return new AdmissionAttempt(result, logs.Entries.ToArray());
+    }
+
+    private static async Task<AdmissionAttempt> ResolveUniqueRaceAsync(
+        FoundationPostgresFixture fixture,
+        Guid userId,
+        ExternalIdentityProof proof,
+        AuditSource source,
+        Guid correlationId)
+    {
+        await using var runtime = fixture.CreateRuntimeDbContext();
+        using var logs = new SessionAdmissionLogProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder
+            .SetMinimumLevel(LogLevel.Trace)
+            .AddProvider(logs));
+        var service = new InternalSessionAdmissionService(
+            runtime,
+            new AuditAppender(runtime),
+            loggerFactory.CreateLogger<InternalSessionAdmissionService>());
+        var method = typeof(InternalSessionAdmissionService).GetMethod(
+            "ResolveUniqueRaceAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var task = (Task<SessionAdmissionResult>)method.Invoke(
+            service,
+            [userId, proof, source, correlationId, CancellationToken.None, new Exception("Test unique replay")])!;
+        var result = await task;
         return new AdmissionAttempt(result, logs.Entries.ToArray());
     }
 
