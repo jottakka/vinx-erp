@@ -390,7 +390,11 @@ public sealed class DocumentUploadEndpointTests
     [Fact]
     public async Task Concurrent_confirmation_with_the_same_request_creates_one_confirmed_result()
     {
-        var storage = new ControlledFileStorage();
+        var storage = new ControlledFileStorage
+        {
+            BlockInspection = true,
+            InspectionsToBlock = 8
+        };
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
@@ -398,8 +402,11 @@ public sealed class DocumentUploadEndpointTests
         storage.Put(file.ProviderKey, SafePayload, file.MimeType);
         var request = new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId);
 
-        var responses = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
+        var responsesTask = Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
             factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request)));
+        await storage.WaitForInspectionAsync();
+        storage.ReleaseInspection();
+        var responses = await responsesTask;
 
         Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
@@ -505,8 +512,10 @@ public sealed class DocumentUploadEndpointTests
         private readonly TaskCompletionSource inspectionStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource inspectionRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _uploadUrlCount;
+        private int inspectionCount;
         public bool FailReads { get; init; }
         public bool BlockInspection { get; init; }
+        public int InspectionsToBlock { get; init; } = 1;
 
         public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(string providerKey, CancellationToken cancellationToken) =>
@@ -537,7 +546,11 @@ public sealed class DocumentUploadEndpointTests
 
             if (BlockInspection)
             {
-                inspectionStarted.TrySetResult();
+                if (Interlocked.Increment(ref inspectionCount) >= InspectionsToBlock)
+                {
+                    inspectionStarted.TrySetResult();
+                }
+
                 await inspectionRelease.Task.WaitAsync(cancellationToken);
             }
 
