@@ -19,6 +19,16 @@
 - Autorização, contexto explícito de empresa, auditoria, observabilidade e documentação fazem parte da definição de pronto.
 - Nunca inclua segredos, tokens, conteúdo médico, prompts ou conteúdo de arquivos em logs, fixtures ou Markdown.
 
+## Logs operacionais
+
+- Adicione logs estruturados em falhas, retries, transições de ciclo de vida e decisões operacionalmente relevantes. Para chamadas rotineiras a provedores externos, prefira trace e métrica de latência/erro; só registre log quando houver falha, mudança de estado ou decisão que exija investigação. Não registre entrada e saída de toda função ou requisição por padrão.
+- Use `ILogger` com template constante e propriedades nomeadas. Inclua contexto mínimo útil: operação, módulo, resultado e motivo seguro. Propague `CorrelationId` pelo escopo de logging ou enriquecimento; não o repita manualmente em todo template. Para correlação autorizada, use identificador interno opaco somente quando necessário; nunca PII.
+- Escolha nível pelo impacto: `Trace` para diagnóstico local muito detalhado; `Debug` para diagnóstico de desenvolvimento; `Information` para marco operacional ou de segurança relevante e esperado; `Warning` para anomalia recuperada, abuso, rate limit ou negação suspeita; `Error` para operação perdida, exceção não recuperada ou retry esgotado; `Critical` para indisponibilidade ampla, risco de integridade ou intervenção imediata. Não use `Warning` ou `Error` para validação comum esperada.
+- Não duplique logs que middleware, biblioteca ou camada superior já emite com contexto equivalente. Preserve exceção e stack trace no ponto que decide a falha; não capture e relogue a mesma exceção em cascata.
+- Auditoria é evidência durável de negócio e segurança; log operacional não a substitui. Mutação que exige auditoria mantém a mesma garantia transacional; tentativas negadas também geram auditoria quando a política exigir.
+- Nunca registre JWT, refresh token, credencial, segredo, PII, conteúdo de arquivo, prompt ou payload bruto. Não use identificadores de alta cardinalidade ou dados controlados pelo cliente como rótulo de métrica.
+- Ao alterar comportamento com sinal operacional relevante, cubra em teste o evento, o nível e as propriedades essenciais quando isso for critério de aceite; não fragilize testes por texto incidental da mensagem.
+
 ## Documentação
 
 - Escreva documentação em português, com linguagem clara e compacta, mantendo apenas detalhes importantes e duráveis.
