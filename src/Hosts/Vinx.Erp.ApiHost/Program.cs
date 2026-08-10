@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
