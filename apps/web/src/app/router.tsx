@@ -1,19 +1,29 @@
-import { createBrowserRouter } from "react-router-dom";
-
-function HealthPage() {
-  return (
-    <main>
-      <h1>Vinx ERP</h1>
-      <p>Healthy</p>
-    </main>
-  );
-}
+import { createBrowserRouter, Navigate } from "react-router-dom";
+import { LoginPage } from "../features/auth/login-page";
+import { ProtectedRoute } from "./protected-route";
+import { PrototypeEntryPage } from "./prototype-entry-page";
 
 export function createAppRouter() {
   return createBrowserRouter([
     {
-      element: <HealthPage />,
+      element: <Navigate replace to="/login" />,
       path: "/",
+    },
+    {
+      element: <LoginPage />,
+      path: "/login",
+    },
+    {
+      element: (
+        <ProtectedRoute>
+          <PrototypeEntryPage />
+        </ProtectedRoute>
+      ),
+      path: "/protected",
+    },
+    {
+      element: <Navigate replace to="/login" />,
+      path: "*",
     },
   ]);
 }
