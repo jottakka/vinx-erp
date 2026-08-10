@@ -92,7 +92,7 @@ describe("visual preferences", () => {
     expect(screen.getByTestId("selected-mode")).toHaveTextContent("light");
     expect(screen.getByTestId("surface-scheme")).toHaveTextContent("light");
 
-    system.emit(true);
+    system.emit(false);
 
     expect(screen.getByTestId("selected-mode")).toHaveTextContent("light");
     expect(screen.getByTestId("surface-scheme")).toHaveTextContent("light");

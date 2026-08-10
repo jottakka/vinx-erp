@@ -3,11 +3,18 @@ import "./theme-augmentation";
 import { darkPalette, lightPalette } from "./palette-primitives";
 
 const supportedModes = new Set(["light", "dark", "system"]);
+const supportedSchemes = new Set(["light", "dark"]);
 
 function noop() {}
 
 function isModeKey(key: string) {
   return key === "mui-mode" || key === "mode" || key.endsWith("-mode");
+}
+
+function isSchemeKey(key: string) {
+  return (
+    key === "mui-color-scheme" || key === "scheme" || key.endsWith("-scheme")
+  );
 }
 
 export function createVinxStorageManager({
@@ -18,6 +25,7 @@ export function createVinxStorageManager({
   return ({ key: storageKey, storageWindow }) => {
     const prefixedKey = `${key}.${storageKey}`;
     const modeKey = isModeKey(storageKey);
+    const schemeKey = isSchemeKey(storageKey);
 
     return {
       get(defaultValue: unknown) {
@@ -28,7 +36,10 @@ export function createVinxStorageManager({
             return defaultValue;
           }
 
-          if (modeKey && !supportedModes.has(value)) {
+          if (
+            (modeKey && !supportedModes.has(value)) ||
+            (schemeKey && !supportedSchemes.has(value))
+          ) {
             return defaultValue;
           }
 
@@ -55,9 +66,9 @@ export function createVinxStorageManager({
           }
 
           if (
-            modeKey &&
             event.newValue !== null &&
-            !supportedModes.has(event.newValue)
+            ((modeKey && !supportedModes.has(event.newValue)) ||
+              (schemeKey && !supportedSchemes.has(event.newValue)))
           ) {
             handler(undefined);
             return;

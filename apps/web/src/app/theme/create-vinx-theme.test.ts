@@ -108,6 +108,35 @@ describe("vinx semantic theme", () => {
     ).toBe("system");
   });
 
+  it("returns MUI defaults for invalid color schemes in reads and subscriptions", () => {
+    let listener: ((event: StorageEvent) => void) | undefined;
+    const schemeWindow = {
+      localStorage: {
+        getItem: () => "unexpected",
+        setItem: () => {},
+      },
+      addEventListener: (_type: string, nextListener: EventListener) => {
+        listener = nextListener as (event: StorageEvent) => void;
+      },
+      removeEventListener: () => {},
+    } as unknown as Window;
+    const manager = createVinxStorageManager({ key: "vinx.visual.v1" });
+    const schemeStorage = manager({
+      key: "scheme",
+      storageWindow: schemeWindow,
+    });
+    const changes: unknown[] = [];
+
+    expect(schemeStorage.get("light")).toBe("light");
+    schemeStorage.subscribe((value) => changes.push(value));
+    listener?.({
+      key: "vinx.visual.v1.scheme",
+      newValue: "unexpected",
+    } as StorageEvent);
+
+    expect(changes).toEqual([undefined]);
+  });
+
   it("falls back to comfortable density when storage is malformed", () => {
     window.localStorage.setItem("vinx.visual-density.v1", "unexpected");
 
