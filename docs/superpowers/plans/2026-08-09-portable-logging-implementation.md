@@ -20,17 +20,17 @@
 
 ---
 
-### Task 1: Configuração compartilhada e correlação HTTP
+### Tarefa 1: Configuração compartilhada e correlação HTTP
 
 **Arquivos:**
-- Create: `src/Foundation/Vinx.Erp.Foundation/Observability/VinxLoggingExtensions.cs`
-- Create: `src/Foundation/Vinx.Erp.Foundation/Observability/RequestCorrelationMiddleware.cs`
-- Create: `tests/public/Vinx.Erp.Foundation.UnitTests/Observability/LoggingInfrastructureTests.cs`
-- Create: `docs/verification/portable-logging-test-cases.md`
-- Modify: `src/Hosts/Vinx.Erp.ApiHost/Program.cs`
-- Modify: `src/Hosts/Vinx.Erp.McpHost/Program.cs`
-- Modify: `src/Hosts/Vinx.Erp.WorkerHost/Program.cs`
-- Modify: `docs/modules/foundation.md`
+- Criar: `src/Foundation/Vinx.Erp.Foundation/Observability/VinxLoggingExtensions.cs`
+- Criar: `src/Foundation/Vinx.Erp.Foundation/Observability/RequestCorrelationMiddleware.cs`
+- Criar: `tests/public/Vinx.Erp.Foundation.UnitTests/Observability/LoggingInfrastructureTests.cs`
+- Criar: `docs/verification/portable-logging-test-cases.md`
+- Modificar: `src/Hosts/Vinx.Erp.ApiHost/Program.cs`
+- Modificar: `src/Hosts/Vinx.Erp.McpHost/Program.cs`
+- Modificar: `src/Hosts/Vinx.Erp.WorkerHost/Program.cs`
+- Modificar: `docs/modules/foundation.md`
 
 **Consome:** `ServerCorrelationContext.Begin` e `CorrelationContext` existentes.
 
