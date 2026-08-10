@@ -85,6 +85,54 @@ END;
 $$;
 
 
+-- Name: revoke_all_user_sessions(uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.revoke_all_user_sessions(p_user_id uuid) RETURNS integer
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'foundation', 'pg_catalog'
+    AS $$
+DECLARE
+    v_now timestamp with time zone;
+    v_revoked_session_count integer;
+BEGIN
+    PERFORM 1
+    FROM foundation.users AS user_record
+    WHERE user_record.id = p_user_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'internal user does not exist'
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    v_now := clock_timestamp();
+
+    WITH revoked_sessions AS (
+        UPDATE foundation.user_sessions
+        SET revoked_at = v_now,
+            revoked_by_user_id = p_user_id,
+            revocation_reason = 'self_revoke_all'
+        WHERE user_id = p_user_id
+          AND revoked_at IS NULL
+        RETURNING 1)
+    SELECT count(*)::integer
+    INTO v_revoked_session_count
+    FROM revoked_sessions;
+
+    IF v_revoked_session_count > 0 THEN
+        UPDATE foundation.users
+        SET sessions_valid_after = CASE
+            WHEN sessions_valid_after IS NULL OR sessions_valid_after < v_now THEN v_now
+            ELSE sessions_valid_after
+        END
+        WHERE id = p_user_id;
+    END IF;
+
+    RETURN v_revoked_session_count;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
