@@ -8,7 +8,10 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
@@ -161,6 +164,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
         builder.ConfigureTestServices(services =>
         {
+            services.AddTransient<IStartupFilter, AllowAnonymousTestEndpointStartupFilter>();
             services.RemoveAll<DbContextOptions<FoundationDbContext>>();
             services.AddDbContext<FoundationDbContext>((_, options) => options
                 .UseNpgsql(_fixture.RuntimeConnectionString)
@@ -515,4 +519,30 @@ internal sealed class GateDatabaseFailureInterceptor(GateDatabaseFailurePoint? f
             throw new InvalidOperationException("Configured database failure for the identity gate test.");
         }
     }
+}
+
+internal sealed class AllowAnonymousTestEndpointStartupFilter : IStartupFilter
+{
+    public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+    {
+        app.Use((context, next) =>
+        {
+            if (context.Request.Path == "/test/identity-gate/allow-anonymous")
+            {
+                context.SetEndpoint(AllowAnonymousEndpoint);
+            }
+
+            return next();
+        });
+        next(app);
+    };
+
+    private static readonly Endpoint AllowAnonymousEndpoint = new(
+        async context =>
+        {
+            context.Response.ContentType = "text/plain";
+            await context.Response.WriteAsync("Anonymous");
+        },
+        new EndpointMetadataCollection(new AuthorizeAttribute(), new AllowAnonymousAttribute()),
+        "Test allow-anonymous endpoint");
 }

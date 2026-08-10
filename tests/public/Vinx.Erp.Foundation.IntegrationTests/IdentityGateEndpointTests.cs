@@ -152,6 +152,22 @@ public sealed class IdentityGateEndpointTests
         Assert.Empty(await administrator.AuditEvents.ToListAsync());
     }
 
+    [Fact]
+    public async Task Allow_anonymous_endpoint_skips_identity_provider_and_session_gate()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAndCountingIdentityProviderAsync();
+        using var client = AuthorizedClient(factory, factory.CreateJwtToken(JwtTokenVariation.Valid));
+
+        var response = await client.GetAsync("/test/identity-gate/allow-anonymous");
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("Anonymous", await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, factory.IdentityProviderCallCount);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.UserSessions.ToListAsync());
+        Assert.Empty(await administrator.AuditEvents.ToListAsync());
+    }
+
     private static HttpClient AuthorizedClient(FoundationApiFactory factory, string token)
     {
         var client = factory.CreateClient();
