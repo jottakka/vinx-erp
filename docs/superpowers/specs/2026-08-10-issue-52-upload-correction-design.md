@@ -49,9 +49,10 @@ modelo `FileRecord` nem o provedor Supabase Storage.
 | Classe | Dado / Quando / Então |
 |---|---|
 | Sucesso | Dado veredito limpo de um double de scanner, quando usuário autorizado confirma objeto íntegro, então há um único documento confirmado e auditado. |
-| Validação/erros | Dado nome, MIME, tamanho, checksum, classificação, origem ou retenção inválidos, quando cria intenção, então recebe código estável e negação auditada. |
+| Validação/erros | Dado comando declarativo inválido, quando o serviço o valida depois de autorização e auditoria, então recebe código estável, negação auditada, sem `FileRecord` e sem URL. |
 | Acesso | Dado ausência de membership, capability ou empresa correta, quando cria intenção ou confirma, então operação é negada sem expor metadado de outro tenant. |
-| Estado/exceções | Dado scanner indisponível, malware ou falha de leitura, quando confirma, então documento fica em `verification_failed` e objeto não fica acessível. |
+| Estado/exceções | Dado `MalwareScanStatus.Unavailable`, malware ou falha de leitura, quando confirma, então documento fica em `verification_failed`, com motivo estável, e objeto não fica acessível. |
+| Double de teste | Dado payload EICAR no double de armazenamento, quando confirma, então o double devolve `MalwareDetected`; produção não procura EICAR. |
 | Concorrência | Dada confirmação repetida com mesmo `request_id`, quando concorrentes confirmam, então uma conclusão persiste e repetições retornam resultado idempotente. |
 
 ## Estimativa e entrega
@@ -65,5 +66,7 @@ modelo `FileRecord` nem o provedor Supabase Storage.
   transição insegura entre PRs.
 - Uma migration e seu designer são reaplicados; as 1.250 linhas geradas do
   designer são reportadas à parte.
-- A PR terá revisão independente e revisão adicional de segurança, testes
-  públicos focados e uma execução do gate público completo antes do push.
+- Antes de publicação, o controlador executará revisão independente e revisão
+  adicional de segurança, testes públicos focados e uma execução do gate
+  público completo. Esta Task 4 não faz push nem abre PR; entrega evidências e
+  documentação para essas revisões externas.

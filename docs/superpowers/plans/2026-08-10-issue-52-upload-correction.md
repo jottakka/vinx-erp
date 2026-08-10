@@ -30,7 +30,7 @@
 - Consumes: FileRecord, FileStorage, AuditAppender, ActorContext, FoundationDbContext e capabilities herdadas.
 - Produces: CreateDocumentUploadIntentCommand, ConfirmDocumentUploadCommand, DocumentUploadService e endpoints de intenção/confirmação, inicialmente equivalentes à PR #107.
 
-- [ ] **Step 1: Confirmar base limpa e ausência de upload em main**
+- [x] **Step 1: Confirmar base limpa e ausência de upload em main**
 
 Run:
 
@@ -42,7 +42,7 @@ git ls-tree -r --name-only HEAD -- src/Foundation/Vinx.Erp.Foundation/Files | gr
 
 Expected: working tree contém apenas plano/especificação; e89a9d8 e DocumentUploadService.cs não estão na base.
 
-- [ ] **Step 2: Reaplicar quatro commits revisados sem editar arquivos**
+- [x] **Step 2: Reaplicar quatro commits revisados sem editar arquivos**
 
 Run:
 
@@ -55,7 +55,7 @@ git cherry-pick -x e89a9d89357189f9034d77c0bff137d0805bbaa9
 
 Expected: quatro commits novos, cada um com trailer cherry picked from; nenhum conflito, pois atualização de main é fora do Foundation de documentos.
 
-- [ ] **Step 3: Verificar equivalência exata antes das correções**
+- [x] **Step 3: Verificar equivalência exata antes das correções**
 
 Run:
 
@@ -88,11 +88,11 @@ Expected: quatro patch-ids iguais, range-diff sem mudança de patch e testes exi
 - Consumes: CreateDocumentUploadIntentCommand e constantes de DocumentUploadPolicy.
 - Produces: DocumentUploadIntentCommandValidation.Validate(CreateDocumentUploadIntentCommand): string?, retornando os mesmos códigos estáveis usados por DocumentUploadService.
 
-- [ ] **Step 1: Escrever teste RED para contrato declarativo**
+- [x] **Step 1: Escrever teste RED para contrato declarativo**
 
 Criar teste unitário com um caso por campo: nome vazio e acima de MaxFileNameLength, MIME vazio/acima de MaxMimeTypeLength, checksum vazio/acima de MaxChecksumLength, classificação e origem vazias/acima de seus limites. Cada caso chama DocumentUploadIntentCommandValidation.Validate(ValidIntent() with { ... }) e espera o código existente, por exemplo file_name_required, file_name_too_long, mime_required, checksum_invalid, classification_required e origin_too_long.
 
-- [ ] **Step 2: Executar RED**
+- [x] **Step 2: Executar RED**
 
 Run:
 
@@ -102,7 +102,7 @@ dotnet test tests/public/Vinx.Erp.Foundation.UnitTests/Vinx.Erp.Foundation.UnitT
 
 Expected: FAIL porque DocumentUploadIntentCommandValidation não existe.
 
-- [ ] **Step 3: Implementar anotações e validação manual mínima**
+- [x] **Step 3: Implementar anotações e validação manual mínima**
 
 Em CreateDocumentUploadIntentCommand, importar System.ComponentModel.DataAnnotations e aplicar property Required e StringLength apenas aos campos cujas mensagens equivalem aos códigos existentes. Usar mensagens exatas: file_name_required, file_name_too_long, mime_required, mime_type_too_long, checksum_invalid, checksum_too_long, classification_required, classification_too_long, origin_required e origin_too_long.
 
@@ -125,7 +125,7 @@ public static class DocumentUploadIntentCommandValidation
 
 Extrair MaxClassificationLength e MaxOriginLength como constantes de DocumentUploadPolicy, sem mudar limite. Em CreateIntentAsync, substituir o bloco atual por chamada a DocumentUploadIntentCommandValidation.Validate(command), mantendo ReturnAuditedDenialAsync e HTTP 400.
 
-- [ ] **Step 4: Verificar GREEN e auditoria de endpoint**
+- [x] **Step 4: Verificar GREEN e auditoria de endpoint**
 
 Adicionar em DocumentUploadEndpointTests dois casos: nome ausente e nome acima do limite. Ambos confirmam HTTP 400/código estável, nenhum FileRecord e um AuditOutcome.Denied com o mesmo motivo.
 
@@ -138,7 +138,7 @@ dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundatio
 
 Expected: PASS. Program.cs não ganha AddValidation().
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ~~~bash
 git add src/Foundation/Vinx.Erp.Foundation/Files/DocumentUploadContracts.cs src/Foundation/Vinx.Erp.Foundation/Files/DocumentUploadPolicy.cs src/Foundation/Vinx.Erp.Foundation/Files/DocumentUploadService.cs tests/public/Vinx.Erp.Foundation.UnitTests/DocumentUploadContractValidationTests.cs tests/public/Vinx.Erp.Foundation.IntegrationTests/DocumentUploadEndpointTests.cs
@@ -159,7 +159,7 @@ git commit -m "fix(foundation): audit document upload validation"
 - Consumes: bytes privados lidos por SupabaseFileStorage e StorageObjectInspection.
 - Produces: MalwareScanStatus com Clean, MalwareDetected e Unavailable; DocumentVerificationPolicy.Validate retorna malware_scan_unavailable para Unavailable.
 
-- [ ] **Step 1: Escrever teste RED para status de scanner ausente**
+- [x] **Step 1: Escrever teste RED para status de scanner ausente**
 
 Adicionar em DocumentVerificationPolicyTests:
 
@@ -176,7 +176,7 @@ public void Inspection_contract_exposes_an_antimalware_status()
 
 Adicionar caso que constrói inspeção com Unavailable e espera malware_scan_unavailable.
 
-- [ ] **Step 2: Executar RED**
+- [x] **Step 2: Executar RED**
 
 Run:
 
@@ -186,7 +186,7 @@ dotnet test tests/public/Vinx.Erp.Foundation.UnitTests/Vinx.Erp.Foundation.UnitT
 
 Expected: primeiro teste falha pela propriedade ausente. Depois da introdução do tipo para torná-lo compilável, caso de política falha até regra fail-closed existir.
 
-- [ ] **Step 3: Introduzir status explícito e regra fail-closed**
+- [x] **Step 3: Introduzir status explícito e regra fail-closed**
 
 Substituir booleano de StorageObjectInspection por:
 
@@ -207,7 +207,7 @@ Em DocumentVerificationPolicy.Validate, retornar malware_scan_unavailable para U
 
 Em SupabaseFileStorage, manter leitura limitada, cálculo SHA-256 e limpeza de buffer. Remover EicarMarker, tabela KMP, índice e métodos ContainsEicarMarker/CreateFailureTable; retornar Unavailable.
 
-- [ ] **Step 4: Mover EICAR para testes e verificar GREEN**
+- [x] **Step 4: Mover EICAR para testes e verificar GREEN**
 
 No storage falso em DocumentUploadEndpointTests, detectar EicarPayload exclusivamente no teste e devolver MalwareDetected; devolver Clean para conteúdo normal. Atualizar teste unitário do adapter para esperar Unavailable. Adicionar cenário de endpoint com Unavailable, esperando verification_failed, malware_scan_unavailable, auditoria de falha e ausência de URL de download.
 
@@ -220,14 +220,14 @@ dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundatio
 
 Expected: PASS. Executar rg -n 'EicarMarker|ContainsEicarMarker|CreateFailureTable' src e esperar código 1; EICAR permanece somente em tests/public.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ~~~bash
 git add src/Foundation/Vinx.Erp.Foundation/Files/FileStorage.cs src/Foundation/Vinx.Erp.Foundation/Files/DocumentVerificationPolicy.cs src/Foundation/Vinx.Erp.Foundation/Files/SupabaseFileStorage.cs tests/public/Vinx.Erp.Foundation.UnitTests/DocumentVerificationPolicyTests.cs tests/public/Vinx.Erp.Foundation.UnitTests/SupabaseFileStorageTests.cs tests/public/Vinx.Erp.Foundation.IntegrationTests/DocumentUploadEndpointTests.cs
 git commit -m "fix(foundation): fail closed document scanning"
 ~~~
 
-### Task 4: Documentar fronteiras, verificar e preparar draft PR
+### Task 4: Documentar fronteiras, verificar e preparar entrega ao controlador
 
 **Files:**
 - Modify: docs/verification/issue-52-be-test-cases.md
@@ -236,13 +236,13 @@ git commit -m "fix(foundation): fail closed document scanning"
 
 **Interfaces:**
 - Consumes: resultados das Tasks 1–3 e #104 como dependência externa.
-- Produces: manifesto BDD curto, evidência de equivalência e descrição de draft PR.
+- Produces: manifesto BDD curto, evidência de equivalência e material para draft PR do controlador.
 
-- [ ] **Step 1: Atualizar manifesto BDD**
+- [x] **Step 1: Atualizar manifesto BDD**
 
 Trocar referência de EICAR produtivo por três cenários: comando declarativo negado/auditado; veredito Unavailable falha fechado; EICAR é payload exclusivo do double de teste. Manter URL, revogação, cleanup e retenção adiados para PR 3, citando que objeto permanece inacessível enquanto aguarda reconciliação.
 
-- [ ] **Step 2: Validar documentação, identidade e escopo**
+- [x] **Step 2: Validar documentação, identidade e escopo**
 
 Run:
 
@@ -257,7 +257,7 @@ rg -n 'EICAR' tests/public
 
 Expected: sem whitespace; somente arquivos estimados e testes; marcador ausente de src e presente apenas em testes.
 
-- [ ] **Step 3: Rodar testes públicos focados e gate completo**
+- [x] **Step 3: Rodar testes públicos focados e gate completo**
 
 Run:
 
@@ -269,14 +269,17 @@ dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundatio
 
 Expected: todos verdes. Não declarar sucesso sem código de saída explícito e contagens de testes registradas na PR.
 
-- [ ] **Step 4: Revisar e publicar**
+- [ ] **Step 4: Revisões externas e publicação pelo controlador**
 
 Pedir revisão independente do diff e revisão de segurança focada em persistência antes da URL, auditoria após DataAnnotations manual, Unavailable fail-closed, ausência de EICAR produtivo, isolamento de empresa e idempotência. Corrigir cada achado com novo RED/GREEN.
 
 ~~~bash
 git add docs/verification/issue-52-be-test-cases.md docs/superpowers/specs/2026-08-10-issue-52-upload-correction-design.md docs/superpowers/plans/2026-08-10-issue-52-upload-correction.md
 git commit -m "docs: verify document upload correction"
-git push -u origin codex/issue-52-document-upload-correction
 ~~~
 
-Abrir draft PR para main com causa da entrega anterior não ter alcançado main; equivalência comprovada da base revisada; correções separadas; estimativa/linhas geradas; BDD; gate; revisões; #104 e limite da PR 3.
+Não fazer push nem abrir PR nesta Task 4. O controlador, após revisão
+independente e revisão de segurança, abrirá draft PR para `main` com causa da
+entrega anterior não ter alcançado `main`; equivalência comprovada da base
+revisada; correções separadas; estimativa/linhas geradas; BDD; gates; #104 e
+limite da PR 3.
