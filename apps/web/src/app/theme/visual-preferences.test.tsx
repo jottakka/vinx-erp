@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { vinxTheme } from "./create-vinx-theme";
 import {
+  useVisualPreferences,
   VinxThemeProvider,
   VisualPreferencesControls,
 } from "./vinx-theme-provider";
@@ -45,18 +46,21 @@ function createMatchMediaMock(initialMatches: boolean) {
 
 function PreferenceConsumer() {
   const { colorScheme, mode } = useColorScheme();
+  const { density } = useVisualPreferences();
   const theme = useTheme();
 
   return (
     <>
       <VisualPreferencesControls />
       <output data-testid="selected-mode">{mode ?? "unresolved"}</output>
+      <output data-testid="selected-density">{density}</output>
       <output data-testid="surface-scheme">
         {colorScheme ?? "unresolved"}
       </output>
       <output data-testid="surface-background">
         {theme.palette.background.default}
       </output>
+      <output data-testid="content-gap">{theme.vinx.layout.contentGap}</output>
     </>
   );
 }
@@ -141,5 +145,7 @@ describe("visual preferences", () => {
     expect(screen.getByRole("combobox", { name: "Densidade" })).toHaveValue(
       "compact",
     );
+    expect(screen.getByTestId("selected-density")).toHaveTextContent("compact");
+    expect(screen.getByTestId("content-gap")).toHaveTextContent("16");
   });
 });

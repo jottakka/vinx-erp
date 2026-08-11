@@ -41,6 +41,22 @@ function renderLogin(
 }
 
 describe("LoginPage", () => {
+  it("exposes the accessible visual preferences menu", async () => {
+    const user = userEvent.setup();
+    renderLogin(createMockSessionGateway());
+
+    await user.click(
+      screen.getByRole("button", { name: "Abrir preferências visuais" }),
+    );
+
+    expect(
+      screen.getByRole("menuitem", { name: "Tema: sistema" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("menuitem", { name: "Densidade: confortável" }),
+    ).toBeVisible();
+  });
+
   it("shows an actionable development-profile error and keeps the route public", async () => {
     const user = userEvent.setup();
     renderLogin(createMockSessionGateway());

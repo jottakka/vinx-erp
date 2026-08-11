@@ -6,19 +6,48 @@ import {
   Stack,
 } from "@mui/material";
 import { ThemeProvider, useColorScheme } from "@mui/material/styles";
-import { type ChangeEvent, type ReactNode, useState } from "react";
-import { createVinxStorageManager, vinxTheme } from "./create-vinx-theme";
+import {
+  type ChangeEvent,
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+} from "react";
+import { createVinxStorageManager, createVinxTheme } from "./create-vinx-theme";
 import { type Density, readDensity, writeDensity } from "./visual-preferences";
 
 type ColorMode = "light" | "dark" | "system";
 
 const vinxStorageManager = createVinxStorageManager({ key: "vinx.visual.v1" });
 
+type VisualPreferencesContextValue = {
+  density: Density;
+  setDensity: (density: Density) => void;
+};
+
+const VisualPreferencesContext = createContext<VisualPreferencesContextValue>({
+  density: "comfortable",
+  setDensity: writeDensity,
+});
+
 type VinxThemeProviderProps = {
   children: ReactNode;
 };
 
 export function VinxThemeProvider({ children }: VinxThemeProviderProps) {
+  const [density, setDensityState] = useState<Density>(readDensity);
+  const setDensity = useCallback((nextDensity: Density) => {
+    setDensityState(nextDensity);
+    writeDensity(nextDensity);
+  }, []);
+  const theme = useMemo(() => createVinxTheme(density), [density]);
+  const preferences = useMemo(
+    () => ({ density, setDensity }),
+    [density, setDensity],
+  );
+
   return (
     <ThemeProvider
       colorSchemeStorageKey="scheme"
@@ -27,12 +56,18 @@ export function VinxThemeProvider({ children }: VinxThemeProviderProps) {
       modeStorageKey="mode"
       noSsr
       storageManager={vinxStorageManager}
-      theme={vinxTheme}
+      theme={theme}
     >
       <CssBaseline enableColorScheme />
-      {children}
+      <VisualPreferencesContext.Provider value={preferences}>
+        {children}
+      </VisualPreferencesContext.Provider>
     </ThemeProvider>
   );
+}
+
+export function useVisualPreferences(): VisualPreferencesContextValue {
+  return useContext(VisualPreferencesContext);
 }
 
 export function VisualPreferencesControls({
@@ -41,7 +76,7 @@ export function VisualPreferencesControls({
   compact?: boolean;
 }) {
   const { mode, setMode } = useColorScheme();
-  const [density, setDensity] = useState<Density>(readDensity);
+  const { density, setDensity } = useVisualPreferences();
 
   function handleModeChange(event: ChangeEvent<HTMLSelectElement>) {
     setMode(event.target.value as ColorMode);
@@ -50,7 +85,6 @@ export function VisualPreferencesControls({
   function handleDensityChange(event: ChangeEvent<HTMLSelectElement>) {
     const nextDensity = event.target.value as Density;
     setDensity(nextDensity);
-    writeDensity(nextDensity);
   }
 
   return (

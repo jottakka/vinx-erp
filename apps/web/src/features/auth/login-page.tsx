@@ -9,8 +9,8 @@ import {
 } from "@mui/material";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { VisualPreferencesControls } from "../../app/theme/vinx-theme-provider";
 import { AppLogo } from "../../shared/ui/app-logo";
+import { AppearanceMenu } from "../../shared/ui/appearance-menu";
 import { useSession } from "./session-provider";
 
 export function LoginPage() {
@@ -59,7 +59,7 @@ export function LoginPage() {
               Entrada interna do protótipo. Não é autenticação de produção.
             </Typography>
           </Stack>
-          <VisualPreferencesControls />
+          <AppearanceMenu />
           <Stack component="form" onSubmit={submit} spacing={2}>
             <TextField
               fullWidth
