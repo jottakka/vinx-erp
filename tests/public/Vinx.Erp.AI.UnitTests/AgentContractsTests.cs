@@ -1,4 +1,6 @@
 using Vinx.Erp.AI.AgentHarness;
+using Vinx.Erp.AI.Models;
+using Vinx.Erp.AI.Tools;
 using Vinx.Erp.Foundation.Identity;
 using Xunit;
 
@@ -146,6 +148,92 @@ public sealed class AgentContractsTests
             AgentRunOutcomeKind.Result, "completed", " ", null));
         Assert.Throws<ArgumentException>(() => new AgentRunOutcome(
             AgentRunOutcomeKind.Result, "completed", null, " "));
+    }
+
+    [Fact]
+    public void Model_request_exposes_only_untrusted_request_and_model_safe_tool_data()
+    {
+        var properties = typeof(AgentModelRequest).GetProperties().Select(property => property.Name);
+
+        Assert.Equal(["AllowedTools", "PriorToolResults", "Request"], properties.OrderBy(name => name));
+        Assert.DoesNotContain("Actor", properties);
+        Assert.DoesNotContain("CompanyId", properties);
+        Assert.DoesNotContain("EffectiveCapabilities", properties);
+        Assert.DoesNotContain("CorrelationId", properties);
+        Assert.DoesNotContain("Profile", properties);
+    }
+
+    [Fact]
+    public void Model_turn_requires_exactly_one_final_message_or_tool_call()
+    {
+        Assert.Throws<ArgumentException>(() => new AgentModelTurn(null, null));
+        Assert.Throws<ArgumentException>(() => new AgentModelTurn("Final answer", CreateToolCall()));
+        Assert.Throws<ArgumentException>(() => new AgentModelTurn(" ", null));
+    }
+
+    [Fact]
+    public void Model_turn_factories_preserve_exactly_one_turn_value()
+    {
+        var final = AgentModelTurn.Final("Final answer");
+        var tool = AgentModelTurn.Tool(CreateToolCall());
+
+        Assert.Equal("Final answer", final.AssistantMessage);
+        Assert.Null(final.ToolCall);
+        Assert.Null(tool.AssistantMessage);
+        Assert.Equal("payments.read", tool.ToolCall!.Name);
+    }
+
+    [Fact]
+    public void Model_request_copies_model_safe_collections_and_rejects_null_items()
+    {
+        var allowedTools = new List<AgentToolDescriptor> { CreateDescriptor() };
+        var priorResults = new List<AgentToolResult> { CreateToolResult() };
+        var request = new AgentModelRequest(
+            new AgentRunRequest("Summarize status", []),
+            allowedTools,
+            priorResults);
+
+        allowedTools.Clear();
+        priorResults.Clear();
+
+        Assert.Single(request.AllowedTools);
+        Assert.Single(request.PriorToolResults);
+        Assert.Throws<ArgumentException>(() => new AgentModelRequest(
+            new AgentRunRequest("Summarize status", []),
+            [null!],
+            []));
+        Assert.Throws<ArgumentException>(() => new AgentModelRequest(
+            new AgentRunRequest("Summarize status", []),
+            [],
+            [null!]));
+    }
+
+    private static AgentToolCall CreateToolCall()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse("{}");
+        return new AgentToolCall("payments.read", document.RootElement);
+    }
+
+    private static AgentToolDescriptor CreateDescriptor()
+    {
+        using var input = System.Text.Json.JsonDocument.Parse("""{"type":"object"}""");
+        using var output = System.Text.Json.JsonDocument.Parse("""{"type":"object"}""");
+        return new AgentToolDescriptor(
+            "payments.read",
+            "1.0.0",
+            input.RootElement,
+            output.RootElement,
+            "payments.read",
+            AgentToolRisk.ReadOnly,
+            requiresExplicitCompany: false,
+            requiresIdempotency: false,
+            new AgentToolMcpHints("Read payments", readOnlyHint: true));
+    }
+
+    private static AgentToolResult CreateToolResult()
+    {
+        using var payload = System.Text.Json.JsonDocument.Parse("""{"count":1}""");
+        return new AgentToolResult("payments.read", true, "tool_succeeded", payload.RootElement);
     }
 
     private static AgentTaskProfile CreateProfile() => new(
