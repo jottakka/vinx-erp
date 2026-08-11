@@ -14,7 +14,7 @@
 - Esta PR entrega somente gate HTTP e revoke-all próprio da #21. #79, #80, #81, #18, #19 e #20 não entram.
 - Pipeline explícito: UseRouting, UseAuthentication, gate interno, UseAuthorization. Health e AllowAnonymous não consultam identidade ou sessão.
 - Rota: POST /foundation/identity/sessions/revoke-all, sem corpo, userId ou companyId. Revoked e NoChange devolvem 204 No Content.
-- Admitted e Active permitem o handler. Prova inválida, identidade desconhecida e Denied devolvem 401. Falha de banco ou auditoria devolve 503 com identity_gate_unavailable.
+- Admitted e Active permitem o handler. Prova inválida, identidade desconhecida e Denied devolvem 401. Falha de banco ou auditoria devolve `503 application/json` com objeto de uma única propriedade `code=identity_gate_unavailable`.
 - iat não é evidência suficiente. Somente autenticação efetiva estritamente posterior a sessions_valid_after entra após revogação.
 - A função PostgreSQL usa SECURITY DEFINER, search_path fixo, relógio do banco, PUBLIC revogado e privilégio mínimo. vinx_runtime não recebe UPDATE direto em users nem em user_sessions.
 - Auditoria usa AuditScope.Global, ação identity_sessions_revoked, recurso user, ator corrente, correlação do servidor e metadata somente com contagem. Nunca registrar JWT, refresh token, e-mail, IP, User-Agent, AMR bruto ou provider_session_id.
@@ -162,7 +162,7 @@ git commit -m "feat(identity): gate protected requests by session"
 
 **Interfaces:**
 - Consome HttpContext.GetRequiredActorContext() e SelfSessionRevocationService.RevokeAllAsync.
-- Produz POST /foundation/identity/sessions/revoke-all, sem request body, com 204, 401 pelo gate ou 503 identity_gate_unavailable.
+- Produz POST /foundation/identity/sessions/revoke-all, sem request body, com 204, 401 pelo gate ou `503 application/json` com somente `code=identity_gate_unavailable`.
 
 ~~~csharp
 app.MapPost("/foundation/identity/sessions/revoke-all", async (
@@ -174,14 +174,15 @@ app.MapPost("/foundation/identity/sessions/revoke-all", async (
         context.GetRequiredActorContext(), AuditSource.Web, cancellationToken);
     return result.State is SelfSessionRevocationState.Revoked or SelfSessionRevocationState.NoChange
         ? Results.NoContent()
-        : Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable,
-            extensions: new Dictionary<string, object?> { ["code"] = "identity_gate_unavailable" });
+        : Results.Json(
+            new { code = "identity_gate_unavailable" },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
 }).RequireAuthorization();
 ~~~
 
 - [ ] **Passo 1: Escrever teste RED do endpoint.**
 
-Criar duas sessões próprias por prova válida, chamar rota sem corpo e verificar 204, barreira avançada, duas sessões revogadas, uma auditoria global com contagem e 401 na próxima chamada com prova antiga. Cobrir chamada não autenticada (401) e repetição concorrente (204, uma transição, uma auditoria). Nenhuma resposta contém ID externo ou detalhe de sessão.
+Criar duas sessões próprias por prova válida, chamar rota sem corpo e verificar 204, barreira avançada, duas sessões revogadas, uma auditoria global com contagem e 401 na próxima chamada com prova antiga. Cobrir chamada não autenticada (401), indisponibilidade com `503 application/json` e objeto de uma única propriedade `code`, e repetição concorrente: pelo menos uma resposta 204, todas em {204, 401}, uma transição e uma auditoria. Duas respostas 204 só ocorrem se ambas as requisições ultrapassarem o gate antes da barreira; não criar bypass do gate. Nenhuma resposta contém ID externo ou detalhe de sessão.
 
 - [ ] **Passo 2: Rodar RED.**
 
@@ -193,7 +194,7 @@ Esperado: rota inexistente ou ainda sem delegar ao serviço.
 
 - [ ] **Passo 3: Implementar mínimo e manifesto.**
 
-Mapear rota com RequireAuthorization(), obter somente ator do gate e converter Revoked/NoChange em NoContent; Unavailable mantém código seguro identity_gate_unavailable. Criar matriz BDD em docs/verification/21-session-gate-revocation-test-cases.md, atualizar responsabilidade do Foundation e manter #79, #80, #81 e #18 explicitamente adiadas.
+Mapear rota com RequireAuthorization(), obter somente ator do gate e converter Revoked/NoChange em NoContent; Unavailable retorna JSON mínimo com código seguro identity_gate_unavailable. Criar matriz BDD em docs/verification/21-session-gate-revocation-test-cases.md, atualizar responsabilidade do Foundation e manter #79, #80, #81 e #18 explicitamente adiadas.
 
 - [ ] **Passo 4: Rodar GREEN.**
 
