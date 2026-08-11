@@ -1,84 +1,89 @@
-import {
-  Alert,
-  Box,
-  Button,
-  Paper,
-  Stack,
-  TextField,
-  Typography,
-} from "@mui/material";
-import { type FormEvent, useState } from "react";
+import { Alert, Button, Stack, TextField, Typography } from "@mui/material";
+import { type FormEvent, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AppLogo } from "../../shared/ui/app-logo";
-import { AppearanceMenu } from "../../shared/ui/appearance-menu";
+import { PublicLayout } from "../../app/public-layout";
 import { useSession } from "./session-provider";
+
+const profileErrorId = "development-profile-error";
 
 export function LoginPage() {
   const [profileId, setProfileId] = useState("maria");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const profileInput = useRef<HTMLInputElement>(null);
   const { error, signIn, status } = useSession();
   const navigate = useNavigate();
+  const visibleError = validationError ?? error;
+  const pending = status === "pending";
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const normalizedProfileId = profileId.trim();
 
-    if (await signIn(profileId)) {
-      navigate("/protected", { replace: true });
+    if (!normalizedProfileId) {
+      setValidationError("Informe um perfil");
+      profileInput.current?.focus();
+      return;
     }
+
+    setValidationError(null);
+    if (await signIn(normalizedProfileId)) {
+      navigate("/protected", { replace: true });
+      return;
+    }
+
+    profileInput.current?.focus();
   }
 
   return (
-    <Box
-      component="main"
-      sx={{
-        alignItems: "center",
-        bgcolor: "background.default",
-        color: "text.primary",
-        display: "flex",
-        justifyContent: "center",
-        minHeight: "100dvh",
-        p: { xs: 2, sm: 4 },
-      }}
-    >
-      <Paper
-        sx={{
-          bgcolor: "background.paper",
-          border: 1,
-          borderColor: "divider",
-          p: { xs: 2.5, sm: 4 },
-          width: "min(100%, 32rem)",
-        }}
-        variant="outlined"
-      >
-        <Stack spacing={3}>
-          <AppLogo compact />
-          <Stack spacing={1}>
-            <Typography component="h1" variant="h4">
-              Entrar
-            </Typography>
-            <Typography color="text.secondary" component="p">
-              Entrada interna do protótipo. Não é autenticação de produção.
-            </Typography>
-          </Stack>
-          <AppearanceMenu />
-          <Stack component="form" onSubmit={submit} spacing={2}>
-            <TextField
-              fullWidth
-              id="development-profile"
-              label="Perfil de desenvolvimento"
-              onChange={(event) => setProfileId(event.target.value)}
-              value={profileId}
-            />
-            <Button
-              disabled={status === "pending"}
-              type="submit"
-              variant="contained"
-            >
-              Entrar
-            </Button>
-          </Stack>
-          {error ? <Alert severity="error">{error}</Alert> : null}
+    <PublicLayout>
+      <Stack sx={(theme) => ({ gap: `${theme.vinx.layout.contentGap}px` })}>
+        <Stack spacing={1}>
+          <Typography component="h1" variant="h4">
+            Entrada do ambiente de desenvolvimento
+          </Typography>
+          <Typography color="text.secondary" component="p">
+            Use o perfil de desenvolvimento autorizado para validar a interface.
+          </Typography>
+          <Typography color="text.secondary" component="p" variant="body2">
+            Entrada interna do protótipo. Não é autenticação de produção.
+          </Typography>
         </Stack>
-      </Paper>
-    </Box>
+        <Stack component="form" onSubmit={submit} spacing={2}>
+          <TextField
+            error={Boolean(visibleError)}
+            fullWidth
+            id="development-profile"
+            inputRef={profileInput}
+            label="Perfil de desenvolvimento"
+            onChange={(event) => {
+              setProfileId(event.target.value);
+              setValidationError(null);
+            }}
+            slotProps={{
+              htmlInput: {
+                "aria-describedby": visibleError ? profileErrorId : undefined,
+              },
+            }}
+            value={profileId}
+          />
+          {visibleError ? (
+            <Alert id={profileErrorId} role="alert" severity="error">
+              {visibleError}
+            </Alert>
+          ) : null}
+          <Button
+            disabled={pending}
+            fullWidth
+            sx={(theme) => ({
+              minHeight: theme.vinx.layout.controlMinHeight,
+            })}
+            type="submit"
+            variant="contained"
+          >
+            {pending ? "Entrando…" : "Entrar"}
+          </Button>
+        </Stack>
+      </Stack>
+    </PublicLayout>
   );
 }

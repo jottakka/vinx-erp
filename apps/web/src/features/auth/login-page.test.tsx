@@ -40,7 +40,80 @@ function renderLogin(
   return { ...rendered, router };
 }
 
+function runtimeCssFor(element: Element) {
+  const selectors = Array.from(
+    element.classList,
+    (className) => `.${className}`,
+  );
+
+  return Array.from(document.styleSheets)
+    .flatMap((styleSheet) => Array.from(styleSheet.cssRules))
+    .map((rule) => rule.cssText)
+    .filter((rule) => selectors.some((selector) => rule.includes(selector)))
+    .join("\n");
+}
+
 describe("LoginPage", () => {
+  it("composes the responsive public development-login surface", async () => {
+    const user = userEvent.setup();
+    renderLogin(createMockSessionGateway());
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Entrada do ambiente de desenvolvimento",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Use o perfil de desenvolvimento autorizado para validar a interface.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Entrada interna do protótipo. Não é autenticação de produção.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Abrir preferências visuais" }),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Perfil de desenvolvimento")).toBeVisible();
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(screen.getByRole("main")).toBeVisible();
+
+    const profileField = screen.getByLabelText("Perfil de desenvolvimento");
+    await user.clear(profileField);
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Informe um perfil",
+    );
+    expect(profileField).toHaveFocus();
+  });
+
+  it("rejects a whitespace-only profile before calling the mock gateway", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockSessionGateway();
+    const login = vi.spyOn(gateway, "login");
+    renderLogin(gateway);
+
+    const profileField = await screen.findByLabelText(
+      "Perfil de desenvolvimento",
+    );
+    await user.clear(profileField);
+    await user.type(profileField, "   ");
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Informe um perfil",
+    );
+    expect(login).not.toHaveBeenCalled();
+    expect(profileField).toHaveFocus();
+    expect(profileField).toHaveAttribute(
+      "aria-describedby",
+      "development-profile-error",
+    );
+  });
+
   it("exposes the accessible visual preferences menu", async () => {
     const user = userEvent.setup();
     renderLogin(createMockSessionGateway());
@@ -57,21 +130,90 @@ describe("LoginPage", () => {
     ).toBeVisible();
   });
 
+  it("applies the selected density to the public layout padding", async () => {
+    const user = userEvent.setup();
+    renderLogin(createMockSessionGateway());
+
+    const main = screen.getByRole("main");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Entrar" })).toBeEnabled();
+    });
+    expect(runtimeCssFor(main)).toContain("padding:");
+
+    await user.click(
+      screen.getByRole("button", { name: "Abrir preferências visuais" }),
+    );
+    await user.click(
+      screen.getByRole("menuitem", { name: "Densidade: compacta" }),
+    );
+
+    await waitFor(() => {
+      expect(runtimeCssFor(main)).toContain("padding: 12px");
+    });
+  });
+
   it("shows an actionable development-profile error and keeps the route public", async () => {
     const user = userEvent.setup();
     renderLogin(createMockSessionGateway());
 
-    await user.clear(await screen.findByLabelText("Perfil de desenvolvimento"));
-    await user.type(
-      screen.getByLabelText("Perfil de desenvolvimento"),
-      "missing-profile",
+    const profileField = await screen.findByLabelText(
+      "Perfil de desenvolvimento",
     );
+    await user.clear(profileField);
+    await user.type(profileField, "missing-profile");
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Perfil de desenvolvimento indisponível",
     );
+    expect(profileField).toHaveFocus();
+    expect(profileField).toHaveAttribute(
+      "aria-describedby",
+      "development-profile-error",
+    );
     expect(screen.queryByText("Protótipo autenticado")).not.toBeInTheDocument();
+  });
+
+  it("trims the development profile before calling the mock gateway", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockSessionGateway();
+    const login = vi.spyOn(gateway, "login");
+    renderLogin(gateway);
+
+    const profileField = await screen.findByLabelText(
+      "Perfil de desenvolvimento",
+    );
+    await user.clear(profileField);
+    await user.type(profileField, "  maria  ");
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    await waitFor(() => expect(login).toHaveBeenCalledWith("maria"));
+  });
+
+  it("associates a gateway failure to the profile field and returns focus", async () => {
+    const user = userEvent.setup();
+    const gateway: MockSessionGateway = {
+      getBootstrap: async () => null,
+      login: vi
+        .fn()
+        .mockRejectedValue(new Error("Falha temporária de entrada")),
+      logout: async () => {},
+    };
+    renderLogin(gateway);
+
+    const profileField = await screen.findByLabelText(
+      "Perfil de desenvolvimento",
+    );
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Falha temporária de entrada",
+    );
+    expect(profileField).toHaveFocus();
+    expect(profileField).toHaveAttribute(
+      "aria-describedby",
+      "development-profile-error",
+    );
   });
 
   it("keeps the labelled field, action and failure alert usable at a mobile viewport", async () => {
@@ -135,6 +277,7 @@ describe("LoginPage", () => {
     await waitFor(() => expect(enterButton).toBeEnabled());
     await user.click(enterButton);
     expect(enterButton).toBeDisabled();
+    expect(enterButton).toHaveTextContent("Entrando…");
     fireEvent.click(enterButton);
 
     expect(login).toHaveBeenCalledTimes(1);
