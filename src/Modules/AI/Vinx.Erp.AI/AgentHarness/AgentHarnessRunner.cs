@@ -79,7 +79,9 @@ public sealed class AgentHarnessRunner(
                 }
 
                 Observe(AgentRunPhase.ToolValidationStarted, descriptor.Name, descriptor.Risk, null);
+                executionSource.Token.ThrowIfCancellationRequested();
                 var validation = registration.Tool.Validate(call);
+                executionSource.Token.ThrowIfCancellationRequested();
                 if (!validation.IsValid)
                 {
                     return Complete(new AgentRunOutcome(
@@ -91,6 +93,7 @@ public sealed class AgentHarnessRunner(
 
                 var invocation = new AgentToolInvocation(runId, context, call);
                 Observe(AgentRunPhase.ToolInvocationStarted, descriptor.Name, descriptor.Risk, null);
+                executionSource.Token.ThrowIfCancellationRequested();
                 var result = await registration.Tool.InvokeAsync(invocation, executionSource.Token);
                 executionSource.Token.ThrowIfCancellationRequested();
                 priorResults.Add(result);

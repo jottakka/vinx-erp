@@ -100,16 +100,19 @@ internal sealed class RecordingAgentModel(AgentModelTurn turn) : IAgentModel
 internal sealed class RecordingAgentTool : IAgentTool
 {
     private readonly Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> invoke;
+    private readonly Action? onValidate;
 
     public RecordingAgentTool(
         string name,
         AgentToolRisk risk = AgentToolRisk.ReadOnly,
         bool requiresExplicitCompany = false,
         AgentToolValidationResult? validation = null,
+        Action? onValidate = null,
         Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>>? invoke = null)
     {
         Descriptor = CreateDescriptor(name, risk, requiresExplicitCompany);
         Validation = validation ?? AgentToolValidationResult.Valid();
+        this.onValidate = onValidate;
         this.invoke = invoke ?? ((_, _) => Task.FromResult(CreateResult(name)));
     }
 
@@ -121,6 +124,7 @@ internal sealed class RecordingAgentTool : IAgentTool
     public AgentToolValidationResult Validate(AgentToolCall call)
     {
         Validations.Enqueue(call);
+        onValidate?.Invoke();
         return Validation;
     }
 
@@ -156,9 +160,13 @@ internal sealed class RecordingAgentTool : IAgentTool
     }
 }
 
-internal sealed class RecordingAgentRunObserver : IAgentRunObserver
+internal sealed class RecordingAgentRunObserver(Action<AgentRunEvent>? onObserve = null) : IAgentRunObserver
 {
     public ConcurrentQueue<AgentRunEvent> Events { get; } = new();
 
-    public void Observe(AgentRunEvent runEvent) => Events.Enqueue(runEvent);
+    public void Observe(AgentRunEvent runEvent)
+    {
+        Events.Enqueue(runEvent);
+        onObserve?.Invoke(runEvent);
+    }
 }

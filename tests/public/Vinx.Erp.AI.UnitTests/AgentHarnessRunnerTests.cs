@@ -222,6 +222,41 @@ public sealed class AgentHarnessRunnerTests
     }
 
     [Fact]
+    public async Task Run_stops_after_validation_cancels_caller_before_invocation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var tool = new RecordingAgentTool("payments.read", onValidate: cancellation.Cancel);
+        var harness = CreateHarness(
+            ScriptedAgentModel.Tool("payments.read", "{}"),
+            new RecordingAgentRunObserver(),
+            tool);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            harness.RunAsync(CreateContext(), CreateRequest(), cancellation.Token));
+
+        Assert.Single(tool.Validations);
+        Assert.Empty(tool.Invocations);
+    }
+
+    [Fact]
+    public async Task Run_stops_after_invocation_observer_cancels_caller_before_invocation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var observer = new RecordingAgentRunObserver(runEvent =>
+        {
+            if (runEvent.Phase == AgentRunPhase.ToolInvocationStarted) cancellation.Cancel();
+        });
+        var tool = new RecordingAgentTool("payments.read");
+        var harness = CreateHarness(ScriptedAgentModel.Tool("payments.read", "{}"), observer, tool);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            harness.RunAsync(CreateContext(), CreateRequest(), cancellation.Token));
+
+        Assert.Single(tool.Validations);
+        Assert.Empty(tool.Invocations);
+    }
+
+    [Fact]
     public async Task Run_propagates_unexpected_model_exception_intact()
     {
         var expected = new InvalidOperationException("model failed");
