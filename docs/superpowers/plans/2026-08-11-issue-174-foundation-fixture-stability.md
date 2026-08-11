@@ -17,7 +17,7 @@
 - Erros não podem conter senha, string de conexão completa, token, log completo do container ou conteúdo de dados.
 - Usar `Pooling=false` em strings administrativa, migradora e runtime; não chamar `NpgsqlConnection.ClearAllPools`.
 - Não inserir `Task.Delay`, retry ilimitado ou desabilitar paralelismo para esconder o problema.
-- Estimativa: 5 arquivos não-teste e 300–500 linhas manuais, incluindo desenho, plano e manifesto; permanece abaixo dos limites do repositório.
+- Reestimativa após os Tasks 1–3: 5 arquivos não-teste e cerca de 651 linhas manuais (adições e remoções), incluindo desenho, plano e manifesto; permanece abaixo do limite de 800 linhas do repositório e não justifica divisão adicional.
 
 ## Estrutura de arquivos
 
