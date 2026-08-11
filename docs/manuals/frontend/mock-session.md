@@ -15,9 +15,10 @@ ser apresentada a clientes.
 
 1. Abra a aplicação e siga para `/login`.
 2. Mantenha o perfil de desenvolvimento `maria` e escolha **Entrar**.
-3. Antes de entrar, escolha **Modo de cor** (sistema, claro ou escuro) e
-   **Densidade** (confortável ou compacta). Essas preferências são visuais e
-   podem ser restauradas pelo navegador.
+3. Antes de entrar, abra **Abrir preferências visuais** e escolha **Tema**
+   (sistema, claro ou escuro) e **Densidade** (confortável ou compacta). Essas
+   preferências são somente visuais e podem ser restauradas pelo navegador;
+   não alteram sessão, autorização ou empresa.
 4. Confirme a entrada **Protótipo autenticado** e as empresas Alfa e Beta.
 5. Para encerrar, escolha **Sair do protótipo**.
 
@@ -32,6 +33,10 @@ não lidas, token, armazenamento local de sessão/dados autenticados, chamada de
 domínio ou acesso a API.
 Os controles de aparência não autenticam, não autorizam e não criam um
 seletor global de empresa.
+
+Para uma checagem de acessibilidade, repita o fluxo somente com teclado,
+inclusive com a janela em 320 CSS px e com zoom do navegador em 200%. O menu
+de preferências deve abrir pelo botão nomeado e manter foco e nomes acessíveis.
 
 ## Erros frequentes
 

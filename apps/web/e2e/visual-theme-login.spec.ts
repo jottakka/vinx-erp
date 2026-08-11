@@ -3,7 +3,11 @@ import { expect, type Page, test } from "@playwright/test";
 
 async function waitForLogin(page: Page) {
   await page.goto("/login");
-  await expect(page.getByRole("heading", { name: "Entrar" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Entrada do ambiente de desenvolvimento",
+    }),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Abrir preferências visuais" }),
   ).toBeEnabled();
@@ -54,6 +58,44 @@ async function readSemanticSurface(page: Page) {
   });
 }
 
+test("Scenario: Maria uses the professional development entry", async ({
+  page,
+}) => {
+  await page.setViewportSize({ height: 800, width: 320 });
+  await page.goto("/login");
+
+  await chooseAppearance(page, "Tema: escuro");
+  await page.getByLabel("Perfil de desenvolvimento").fill("maria");
+  await page.getByRole("button", { name: "Entrar" }).click();
+
+  await expect(page).toHaveURL(/\/protected$/);
+  await expect(
+    page.getByRole("heading", { name: "Protótipo autenticado" }),
+  ).toHaveCount(1);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    )
+    .toBe(true);
+});
+
+test("Scenario: Invalid development profile remains recoverable", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  const profile = page.getByLabel("Perfil de desenvolvimento");
+
+  for (const value of ["", "   ", "unavailable-profile"]) {
+    await profile.fill(value);
+    await page.getByRole("button", { name: "Entrar" }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(profile).toBeFocused();
+  }
+});
+
 test("successful Maria entry reaches /protected with only Alfa and Beta", async ({
   page,
 }) => {
@@ -83,7 +125,11 @@ test("anonymous /protected deep link returns to /login", async ({ page }) => {
   await page.goto("/protected");
 
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("heading", { name: "Entrar" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Entrada do ambiente de desenvolvimento",
+    }),
+  ).toBeVisible();
 });
 
 test("reload returns to /login while the selected visual mode restores", async ({

@@ -24,7 +24,11 @@ test("redirects an anonymous protected deep link to login", async ({
   await page.goto("/protected");
 
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("heading", { name: "Entrar" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Entrada do ambiente de desenvolvimento",
+    }),
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Protótipo autenticado" }),
   ).not.toBeVisible();
@@ -36,7 +40,11 @@ test("logout removes access to the protected prototype", async ({ page }) => {
   await page.getByRole("button", { name: "Sair do protótipo" }).click();
 
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("heading", { name: "Entrar" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Entrada do ambiente de desenvolvimento",
+    }),
+  ).toBeVisible();
 });
 
 test("reload returns to login because the mock session is in memory only", async ({
@@ -47,5 +55,9 @@ test("reload returns to login because the mock session is in memory only", async
   await page.reload();
 
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("heading", { name: "Entrar" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Entrada do ambiente de desenvolvimento",
+    }),
+  ).toBeVisible();
 });
