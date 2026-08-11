@@ -1,6 +1,18 @@
-import { createTheme, type StorageManager } from "@mui/material/styles";
+import {
+  createTheme,
+  type StorageManager,
+  type Theme,
+} from "@mui/material/styles";
 import "./theme-augmentation";
 import { darkPalette, lightPalette } from "./palette-primitives";
+import type { Density } from "./visual-preferences";
+
+export type VinxLayoutTokens = {
+  contentGap: number;
+  contentPadding: number;
+  controlMinHeight: number;
+  navigationWidth: number;
+};
 
 const supportedModes = new Set(["light", "dark", "system"]);
 const supportedSchemes = new Set(["light", "dark"]);
@@ -94,22 +106,40 @@ export function createVinxStorageManager({
   };
 }
 
-const baseVinxTheme = createTheme({
-  cssVariables: {
-    colorSchemeSelector: "data",
-    cssVarPrefix: "vinx",
+const layoutTokens: Record<Density, VinxLayoutTokens> = {
+  comfortable: {
+    contentGap: 24,
+    contentPadding: 32,
+    controlMinHeight: 40,
+    navigationWidth: 280,
   },
-  colorSchemes: {
-    light: { palette: lightPalette },
-    dark: { palette: darkPalette },
+  compact: {
+    contentGap: 16,
+    contentPadding: 24,
+    controlMinHeight: 32,
+    navigationWidth: 240,
   },
-});
+};
 
 type VinxColorSchemes = {
   light: { palette: typeof lightPalette };
   dark: { palette: typeof darkPalette };
 };
 
-export const vinxTheme = baseVinxTheme as typeof baseVinxTheme & {
+export function createVinxTheme(density: Density): Theme & {
   colorSchemes: VinxColorSchemes;
-};
+} {
+  return createTheme({
+    cssVariables: {
+      colorSchemeSelector: "data",
+      cssVarPrefix: "vinx",
+    },
+    colorSchemes: {
+      light: { palette: lightPalette },
+      dark: { palette: darkPalette },
+    },
+    vinx: { layout: layoutTokens[density] },
+  }) as Theme & { colorSchemes: VinxColorSchemes };
+}
+
+export const vinxTheme = createVinxTheme("comfortable");

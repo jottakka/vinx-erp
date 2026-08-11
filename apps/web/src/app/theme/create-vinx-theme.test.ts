@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createVinxStorageManager, vinxTheme } from "./create-vinx-theme";
+import {
+  createVinxStorageManager,
+  createVinxTheme,
+  vinxTheme,
+} from "./create-vinx-theme";
 import { readDensity } from "./visual-preferences";
 
 function relativeLuminance(color: string) {
@@ -49,6 +53,16 @@ describe("vinx semantic theme", () => {
       vinxTheme.colorSchemes.dark.palette.background.default,
     ).toBeDefined();
     expect(vinxTheme.colorSchemes.light.palette.navigation).toBeDefined();
+  });
+
+  it("derives smaller usable layout tokens for compact density", () => {
+    const comfortable = createVinxTheme("comfortable");
+    const compact = createVinxTheme("compact");
+
+    expect(compact.vinx.layout.contentGap).toBeLessThan(
+      comfortable.vinx.layout.contentGap,
+    );
+    expect(compact.vinx.layout.controlMinHeight).toBeGreaterThanOrEqual(24);
   });
 
   it("uses valid contrast pairs for text, focus and every company slot", () => {
