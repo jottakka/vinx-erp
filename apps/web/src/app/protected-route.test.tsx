@@ -7,6 +7,7 @@ import { createMockSessionGateway } from "../features/auth/mock-session-gateway"
 import { SessionProvider } from "../features/auth/session-provider";
 import { ProtectedRoute } from "./protected-route";
 import { PrototypeEntryPage } from "./prototype-entry-page";
+import { VinxThemeProvider } from "./theme/vinx-theme-provider";
 
 function renderPrototypeRoute(initialPath: string) {
   const router = createMemoryRouter(
@@ -25,9 +26,11 @@ function renderPrototypeRoute(initialPath: string) {
   );
 
   return render(
-    <SessionProvider gateway={createMockSessionGateway()}>
-      <RouterProvider router={router} />
-    </SessionProvider>,
+    <VinxThemeProvider>
+      <SessionProvider gateway={createMockSessionGateway()}>
+        <RouterProvider router={router} />
+      </SessionProvider>
+    </VinxThemeProvider>,
   );
 }
 
@@ -36,7 +39,9 @@ describe("ProtectedRoute", () => {
     renderPrototypeRoute("/protected");
 
     expect(
-      await screen.findByRole("heading", { name: "Entrar" }),
+      await screen.findByRole("heading", {
+        name: "Entrada do ambiente de desenvolvimento",
+      }),
     ).toBeVisible();
     expect(screen.queryByText("Protótipo autenticado")).not.toBeInTheDocument();
   });
@@ -51,7 +56,9 @@ describe("ProtectedRoute", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "Entrar" }),
+      await screen.findByRole("heading", {
+        name: "Entrada do ambiente de desenvolvimento",
+      }),
     ).toBeVisible();
     expect(screen.queryByText("Protótipo autenticado")).not.toBeInTheDocument();
   });
