@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -137,6 +138,16 @@ public sealed class IdentityGateEndpointTests
         Assert.Equal("identity_gate_unavailable", property.Value.GetString());
     }
 
+    private static async Task AssertOnlyUnavailableJsonCodeAsync(HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var property = Assert.Single(document.RootElement.EnumerateObject());
+        Assert.Equal("code", property.Name);
+        Assert.Equal("identity_gate_unavailable", property.Value.GetString());
+    }
+
     [Fact]
     public async Task Health_does_not_consult_the_identity_provider_or_session_gate()
     {
@@ -168,11 +179,127 @@ public sealed class IdentityGateEndpointTests
         Assert.Empty(await administrator.AuditEvents.ToListAsync());
     }
 
+    [Fact]
+    public async Task Revoke_all_without_a_body_revokes_own_sessions_and_invalidates_the_old_proof()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        var currentToken = factory.CreateJwtToken(JwtTokenVariation.Valid);
+        await AdmitSessionAsync(factory, currentToken);
+        await AdmitSessionAsync(factory, factory.CreateJwtToken(JwtTokenVariation.Valid));
+        using var client = AuthorizedClient(factory, currentToken);
+        using var response = await client.SendAsync(new HttpRequestMessage(
+            HttpMethod.Post,
+            "/foundation/identity/sessions/revoke-all"));
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var user = await administrator.Users.SingleAsync();
+        var sessions = await administrator.UserSessions.OrderBy(session => session.Id).ToListAsync();
+        var audit = Assert.Single(await administrator.AuditEvents
+            .Where(auditEvent => auditEvent.Action == "identity_sessions_revoked")
+            .ToListAsync());
+        Assert.NotNull(user.SessionsValidAfter);
+        Assert.Equal(2, sessions.Count);
+        Assert.All(sessions, session => Assert.Equal(user.SessionsValidAfter, session.RevokedAt));
+        Assert.Equal(AuditScope.Global, audit.Scope);
+        using var metadata = JsonDocument.Parse(audit.MetadataJson);
+        Assert.Equal(2, metadata.RootElement.GetProperty("revoked_session_count").GetInt32());
+
+        using var oldProofResponse = await client.SendAsync(new HttpRequestMessage(
+            HttpMethod.Post,
+            "/foundation/identity/sessions/revoke-all"));
+        Assert.Equal(HttpStatusCode.Unauthorized, oldProofResponse.StatusCode);
+        Assert.Empty(await oldProofResponse.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Revoke_all_without_authentication_returns_401()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        using var response = await factory.CreateClient().SendAsync(new HttpRequestMessage(
+            HttpMethod.Post,
+            "/foundation/identity/sessions/revoke-all"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.UserSessions.ToListAsync());
+        Assert.Empty(await administrator.AuditEvents.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Revoke_all_database_failure_returns_only_the_safe_identity_gate_code()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        var token = factory.CreateJwtToken(JwtTokenVariation.Valid);
+        await AdmitSessionAsync(factory, token);
+        await RevokeSelfSessionRevocationExecuteAsync(factory);
+        using var client = AuthorizedClient(factory, token);
+
+        using var response = await client.SendAsync(new HttpRequestMessage(
+            HttpMethod.Post,
+            "/foundation/identity/sessions/revoke-all"));
+
+        await AssertOnlyUnavailableJsonCodeAsync(response);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var user = await administrator.Users.SingleAsync();
+        var session = await administrator.UserSessions.SingleAsync();
+        Assert.Null(user.SessionsValidAfter);
+        Assert.Null(session.RevokedAt);
+    }
+
+    [Fact]
+    public async Task Concurrent_revoke_all_requests_preserve_one_transition_when_a_late_request_loses_admission()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        var token = factory.CreateJwtToken(JwtTokenVariation.Valid);
+        await AdmitSessionAsync(factory, token);
+        await AdmitSessionAsync(factory, factory.CreateJwtToken(JwtTokenVariation.Valid));
+        using var firstClient = AuthorizedClient(factory, token);
+        using var secondClient = AuthorizedClient(factory, token);
+
+        var responses = await Task.WhenAll(
+            firstClient.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/foundation/identity/sessions/revoke-all")),
+            secondClient.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/foundation/identity/sessions/revoke-all")));
+
+        try
+        {
+            Assert.All(
+                responses,
+                response => Assert.Contains(
+                    response.StatusCode,
+                    new[] { HttpStatusCode.NoContent, HttpStatusCode.Unauthorized }));
+            Assert.Contains(responses, response => response.StatusCode == HttpStatusCode.NoContent);
+            await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+            var sessions = await administrator.UserSessions.ToListAsync();
+            var audits = await administrator.AuditEvents
+                .Where(auditEvent => auditEvent.Action == "identity_sessions_revoked")
+                .ToListAsync();
+            Assert.All(sessions, session => Assert.NotNull(session.RevokedAt));
+            Assert.Single(audits);
+        }
+        finally
+        {
+            foreach (var response in responses)
+            {
+                response.Dispose();
+            }
+        }
+    }
+
     private static HttpClient AuthorizedClient(FoundationApiFactory factory, string token)
     {
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;
+    }
+
+    private static async Task AdmitSessionAsync(FoundationApiFactory factory, string token)
+    {
+        using var client = AuthorizedClient(factory, token);
+        using var response = await client.GetAsync("/foundation/capabilities");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     private static ExternalIdentityProof ProofFrom(string token)
@@ -226,6 +353,15 @@ public sealed class IdentityGateEndpointTests
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
             "REVOKE EXECUTE ON FUNCTION foundation.lock_user_for_session_admission(uuid) FROM vinx_runtime;",
+            administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task RevokeSelfSessionRevocationExecuteAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "REVOKE EXECUTE ON FUNCTION foundation.revoke_all_user_sessions(uuid) FROM vinx_runtime;",
             administrator);
         await command.ExecuteNonQueryAsync();
     }

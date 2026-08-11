@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
+using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
@@ -52,6 +53,7 @@ builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddSingleton<IIdentityProvider>(new SupabaseIdentityProvider(normalizedAuthIssuer));
 builder.Services.AddScoped<InternalIdentityResolver>();
 builder.Services.AddScoped<InternalSessionAdmissionService>();
+builder.Services.AddScoped<SelfSessionRevocationService>();
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddHttpClient<SupabaseFileStorage>(client => client.BaseAddress = storageOptions.BaseUri);
 builder.Services.AddScoped<FileStorage>(serviceProvider => serviceProvider.GetRequiredService<SupabaseFileStorage>());
@@ -91,6 +93,20 @@ app.MapGet("/foundation/capabilities", async (
         companyId,
         cancellationToken);
     return result.ToMinimalApiResult();
+}).RequireAuthorization();
+app.MapPost("/foundation/identity/sessions/revoke-all", async (
+    HttpContext context,
+    SelfSessionRevocationService service,
+    CancellationToken cancellationToken) =>
+{
+    var result = await service.RevokeAllAsync(
+        context.GetRequiredActorContext(), AuditSource.Web, cancellationToken);
+    return result.State is SelfSessionRevocationState.Revoked or SelfSessionRevocationState.NoChange
+        ? Results.NoContent()
+        : Results.Json(
+            new { code = "identity_gate_unavailable" },
+            contentType: "application/json",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
 }).RequireAuthorization();
 app.Run();
 
