@@ -11,5 +11,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
+    <ProjectReference Include="../../../src/Modules/AI/Vinx.Erp.AI/Vinx.Erp.AI.csproj" />
   </ItemGroup>
 </Project>

@@ -14,6 +14,7 @@ public sealed class ModuleContractDocumentationTests
     ];
 
     [Theory]
+    [InlineData("docs/modules/ai.md")]
     [InlineData("docs/modules/foundation.md")]
     [InlineData("docs/modules/_template.md")]
     public void Module_contract_contains_required_headings(string relativePath)
