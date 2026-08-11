@@ -129,6 +129,21 @@ public sealed class IdentityGateEndpointTests
         await AssertOnlyUnavailableCodeAsync(response);
     }
 
+    [Fact]
+    public async Task Admission_audit_failure_returns_only_the_safe_identity_gate_code_without_persisting_state()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
+        await RevokeAuditAppendAsync(factory);
+        using var client = AuthorizedClient(factory, factory.CreateJwtToken(JwtTokenVariation.Valid));
+
+        var response = await client.GetAsync("/foundation/capabilities");
+
+        await AssertOnlyUnavailableJsonCodeAsync(response);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.UserSessions.ToListAsync());
+        Assert.Empty(await administrator.AuditEvents.ToListAsync());
+    }
+
     private static async Task AssertOnlyUnavailableCodeAsync(HttpResponseMessage response)
     {
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
@@ -353,6 +368,15 @@ public sealed class IdentityGateEndpointTests
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
             "REVOKE EXECUTE ON FUNCTION foundation.lock_user_for_session_admission(uuid) FROM vinx_runtime;",
+            administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task RevokeAuditAppendAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "REVOKE EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) FROM vinx_runtime;",
             administrator);
         await command.ExecuteNonQueryAsync();
     }
