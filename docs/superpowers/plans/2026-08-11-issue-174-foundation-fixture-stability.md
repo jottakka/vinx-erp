@@ -81,35 +81,7 @@ dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundatio
 
 Expected: FAIL nas asserções `Pooling == false`, não por indisponibilidade de Docker.
 
-- [ ] **Step 3: Escrever o cenário de protocolo incompatível**
-
-Adicionar um `TcpListener` em loopback que aceita uma conexão e devolve o byte
-`H` após o cliente enviar o `SSLRequest`. O teste deve chamar a nova API interna
-`FoundationPostgresFixture.VerifyEndpointAsync` com uma
-`NpgsqlConnectionStringBuilder` de `Host=127.0.0.1`, porta do listener,
-`Database=postgres`, `Username=postgres`, senha de fixture e `Pooling=false`.
-
-Exigir `InvalidOperationException` com `phase=endpoint-connect`,
-`host=127.0.0.1`, a porta numérica e o tipo da exceção; exigir ausência da senha
-do fixture. A falha protegida é “handshake não PostgreSQL alcança bootstrap ou
-vaza string de conexão”.
-
-- [ ] **Step 4: Rodar o RED do protocolo**
-
-Run:
-
-```bash
-dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj \
-  --no-restore \
-  --filter 'FullyQualifiedName~VerifyEndpointAsync_rejects_a_non_postgresql_handshake'
-```
-
-Expected: antes do código do Task 2, a build indica que `VerifyEndpointAsync`
-ainda não existe; depois de introduzir a assinatura interna, a implementação
-inicial sem tratamento deve falhar por não produzir o diagnóstico sanitizado.
-Não aceitar um teste que passe apenas por observar a exceção crua do Npgsql.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add tests/public/Vinx.Erp.Foundation.IntegrationTests/Infrastructure/FoundationPostgresFixtureTests.cs
@@ -130,11 +102,34 @@ git commit -m "test: specify postgres fixture endpoint verification"
 - Produzir `internal sealed record FoundationPostgresEndpoint(string Host, int Port, string Database, string Username, bool Pooling)` sem senha.
 - Manter `StartAsync()`, `OpenAdministratorConnectionAsync()`, `MigratorConnectionString` e `RuntimeConnectionString` como contratos existentes.
 
-- [ ] **Step 1: Reexecutar os dois REDs**
+- [ ] **Step 1: Escrever e observar o RED do protocolo incompatível**
 
-Executar os comandos dos Tasks 1, Steps 2 e 4. Confirmar que o primeiro falha
-por pooling e o segundo não tem ainda o diagnóstico do fixture; não mudar
-produção antes dessa evidência.
+Adicionar um `TcpListener` em loopback que aceita uma conexão e devolve o byte
+`H` após o cliente enviar o `SSLRequest`. O teste chama
+`FoundationPostgresFixture.VerifyEndpointAsync` com uma
+`NpgsqlConnectionStringBuilder` de `Host=127.0.0.1`, porta do listener,
+`Database=postgres`, `Username=postgres`, senha de fixture e `Pooling=false`.
+
+Exigir `InvalidOperationException` com `phase=endpoint-connect`,
+`host=127.0.0.1`, a porta numérica e o tipo da exceção; exigir ausência da senha
+do fixture. A falha protegida é “handshake não PostgreSQL alcança bootstrap ou
+vaza string de conexão”.
+
+Introduzir apenas a assinatura interna necessária se a compilação exigir, rodar
+o teste e confirmar que a implementação ainda falha sem diagnóstico sanitizado.
+Não aceitar um teste que passe apenas por observar a exceção crua do Npgsql.
+
+Run:
+
+```bash
+dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj \
+  --no-restore \
+  --filter 'FullyQualifiedName~VerifyEndpointAsync_rejects_a_non_postgresql_handshake'
+```
+
+Expected: FAIL com o handshake simulado antes de o tratamento sanitizado estar
+completo. Reexecutar também o RED de pooling do Task 1, Step 2 antes da
+implementação definitiva.
 
 - [ ] **Step 2: Implementar a prova semântica do endpoint**
 
@@ -263,4 +258,3 @@ git add docs/superpowers/specs/2026-08-11-issue-174-foundation-fixture-stability
   docs/verification/issue-174-foundation-fixture-stability-test-cases.md
 git commit -m "docs: verify postgres fixture stability"
 ```
-
