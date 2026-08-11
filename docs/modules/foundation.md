@@ -46,9 +46,10 @@ revoga todas as sessões da própria pessoa pela função transacional existente
 `Revoked` e `NoChange` retornam `204`; indisponibilidade retorna
 `503 application/json` com objeto de uma única propriedade `code` e valor
 `identity_gate_unavailable`. A operação mantém o mesmo estado final em
-repetições concorrentes: após a primeira avançar a barreira, uma credencial
-anterior pode receber `401` no gate antes do endpoint. Listagem e revogação
-individual (#79), interfaces de sessão (#80), administração de sessão (#81), MFA/AAL (#18),
+repetições concorrentes: `204/204` é permitido quando ambas as requisições
+passam pelo gate antes da barreira, e `204/401` quando uma observa a barreira
+antes do endpoint. O teste determinístico após o primeiro `204` espera `401`.
+Listagem e revogação individual (#79), interfaces de sessão (#80), administração de sessão (#81), MFA/AAL (#18),
 recuperação (#19) e logout/banimento no provedor (#20) continuam adiados.
 Configure a API com `SUPABASE_AUTH_ISSUER` e `SUPABASE_AUTH_AUDIENCE`;
 `FOUNDATION_RUNTIME_CONNECTION`, `SUPABASE_STORAGE_URL` e

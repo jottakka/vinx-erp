@@ -169,8 +169,10 @@ autoridade de plataforma não será introduzida nesta fatia.
    somente `ActorContext`, responde `204` para `Revoked`/`NoChange` e
    `503 application/json` com objeto de uma única propriedade `code` e valor
    `identity_gate_unavailable` para indisponibilidade. A idempotência preserva
-   o mesmo estado final: na concorrência, uma credencial que perdeu admissão
-   pela barreira pode receber `401` no gate antes do endpoint.
+   o mesmo estado final: a concorrência pode responder `204/204` quando ambas
+   as requisições passam pelo gate antes da barreira, ou `204/401` quando uma
+   observa a barreira no gate. O teste determinístico após o primeiro `204`
+   espera `401`.
 5. PR de desativação: capability de grupo, comando transacional, migration,
    documentação e testes públicos, sobre as três PRs anteriores.
 6. Depois de todas mergeadas, a issue #18 implementa MFA step-up/AAL sobre a

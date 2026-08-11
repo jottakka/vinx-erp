@@ -250,7 +250,7 @@ public sealed class IdentityGateEndpointTests
     }
 
     [Fact]
-    public async Task Concurrent_revoke_all_requests_preserve_one_transition_when_a_late_request_loses_admission()
+    public async Task Concurrent_revoke_all_requests_preserve_one_transition_with_permitted_results()
     {
         await using var factory = await FoundationApiFactory.CreateWithJwtBearerAsync();
         var token = factory.CreateJwtToken(JwtTokenVariation.Valid);
