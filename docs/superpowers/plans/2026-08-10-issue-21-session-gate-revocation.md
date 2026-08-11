@@ -33,7 +33,12 @@
 | Estado/exceção | Dada sessão revogada, barreira igual/anterior ou falha de banco/auditoria, quando gate ou revogação executa, então recebe 401 ou 503 sem mutação parcial. | serviço e endpoint |
 | Concorrência | Dadas admissão e duas revogações simultâneas, quando disputam o mesmo usuário, então lock serializa, somente uma revogação altera estado/audita e a NoChange preserva a barreira que nega prova antiga ainda não observada. | SelfSessionRevocationServiceTests |
 
-Estimativa: 17–21 arquivos totais, 680–790 linhas manuais. Migration, designer e snapshot gerados são reportados separadamente. Banco e API ficam na mesma fatia porque endpoint só é seguro com gate, lock e auditoria atômicos.
+Reestimativa na entrega: a implementação completa ultrapassou 800 linhas
+manuais, então sai em três PRs empilhadas por responsabilidade: núcleo de
+revogação (Task 1), gate (Task 2) e endpoint/documentação (Task 3). Cada PR
+mantém seu diff revisável; migration, designer e snapshot gerados são
+reportados separadamente. Banco e API permanecem na mesma sequência porque o
+endpoint só é seguro sobre gate, lock e auditoria atômicos.
 
 ---
 
@@ -216,4 +221,4 @@ git commit -m "feat(identity): expose self revoke-all"
 - Cobertura: cada requisito da #21 aparece em tarefa e BDD; #79, #80, #81 e #18 permanecem fora.
 - Consistência: gate usa prova e admissão existentes; somente função SQL muda barreira e sessões; endpoint não aceita alvo do cliente.
 - Segurança: negações sem pessoa interna não criam ator sintético; mutação e auditoria usam uma transação; nenhum dado sensível entra em logs ou documentos.
-- Tamanho: três tarefas e arquivos reutilizados mantêm a PR abaixo de 25 arquivos e 800 linhas manuais; reestimar antes do push.
+- Tamanho: a reestimativa dividiu Tasks 1, 2 e 3 em PRs empilhadas; cada uma é reestimada antes do push e mantém menos de 25 arquivos e 800 linhas manuais.
