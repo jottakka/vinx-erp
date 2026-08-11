@@ -10,6 +10,17 @@ public sealed record StorageObjectMetadata(
     string ContentType,
     string Checksum);
 
+public enum MalwareScanStatus
+{
+    Unavailable = 0,
+    Clean = 1,
+    MalwareDetected = 2
+}
+
+public sealed record StorageObjectInspection(
+    StorageObjectMetadata Metadata,
+    MalwareScanStatus MalwareScanStatus);
+
 public sealed record StorageObjectSummary(string Key, DateTimeOffset? CreatedAt);
 
 public interface FileStorage
@@ -21,6 +32,8 @@ public interface FileStorage
         CancellationToken cancellationToken);
 
     Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken);
+
+    Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken);
 
     Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
         string providerKey,

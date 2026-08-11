@@ -15,8 +15,11 @@ ser apresentada a clientes.
 
 1. Abra a aplicação e siga para `/login`.
 2. Mantenha o perfil de desenvolvimento `maria` e escolha **Entrar**.
-3. Confirme a entrada **Protótipo autenticado** e as empresas Alfa e Beta.
-4. Para encerrar, escolha **Sair do protótipo**.
+3. Antes de entrar, escolha **Modo de cor** (sistema, claro ou escuro) e
+   **Densidade** (confortável ou compacta). Essas preferências são visuais e
+   podem ser restauradas pelo navegador.
+4. Confirme a entrada **Protótipo autenticado** e as empresas Alfa e Beta.
+5. Para encerrar, escolha **Sair do protótipo**.
 
 Após sair, a aplicação retorna a `/login`. Uma recarga também remove a sessão;
 a próxima navegação protegida pede entrada novamente.
@@ -25,7 +28,10 @@ a próxima navegação protegida pede entrada novamente.
 
 O protótipo mostra somente as empresas autorizadas da fixture e suas
 capabilities efetivas. Gama não aparece. Não há empresa ativa, contador de
-não lidas, token, armazenamento local, chamada de domínio ou acesso a API.
+não lidas, token, armazenamento local de sessão/dados autenticados, chamada de
+domínio ou acesso a API.
+Os controles de aparência não autenticam, não autorizam e não criam um
+seletor global de empresa.
 
 ## Erros frequentes
 
@@ -41,4 +47,6 @@ Use este fluxo somente para desenvolvimento da interface. A prova de
 autenticação real com API e banco pertence às issues #114 e #115.
 
 Esta sessão é uma mock de desenvolvimento não persistente: cada instância do
-navegador cria seu próprio estado em memória e o descarta ao recarregar.
+navegador cria seu próprio estado em memória e o descarta ao recarregar. As
+preferências visuais podem permanecer no armazenamento local, sem persistir
+sessão nem dados autenticados.

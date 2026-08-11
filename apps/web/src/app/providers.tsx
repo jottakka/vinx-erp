@@ -4,6 +4,7 @@ import { createMockSessionGateway } from "../features/auth/mock-session-gateway"
 import type { MockSessionGateway } from "../features/auth/session-contract";
 import { SessionProvider } from "../features/auth/session-provider";
 import { createQueryClient } from "./query-client";
+import { VinxThemeProvider } from "./theme/vinx-theme-provider";
 
 type AppProvidersProps = {
   children: ReactNode;
@@ -16,8 +17,10 @@ export function AppProviders({ children, sessionGateway }: AppProvidersProps) {
   );
 
   return (
-    <QueryClientProvider client={createQueryClient()}>
-      <SessionProvider gateway={gateway}>{children}</SessionProvider>
-    </QueryClientProvider>
+    <VinxThemeProvider>
+      <QueryClientProvider client={createQueryClient()}>
+        <SessionProvider gateway={gateway}>{children}</SessionProvider>
+      </QueryClientProvider>
+    </VinxThemeProvider>
   );
 }

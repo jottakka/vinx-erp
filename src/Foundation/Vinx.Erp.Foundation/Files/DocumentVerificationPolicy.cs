@@ -6,17 +6,22 @@ public static class DocumentVerificationPolicy
 {
     public static string? Validate(
         FileRecord record,
-        StorageObjectMetadata stored,
-        bool malwareDetected)
+        StorageObjectInspection inspection)
     {
+        var stored = inspection.Metadata;
         if (!string.Equals(stored.Key, record.ProviderKey, StringComparison.Ordinal))
         {
             return "object_key_mismatch";
         }
 
-        if (malwareDetected)
+        switch (inspection.MalwareScanStatus)
         {
-            return "malware_detected";
+            case MalwareScanStatus.Clean:
+                break;
+            case MalwareScanStatus.MalwareDetected:
+                return "malware_detected";
+            default:
+                return "malware_scan_unavailable";
         }
 
         if (stored.SizeBytes != record.SizeBytes)

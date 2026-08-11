@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
+import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
 import { LoginPage } from "./login-page";
 import { createMockSessionGateway } from "./mock-session-gateway";
 import type { BootstrapSnapshot, MockSessionGateway } from "./session-contract";
@@ -29,9 +30,11 @@ function renderLogin(
   router = createLoginRouter(),
 ) {
   const rendered = render(
-    <SessionProvider gateway={gateway}>
-      <RouterProvider router={router} />
-    </SessionProvider>,
+    <VinxThemeProvider>
+      <SessionProvider gateway={gateway}>
+        <RouterProvider router={router} />
+      </SessionProvider>
+    </VinxThemeProvider>,
   );
 
   return { ...rendered, router };
@@ -49,10 +52,31 @@ describe("LoginPage", () => {
     );
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
-    expect(
-      await screen.findByText("Perfil de desenvolvimento indisponível"),
-    ).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Perfil de desenvolvimento indisponível",
+    );
     expect(screen.queryByText("Protótipo autenticado")).not.toBeInTheDocument();
+  });
+
+  it("keeps the labelled field, action and failure alert usable at a mobile viewport", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 320,
+    });
+    renderLogin(createMockSessionGateway());
+
+    const profileField = await screen.findByLabelText(
+      "Perfil de desenvolvimento",
+    );
+    expect(profileField).toBeVisible();
+    expect(screen.getByRole("button", { name: "Entrar" })).toBeVisible();
+
+    await user.clear(profileField);
+    await user.type(profileField, "missing");
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toBeVisible();
   });
 
   it("opens the protected placeholder after a successful prototype sign-in", async () => {
@@ -92,8 +116,10 @@ describe("LoginPage", () => {
     renderLogin(gateway, router);
 
     const enterButton = await screen.findByRole("button", { name: "Entrar" });
+    await waitFor(() => expect(enterButton).toBeEnabled());
     await user.click(enterButton);
-    await user.click(enterButton);
+    expect(enterButton).toBeDisabled();
+    fireEvent.click(enterButton);
 
     expect(login).toHaveBeenCalledTimes(1);
     expect(navigate).not.toHaveBeenCalledWith("/protected", { replace: true });
