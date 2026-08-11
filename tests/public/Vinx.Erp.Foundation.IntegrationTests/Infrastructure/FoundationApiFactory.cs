@@ -4,6 +4,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
+using System.Runtime.ExceptionServices;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
@@ -90,9 +91,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 "same-address@example.test",
                 resolvedCorrelationId.ToString()),
             testFileStorage: fileStorage);
-        await factory._fixture.StartAsync();
-        await factory._fixture.MigrateAsync();
-        return factory;
+        return await PrepareAsync(factory);
     }
 
     public static async Task<FoundationApiFactory> CreateWithAuthenticatedIdentityAsync(
@@ -101,8 +100,16 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         FileStorage? fileStorage = null)
     {
         var factory = await CreateAsync(actorUserId, correlationId, fileStorage);
-        await factory.SeedAuthenticatedActorAsync();
-        return factory;
+        try
+        {
+            await factory.SeedAuthenticatedActorAsync();
+            return factory;
+        }
+        catch
+        {
+            await factory.DisposeAsync();
+            throw;
+        }
     }
 
     public static async Task<FoundationApiFactory> CreateWithClaimsAsync(
@@ -115,9 +122,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             Guid.NewGuid(),
             Guid.NewGuid(),
             CreateTestPrincipalClaims(issuer, subject, email, correlationIdClaim));
-        await factory._fixture.StartAsync();
-        await factory._fixture.MigrateAsync();
-        return factory;
+        return await PrepareAsync(factory);
     }
 
     public static async Task<FoundationApiFactory> CreateWithJwtBearerAsync()
@@ -139,10 +144,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             CreateTestPrincipalClaims(null, null, null, null),
             new JwtTestAuthority(),
             databaseFailurePoint: databaseFailurePoint);
-        await factory._fixture.StartAsync();
-        await factory._fixture.MigrateAsync();
-        await factory.SeedAuthenticatedActorAsync();
-        return factory;
+        return await PrepareAsync(factory, seedAuthenticatedActor: true);
     }
 
     private static async Task<FoundationApiFactory> CreateWithJwtBearerAsync(bool useCountingIdentityProvider)
@@ -156,10 +158,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             CreateTestPrincipalClaims(null, null, null, null),
             new JwtTestAuthority(),
             identityProvider);
-        await factory._fixture.StartAsync();
-        await factory._fixture.MigrateAsync();
-        await factory.SeedAuthenticatedActorAsync();
-        return factory;
+        return await PrepareAsync(factory, seedAuthenticatedActor: true);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -226,9 +225,60 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     public override async ValueTask DisposeAsync()
     {
-        _jwtAuthority?.Dispose();
-        await _fixture.DisposeAsync();
-        await base.DisposeAsync();
+        Exception? failure = null;
+        try
+        {
+            await base.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+
+        try
+        {
+            _jwtAuthority?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            failure ??= exception;
+        }
+
+        try
+        {
+            await _fixture.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            failure ??= exception;
+        }
+
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
+    private static async Task<FoundationApiFactory> PrepareAsync(
+        FoundationApiFactory factory,
+        bool seedAuthenticatedActor = false)
+    {
+        try
+        {
+            await factory._fixture.StartAsync();
+            await factory._fixture.MigrateAsync();
+            if (seedAuthenticatedActor)
+            {
+                await factory.SeedAuthenticatedActorAsync();
+            }
+
+            return factory;
+        }
+        catch
+        {
+            await factory.DisposeAsync();
+            throw;
+        }
     }
 
     private async Task SeedAuthenticatedActorAsync()
