@@ -9,6 +9,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class SessionMigrationTests
 {
     private const string BeforeInternalSessionState = "20260809184931_AddAuditScope";
+    private const string BeforeSelfSessionRevocation = "20260810002901_AddInternalSessionState";
     private const long DowngradePauseLockKey = 719_364_225;
 
     [Fact]
@@ -80,6 +81,204 @@ public sealed class SessionMigrationTests
         Assert.False(reader.GetBoolean(16));
         Assert.True(reader.GetBoolean(17));
         Assert.True(reader.GetBoolean(18));
+    }
+
+    [Fact]
+    public async Task Migration_exposes_self_revocation_only_through_a_secure_definer_function()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                to_regprocedure('foundation.revoke_all_user_sessions(uuid)') IS NOT NULL,
+                has_function_privilege(
+                    'vinx_runtime',
+                    'foundation.revoke_all_user_sessions(uuid)',
+                    'EXECUTE'),
+                has_table_privilege('vinx_runtime', 'foundation.users', 'UPDATE'),
+                has_table_privilege('vinx_runtime', 'foundation.user_sessions', 'UPDATE'),
+                has_column_privilege('vinx_runtime', 'foundation.users', 'sessions_valid_after', 'UPDATE'),
+                has_column_privilege('vinx_runtime', 'foundation.user_sessions', 'revoked_at', 'UPDATE'),
+                has_column_privilege('vinx_identity_owner', 'foundation.users', 'sessions_valid_after', 'UPDATE'),
+                has_column_privilege('vinx_identity_owner', 'foundation.user_sessions', 'revoked_at', 'UPDATE'),
+                has_column_privilege('vinx_identity_owner', 'foundation.user_sessions', 'revoked_by_user_id', 'UPDATE'),
+                has_column_privilege('vinx_identity_owner', 'foundation.user_sessions', 'revocation_reason', 'UPDATE'),
+                function.prosecdef,
+                function.proconfig,
+                pg_get_userbyid(function.proowner),
+                NOT EXISTS (
+                    SELECT 1
+                    FROM aclexplode(COALESCE(function.proacl, acldefault('f', function.proowner))) AS privilege
+                    WHERE privilege.grantee = 0 AND privilege.privilege_type = 'EXECUTE')
+            FROM pg_proc AS function
+            WHERE function.oid = 'foundation.revoke_all_user_sessions(uuid)'::regprocedure
+            """, administrator);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.False(reader.GetBoolean(2));
+        Assert.False(reader.GetBoolean(3));
+        Assert.False(reader.GetBoolean(4));
+        Assert.False(reader.GetBoolean(5));
+        Assert.True(reader.GetBoolean(6));
+        Assert.True(reader.GetBoolean(7));
+        Assert.True(reader.GetBoolean(8));
+        Assert.True(reader.GetBoolean(9));
+        Assert.True(reader.GetBoolean(10));
+        Assert.Equal(["search_path=foundation, pg_catalog"], reader.GetFieldValue<string[]>(11));
+        Assert.Equal("vinx_identity_owner", reader.GetString(12));
+        Assert.True(reader.GetBoolean(13));
+    }
+
+    [Fact]
+    public async Task Runtime_function_revokes_active_sessions_with_one_database_timestamp_and_keeps_no_change_monotonic()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var userId = Guid.NewGuid();
+
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var setup = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.users (id, display_name, email, created_at)
+            VALUES (@user_id, 'Função', 'function-revoke@example.test', clock_timestamp());
+            INSERT INTO foundation.user_sessions (
+                id, user_id, issuer, provider_session_id, provider_authenticated_at, token_expires_at)
+            VALUES
+                (gen_random_uuid(), @user_id, 'https://project.supabase.co/auth/v1', gen_random_uuid(),
+                 '2026-08-09T12:00:00+00:00', '2026-08-09T13:00:00+00:00'),
+                (gen_random_uuid(), @user_id, 'https://project.supabase.co/auth/v1', gen_random_uuid(),
+                 '2026-08-09T12:01:00+00:00', '2026-08-09T13:01:00+00:00');
+            """, administrator))
+        {
+            setup.Parameters.AddWithValue("user_id", userId);
+            await setup.ExecuteNonQueryAsync();
+        }
+
+        await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+        await using var revoke = new NpgsqlCommand(
+            "SELECT foundation.revoke_all_user_sessions(@user_id)", runtime);
+        revoke.Parameters.AddWithValue("user_id", userId);
+        Assert.Equal(2, Convert.ToInt32(await revoke.ExecuteScalarAsync()));
+
+        await using var verify = await fixture.OpenAdministratorConnectionAsync();
+        await using var state = new NpgsqlCommand(
+            """
+            SELECT
+                (SELECT sessions_valid_after FROM foundation.users WHERE id = @user_id),
+                count(*) FILTER (WHERE revoked_at IS NOT NULL),
+                count(DISTINCT revoked_at),
+                bool_and(revoked_by_user_id = @user_id AND revocation_reason = 'self_revoke_all')
+            FROM foundation.user_sessions
+            WHERE user_id = @user_id
+            """, verify);
+        state.Parameters.AddWithValue("user_id", userId);
+        await using var reader = await state.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        var barrier = reader.GetDateTime(0);
+        Assert.Equal(2L, reader.GetInt64(1));
+        Assert.Equal(1L, reader.GetInt64(2));
+        Assert.True(reader.GetBoolean(3));
+        await reader.CloseAsync();
+
+        await using var noChange = new NpgsqlCommand(
+            "SELECT foundation.revoke_all_user_sessions(@user_id)", runtime);
+        noChange.Parameters.AddWithValue("user_id", userId);
+        Assert.Equal(0, Convert.ToInt32(await noChange.ExecuteScalarAsync()));
+        await using var afterNoChange = new NpgsqlCommand(
+            "SELECT sessions_valid_after FROM foundation.users WHERE id = @user_id", verify);
+        afterNoChange.Parameters.AddWithValue("user_id", userId);
+        Assert.Equal(barrier, await afterNoChange.ExecuteScalarAsync());
+    }
+
+    [Theory]
+    [InlineData("barrier")]
+    [InlineData("revocation")]
+    [InlineData("audit")]
+    public async Task Self_revocation_downgrade_fails_closed_when_observable_state_exists(string state)
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var userId = Guid.NewGuid();
+
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var setup = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.users (id, display_name, email, created_at, sessions_valid_after)
+            VALUES (@user_id, 'Downgrade', 'downgrade-revoke@example.test', clock_timestamp(),
+                CASE WHEN @state = 'barrier' THEN clock_timestamp() ELSE NULL END);
+            INSERT INTO foundation.user_sessions (
+                id, user_id, issuer, provider_session_id, provider_authenticated_at, token_expires_at,
+                revoked_at, revoked_by_user_id, revocation_reason)
+            SELECT gen_random_uuid(), @user_id, 'https://project.supabase.co/auth/v1', gen_random_uuid(),
+                '2026-08-09T12:00:00+00:00', '2026-08-09T13:00:00+00:00',
+                CASE WHEN @state = 'revocation' THEN clock_timestamp() ELSE NULL END,
+                CASE WHEN @state = 'revocation' THEN @user_id ELSE NULL END,
+                CASE WHEN @state = 'revocation' THEN 'self_revoke_all' ELSE NULL END;
+            INSERT INTO audit.audit_events (
+                id, actor_user_id, scope, requested_company_id, source, action, resource_type, resource_id,
+                outcome, correlation_id, reason, metadata_json, occurred_at)
+            SELECT gen_random_uuid(), @user_id, 'global', NULL, 'web', 'identity_sessions_revoked', 'user',
+                @user_id, 'success', gen_random_uuid(), NULL, '{"revoked_session_count":1}'::jsonb, clock_timestamp()
+            WHERE @state = 'audit';
+            """, administrator))
+        {
+            setup.Parameters.AddWithValue("user_id", userId);
+            setup.Parameters.AddWithValue("state", state);
+            await setup.ExecuteNonQueryAsync();
+        }
+
+        await using var migrator = fixture.CreateMigratorDbContext();
+        var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
+            await migrator.Database.MigrateAsync(BeforeSelfSessionRevocation));
+
+        Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+    }
+
+    [Fact]
+    public async Task Successful_self_revocation_downgrade_removes_function_and_owner_session_grants()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(BeforeSelfSessionRevocation);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                to_regprocedure('foundation.revoke_all_user_sessions(uuid)') IS NULL,
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'user_id', 'SELECT'),
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'revoked_at', 'SELECT'),
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'revoked_at', 'UPDATE'),
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'revoked_by_user_id', 'UPDATE'),
+                NOT has_column_privilege(
+                    'vinx_identity_owner', 'foundation.user_sessions', 'revocation_reason', 'UPDATE')
+            """, administrator);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.True(reader.GetBoolean(2));
+        Assert.True(reader.GetBoolean(3));
+        Assert.True(reader.GetBoolean(4));
+        Assert.True(reader.GetBoolean(5));
     }
 
     [Fact]
@@ -277,6 +476,11 @@ public sealed class SessionMigrationTests
             await administratorContext.SaveChangesAsync();
         }
 
+        await using (var selfRevocationMigrator = fixture.CreateMigratorDbContext())
+        {
+            await selfRevocationMigrator.Database.MigrateAsync(BeforeSelfSessionRevocation);
+        }
+
         await using var administrator = await fixture.OpenAdministratorConnectionAsync();
         await CreateDowngradePauseTriggerAsync(administrator);
         await using var coordinator = await fixture.OpenAdministratorConnectionAsync();
@@ -320,6 +524,11 @@ public sealed class SessionMigrationTests
         {
             administratorContext.Users.Add(new User(userId, "Barreira concorrente", "barrier-concurrency@example.test"));
             await administratorContext.SaveChangesAsync();
+        }
+
+        await using (var selfRevocationMigrator = fixture.CreateMigratorDbContext())
+        {
+            await selfRevocationMigrator.Database.MigrateAsync(BeforeSelfSessionRevocation);
         }
 
         await using var administrator = await fixture.OpenAdministratorConnectionAsync();
