@@ -50,6 +50,7 @@ builder.Services.AddDbContext<FoundationDbContext>(options => options
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
 builder.Services.AddScoped<RoleAssignmentService>();
+builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddSingleton<IIdentityProvider>(new SupabaseIdentityProvider(normalizedAuthIssuer));
 builder.Services.AddScoped<InternalIdentityResolver>();
 builder.Services.AddScoped<InternalSessionAdmissionService>();
@@ -107,6 +108,30 @@ app.MapPost("/foundation/identity/sessions/revoke-all", async (
             new { code = "identity_gate_unavailable" },
             contentType: "application/json",
             statusCode: StatusCodes.Status503ServiceUnavailable);
+}).RequireAuthorization();
+app.MapPost("/foundation/files/upload-intentions", async (
+    CreateDocumentUploadIntentCommand command,
+    HttpContext httpContext,
+    DocumentUploadService service,
+    CancellationToken cancellationToken) =>
+{
+    var result = await service.CreateIntentAsync(
+        httpContext.GetRequiredActorContext(),
+        command,
+        cancellationToken);
+    return result.ToMinimalApiResult();
+}).RequireAuthorization();
+app.MapPost("/foundation/files/confirmations", async (
+    ConfirmDocumentUploadCommand command,
+    HttpContext httpContext,
+    DocumentUploadService service,
+    CancellationToken cancellationToken) =>
+{
+    var result = await service.ConfirmAsync(
+        httpContext.GetRequiredActorContext(),
+        command,
+        cancellationToken);
+    return result.ToMinimalApiResult();
 }).RequireAuthorization();
 app.Run();
 

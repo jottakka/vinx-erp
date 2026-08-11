@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Buffers;
 using System.Text.Json;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -65,19 +66,58 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
 
     public async Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken)
     {
+        var inspection = await InspectObjectAsync(providerKey, cancellationToken);
+        return inspection.Metadata;
+    }
+
+    public async Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken)
+    {
         ValidateObjectKey(providerKey);
         options.Validate();
         using var request = new HttpRequestMessage(HttpMethod.Get, ObjectPath(string.Empty, providerKey));
         AddAuthenticationHeaders(request);
-        using var response = await httpClient.SendAsync(request, cancellationToken);
+        using var response = await httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
         response.EnsureSuccessStatusCode();
         var contentType = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
-        var content = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        return new StorageObjectMetadata(
-            providerKey,
-            content.LongLength,
-            contentType,
-            $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}");
+        if (response.Content.Headers.ContentLength is long declaredLength
+            && declaredLength > DocumentUploadPolicy.MaxSizeBytes)
+        {
+            throw new InvalidOperationException("Storage object exceeds the maximum inspection size.");
+        }
+
+        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var buffer = ArrayPool<byte>.Shared.Rent(81920);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        try
+        {
+            long sizeBytes = 0;
+            int read;
+            while ((read = await content.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
+            {
+                sizeBytes = checked(sizeBytes + read);
+                if (sizeBytes > DocumentUploadPolicy.MaxSizeBytes)
+                {
+                    throw new InvalidOperationException("Storage object exceeds the maximum inspection size.");
+                }
+
+                hash.AppendData(buffer, 0, read);
+            }
+
+            return new StorageObjectInspection(
+                new StorageObjectMetadata(
+                    providerKey,
+                    sizeBytes,
+                    contentType,
+                    $"sha256:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}"),
+                MalwareScanStatus.Unavailable);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
     }
 
     public async Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
