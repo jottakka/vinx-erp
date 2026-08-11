@@ -5,10 +5,10 @@
 Decisão aprovada em 09/08/2026. Esta decisão detalha a fatia de sessões da
 issue #21, subordinada à issue #44. MFA e AAL permanecem na issue #18.
 
-A entrega atual cobre somente a admissão interna da sessão: estado EF, lock
-atômico, auditoria global e logs operacionais. Ela não registra o serviço no
-host e não altera o gate HTTP; revogação, desativação e endpoints continuam
-nas fatias posteriores.
+A admissão interna da sessão já foi entregue pela PR #105: estado EF, lock
+atômico, auditoria global e logs operacionais. A próxima fatia da #21 registra
+o gate HTTP e expõe somente a revogação global da própria pessoa; desativação
+e demais operações de sessão continuam posteriores.
 
 ## Objetivo
 
@@ -72,8 +72,8 @@ barreira, pois é renovado a cada access token.
 
 Há unicidade em `(issuer, provider_session_id)`, índice por
 `(user_id, revoked_at)` e FKs restritivas. A sessão é criada uma vez; sessão
-revogada nunca é reativada. Runtime recebe somente privilégios necessários de
-`SELECT`, `INSERT` e `UPDATE`, sem `DELETE`.
+revogada nunca é reativada. Runtime recebe somente `SELECT`, `INSERT` e
+`EXECUTE` para funções estreitas; não recebe `UPDATE` ou `DELETE` direto.
 
 ## Fluxo de acesso
 
@@ -106,14 +106,12 @@ logs, fixtures ou Markdown.
 
 ## Operações e auditoria
 
-A primeira PR expõe somente operações do próprio usuário:
+Esta fatia expõe somente `POST /foundation/identity/sessions/revoke-all`, sem
+corpo e sem identificador de usuário ou empresa. Ela revoga sessões próprias,
+inclusive a corrente, e responde `204`. Listagem e revogação individual ficam
+na #79; portanto sessão de outra pessoa não é uma superfície desta PR.
 
-- listar sessões ativas, com dados redigidos e identificador interno;
-- revogar uma sessão própria, idempotentemente;
-- revogar todas as sessões próprias, inclusive a corrente.
-
-Sessão de outro usuário parece inexistente (`404`) e a tentativa negada é
-auditada. Sessões são globais; por isso `AuditEvent` e `AuditEventData` ganham
+Sessões são globais; por isso `AuditEvent` e `AuditEventData` ganham
 `AuditScope` com valores `global` e `company`. A migration substitui
 `audit.append_event` para receber esse escopo e cria a constraint:
 `global` exige `requested_company_id IS NULL`; `company` exige empresa não
@@ -163,11 +161,13 @@ autoridade de plataforma não será introduzida nesta fatia.
 2. Microfatia de prova Supabase: `session_id` UUID e `amr` com autenticação
    não-refresh, `401` fail-closed e sem persistência; não introduz sessão EF,
    gate ou revogação.
-3. PR de sessão: adapter de claims, modelo EF, gate e operações próprias,
-   sobre a auditoria global já entregue.
-4. PR de desativação: capability de grupo, comando transacional, migration,
+3. PR de admissão de sessão, já mesclada como #105: modelo EF, lock,
+   admissão, auditoria e logs.
+4. PR de gate e `revoke-all` próprio da #21: middleware, função SQL estreita,
+   revogação global atômica e endpoint protegido.
+5. PR de desativação: capability de grupo, comando transacional, migration,
    documentação e testes públicos, sobre as três PRs anteriores.
-5. Depois de todas mergeadas, a issue #18 implementa MFA step-up/AAL sobre a
+6. Depois de todas mergeadas, a issue #18 implementa MFA step-up/AAL sobre a
    evidência de sessão já admitida.
 
 ## Critérios verificáveis
