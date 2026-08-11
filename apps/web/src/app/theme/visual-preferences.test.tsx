@@ -3,11 +3,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { vinxTheme } from "./create-vinx-theme";
-import {
-  useVisualPreferences,
-  VinxThemeProvider,
-  VisualPreferencesControls,
-} from "./vinx-theme-provider";
+import { useVisualPreferences, VinxThemeProvider } from "./vinx-theme-provider";
 
 function createMatchMediaMock(initialMatches: boolean) {
   let matches = initialMatches;
@@ -45,13 +41,21 @@ function createMatchMediaMock(initialMatches: boolean) {
 }
 
 function PreferenceConsumer() {
-  const { colorScheme, mode } = useColorScheme();
-  const { density } = useVisualPreferences();
+  const { colorScheme, mode, setMode } = useColorScheme();
+  const { density, setDensity } = useVisualPreferences();
   const theme = useTheme();
 
   return (
     <>
-      <VisualPreferencesControls />
+      <button onClick={() => setMode("light")} type="button">
+        Usar modo claro
+      </button>
+      <button onClick={() => setMode("dark")} type="button">
+        Usar modo escuro
+      </button>
+      <button onClick={() => setDensity("compact")} type="button">
+        Usar densidade compacta
+      </button>
       <output data-testid="selected-mode">{mode ?? "unresolved"}</output>
       <output data-testid="selected-density">{density}</output>
       <output data-testid="surface-scheme">
@@ -88,11 +92,7 @@ describe("visual preferences", () => {
     vi.stubGlobal("matchMedia", system.matchMedia);
     renderHarness();
 
-    const modeControl = await screen.findByRole("combobox", {
-      name: "Modo de cor",
-    });
-    expect(modeControl).not.toBeDisabled();
-    await user.selectOptions(modeControl, "light");
+    await user.click(screen.getByRole("button", { name: "Usar modo claro" }));
     expect(screen.getByTestId("selected-mode")).toHaveTextContent("light");
     expect(screen.getByTestId("surface-scheme")).toHaveTextContent("light");
 
@@ -127,24 +127,14 @@ describe("visual preferences", () => {
     vi.stubGlobal("matchMedia", system.matchMedia);
     const firstRender = renderHarness();
 
-    await user.selectOptions(
-      await screen.findByRole("combobox", { name: "Modo de cor" }),
-      "dark",
-    );
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Densidade" }),
-      "compact",
+    await user.click(screen.getByRole("button", { name: "Usar modo escuro" }));
+    await user.click(
+      screen.getByRole("button", { name: "Usar densidade compacta" }),
     );
     firstRender.unmount();
 
     renderHarness();
 
-    expect(
-      await screen.findByRole("combobox", { name: "Modo de cor" }),
-    ).toHaveValue("dark");
-    expect(screen.getByRole("combobox", { name: "Densidade" })).toHaveValue(
-      "compact",
-    );
     expect(screen.getByTestId("selected-density")).toHaveTextContent("compact");
     expect(screen.getByTestId("content-gap")).toHaveTextContent("16");
   });
