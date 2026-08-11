@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Data.Common;
 using System.IdentityModel.Tokens.Jwt;
 using System.Globalization;
 using System.Net;
@@ -7,10 +8,14 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -35,6 +40,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly TestPrincipalClaims _principalClaims;
     private readonly JwtTestAuthority? _jwtAuthority;
     private readonly CountingIdentityProvider? _countingIdentityProvider;
+    private readonly GateDatabaseFailurePoint? _databaseFailurePoint;
     private readonly FileStorage? _testFileStorage;
     private readonly bool _useJwtBearer;
 
@@ -44,6 +50,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         TestPrincipalClaims principalClaims,
         JwtTestAuthority? jwtAuthority = null,
         CountingIdentityProvider? countingIdentityProvider = null,
+        GateDatabaseFailurePoint? databaseFailurePoint = null,
         FileStorage? testFileStorage = null)
     {
         ActorUserId = actorUserId;
@@ -51,6 +58,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _principalClaims = principalClaims;
         _jwtAuthority = jwtAuthority;
         _countingIdentityProvider = countingIdentityProvider;
+        _databaseFailurePoint = databaseFailurePoint;
         _testFileStorage = testFileStorage;
         _useJwtBearer = jwtAuthority is not null;
     }
@@ -122,6 +130,21 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         return await CreateWithJwtBearerAsync(useCountingIdentityProvider: true);
     }
 
+    public static async Task<FoundationApiFactory> CreateWithJwtBearerAndDatabaseFailureAsync(
+        GateDatabaseFailurePoint databaseFailurePoint)
+    {
+        var factory = new FoundationApiFactory(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            CreateTestPrincipalClaims(null, null, null, null),
+            new JwtTestAuthority(),
+            databaseFailurePoint: databaseFailurePoint);
+        await factory._fixture.StartAsync();
+        await factory._fixture.MigrateAsync();
+        await factory.SeedAuthenticatedActorAsync();
+        return factory;
+    }
+
     private static async Task<FoundationApiFactory> CreateWithJwtBearerAsync(bool useCountingIdentityProvider)
     {
         var identityProvider = useCountingIdentityProvider
@@ -148,11 +171,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
         builder.ConfigureTestServices(services =>
         {
+            services.AddTransient<IStartupFilter, AllowAnonymousTestEndpointStartupFilter>();
             services.RemoveAll<DbContextOptions<FoundationDbContext>>();
             services.AddDbContext<FoundationDbContext>((_, options) => options
                 .UseNpgsql(_fixture.RuntimeConnectionString)
                 .UseSnakeCaseNamingConvention()
-                .AddInterceptors(new RowVersionInterceptor()));
+                .AddInterceptors(
+                    new RowVersionInterceptor(),
+                    new GateDatabaseFailureInterceptor(_databaseFailurePoint)));
             if (_testFileStorage is not null)
             {
                 services.RemoveAll<FileStorage>();
@@ -468,4 +494,67 @@ internal sealed class CountingIdentityProvider(IIdentityProvider inner) : IIdent
         Interlocked.Increment(ref _callCount);
         return inner.TryGetExternalIdentityProof(principal, out proof);
     }
+}
+
+public enum GateDatabaseFailurePoint
+{
+    Resolution
+}
+
+internal sealed class GateDatabaseFailureInterceptor(GateDatabaseFailurePoint? failurePoint) : DbCommandInterceptor
+{
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        ThrowWhenConfigured(command);
+        return result;
+    }
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowWhenConfigured(command);
+        return ValueTask.FromResult(result);
+    }
+
+    private void ThrowWhenConfigured(DbCommand command)
+    {
+        var failsResolution = failurePoint == GateDatabaseFailurePoint.Resolution
+            && command.CommandText.Contains("external_identities", StringComparison.Ordinal);
+        if (failsResolution)
+        {
+            throw new InvalidOperationException("Configured database failure for the identity gate test.");
+        }
+    }
+}
+
+internal sealed class AllowAnonymousTestEndpointStartupFilter : IStartupFilter
+{
+    public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+    {
+        app.Use((context, next) =>
+        {
+            if (context.Request.Path == "/test/identity-gate/allow-anonymous")
+            {
+                context.SetEndpoint(AllowAnonymousEndpoint);
+            }
+
+            return next();
+        });
+        next(app);
+    };
+
+    private static readonly Endpoint AllowAnonymousEndpoint = new(
+        async context =>
+        {
+            context.Response.ContentType = "text/plain";
+            await context.Response.WriteAsync("Anonymous");
+        },
+        new EndpointMetadataCollection(new AuthorizeAttribute(), new AllowAnonymousAttribute()),
+        "Test allow-anonymous endpoint");
 }
