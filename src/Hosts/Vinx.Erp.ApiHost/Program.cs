@@ -96,19 +96,11 @@ app.MapGet("/foundation/capabilities", async (
 app.MapPost("/foundation/files/upload-intentions", async (
     CreateDocumentUploadIntentCommand command,
     HttpContext httpContext,
-    ClaimsPrincipal principal,
-    InternalIdentityResolver identityResolver,
     DocumentUploadService service,
     CancellationToken cancellationToken) =>
 {
-    var internalUserId = await identityResolver.ResolveAsync(principal, cancellationToken);
-    if (internalUserId is null)
-    {
-        return Results.Unauthorized();
-    }
-
     var result = await service.CreateIntentAsync(
-        new ActorContext(internalUserId.Value, ServerCorrelationContext.Get(httpContext).CorrelationId),
+        httpContext.GetRequiredActorContext(),
         command,
         cancellationToken);
     return result.ToMinimalApiResult();
@@ -116,19 +108,11 @@ app.MapPost("/foundation/files/upload-intentions", async (
 app.MapPost("/foundation/files/confirmations", async (
     ConfirmDocumentUploadCommand command,
     HttpContext httpContext,
-    ClaimsPrincipal principal,
-    InternalIdentityResolver identityResolver,
     DocumentUploadService service,
     CancellationToken cancellationToken) =>
 {
-    var internalUserId = await identityResolver.ResolveAsync(principal, cancellationToken);
-    if (internalUserId is null)
-    {
-        return Results.Unauthorized();
-    }
-
     var result = await service.ConfirmAsync(
-        new ActorContext(internalUserId.Value, ServerCorrelationContext.Get(httpContext).CorrelationId),
+        httpContext.GetRequiredActorContext(),
         command,
         cancellationToken);
     return result.ToMinimalApiResult();

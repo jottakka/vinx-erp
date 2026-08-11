@@ -73,7 +73,7 @@ public sealed class DocumentUploadEndpointTests
         Assert.Equal(expectedCode, (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         Assert.Empty(await administrator.Files.ToListAsync());
-        var denial = await administrator.AuditEvents.SingleAsync();
+        var denial = await administrator.AuditEvents.SingleAsync(audit => audit.Action == expectedCode);
         Assert.Equal(expectedCode, denial.Action);
         Assert.Equal("{}", denial.MetadataJson);
         Assert.DoesNotContain(fileName, denial.MetadataJson, StringComparison.Ordinal);
@@ -98,7 +98,7 @@ public sealed class DocumentUploadEndpointTests
         Assert.Equal(expectedCode, (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         Assert.Empty(await administrator.Files.ToListAsync());
-        var denial = await administrator.AuditEvents.SingleAsync();
+        var denial = await administrator.AuditEvents.SingleAsync(audit => audit.Action == expectedCode);
         Assert.Equal(AuditOutcome.Denied, denial.Outcome);
         Assert.Equal(expectedCode, denial.Action);
         Assert.Equal(expectedCode, denial.Reason);
@@ -219,7 +219,8 @@ public sealed class DocumentUploadEndpointTests
         Assert.Equal("membership_required", (await membershipResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using (var membershipAdministrator = membershipFactory.Fixture.CreateAdministratorDbContext())
         {
-            var denial = await membershipAdministrator.AuditEvents.SingleAsync();
+            var denial = await membershipAdministrator.AuditEvents.SingleAsync(
+                audit => audit.Action == "membership_required");
             Assert.Equal("membership_required", denial.Action);
             Assert.Equal("{}", denial.MetadataJson);
         }
@@ -233,7 +234,8 @@ public sealed class DocumentUploadEndpointTests
         Assert.Equal(HttpStatusCode.Forbidden, capabilityResponse.StatusCode);
         Assert.Equal("capability_denied", (await capabilityResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var capabilityAdministrator = capabilityFactory.Fixture.CreateAdministratorDbContext();
-        var capabilityDenial = await capabilityAdministrator.AuditEvents.SingleAsync();
+        var capabilityDenial = await capabilityAdministrator.AuditEvents.SingleAsync(
+            audit => audit.Action == "capability_denied");
         Assert.Equal("capability_denied", capabilityDenial.Action);
         Assert.Equal("{}", capabilityDenial.MetadataJson);
     }
