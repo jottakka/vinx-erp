@@ -201,5 +201,6 @@ autoridade de plataforma não será introduzida nesta fatia.
 
 Esta entrega não inclui listagem ou revogação individual (#79), interface de
 sessões (#80), administração de sessões (#81), MFA/AAL (#18), recuperação
-(#19) ou logout/banimento no provedor (#20). Ela não altera migrations,
-modelo EF, snapshot ou gate de identidade.
+(#19) ou logout/banimento no provedor (#20). Esta fatia inclui migration de
+sessão/revogação e gate de identidade. Não há mudança adicional de modelo EF
+ou `ModelSnapshot`, nem entrada nos adiamentos #79, #80, #81, #18, #19 ou #20.
