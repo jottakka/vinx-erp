@@ -4,6 +4,7 @@ public sealed class FileRecord : SoftDeletableEntity, ICompanyScoped
 {
     public const string QuarantinedState = "quarantined";
     public const string VerifiedState = "verified";
+    public const string ConfirmedState = "confirmed";
     public const string VerificationFailedState = "verification_failed";
 
     private FileRecord()
@@ -73,6 +74,13 @@ public sealed class FileRecord : SoftDeletableEntity, ICompanyScoped
     {
         EnsureState(QuarantinedState);
         ProcessingState = VerifiedState;
+        RecordUpdate(actorUserId, requestId);
+    }
+
+    public void MarkConfirmed(Guid actorUserId, Guid requestId)
+    {
+        EnsureState(VerifiedState);
+        ProcessingState = ConfirmedState;
         RecordUpdate(actorUserId, requestId);
     }
 

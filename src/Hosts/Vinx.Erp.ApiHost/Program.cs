@@ -50,6 +50,7 @@ builder.Services.AddDbContext<FoundationDbContext>(options => options
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
 builder.Services.AddScoped<RoleAssignmentService>();
+builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddSingleton<IIdentityProvider>(new SupabaseIdentityProvider(normalizedAuthIssuer));
 builder.Services.AddScoped<InternalIdentityResolver>();
 builder.Services.AddSingleton(storageOptions);
@@ -96,6 +97,46 @@ app.MapGet("/foundation/capabilities", async (
         internalUserId.Value,
         ServerCorrelationContext.Get(httpContext).CorrelationId);
     var result = await service.GetCapabilitiesAsync(actor, companyId, cancellationToken);
+    return result.ToMinimalApiResult();
+}).RequireAuthorization();
+app.MapPost("/foundation/files/upload-intentions", async (
+    CreateDocumentUploadIntentCommand command,
+    HttpContext httpContext,
+    ClaimsPrincipal principal,
+    InternalIdentityResolver identityResolver,
+    DocumentUploadService service,
+    CancellationToken cancellationToken) =>
+{
+    var internalUserId = await identityResolver.ResolveAsync(principal, cancellationToken);
+    if (internalUserId is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var result = await service.CreateIntentAsync(
+        new ActorContext(internalUserId.Value, ServerCorrelationContext.Get(httpContext).CorrelationId),
+        command,
+        cancellationToken);
+    return result.ToMinimalApiResult();
+}).RequireAuthorization();
+app.MapPost("/foundation/files/confirmations", async (
+    ConfirmDocumentUploadCommand command,
+    HttpContext httpContext,
+    ClaimsPrincipal principal,
+    InternalIdentityResolver identityResolver,
+    DocumentUploadService service,
+    CancellationToken cancellationToken) =>
+{
+    var internalUserId = await identityResolver.ResolveAsync(principal, cancellationToken);
+    if (internalUserId is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var result = await service.ConfirmAsync(
+        new ActorContext(internalUserId.Value, ServerCorrelationContext.Get(httpContext).CorrelationId),
+        command,
+        cancellationToken);
     return result.ToMinimalApiResult();
 }).RequireAuthorization();
 app.Run();
