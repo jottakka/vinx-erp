@@ -6,6 +6,29 @@ namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 public sealed class FoundationPostgresFixtureTests
 {
     [Fact]
+    public async Task StartAsync_uses_nonpooled_connections_to_a_verified_postgresql_endpoint()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        var administratorSettings = new NpgsqlConnectionStringBuilder(administrator.ConnectionString);
+        var migratorSettings = new NpgsqlConnectionStringBuilder(fixture.MigratorConnectionString);
+        var runtimeSettings = new NpgsqlConnectionStringBuilder(fixture.RuntimeConnectionString);
+        Assert.False(administratorSettings.Pooling);
+        Assert.False(migratorSettings.Pooling);
+        Assert.False(runtimeSettings.Pooling);
+
+        await using var command = new NpgsqlCommand(
+            "SELECT current_database(), inet_server_port(), version()", administrator);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.False(string.IsNullOrWhiteSpace(reader.GetString(0)));
+        Assert.Equal(5432, reader.GetInt32(1));
+        Assert.StartsWith("PostgreSQL", reader.GetString(2), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task StartAsync_grants_public_schema_privileges_only_to_the_migrator()
     {
         await using var fixture = new FoundationPostgresFixture();
