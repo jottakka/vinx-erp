@@ -1,16 +1,5 @@
-import {
-  Alert,
-  Box,
-  Button,
-  Paper,
-  Stack,
-  TextField,
-  Typography,
-} from "@mui/material";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { VisualPreferencesControls } from "../../app/theme/vinx-theme-provider";
-import { AppLogo } from "../../shared/ui/app-logo";
 import { useSession } from "./session-provider";
 
 export function LoginPage() {
@@ -27,58 +16,21 @@ export function LoginPage() {
   }
 
   return (
-    <Box
-      component="main"
-      sx={{
-        alignItems: "center",
-        bgcolor: "background.default",
-        color: "text.primary",
-        display: "flex",
-        justifyContent: "center",
-        minHeight: "100dvh",
-        p: { xs: 2, sm: 4 },
-      }}
-    >
-      <Paper
-        sx={{
-          bgcolor: "background.paper",
-          border: 1,
-          borderColor: "divider",
-          p: { xs: 2.5, sm: 4 },
-          width: "min(100%, 32rem)",
-        }}
-        variant="outlined"
-      >
-        <Stack spacing={3}>
-          <AppLogo compact />
-          <Stack spacing={1}>
-            <Typography component="h1" variant="h4">
-              Entrar
-            </Typography>
-            <Typography color="text.secondary" component="p">
-              Entrada interna do protótipo. Não é autenticação de produção.
-            </Typography>
-          </Stack>
-          <VisualPreferencesControls />
-          <Stack component="form" onSubmit={submit} spacing={2}>
-            <TextField
-              fullWidth
-              id="development-profile"
-              label="Perfil de desenvolvimento"
-              onChange={(event) => setProfileId(event.target.value)}
-              value={profileId}
-            />
-            <Button
-              disabled={status === "pending"}
-              type="submit"
-              variant="contained"
-            >
-              Entrar
-            </Button>
-          </Stack>
-          {error ? <Alert severity="error">{error}</Alert> : null}
-        </Stack>
-      </Paper>
-    </Box>
+    <main>
+      <h1>Entrar</h1>
+      <p>Entrada interna do protótipo. Não é autenticação de produção.</p>
+      <form onSubmit={submit}>
+        <label htmlFor="development-profile">Perfil de desenvolvimento</label>
+        <input
+          id="development-profile"
+          onChange={(event) => setProfileId(event.target.value)}
+          value={profileId}
+        />
+        <button disabled={status === "pending"} type="submit">
+          Entrar
+        </button>
+      </form>
+      {error ? <p role="alert">{error}</p> : null}
+    </main>
   );
 }
