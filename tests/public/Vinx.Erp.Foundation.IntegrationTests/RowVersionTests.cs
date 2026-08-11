@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
@@ -42,10 +43,10 @@ public sealed class RowVersionTests
             DateTimeOffset.Parse("2026-08-09T13:00:00+00:00"));
 
         await using var administrator = fixture.CreateAdministratorDbContext();
-        var beforeSave = DateTimeOffset.UtcNow;
+        var beforeSave = await DatabaseClockAsync(fixture);
         administrator.AddRange(user, session);
         await administrator.SaveChangesAsync();
-        var afterSave = DateTimeOffset.UtcNow;
+        var afterSave = await DatabaseClockAsync(fixture);
 
         Assert.Equal(1L, user.RowVersion);
         Assert.Equal(1L, session.RowVersion);
@@ -70,5 +71,13 @@ public sealed class RowVersionTests
         administrator.AddRange(group, company);
         await administrator.SaveChangesAsync();
         return (group.Id, company.Id);
+    }
+
+    private static async Task<DateTimeOffset> DatabaseClockAsync(FoundationPostgresFixture fixture)
+    {
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand("SELECT clock_timestamp()", connection);
+        var value = Assert.IsType<DateTime>(await command.ExecuteScalarAsync());
+        return new DateTimeOffset(value, TimeSpan.Zero);
     }
 }

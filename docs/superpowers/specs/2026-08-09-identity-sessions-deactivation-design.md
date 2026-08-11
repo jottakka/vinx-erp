@@ -6,9 +6,9 @@ Decisão aprovada em 09/08/2026. Esta decisão detalha a fatia de sessões da
 issue #21, subordinada à issue #44. MFA e AAL permanecem na issue #18.
 
 A admissão interna da sessão já foi entregue pela PR #105: estado EF, lock
-atômico, auditoria global e logs operacionais. A próxima fatia da #21 registra
-o gate HTTP e expõe somente a revogação global da própria pessoa; desativação
-e demais operações de sessão continuam posteriores.
+atômico, auditoria global e logs operacionais. A fatia atual da #21 registra o
+gate HTTP e expõe somente a revogação global da própria pessoa; desativação e
+demais operações de sessão continuam posteriores.
 
 ## Objetivo
 
@@ -164,7 +164,15 @@ autoridade de plataforma não será introduzida nesta fatia.
 3. PR de admissão de sessão, já mesclada como #105: modelo EF, lock,
    admissão, auditoria e logs.
 4. PR de gate e `revoke-all` próprio da #21: middleware, função SQL estreita,
-   revogação global atômica e endpoint protegido.
+   revogação global atômica e endpoint protegido. A rota é
+   `POST /foundation/identity/sessions/revoke-all`, sem corpo e sem alvo; usa
+   somente `ActorContext`, responde `204` para `Revoked`/`NoChange` e
+   `503 application/json` com objeto de uma única propriedade `code` e valor
+   `identity_gate_unavailable` para indisponibilidade. A idempotência preserva
+   o mesmo estado final: a concorrência pode responder `204/204` quando ambas
+   as requisições passam pelo gate antes da barreira, ou `204/401` quando uma
+   observa a barreira no gate. O teste determinístico após o primeiro `204`
+   espera `401`.
 5. PR de desativação: capability de grupo, comando transacional, migration,
    documentação e testes públicos, sobre as três PRs anteriores.
 6. Depois de todas mergeadas, a issue #18 implementa MFA step-up/AAL sobre a
@@ -188,3 +196,11 @@ autoridade de plataforma não será introduzida nesta fatia.
 - indisponibilidade de auditoria não desativa nem revoga parcialmente;
 - todos os testes ficam em `tests/public`; `quality/private` não é lido nem
   executado.
+
+## Adiamentos explícitos
+
+Esta entrega não inclui listagem ou revogação individual (#79), interface de
+sessões (#80), administração de sessões (#81), MFA/AAL (#18), recuperação
+(#19) ou logout/banimento no provedor (#20). Esta fatia inclui migration de
+sessão/revogação e gate de identidade. Não há mudança adicional de modelo EF
+ou `ModelSnapshot`, nem entrada nos adiamentos #79, #80, #81, #18, #19 ou #20.

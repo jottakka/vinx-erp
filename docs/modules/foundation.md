@@ -33,12 +33,24 @@ Antes dessa resolução, `session_id` deve ser UUID e `amr` deve conter
 autenticação não `token_refresh`; ausência ou malformação falha fechada com
 `401`. A prova não persiste token nem dado pessoal.
 
-`InternalSessionAdmissionService` é a fatia interna ainda não registrada em
-hosts: bloqueia o usuário por função SQL, grava uma sessão EF só quando a
-autenticação é estritamente posterior à barreira e registra auditoria global
-na mesma transação. Repetição ativa não cria auditoria; barreira, revogação e
-colisão produzem negação auditada sem identificador externo. O próximo gate
-HTTP decidirá entre `401` e `503` a partir desse resultado.
+`InternalSessionAdmissionService` é usado pelo gate HTTP: bloqueia o usuário
+por função SQL, grava uma sessão EF só quando a autenticação é estritamente
+posterior à barreira e registra auditoria global na mesma transação. Repetição
+ativa não cria auditoria; barreira, revogação e colisão produzem negação
+auditada sem identificador externo. O gate cria o `ActorContext` e decide
+entre `401` e `503` antes do endpoint protegido.
+
+`POST /foundation/identity/sessions/revoke-all` não recebe corpo, usuário,
+empresa nem alvo. Ele usa somente o `ActorContext` estabelecido pelo gate e
+revoga todas as sessões da própria pessoa pela função transacional existente.
+`Revoked` e `NoChange` retornam `204`; indisponibilidade retorna
+`503 application/json` com objeto de uma única propriedade `code` e valor
+`identity_gate_unavailable`. A operação mantém o mesmo estado final em
+repetições concorrentes: `204/204` é permitido quando ambas as requisições
+passam pelo gate antes da barreira, e `204/401` quando uma observa a barreira
+antes do endpoint. O teste determinístico após o primeiro `204` espera `401`.
+Listagem e revogação individual (#79), interfaces de sessão (#80), administração de sessão (#81), MFA/AAL (#18),
+recuperação (#19) e logout/banimento no provedor (#20) continuam adiados.
 Configure a API com `SUPABASE_AUTH_ISSUER` e `SUPABASE_AUTH_AUDIENCE`;
 `FOUNDATION_RUNTIME_CONNECTION`, `SUPABASE_STORAGE_URL` e
 `SUPABASE_STORAGE_SERVICE_ROLE_KEY` continuam obrigatórias para a infraestrutura.
