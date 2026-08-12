@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using Npgsql;
 using Xunit;
 
@@ -5,6 +7,76 @@ namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
 public sealed class FoundationPostgresFixtureTests
 {
+    [Fact]
+    public async Task VerifyEndpointAsync_rejects_a_non_postgresql_handshake()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var serverTask = AcceptSslRequestAndReturnIncompatibleHandshakeAsync(listener);
+        var settings = new NpgsqlConnectionStringBuilder
+        {
+            Host = IPAddress.Loopback.ToString(),
+            Port = port,
+            Database = "postgres",
+            Username = "postgres",
+            Password = "fixture-secret-must-not-leak",
+            Pooling = false
+        };
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => FoundationPostgresFixture.VerifyEndpointAsync(
+                    settings,
+                    "endpoint-connect",
+                    CancellationToken.None));
+
+            Assert.Contains("phase=endpoint-connect", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("host=127.0.0.1", exception.Message, StringComparison.Ordinal);
+            Assert.Contains($"port={port}", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("NpgsqlException", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(settings.Password, exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            listener.Stop();
+            try
+            {
+                await serverTask;
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_uses_nonpooled_connections_to_a_verified_postgresql_endpoint()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        var administratorSettings = new NpgsqlConnectionStringBuilder(administrator.ConnectionString);
+        var migratorSettings = new NpgsqlConnectionStringBuilder(fixture.MigratorConnectionString);
+        var runtimeSettings = new NpgsqlConnectionStringBuilder(fixture.RuntimeConnectionString);
+        Assert.False(administratorSettings.Pooling);
+        Assert.False(migratorSettings.Pooling);
+        Assert.False(runtimeSettings.Pooling);
+
+        await using var command = new NpgsqlCommand(
+            "SELECT current_database(), inet_server_port(), version()", administrator);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.False(string.IsNullOrWhiteSpace(reader.GetString(0)));
+        Assert.Equal(5432, reader.GetInt32(1));
+        Assert.StartsWith("PostgreSQL", reader.GetString(2), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task StartAsync_grants_public_schema_privileges_only_to_the_migrator()
     {
@@ -180,5 +252,15 @@ public sealed class FoundationPostgresFixtureTests
             "SELECT has_database_privilege('vinx_audit_owner', current_database(), 'CREATE')", connection);
         return (bool)(await command.ExecuteScalarAsync()
             ?? throw new InvalidOperationException("The privilege query returned no result."));
+    }
+
+    private static async Task AcceptSslRequestAndReturnIncompatibleHandshakeAsync(TcpListener listener)
+    {
+        using var client = await listener.AcceptTcpClientAsync();
+        await using var stream = client.GetStream();
+        var request = new byte[8];
+        await stream.ReadExactlyAsync(request);
+        await stream.WriteAsync(new byte[] { (byte)'H' });
+        await stream.FlushAsync();
     }
 }
