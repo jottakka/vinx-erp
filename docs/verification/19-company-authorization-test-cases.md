@@ -3,8 +3,8 @@
 ## Escopo desta fatia
 
 Esta fatia introduz a avaliação de capability por membership, o catálogo
-durável de Foundation e o mapa autenticado de memberships. Revogação continua
-em fatia posterior; não há rota CRUD, grant novo ou alteração de RLS.
+durável de Foundation, o mapa autenticado e a revogação interna de membership.
+Não há rota CRUD, MCP, UI, grant novo ou alteração de RLS nesta entrega.
 
 | Classe BDD | Cenário | Evidência pública | Situação |
 |---|---|---|---|
@@ -17,6 +17,9 @@ em fatia posterior; não há rota CRUD, grant novo ou alteração de RLS.
 | downgrade | Dada capability seeded referenciada, quando faz downgrade, então falha fechada sem remover catálogo | `CapabilityCatalogMigrationTests.Downgrade_fails_closed_when_a_seeded_capability_is_referenced` | coberto |
 | mapa autenticado | Dado ator com memberships Alfa, Beta e Gama, quando consulta `/foundation/memberships`, então recebe somente suas memberships em ordem de nome, grants isolados por empresa e lista vazia quando não há grant | `MembershipMapEndpointTests.Membership_map_returns_only_the_current_actor_memberships_with_company_scoped_grants`; cenário BDD `Current actor membership map contains only company-scoped grants` | coberto |
 | mapa anônimo | Dada chamada sem ator autenticado, quando consulta `/foundation/memberships`, então recebe `401` | `MembershipMapEndpointTests.Membership_map_rejects_an_anonymous_call` | coberto |
+| revogação | Dado ator ativo com `foundation.memberships.revoke` em `company`, quando revoga membership ativa da mesma empresa, então há soft-delete, uma idempotência e uma auditoria de sucesso | `RevokeMembershipServiceIntegrationTests.Revoking_an_active_same_company_membership_soft_deletes_it_and_writes_one_audit_and_idempotency_record` | coberto |
+| replay | Dado `request_id` repetido após soft-delete, quando o payload é igual, então retorna sucesso original; com payload diferente retorna conflito | `RevokeMembershipServiceIntegrationTests.Matching_replay_returns_original_result_and_different_payload_conflicts` | coberto |
+| acesso e isolamento | Dada capability fora de `company`, capability removida antes do replay ou alvo Beta, quando tenta revogar Alfa, então nega antes de replay e não revela/altera outra empresa | `RevokeMembershipServiceIntegrationTests.Non_company_scope_is_denied`; `Authorization_is_evaluated_before_a_matching_replay`; `Cross_company_target_is_hidden_as_not_found` | coberto |
 
 ## Limites mantidos
 
