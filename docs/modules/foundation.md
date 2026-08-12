@@ -132,9 +132,16 @@ identidade possui somente `USAGE` em `foundation`, `SELECT` em
 necessário para o `FOR UPDATE` da função de admissão de sessão. O owner de
 autorização recebe leitura somente de `memberships` e `companies` para
 `current_actor_memberships()`, e suas policies RLS exclusivas não se aplicam
-ao runtime. O runtime não recebe esses `UPDATE`s nem leitura global dessas
+ao runtime. O runtime não recebe `UPDATE` amplo nem leitura global dessas
 tabelas. Essas roles são distintas das roles legadas do Supabase: `anon`,
 `authenticated` e `service_role`.
+
+A revogação de membership é transição de domínio idempotente: marca somente o
+soft-delete e a auditoria técnica da própria membership. Ela não revoga
+sessões nem altera `sessions_valid_after`. O runtime recebe `UPDATE` apenas nas
+colunas de ciclo de vida da revogação, auditoria de alteração e `row_version`;
+`INSERT`, `DELETE` e chaves da membership continuam negados, sob a policy RLS
+de empresa já existente.
 
 ## Module responsibilities
 
