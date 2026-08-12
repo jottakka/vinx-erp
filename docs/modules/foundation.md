@@ -50,6 +50,15 @@ ativa não cria auditoria; barreira, revogação e colisão produzem negação
 auditada sem identificador externo. O gate cria o `ActorContext` e decide
 entre `401` e `503` antes do endpoint protegido.
 
+`GET /foundation/memberships` usa somente esse `ActorContext`. Em uma única
+transação de leitura, descobre as memberships ativas do ator e projeta as
+capabilities efetivas por empresa, em ordem de nome da empresa. Cada empresa
+recebe contexto RLS próprio antes da leitura de grants; uma membership válida
+sem grant retorna `capabilities: []`. A resposta não expõe papéis, identidade
+externa ou dados de autenticação. Falha de descoberta retorna `503` seguro.
+`GET /foundation/capabilities?companyId=` continua sendo o contrato de uma
+única empresa e preserva suas negações auditáveis.
+
 `POST /foundation/identity/sessions/revoke-all` não recebe corpo, usuário,
 empresa nem alvo. Ele usa somente o `ActorContext` estabelecido pelo gate e
 revoga todas as sessões da própria pessoa pela função transacional existente.
@@ -115,12 +124,16 @@ The first migration is `InitialFoundationBaseline`.
 
 A fronteira atual de ownership usa `vinx_migrator LOGIN NOINHERIT
 NOBYPASSRLS`, `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`,
-`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
-`vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O último possui somente
-`USAGE` em `foundation`, `SELECT` em `foundation.users` e `UPDATE` apenas na
-coluna `sessions_valid_after`, necessário para o `FOR UPDATE` da função de
-admissão de sessão. O runtime não recebe esse `UPDATE` nem leitura direta de
-`users`. Essas roles são distintas das roles legadas do Supabase: `anon`,
+`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`,
+`vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
+`vinx_authorization_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O owner de
+identidade possui somente `USAGE` em `foundation`, `SELECT` em
+`foundation.users` e `UPDATE` apenas na coluna `sessions_valid_after`,
+necessário para o `FOR UPDATE` da função de admissão de sessão. O owner de
+autorização recebe leitura somente de `memberships` e `companies` para
+`current_actor_memberships()`, e suas policies RLS exclusivas não se aplicam
+ao runtime. O runtime não recebe esses `UPDATE`s nem leitura global dessas
+tabelas. Essas roles são distintas das roles legadas do Supabase: `anon`,
 `authenticated` e `service_role`.
 
 ## Module responsibilities
