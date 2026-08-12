@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
+using System.Runtime.ExceptionServices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -177,27 +179,7 @@ public sealed class RevokeMembershipServiceIntegrationTests
     [Fact]
     public async Task Audit_failure_rolls_back_the_membership_revocation_and_reports_membership_telemetry()
     {
-        using var listener = new MeterListener();
-        var operation = default(string);
-        listener.InstrumentPublished = (instrument, meterListener) =>
-        {
-            if (instrument.Meter.Name == AuthorizationTelemetry.MeterName
-                && instrument.Name == AuthorizationTelemetry.AuditUnavailableCounterName)
-            {
-                meterListener.EnableMeasurementEvents(instrument);
-            }
-        };
-        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
-        {
-            foreach (var tag in tags)
-            {
-                if (tag.Key == "operation")
-                {
-                    operation = tag.Value?.ToString();
-                }
-            }
-        });
-        listener.Start();
+        using var telemetry = new AuthorizationTelemetryCollector();
 
         await using var factory = await FoundationApiFactory.CreateAsync();
         var logCapture = new RevocationLogCapture(typeof(RevokeMembershipService).FullName!);
@@ -208,7 +190,7 @@ public sealed class RevokeMembershipServiceIntegrationTests
         var result = await RevokeAsync(factory, scenario.CompanyId, scenario.TargetMembershipId, Guid.NewGuid());
 
         Assert.Equal("audit_unavailable", ErrorCode(result));
-        Assert.Equal("membership_revocation", operation);
+        telemetry.AssertRecorded("membership_revocation", "success_transaction");
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         Assert.Null(await DeletedAtAsync(administrator, scenario.TargetMembershipId));
         Assert.Empty(await administrator.IdempotencyRecords.Where(record =>
@@ -239,6 +221,7 @@ public sealed class RevokeMembershipServiceIntegrationTests
         await AcquireRaceCoordinatorLockAsync(coordinator);
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
+        Task<AuthorizationResult<RevokeMembershipResult>[]>? allAttempts = null;
         try
         {
             var attempts = Enumerable.Range(0, 16).Select(_ => RevokeAsync(
@@ -247,7 +230,7 @@ public sealed class RevokeMembershipServiceIntegrationTests
                 scenario.TargetMembershipId,
                 requestId,
                 cancellation.Token));
-            var allAttempts = Task.WhenAll(attempts);
+            allAttempts = Task.WhenAll(attempts);
             await WaitForRaceArrivalsAsync(coordinator, expectedArrivals: 16, cancellation.Token);
             await ReleaseRaceCoordinatorLockAsync(coordinator);
             var results = await allAttempts;
@@ -273,7 +256,24 @@ public sealed class RevokeMembershipServiceIntegrationTests
         finally
         {
             await ReleaseRaceCoordinatorLockAsync(coordinator);
+            Exception? attemptsFailure = null;
+            if (allAttempts is not null)
+            {
+                try
+                {
+                    await allAttempts;
+                }
+                catch (Exception exception)
+                {
+                    attemptsFailure = exception;
+                }
+            }
+
             await RemoveMembershipRevocationRaceBarrierAsync(factory);
+            if (attemptsFailure is not null)
+            {
+                ExceptionDispatchInfo.Capture(attemptsFailure).Throw();
+            }
         }
     }
 
@@ -281,18 +281,47 @@ public sealed class RevokeMembershipServiceIntegrationTests
     public async Task Cancellation_propagates_without_revoking_the_target()
     {
         await using var factory = await FoundationApiFactory.CreateAsync();
+        var logCapture = new RevocationLogCapture(typeof(RevokeMembershipService).FullName!);
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logCapture);
         var scenario = await SeedScenarioAsync(factory);
+        await InstallMembershipRevocationRaceBarrierAsync(factory);
+        await using var coordinator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await AcquireRaceCoordinatorLockAsync(coordinator);
         using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
-
-        await Assert.ThrowsAsync<OperationCanceledException>(() => RevokeAsync(
+        var revocation = RevokeAsync(
             factory,
             scenario.CompanyId,
             scenario.TargetMembershipId,
             Guid.NewGuid(),
-            cancellation.Token));
-        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        Assert.Null(await DeletedAtAsync(administrator, scenario.TargetMembershipId));
+            cancellation.Token);
+
+        try
+        {
+            await WaitForRaceArrivalsAsync(coordinator, expectedArrivals: 1, CancellationToken.None);
+            cancellation.Cancel();
+            await ReleaseRaceCoordinatorLockAsync(coordinator);
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() => revocation);
+            await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+            Assert.Null(await DeletedAtAsync(administrator, scenario.TargetMembershipId));
+            Assert.Empty(await administrator.IdempotencyRecords.Where(record =>
+                record.CommandName == "foundation.memberships.revoke").ToListAsync());
+            Assert.Empty(await administrator.AuditEvents.ToListAsync());
+            Assert.Empty(logCapture.Entries);
+        }
+        finally
+        {
+            await ReleaseRaceCoordinatorLockAsync(coordinator);
+            try
+            {
+                await revocation;
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+            }
+
+            await RemoveMembershipRevocationRaceBarrierAsync(factory);
+        }
     }
 
     private static async Task<RevocationScenario> SeedScenarioAsync(
@@ -481,6 +510,42 @@ public sealed class RevokeMembershipServiceIntegrationTests
         LogLevel Level,
         Exception? Exception,
         IReadOnlyDictionary<string, object?> Properties);
+
+    private sealed class AuthorizationTelemetryCollector : IDisposable
+    {
+        private readonly ConcurrentQueue<IReadOnlyDictionary<string, string>> _measurements = new();
+        private readonly MeterListener _listener = new();
+
+        public AuthorizationTelemetryCollector()
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == AuthorizationTelemetry.MeterName
+                    && instrument.Name == AuthorizationTelemetry.AuditUnavailableCounterName)
+                {
+                    listener.EnableMeasurementEvents(instrument);
+                }
+            };
+            _listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                _measurements.Enqueue(tags.ToArray().ToDictionary(
+                    tag => tag.Key,
+                    tag => tag.Value?.ToString() ?? string.Empty,
+                    StringComparer.Ordinal));
+            });
+            _listener.Start();
+        }
+
+        public void AssertRecorded(string operation, string phase)
+        {
+            Assert.Contains(_measurements, measurement =>
+                measurement.Count == 2
+                && measurement.GetValueOrDefault("operation") == operation
+                && measurement.GetValueOrDefault("phase") == phase);
+        }
+
+        public void Dispose() => _listener.Dispose();
+    }
 
     private sealed class RevocationLogCapture : ILoggerProvider, ILogger
     {
