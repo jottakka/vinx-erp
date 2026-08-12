@@ -118,18 +118,18 @@ public sealed record AgentToolDescriptor
             return;
         }
 
-        if (mcpHints.ReadOnlyHint || !mcpHints.IdempotentHint)
+        if (mcpHints.ReadOnlyHint)
         {
             throw new ArgumentException(
-                "Write tools must expose non-read-only idempotent MCP hints.",
+                "Write tools must expose a non-read-only MCP hint.",
                 nameof(mcpHints));
         }
 
-        if (!requiresIdempotency)
+        if (requiresIdempotency && !mcpHints.IdempotentHint)
         {
             throw new ArgumentException(
-                "Write tools must require an idempotency key.",
-                nameof(requiresIdempotency));
+                "Tools that require idempotency must expose an idempotent MCP hint.",
+                nameof(mcpHints));
         }
     }
 }

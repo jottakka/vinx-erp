@@ -103,15 +103,14 @@ public sealed class AgentToolRegistryTests
     }
 
     [Fact]
-    public void Write_descriptor_requires_idempotent_non_read_only_contract()
+    public void Write_descriptor_rejects_read_only_hint_or_required_idempotency_mismatch()
     {
         Assert.Throws<ArgumentException>(() => CreateDescriptor(
             "payments.write",
             "1.0.0",
             risk: AgentToolRisk.InternalWrite,
             requiresIdempotency: false,
-            readOnlyHint: false,
-            idempotentHint: true));
+            readOnlyHint: true));
         Assert.Throws<ArgumentException>(() => CreateDescriptor(
             "payments.write",
             "1.0.0",
@@ -129,20 +128,20 @@ public sealed class AgentToolRegistryTests
     }
 
     [Fact]
-    public void Destructive_external_write_descriptor_can_be_consistent()
+    public void Non_idempotent_destructive_external_write_descriptor_can_be_consistent()
     {
         var descriptor = CreateDescriptor(
             "payments.submit",
             "1.0.0",
             risk: AgentToolRisk.ExternalWrite,
-            requiresIdempotency: true,
+            requiresIdempotency: false,
             readOnlyHint: false,
             destructiveHint: true,
-            idempotentHint: true);
+            idempotentHint: false);
 
         Assert.Equal(AgentToolRisk.ExternalWrite, descriptor.Risk);
         Assert.True(descriptor.McpHints.DestructiveHint);
-        Assert.True(descriptor.RequiresIdempotency);
+        Assert.False(descriptor.RequiresIdempotency);
     }
 
     private static AgentToolDescriptor CreateDescriptor(
