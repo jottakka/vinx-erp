@@ -65,6 +65,16 @@ test("Scenario: Maria uses the professional development entry", async ({
   await page.goto("/login");
 
   await chooseAppearance(page, "Tema: escuro");
+  await chooseAppearance(page, "Densidade: compacta");
+  await expectSelectedAppearance(page, "Densidade: compacta");
+
+  const loginCard = page.locator("main .MuiPaper-root");
+  await expect(loginCard).toHaveCSS("padding-top", "12px");
+  await expect(loginCard.locator(":scope > .MuiStack-root")).toHaveCSS(
+    "gap",
+    "16px",
+  );
+
   await page.getByLabel("Perfil de desenvolvimento").fill("maria");
   await page.getByRole("button", { name: "Entrar" }).click();
 
