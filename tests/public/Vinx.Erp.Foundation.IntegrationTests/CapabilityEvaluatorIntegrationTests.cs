@@ -97,16 +97,11 @@ public sealed class CapabilityEvaluatorIntegrationTests
         var user = new User(actorUserId, $"User {Guid.NewGuid():N}", $"{Guid.NewGuid():N}@example.test");
         var membership = new Membership(Guid.NewGuid(), company.Id, user.Id, actorUserId, requestId);
         var role = new Role(Guid.NewGuid(), company.Id, $"Role {Guid.NewGuid():N}", actorUserId, requestId);
-        var capability = await administrator.Capabilities.SingleOrDefaultAsync(candidate =>
-            candidate.Name == "foundation.roles.assign")
-            ?? new Capability(Guid.NewGuid(), "foundation.roles.assign");
+        var capability = await administrator.Capabilities.SingleAsync(candidate =>
+            candidate.Name == KnownCapabilities.RolesAssign);
         var assignment = new RoleAssignment(Guid.NewGuid(), company.Id, role.Id, membership.Id, actorUserId, requestId);
         var grant = new RoleCapability(Guid.NewGuid(), company.Id, role.Id, capability.Id, scope, actorUserId, requestId);
         administrator.AddRange(group, company, user, membership, role, assignment, grant);
-        if (administrator.Entry(capability).State == EntityState.Detached)
-        {
-            administrator.Capabilities.Add(capability);
-        }
         await administrator.SaveChangesAsync();
         return new EvaluatorScenario(company.Id, membership.Id);
     }

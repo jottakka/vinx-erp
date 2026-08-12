@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Audit;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -616,10 +617,12 @@ public sealed class DocumentUploadEndpointTests
         var company = new Company(Guid.NewGuid(), group.Id, "Vinx Obras", factory.ActorUserId, request);
         var membership = new Membership(Guid.NewGuid(), company.Id, factory.ActorUserId, factory.ActorUserId, request);
         var role = new Role(Guid.NewGuid(), company.Id, "Document operator", factory.ActorUserId, request);
-        var uploadCapability = new Capability(Guid.NewGuid(), "foundation.files.upload");
-        var confirmCapability = new Capability(Guid.NewGuid(), "foundation.files.confirm");
+        var uploadCapability = await administrator.Capabilities.SingleAsync(capability =>
+            capability.Name == KnownCapabilities.FilesUpload);
+        var confirmCapability = await administrator.Capabilities.SingleAsync(capability =>
+            capability.Name == KnownCapabilities.FilesConfirm);
         var assignment = new RoleAssignment(Guid.NewGuid(), company.Id, role.Id, membership.Id, factory.ActorUserId, request);
-        administrator.AddRange(group, company, membership, role, uploadCapability, confirmCapability, assignment);
+        administrator.AddRange(group, company, membership, role, assignment);
         if (grantUpload)
         {
             administrator.RoleCapabilities.Add(new RoleCapability(

@@ -22,6 +22,16 @@ The frontend receives effective capabilities only to shape menus, routes,
 buttons, columns and data. It is never the authorization authority. API, MCP
 and database protections deny forged or cross-company requests.
 
+## Catálogo de capabilities
+
+`foundation.capabilities` é catálogo técnico administrado exclusivamente por
+migrations. Os nomes canônicos são identidade estável; o runtime apenas lê o
+catálogo e não recebe `INSERT`, `UPDATE` ou `DELETE`. A migration preserva uma
+linha legada que já use o mesmo nome, falha se o UUID canônico estiver ocupado
+por outro nome e não permite downgrade que remova uma capability referenciada
+por um grant. Para comandos atuais, somente grant de escopo `company` satisfaz
+o requisito; os demais escopos falham fechados até existir regra específica.
+
 ## Identidade autenticada
 
 A API valida o JWT do Supabase Auth e resolve o ator interno exclusivamente

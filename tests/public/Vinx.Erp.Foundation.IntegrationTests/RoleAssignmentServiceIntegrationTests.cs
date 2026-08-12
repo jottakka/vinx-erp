@@ -194,7 +194,8 @@ public sealed class RoleAssignmentServiceIntegrationTests
         var administratorRole = new Role(Guid.NewGuid(), company.Id, "Foundation administrator", factory.ActorUserId, requestId);
         var assignableRole = new Role(Guid.NewGuid(), company.Id, "Operator", factory.ActorUserId, requestId);
         var alternateRole = new Role(Guid.NewGuid(), company.Id, "Reviewer", factory.ActorUserId, requestId);
-        var capability = new Capability(Guid.NewGuid(), "foundation.roles.assign");
+        var capability = await administrator.Capabilities.SingleAsync(candidate =>
+            candidate.Name == KnownCapabilities.RolesAssign);
         var grant = new RoleCapability(
             Guid.NewGuid(), company.Id, administratorRole.Id, capability.Id, administratorScope, factory.ActorUserId, requestId);
         var administratorAssignment = new RoleAssignment(
@@ -211,7 +212,6 @@ public sealed class RoleAssignmentServiceIntegrationTests
             administratorRole,
             assignableRole,
             alternateRole,
-            capability,
             grant,
             administratorAssignment);
         await administrator.SaveChangesAsync();
