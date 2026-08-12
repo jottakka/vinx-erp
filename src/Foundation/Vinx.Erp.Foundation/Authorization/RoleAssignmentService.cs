@@ -13,10 +13,12 @@ namespace Vinx.Erp.Foundation.Authorization;
 public sealed class RoleAssignmentService(
     FoundationDbContext database,
     AuditAppender auditAppender,
-    AuthorizationTelemetry telemetry)
+    AuthorizationTelemetry telemetry,
+    CapabilityEvaluator capabilityEvaluator)
 {
     private const string CommandName = "foundation.roles.assign";
-    private const string RequiredCapability = "foundation.roles.assign";
+    private static readonly CapabilityRequirement RequiredCapability =
+        new(KnownCapabilities.RolesAssign, CapabilityScope.Company);
 
     public async Task<AuthorizationResult<AssignRoleToMembershipResult>> AssignRoleToMembershipAsync(
         ActorContext actor,
@@ -37,7 +39,7 @@ public sealed class RoleAssignmentService(
             {
                 denial = AuthorizationErrorCode.MembershipRequired;
             }
-            else if (!await HasRequiredCapabilityAsync(command.CompanyId, actorMembership.Id, cancellationToken))
+            else if (!await capabilityEvaluator.HasGrantAsync(command.CompanyId, actorMembership.Id, RequiredCapability, cancellationToken))
             {
                 denial = AuthorizationErrorCode.CapabilityDenied;
             }
@@ -131,20 +133,6 @@ public sealed class RoleAssignmentService(
 
         return await ReturnAuditedDenialAsync(actor, command.CompanyId, denial!.Value, cancellationToken);
     }
-
-    private async Task<bool> HasRequiredCapabilityAsync(Guid companyId, Guid membershipId, CancellationToken cancellationToken) =>
-        await (
-            from assignment in database.RoleAssignments.AsNoTracking()
-            join role in database.Roles.AsNoTracking() on assignment.RoleId equals role.Id
-            join grant in database.RoleCapabilities.AsNoTracking() on role.Id equals grant.RoleId
-            join capability in database.Capabilities.AsNoTracking() on grant.CapabilityId equals capability.Id
-            where assignment.CompanyId == companyId
-                && assignment.MembershipId == membershipId
-                && role.CompanyId == companyId
-                && grant.CompanyId == companyId
-                && capability.Name == RequiredCapability
-            select capability.Id)
-            .AnyAsync(cancellationToken);
 
     private async Task<AuthorizationResult<AssignRoleToMembershipResult>> ReturnAuditedDenialAsync(
         ActorContext actor,

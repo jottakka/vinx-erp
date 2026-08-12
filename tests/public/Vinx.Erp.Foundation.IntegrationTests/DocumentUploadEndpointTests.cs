@@ -258,6 +258,34 @@ public sealed class DocumentUploadEndpointTests
         Assert.Equal("capability_denied", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
     }
 
+    [Theory]
+    [InlineData(CapabilityScope.Self)]
+    [InlineData(CapabilityScope.Team)]
+    [InlineData(CapabilityScope.Unit)]
+    [InlineData(CapabilityScope.Group)]
+    public async Task Restricted_scopes_do_not_authorize_company_upload_commands(CapabilityScope scope)
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, uploadScope: scope, confirmationScope: scope);
+
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/upload-intentions", NewIntent(scenario.CompanyId));
+        var confirmationResponse = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), Guid.NewGuid()));
+
+        Assert.Equal(HttpStatusCode.Forbidden, intentResponse.StatusCode);
+        Assert.Equal("capability_denied", (await intentResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(HttpStatusCode.Forbidden, confirmationResponse.StatusCode);
+        Assert.Equal("capability_denied", (await confirmationResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.Files.ToListAsync());
+        Assert.Empty(await administrator.IdempotencyRecords.ToListAsync());
+        Assert.Equal(2, await administrator.AuditEvents.CountAsync(audit =>
+            audit.Action == "capability_denied" && audit.Outcome == AuditOutcome.Denied));
+    }
+
     [Fact]
     public async Task Confirmation_hides_a_file_from_another_authorized_tenant()
     {
@@ -578,7 +606,9 @@ public sealed class DocumentUploadEndpointTests
     private static async Task<UploadScenario> SeedScenarioAsync(
         FoundationApiFactory factory,
         bool grantUpload = true,
-        bool grantConfirmation = true)
+        bool grantConfirmation = true,
+        CapabilityScope uploadScope = CapabilityScope.Company,
+        CapabilityScope confirmationScope = CapabilityScope.Company)
     {
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var request = Guid.NewGuid();
@@ -593,13 +623,13 @@ public sealed class DocumentUploadEndpointTests
         if (grantUpload)
         {
             administrator.RoleCapabilities.Add(new RoleCapability(
-                Guid.NewGuid(), company.Id, role.Id, uploadCapability.Id, CapabilityScope.Company, factory.ActorUserId, request));
+                Guid.NewGuid(), company.Id, role.Id, uploadCapability.Id, uploadScope, factory.ActorUserId, request));
         }
 
         if (grantConfirmation)
         {
             administrator.RoleCapabilities.Add(new RoleCapability(
-                Guid.NewGuid(), company.Id, role.Id, confirmCapability.Id, CapabilityScope.Company, factory.ActorUserId, request));
+                Guid.NewGuid(), company.Id, role.Id, confirmCapability.Id, confirmationScope, factory.ActorUserId, request));
         }
 
         await administrator.SaveChangesAsync();
