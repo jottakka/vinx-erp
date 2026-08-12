@@ -38,16 +38,7 @@ public sealed class CapabilityMapService(
                 }
                 else
                 {
-                    var grants = await (
-                        from assignment in database.RoleAssignments.AsNoTracking()
-                        join role in database.Roles.AsNoTracking() on assignment.RoleId equals role.Id
-                        join grant in database.RoleCapabilities.AsNoTracking() on role.Id equals grant.RoleId
-                        join capability in database.Capabilities.AsNoTracking() on grant.CapabilityId equals capability.Id
-                        where assignment.CompanyId == companyId
-                            && assignment.MembershipId == membership.Id
-                            && role.CompanyId == companyId
-                            && grant.CompanyId == companyId
-                        select new CapabilityGrant(capability.Name, grant.Scope))
+                    var grants = await CreateCapabilityGrantQuery(database, companyId.Value, membership.Id)
                         .ToListAsync(cancellationToken);
 
                     if (grants.Count == 0)
@@ -56,13 +47,7 @@ public sealed class CapabilityMapService(
                     }
                     else
                     {
-                        capabilities = grants
-                            .GroupBy(grant => grant.Name, StringComparer.Ordinal)
-                            .OrderBy(group => group.Key, StringComparer.Ordinal)
-                            .Select(group => new EffectiveCapability(
-                                group.Key,
-                                new HashSet<CapabilityScope>(group.Select(grant => grant.Scope))))
-                            .ToArray();
+                        capabilities = ProjectEffectiveCapabilities(grants);
                     }
                 }
 
@@ -137,5 +122,28 @@ public sealed class CapabilityMapService(
             $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)", cancellationToken);
     }
 
-    private sealed record CapabilityGrant(string Name, CapabilityScope Scope);
+    internal static IQueryable<CapabilityGrant> CreateCapabilityGrantQuery(
+        FoundationDbContext database,
+        Guid companyId,
+        Guid membershipId) =>
+        from assignment in database.RoleAssignments.AsNoTracking()
+        join role in database.Roles.AsNoTracking() on assignment.RoleId equals role.Id
+        join grant in database.RoleCapabilities.AsNoTracking() on role.Id equals grant.RoleId
+        join capability in database.Capabilities.AsNoTracking() on grant.CapabilityId equals capability.Id
+        where assignment.CompanyId == companyId
+            && assignment.MembershipId == membershipId
+            && role.CompanyId == companyId
+            && grant.CompanyId == companyId
+        select new CapabilityGrant(capability.Name, grant.Scope);
+
+    internal static IReadOnlyList<EffectiveCapability> ProjectEffectiveCapabilities(IEnumerable<CapabilityGrant> grants) =>
+        grants
+            .GroupBy(grant => grant.Name, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => new EffectiveCapability(
+                group.Key,
+                new HashSet<CapabilityScope>(group.Select(grant => grant.Scope))))
+            .ToArray();
+
+    internal sealed record CapabilityGrant(string Name, CapabilityScope Scope);
 }

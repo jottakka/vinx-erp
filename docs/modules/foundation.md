@@ -50,6 +50,15 @@ ativa não cria auditoria; barreira, revogação e colisão produzem negação
 auditada sem identificador externo. O gate cria o `ActorContext` e decide
 entre `401` e `503` antes do endpoint protegido.
 
+`GET /foundation/memberships` usa somente esse `ActorContext`. Em uma única
+transação de leitura, descobre as memberships ativas do ator e projeta as
+capabilities efetivas por empresa, em ordem de nome da empresa. Cada empresa
+recebe contexto RLS próprio antes da leitura de grants; uma membership válida
+sem grant retorna `capabilities: []`. A resposta não expõe papéis, identidade
+externa ou dados de autenticação. Falha de descoberta retorna `503` seguro.
+`GET /foundation/capabilities?companyId=` continua sendo o contrato de uma
+única empresa e preserva suas negações auditáveis.
+
 `POST /foundation/identity/sessions/revoke-all` não recebe corpo, usuário,
 empresa nem alvo. Ele usa somente o `ActorContext` estabelecido pelo gate e
 revoga todas as sessões da própria pessoa pela função transacional existente.

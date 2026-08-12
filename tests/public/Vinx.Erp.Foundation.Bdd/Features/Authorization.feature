@@ -1,6 +1,13 @@
 @foundation
 Feature: Foundation authorization
 
+Scenario: Current actor membership map contains only company-scoped grants
+  Given Ana has memberships in Alfa, Beta and Gama
+  When she requests her membership capability map
+  Then the membership map lists Alfa, Beta and Gama in that order
+  And Alfa has only "payment.approve" and Beta has only "foundation.files.upload"
+  And Gama has no effective capabilities
+
 Scenario: Capability map without an explicit company is denied
   Given Ana is authenticated
   When she requests her capability map without a company identifier
