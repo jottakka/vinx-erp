@@ -19,7 +19,10 @@ usam seam restrito à infraestrutura de testes.
 - Não alterar produção, provider, imagem, pacote, paralelismo global, #173 ou frontend.
 - Sem retry, polling ou `Task.Delay` de readiness; hipótese não comprovada.
 - Nunca expor senha ou connection string completa.
-- Estimativa: 4–6 arquivos, 180–320 linhas manuais; parar/redividir se exceder 800 linhas.
+- A PR parte de #177 e tem estimativa adicional de 180–320 linhas manuais em
+  quatro arquivos. O conjunto empilhado não é a base de revisão desta fatia;
+  após merge de #177, a diff contra `main` deve permanecer até 320 linhas.
+  Parar/redividir se exceder 800 linhas.
 
 ## Arquivos
 
@@ -38,7 +41,8 @@ usam seam restrito à infraestrutura de testes.
 **Interfaces:**
 
 - Produzir uma leitura de identidade observável do fixture, sem senha.
-- Estender `VerifyEndpointAsync` para receber identidade esperada.
+- Estender `VerifyEndpointAsync` para receber identidade esperada por record
+  interno, sem fazer endpoint ou senha públicos.
 
 - [ ] **Step 1: Escrever RED de PostgreSQL válido, mas errado**
 
