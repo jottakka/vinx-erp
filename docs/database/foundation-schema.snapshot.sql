@@ -69,6 +69,21 @@ END;
 $$;
 
 
+-- Name: current_actor_memberships(); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.current_actor_memberships() RETURNS TABLE(membership_id uuid, company_id uuid, company_name text)
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'foundation', 'pg_catalog'
+    AS $$
+    SELECT membership.id, company.id, company.name::text
+    FROM foundation.memberships AS membership
+    INNER JOIN foundation.companies AS company ON company.id = membership.company_id
+    WHERE membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid
+      AND membership.deleted_at IS NULL
+    ORDER BY company.name, company.id;
+$$;
+
+
 -- Name: lock_user_for_session_admission(uuid); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.lock_user_for_session_admission(p_user_id uuid) RETURNS TABLE(sessions_valid_after timestamp with time zone)
@@ -845,6 +860,11 @@ ALTER TABLE ONLY foundation.user_sessions
 
 ALTER TABLE foundation.companies ENABLE ROW LEVEL SECURITY;
 
+-- Name: companies companies_authorization_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY companies_authorization_owner_read ON foundation.companies FOR SELECT TO vinx_authorization_owner USING (true);
+
+
 -- Name: companies companies_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY companies_company_isolation ON foundation.companies USING ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
@@ -893,6 +913,11 @@ CREATE POLICY idempotency_records_company_isolation ON foundation.idempotency_re
 -- Name: memberships; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.memberships ENABLE ROW LEVEL SECURITY;
+
+-- Name: memberships memberships_authorization_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_authorization_owner_read ON foundation.memberships FOR SELECT TO vinx_authorization_owner USING (true);
+
 
 -- Name: memberships memberships_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 

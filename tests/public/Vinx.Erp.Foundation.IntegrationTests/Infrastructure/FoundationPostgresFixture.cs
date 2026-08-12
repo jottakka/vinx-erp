@@ -61,6 +61,8 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
 
     public Task<bool> MigratorCanSetAuditOwnerAsync() => MigratorCanSetRoleAsync("vinx_audit_owner");
 
+    public Task<bool> MigratorCanSetAuthorizationOwnerAsync() => MigratorCanSetRoleAsync("vinx_authorization_owner");
+
     public Task<bool> MigratorCanSetIdentityOwnerAsync() => MigratorCanSetRoleAsync("vinx_identity_owner");
 
     public async Task MigrateAsync()

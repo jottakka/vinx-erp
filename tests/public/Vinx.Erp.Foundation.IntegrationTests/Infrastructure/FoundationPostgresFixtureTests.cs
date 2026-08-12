@@ -64,7 +64,7 @@ public sealed class FoundationPostgresFixtureTests
     }
 
     [Fact]
-    public async Task StartAsync_creates_the_four_non_superuser_roles_and_migrator_can_set_isolated_owners()
+    public async Task StartAsync_creates_the_isolated_non_superuser_roles_and_migrator_can_set_them()
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
@@ -74,14 +74,16 @@ public sealed class FoundationPostgresFixtureTests
             "SELECT rolname FROM pg_roles WHERE rolname = ANY (@roles) ORDER BY rolname", connection);
         command.Parameters.AddWithValue("roles", new[]
         {
-            "vinx_audit_owner", "vinx_identity_owner", "vinx_migrator", "vinx_runtime"
+            "vinx_audit_owner", "vinx_authorization_owner", "vinx_identity_owner", "vinx_migrator", "vinx_runtime"
         });
 
         await using var reader = await command.ExecuteReaderAsync();
         var roles = new List<string>();
         while (await reader.ReadAsync()) roles.Add(reader.GetString(0));
 
-        Assert.Equal(["vinx_audit_owner", "vinx_identity_owner", "vinx_migrator", "vinx_runtime"], roles);
+        Assert.Equal(
+            ["vinx_audit_owner", "vinx_authorization_owner", "vinx_identity_owner", "vinx_migrator", "vinx_runtime"],
+            roles);
 
         await reader.CloseAsync();
         await using var attributesCommand = new NpgsqlCommand(
@@ -100,7 +102,7 @@ public sealed class FoundationPostgresFixtureTests
             """, connection);
         attributesCommand.Parameters.AddWithValue("roles", new[]
         {
-            "vinx_audit_owner", "vinx_identity_owner", "vinx_migrator", "vinx_runtime"
+            "vinx_audit_owner", "vinx_authorization_owner", "vinx_identity_owner", "vinx_migrator", "vinx_runtime"
         });
 
         await using var attributesReader = await attributesCommand.ExecuteReaderAsync();
@@ -127,6 +129,7 @@ public sealed class FoundationPostgresFixtureTests
         Assert.Equal(
         [
             ("vinx_audit_owner", false, false, false, false, false, false),
+            ("vinx_authorization_owner", false, false, false, false, false, false),
             ("vinx_identity_owner", false, false, false, false, false, false),
             ("vinx_migrator", true, false, false, false, false, false),
             ("vinx_runtime", true, false, false, false, false, false)
@@ -164,6 +167,7 @@ public sealed class FoundationPostgresFixtureTests
         Assert.True(membershipReader.GetBoolean(1));
 
         Assert.True(await fixture.MigratorCanSetAuditOwnerAsync());
+        Assert.True(await fixture.MigratorCanSetAuthorizationOwnerAsync());
         Assert.True(await fixture.MigratorCanSetIdentityOwnerAsync());
 
         await membershipReader.CloseAsync();
