@@ -9,6 +9,7 @@ import type { Density } from "../../app/theme/visual-preferences";
 type ColorMode = "light" | "dark" | "system";
 
 const menuId = "vinx-appearance-menu";
+const triggerId = "vinx-appearance-menu-trigger";
 
 export function AppearanceMenu() {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
@@ -41,11 +42,22 @@ export function AppearanceMenu() {
         aria-expanded={open ? "true" : undefined}
         aria-haspopup="menu"
         aria-label="Abrir preferências visuais"
+        id={triggerId}
         onClick={openMenu}
       >
         <PaletteOutlinedIcon />
       </IconButton>
-      <Menu anchorEl={anchorEl} id={menuId} onClose={closeMenu} open={open}>
+      <Menu
+        anchorEl={anchorEl}
+        id={menuId}
+        onClose={closeMenu}
+        open={open}
+        slotProps={{
+          list: {
+            "aria-labelledby": triggerId,
+          },
+        }}
+      >
         <MenuItem
           aria-selected={(mode ?? "system") === "system"}
           onClick={() => selectMode("system")}
