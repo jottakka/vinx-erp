@@ -7,14 +7,13 @@ using Vinx.Erp.Foundation.Persistence.Interceptors;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
-public sealed class FoundationPostgresFixture : IAsyncDisposable
+public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
 {
     private const string BootstrapResourceName =
         "Vinx.Erp.Foundation.IntegrationTests.Infrastructure.bootstrap-foundation-roles.sql";
+    private const string AdministratorUsername = "postgres";
 
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder()
-        .WithImage("postgres:17.9-alpine")
-        .Build();
+    private readonly IFoundationPostgresContainer _container;
     private string? _administratorConnectionString;
     private string? _migratorConnectionString;
     private string? _runtimeConnectionString;
@@ -22,14 +21,38 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
     private bool _started;
     private bool _disposed;
 
+    public FoundationPostgresFixture()
+    {
+        var database = $"vinx_fixture_{Guid.NewGuid():N}";
+        var password = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        _container = new TestcontainersPostgresContainer(new PostgreSqlBuilder()
+            .WithImage("postgres:17.9-alpine")
+            .WithDatabase(database)
+            .WithUsername(AdministratorUsername)
+            .WithPassword(password)
+            .Build());
+    }
+
+    internal FoundationPostgresFixture(IFoundationPostgresContainer container)
+    {
+        _container = container;
+    }
+
     public string MigratorConnectionString => _migratorConnectionString
         ?? throw new InvalidOperationException("The fixture has not been started.");
 
     public string RuntimeConnectionString => _runtimeConnectionString
         ?? throw new InvalidOperationException("The fixture has not been started.");
 
+    internal string AdministratorConnectionString => _administratorConnectionString
+        ?? throw new InvalidOperationException("The fixture has not been started.");
+
+    internal FoundationPostgresEndpoint Endpoint => _endpoint
+        ?? throw new InvalidOperationException("The fixture has not been started.");
+
     internal static async Task VerifyEndpointAsync(
         NpgsqlConnectionStringBuilder settings,
+        FoundationPostgresEndpoint? expectedEndpoint,
         string phase,
         CancellationToken cancellationToken)
     {
@@ -43,7 +66,7 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             await using var connection = new NpgsqlConnection(settings.ConnectionString);
             await connection.OpenAsync(cancellationToken);
             await using var command = new NpgsqlCommand(
-                "SELECT current_database(), inet_server_port(), version()",
+                "SELECT current_database(), current_user, inet_server_port(), version()",
                 connection);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))
@@ -52,10 +75,14 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             }
 
             var database = reader.GetString(0);
-            var port = reader.GetInt32(1);
-            var version = reader.GetString(2);
+            var username = reader.GetString(1);
+            var port = reader.GetInt32(2);
+            var version = reader.GetString(3);
             if (string.IsNullOrWhiteSpace(database) || port != 5432 ||
-                !version.StartsWith("PostgreSQL", StringComparison.Ordinal))
+                !version.StartsWith("PostgreSQL", StringComparison.Ordinal) ||
+                (expectedEndpoint is not null &&
+                 (!string.Equals(database, expectedEndpoint.Database, StringComparison.Ordinal) ||
+                  !string.Equals(username, expectedEndpoint.Username, StringComparison.Ordinal))))
             {
                 throw new InvalidOperationException("The endpoint verification returned unexpected metadata.");
             }
@@ -99,7 +126,7 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
                 Pooling = _endpoint.Pooling
             };
             _administratorConnectionString = administratorSettings.ConnectionString;
-            await VerifyEndpointAsync(administratorSettings, "endpoint-connect", CancellationToken.None);
+            await VerifyEndpointAsync(administratorSettings, _endpoint, "endpoint-connect", CancellationToken.None);
 
             await using var connection = await OpenAdministratorConnectionAsync();
             await ExecuteBootstrapAsync(connection);
@@ -113,9 +140,9 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             _runtimeConnectionString = BuildConnectionString("vinx_runtime", runtimePassword);
             _started = true;
         }
-        catch
+        catch (Exception primaryFailure)
         {
-            await DisposeAsync();
+            await FixtureCleanup.CompleteAsync(primaryFailure, DisposeAsync);
             throw;
         }
     }
@@ -161,9 +188,9 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             return;
         }
 
+        await _container.DisposeAsync();
         _disposed = true;
         _started = false;
-        await _container.DisposeAsync();
     }
 
     private async Task ExecuteBootstrapAsync(NpgsqlConnection connection)
@@ -227,6 +254,75 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             .Options;
         return new FoundationDbContext(options);
     }
+
+}
+
+internal interface IFoundationFixtureLifecycle : IAsyncDisposable
+{
+    string RuntimeConnectionString { get; }
+
+    Task StartAsync();
+
+    Task MigrateAsync();
+
+    FoundationDbContext CreateAdministratorDbContext();
+}
+
+internal static class FixtureCleanup
+{
+    internal static async ValueTask CompleteAsync(
+        Exception? primaryFailure,
+        params Func<ValueTask>[] cleanupSteps)
+    {
+        List<Exception>? failures = primaryFailure is null ? null : [primaryFailure];
+        foreach (var cleanupStep in cleanupSteps)
+        {
+            try
+            {
+                await cleanupStep();
+            }
+            catch (Exception cleanupFailure)
+            {
+                (failures ??= []).Add(cleanupFailure);
+            }
+        }
+
+        if (failures is not { Count: > 0 })
+        {
+            return;
+        }
+
+        if (failures.Count == 1)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        }
+
+        throw new AggregateException(failures);
+    }
+}
+
+internal interface IFoundationPostgresContainer : IAsyncDisposable
+{
+    string Hostname { get; }
+
+    string GetConnectionString();
+
+    int GetMappedPublicPort(int containerPort);
+
+    Task StartAsync();
+}
+
+internal sealed class TestcontainersPostgresContainer(PostgreSqlContainer container) : IFoundationPostgresContainer
+{
+    public string Hostname => container.Hostname;
+
+    public string GetConnectionString() => container.GetConnectionString();
+
+    public int GetMappedPublicPort(int containerPort) => container.GetMappedPublicPort(containerPort);
+
+    public Task StartAsync() => container.StartAsync();
+
+    public ValueTask DisposeAsync() => container.DisposeAsync();
 }
 
 internal sealed record FoundationPostgresEndpoint(

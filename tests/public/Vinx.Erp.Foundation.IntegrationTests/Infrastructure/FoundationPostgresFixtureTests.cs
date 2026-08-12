@@ -29,6 +29,7 @@ public sealed class FoundationPostgresFixtureTests
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => FoundationPostgresFixture.VerifyEndpointAsync(
                     settings,
+                    expectedEndpoint: null,
                     "endpoint-connect",
                     CancellationToken.None));
 
@@ -75,6 +76,153 @@ public sealed class FoundationPostgresFixtureTests
         Assert.False(string.IsNullOrWhiteSpace(reader.GetString(0)));
         Assert.Equal(5432, reader.GetInt32(1));
         Assert.StartsWith("PostgreSQL", reader.GetString(2), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task VerifyEndpointAsync_rejects_postgresql_with_unexpected_database()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+
+        var settings = new NpgsqlConnectionStringBuilder(fixture.AdministratorConnectionString)
+        {
+            Pooling = false
+        };
+        var password = settings.Password
+            ?? throw new InvalidOperationException("The administrator connection string did not include a password.");
+        var unexpectedEndpoint = fixture.Endpoint with
+        {
+            Database = $"unexpected_{Guid.NewGuid():N}"
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => FoundationPostgresFixture.VerifyEndpointAsync(
+                settings,
+                unexpectedEndpoint,
+                "endpoint-connect",
+                CancellationToken.None));
+
+        Assert.Contains("phase=endpoint-connect", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(password, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task VerifyEndpointAsync_rejects_postgresql_with_unexpected_username()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+
+        var settings = new NpgsqlConnectionStringBuilder(fixture.AdministratorConnectionString)
+        {
+            Pooling = false
+        };
+        var password = settings.Password
+            ?? throw new InvalidOperationException("The administrator connection string did not include a password.");
+        var unexpectedEndpoint = fixture.Endpoint with
+        {
+            Username = $"unexpected_{Guid.NewGuid():N}"
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => FoundationPostgresFixture.VerifyEndpointAsync(
+                settings,
+                unexpectedEndpoint,
+                "endpoint-connect",
+                CancellationToken.None));
+
+        Assert.Contains("phase=endpoint-connect", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(password, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Concurrent_fixtures_use_distinct_verified_postgresql_endpoints()
+    {
+        var first = new FoundationPostgresFixture();
+        var second = new FoundationPostgresFixture();
+
+        try
+        {
+            await Task.WhenAll(first.StartAsync(), second.StartAsync());
+
+            var firstIdentity = await ReadIdentityAsync(first);
+            var secondIdentity = await ReadIdentityAsync(second);
+
+            Assert.Equal(first.Endpoint.Database, firstIdentity.Database);
+            Assert.Equal(first.Endpoint.Username, firstIdentity.Username);
+            Assert.Equal(5432, firstIdentity.Port);
+            Assert.StartsWith("PostgreSQL", firstIdentity.Version, StringComparison.Ordinal);
+            Assert.Equal(second.Endpoint.Database, secondIdentity.Database);
+            Assert.Equal(second.Endpoint.Username, secondIdentity.Username);
+            Assert.Equal(5432, secondIdentity.Port);
+            Assert.StartsWith("PostgreSQL", secondIdentity.Version, StringComparison.Ordinal);
+            Assert.NotEqual(firstIdentity.Database, secondIdentity.Database);
+            Assert.NotEqual(first.Endpoint.Port, second.Endpoint.Port);
+            var firstSettings = new NpgsqlConnectionStringBuilder(first.AdministratorConnectionString);
+            var secondSettings = new NpgsqlConnectionStringBuilder(second.AdministratorConnectionString);
+            Assert.False(firstSettings.Pooling);
+            Assert.False(secondSettings.Pooling);
+
+            await Task.WhenAll(
+                FoundationPostgresFixture.VerifyEndpointAsync(
+                    firstSettings,
+                    first.Endpoint,
+                    "endpoint-connect",
+                    CancellationToken.None),
+                FoundationPostgresFixture.VerifyEndpointAsync(
+                    secondSettings,
+                    second.Endpoint,
+                    "endpoint-connect",
+                    CancellationToken.None));
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => FoundationPostgresFixture.VerifyEndpointAsync(
+                    firstSettings,
+                    second.Endpoint,
+                    "endpoint-connect",
+                    CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => FoundationPostgresFixture.VerifyEndpointAsync(
+                    secondSettings,
+                    first.Endpoint,
+                    "endpoint-connect",
+                    CancellationToken.None));
+        }
+        finally
+        {
+            await Task.WhenAll(first.DisposeAsync().AsTask(), second.DisposeAsync().AsTask());
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_preserves_primary_failure_when_cleanup_also_fails()
+    {
+        var primaryFailure = new InvalidOperationException("primary-start-failure");
+        var cleanupFailure = new InvalidOperationException("cleanup-failure");
+        var container = new ControlledPostgresContainer(
+            startException: primaryFailure,
+            firstDisposeException: cleanupFailure);
+        var fixture = new FoundationPostgresFixture(container);
+
+        var exception = await Assert.ThrowsAsync<AggregateException>(() => fixture.StartAsync());
+
+        Assert.Collection(
+            exception.InnerExceptions,
+            actual => Assert.Same(primaryFailure, actual),
+            actual => Assert.Same(cleanupFailure, actual));
+    }
+
+    [Fact]
+    public async Task DisposeAsync_retries_after_a_failed_container_cleanup()
+    {
+        var cleanupFailure = new InvalidOperationException("cleanup-failure");
+        var container = new ControlledPostgresContainer(firstDisposeException: cleanupFailure);
+        var fixture = new FoundationPostgresFixture(container);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.DisposeAsync().AsTask());
+
+        Assert.Same(cleanupFailure, exception);
+        await fixture.DisposeAsync();
+        Assert.Equal(2, container.DisposeCallCount);
     }
 
     [Fact]
@@ -254,6 +402,22 @@ public sealed class FoundationPostgresFixtureTests
             ?? throw new InvalidOperationException("The privilege query returned no result."));
     }
 
+    private static async Task<(string Database, string Username, int Port, string Version)> ReadIdentityAsync(
+        FoundationPostgresFixture fixture)
+    {
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT current_database(), current_user, inet_server_port(), version()",
+            connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetInt32(2),
+            reader.GetString(3));
+    }
+
     private static async Task AcceptSslRequestAndReturnIncompatibleHandshakeAsync(TcpListener listener)
     {
         using var client = await listener.AcceptTcpClientAsync();
@@ -262,5 +426,42 @@ public sealed class FoundationPostgresFixtureTests
         await stream.ReadExactlyAsync(request);
         await stream.WriteAsync(new byte[] { (byte)'H' });
         await stream.FlushAsync();
+    }
+
+    private sealed class ControlledPostgresContainer(
+        Exception? startException = null,
+        Exception? firstDisposeException = null) : IFoundationPostgresContainer
+    {
+        private readonly Exception? _startException = startException;
+        private Exception? _firstDisposeException = firstDisposeException;
+
+        public int DisposeCallCount { get; private set; }
+        public string Hostname => "127.0.0.1";
+
+        public string GetConnectionString() =>
+            "Host=127.0.0.1;Port=5432;Database=fixture;Username=postgres;Password=test;Pooling=false";
+
+        public int GetMappedPublicPort(int containerPort) => containerPort;
+
+        public Task StartAsync()
+        {
+            if (_startException is not null)
+            {
+                return Task.FromException(_startException);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCallCount++;
+            if (Interlocked.Exchange(ref _firstDisposeException, null) is { } exception)
+            {
+                return ValueTask.FromException(exception);
+            }
+
+            return ValueTask.CompletedTask;
+        }
     }
 }

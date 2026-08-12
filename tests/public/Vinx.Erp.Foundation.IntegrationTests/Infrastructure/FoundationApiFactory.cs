@@ -4,7 +4,6 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
-using System.Runtime.ExceptionServices;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
@@ -37,12 +36,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 {
     public const string TestAuthenticationScheme = "FoundationTest";
 
-    private readonly FoundationPostgresFixture _fixture = new();
+    private readonly IFoundationFixtureLifecycle _fixture;
     private readonly TestPrincipalClaims _principalClaims;
     private readonly JwtTestAuthority? _jwtAuthority;
     private readonly CountingIdentityProvider? _countingIdentityProvider;
     private readonly GateDatabaseFailurePoint? _databaseFailurePoint;
     private readonly FileStorage? _testFileStorage;
+    private readonly Func<ValueTask>? _disposeHostAsync;
+    private readonly Func<ValueTask>? _disposeJwtAsync;
     private readonly bool _useJwtBearer;
 
     private FoundationApiFactory(
@@ -52,7 +53,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         JwtTestAuthority? jwtAuthority = null,
         CountingIdentityProvider? countingIdentityProvider = null,
         GateDatabaseFailurePoint? databaseFailurePoint = null,
-        FileStorage? testFileStorage = null)
+        FileStorage? testFileStorage = null,
+        IFoundationFixtureLifecycle? fixture = null,
+        Func<ValueTask>? disposeHostAsync = null,
+        Func<ValueTask>? disposeJwtAsync = null)
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
@@ -61,12 +65,16 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _countingIdentityProvider = countingIdentityProvider;
         _databaseFailurePoint = databaseFailurePoint;
         _testFileStorage = testFileStorage;
+        _fixture = fixture ?? new FoundationPostgresFixture();
+        _disposeHostAsync = disposeHostAsync;
+        _disposeJwtAsync = disposeJwtAsync;
         _useJwtBearer = jwtAuthority is not null;
     }
 
     public Guid ActorUserId { get; }
     public Guid CorrelationId { get; }
-    public FoundationPostgresFixture Fixture => _fixture;
+    public FoundationPostgresFixture Fixture => _fixture as FoundationPostgresFixture
+        ?? throw new InvalidOperationException("The factory is configured with a test lifecycle double.");
     public int IdentityProviderCallCount => _countingIdentityProvider?.CallCount
         ?? throw new InvalidOperationException("The factory is not configured with a counting identity provider.");
     public ClaimsPrincipal? AuthenticatedJwtPrincipal { get; private set; }
@@ -100,14 +108,20 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         FileStorage? fileStorage = null)
     {
         var factory = await CreateAsync(actorUserId, correlationId, fileStorage);
+        return await SeedAuthenticatedActorAndReturnAsync(factory);
+    }
+
+    private static async Task<FoundationApiFactory> SeedAuthenticatedActorAndReturnAsync(
+        FoundationApiFactory factory)
+    {
         try
         {
             await factory.SeedAuthenticatedActorAsync();
             return factory;
         }
-        catch
+        catch (Exception primaryFailure)
         {
-            await factory.DisposeAsync();
+            await factory.DisposeResourcesAsync(primaryFailure);
             throw;
         }
     }
@@ -123,6 +137,36 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             Guid.NewGuid(),
             CreateTestPrincipalClaims(issuer, subject, email, correlationIdClaim));
         return await PrepareAsync(factory);
+    }
+
+    internal static async Task<FoundationApiFactory> CreateForLifecycleTestAsync(
+        IFoundationFixtureLifecycle fixture,
+        Func<ValueTask> disposeHostAsync,
+        Func<ValueTask> disposeJwtAsync)
+    {
+        var factory = new FoundationApiFactory(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            CreateTestPrincipalClaims(null, null, null, null),
+            fixture: fixture,
+            disposeHostAsync: disposeHostAsync,
+            disposeJwtAsync: disposeJwtAsync);
+        return await PrepareAsync(factory);
+    }
+
+    internal static async Task<FoundationApiFactory> CreateForSeedLifecycleTestAsync(
+        IFoundationFixtureLifecycle fixture,
+        Func<ValueTask> disposeHostAsync,
+        Func<ValueTask> disposeJwtAsync)
+    {
+        var factory = new FoundationApiFactory(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            CreateTestPrincipalClaims(null, null, null, null),
+            fixture: fixture,
+            disposeHostAsync: disposeHostAsync,
+            disposeJwtAsync: disposeJwtAsync);
+        return await SeedAuthenticatedActorAndReturnAsync(await PrepareAsync(factory));
     }
 
     public static async Task<FoundationApiFactory> CreateWithJwtBearerAsync()
@@ -223,40 +267,26 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         });
     }
 
-    public override async ValueTask DisposeAsync()
+    public override ValueTask DisposeAsync() => DisposeResourcesAsync(primaryFailure: null);
+
+    private ValueTask DisposeResourcesAsync(Exception? primaryFailure) =>
+        FixtureCleanup.CompleteAsync(
+            primaryFailure,
+            DisposeHostAsync,
+            DisposeJwtAsync,
+            _fixture.DisposeAsync);
+
+    private ValueTask DisposeHostAsync() => _disposeHostAsync?.Invoke() ?? base.DisposeAsync();
+
+    private ValueTask DisposeJwtAsync()
     {
-        Exception? failure = null;
-        try
+        if (_disposeJwtAsync is not null)
         {
-            await base.DisposeAsync();
-        }
-        catch (Exception exception)
-        {
-            failure = exception;
+            return _disposeJwtAsync();
         }
 
-        try
-        {
-            _jwtAuthority?.Dispose();
-        }
-        catch (Exception exception)
-        {
-            failure ??= exception;
-        }
-
-        try
-        {
-            await _fixture.DisposeAsync();
-        }
-        catch (Exception exception)
-        {
-            failure ??= exception;
-        }
-
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
+        _jwtAuthority?.Dispose();
+        return ValueTask.CompletedTask;
     }
 
     private static async Task<FoundationApiFactory> PrepareAsync(
@@ -274,9 +304,9 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
             return factory;
         }
-        catch
+        catch (Exception primaryFailure)
         {
-            await factory.DisposeAsync();
+            await factory.DisposeResourcesAsync(primaryFailure);
             throw;
         }
     }
