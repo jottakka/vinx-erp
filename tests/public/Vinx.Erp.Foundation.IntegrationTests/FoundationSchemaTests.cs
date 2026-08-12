@@ -250,10 +250,11 @@ public sealed class FoundationSchemaTests
 
         await using var policyCommand = new NpgsqlCommand(
             """
-            SELECT tablename, qual, with_check
+            SELECT tablename, permissive, cmd, roles, qual, with_check
             FROM pg_policies
             WHERE schemaname = 'foundation'
               AND tablename = ANY (@table_names)
+              AND policyname = tablename || '_company_isolation'
             ORDER BY tablename
             """, connection);
         policyCommand.Parameters.AddWithValue("table_names", ExpectedRlsTables);
@@ -262,8 +263,11 @@ public sealed class FoundationSchemaTests
         while (await policyReader.ReadAsync())
         {
             policyTables.Add(policyReader.GetString(0));
-            AssertFailClosedCompanySetting(policyReader.GetString(1));
-            AssertFailClosedCompanySetting(policyReader.GetString(2));
+            Assert.Equal("PERMISSIVE", policyReader.GetString(1));
+            Assert.Equal("ALL", policyReader.GetString(2));
+            Assert.Equal(["public"], policyReader.GetFieldValue<string[]>(3));
+            AssertFailClosedCompanySetting(policyReader.GetString(4));
+            AssertFailClosedCompanySetting(policyReader.GetString(5));
         }
         Assert.Equal(ExpectedRlsTables, policyTables);
     }

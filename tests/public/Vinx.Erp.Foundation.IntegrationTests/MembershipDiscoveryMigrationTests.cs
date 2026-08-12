@@ -45,6 +45,7 @@ public sealed class MembershipDiscoveryMigrationTests
                 has_schema_privilege('vinx_authorization_owner', 'foundation', 'CREATE'),
                 has_table_privilege('vinx_authorization_owner', 'foundation.memberships', 'SELECT'),
                 has_table_privilege('vinx_authorization_owner', 'foundation.companies', 'SELECT'),
+                NOT pg_has_role('vinx_runtime', 'vinx_authorization_owner', 'MEMBER'),
                 EXISTS (
                     SELECT 1
                     FROM pg_auth_members AS membership
@@ -76,6 +77,51 @@ public sealed class MembershipDiscoveryMigrationTests
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));
         Assert.True(reader.GetBoolean(13));
+        Assert.True(reader.GetBoolean(14));
+    }
+
+    [Fact]
+    public async Task Migration_creates_exactly_two_select_only_authorization_owner_policies()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT tablename, policyname, permissive, cmd, roles, qual, with_check
+            FROM pg_policies
+            WHERE schemaname = 'foundation'
+              AND policyname IN (
+                  'companies_authorization_owner_read',
+                  'memberships_authorization_owner_read')
+            ORDER BY tablename
+            """, administrator);
+        await using var reader = await command.ExecuteReaderAsync();
+        var policies = new List<(string Table, string Name, string Permissive, string Command, string[] Roles, string Qual, string? WithCheck)>();
+        while (await reader.ReadAsync())
+        {
+            policies.Add((
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetFieldValue<string[]>(4),
+                reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6)));
+        }
+
+        Assert.Collection(
+            policies,
+            policy => AssertAuthorizationOwnerPolicy(
+                policy,
+                "companies",
+                "companies_authorization_owner_read"),
+            policy => AssertAuthorizationOwnerPolicy(
+                policy,
+                "memberships",
+                "memberships_authorization_owner_read"));
     }
 
     [Fact]
@@ -194,5 +240,19 @@ public sealed class MembershipDiscoveryMigrationTests
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
+    }
+
+    private static void AssertAuthorizationOwnerPolicy(
+        (string Table, string Name, string Permissive, string Command, string[] Roles, string Qual, string? WithCheck) policy,
+        string table,
+        string name)
+    {
+        Assert.Equal(table, policy.Table);
+        Assert.Equal(name, policy.Name);
+        Assert.Equal("PERMISSIVE", policy.Permissive);
+        Assert.Equal("SELECT", policy.Command);
+        Assert.Equal(["vinx_authorization_owner"], policy.Roles);
+        Assert.Equal("true", policy.Qual);
+        Assert.Null(policy.WithCheck);
     }
 }
