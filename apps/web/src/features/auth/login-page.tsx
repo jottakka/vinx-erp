@@ -1,18 +1,27 @@
 import { Alert, Button, Stack, TextField, Typography } from "@mui/material";
 import { type FormEvent, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { resolveAppPath } from "../../app/app-navigation";
 import { PublicLayout } from "../../app/public-layout";
 import { useSession } from "./session-provider";
 
 const profileErrorId = "development-profile-error";
+
+function returnPathFromState(state: unknown) {
+  return state && typeof state === "object"
+    ? resolveAppPath(Reflect.get(state, "returnPath"))
+    : "/";
+}
 
 export function LoginPage() {
   const [profileId, setProfileId] = useState("maria");
   const [validationError, setValidationError] = useState<string | null>(null);
   const profileInput = useRef<HTMLInputElement>(null);
   const { error, signIn, status } = useSession();
+  const location = useLocation();
   const navigate = useNavigate();
   const visibleError = validationError ?? error;
+  const returnPath = returnPathFromState(location.state);
   const pending = status === "pending";
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -27,7 +36,7 @@ export function LoginPage() {
 
     setValidationError(null);
     if (await signIn(normalizedProfileId)) {
-      navigate("/protected", { replace: true });
+      navigate(returnPath, { replace: true });
       return;
     }
 

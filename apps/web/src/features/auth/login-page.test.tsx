@@ -8,20 +8,34 @@ import { createMockSessionGateway } from "./mock-session-gateway";
 import type { BootstrapSnapshot, MockSessionGateway } from "./session-contract";
 import { SessionProvider } from "./session-provider";
 
-function PrototypePage() {
-  return <h1>Protótipo autenticado</h1>;
+function LegacyProtectedPage() {
+  return <h1>Área protegida legada</h1>;
 }
 
-function createLoginRouter() {
+function HomePage() {
+  return <h1>Início</h1>;
+}
+
+function HelpPage() {
+  return <h1>Ajuda</h1>;
+}
+
+function createLoginRouter(
+  initialEntries: Array<string | { pathname: string; state?: unknown }> = [
+    "/login",
+  ],
+) {
   return createMemoryRouter(
     [
+      { element: <HomePage />, path: "/" },
       { element: <LoginPage />, path: "/login" },
+      { element: <HelpPage />, path: "/ajuda" },
       {
-        element: <PrototypePage />,
+        element: <LegacyProtectedPage />,
         path: "/protected",
       },
     ],
-    { initialEntries: ["/login"] },
+    { initialEntries },
   );
 }
 
@@ -171,7 +185,7 @@ describe("LoginPage", () => {
       "aria-describedby",
       "development-profile-error",
     );
-    expect(screen.queryByText("Protótipo autenticado")).not.toBeInTheDocument();
+    expect(screen.queryByText("Área protegida legada")).not.toBeInTheDocument();
   });
 
   it("trims the development profile before calling the mock gateway", async () => {
@@ -237,18 +251,51 @@ describe("LoginPage", () => {
     expect(await screen.findByRole("alert")).toBeVisible();
   });
 
-  it("opens the protected placeholder after a successful prototype sign-in", async () => {
+  it("returns Maria to a known internal help path after sign-in", async () => {
+    const user = userEvent.setup();
+    renderLogin(
+      createMockSessionGateway(),
+      createLoginRouter([
+        { pathname: "/login", state: { returnPath: "/ajuda" } },
+      ]),
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("heading", { name: "Ajuda" })).toBeVisible();
+  });
+
+  it("rejects an unknown return path after sign-in", async () => {
+    const user = userEvent.setup();
+    renderLogin(
+      createMockSessionGateway(),
+      createLoginRouter([
+        {
+          pathname: "/login",
+          state: { returnPath: "https://outside.example" },
+        },
+      ]),
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Entrar" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Início" }),
+    ).toBeVisible();
+  });
+
+  it("opens the default authenticated destination after a successful prototype sign-in", async () => {
     const user = userEvent.setup();
     renderLogin(createMockSessionGateway());
 
     await user.click(await screen.findByRole("button", { name: "Entrar" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Protótipo autenticado" }),
+      await screen.findByRole("heading", { name: "Início" }),
     ).toBeVisible();
   });
 
-  it("transitions to the protected route exactly once after deferred repeated sign-in", async () => {
+  it("transitions to the default authenticated route exactly once after deferred repeated sign-in", async () => {
     const user = userEvent.setup();
     let resolveLogin!: (snapshot: BootstrapSnapshot) => void;
     const login = vi.fn(
@@ -263,11 +310,11 @@ describe("LoginPage", () => {
       logout: async () => {},
     };
     const router = createLoginRouter();
-    const protectedTransitions = vi.fn();
+    const homeTransitions = vi.fn();
     const navigate = vi.spyOn(router, "navigate");
     const unsubscribe = router.subscribe((state) => {
-      if (state.location.pathname === "/protected") {
-        protectedTransitions();
+      if (state.location.pathname === "/") {
+        homeTransitions();
       }
     });
 
@@ -281,8 +328,8 @@ describe("LoginPage", () => {
     fireEvent.click(enterButton);
 
     expect(login).toHaveBeenCalledTimes(1);
-    expect(navigate).not.toHaveBeenCalledWith("/protected", { replace: true });
-    expect(protectedTransitions).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalledWith("/", { replace: true });
+    expect(homeTransitions).not.toHaveBeenCalled();
 
     resolveLogin({
       companies: [],
@@ -291,15 +338,15 @@ describe("LoginPage", () => {
     });
 
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/protected");
+      expect(router.state.location.pathname).toBe("/");
     });
     expect(
       navigate.mock.calls.filter(
         ([destination, options]) =>
-          destination === "/protected" && options?.replace === true,
+          destination === "/" && options?.replace === true,
       ),
     ).toHaveLength(1);
-    expect(protectedTransitions).toHaveBeenCalledTimes(1);
+    expect(homeTransitions).toHaveBeenCalledTimes(1);
     unsubscribe();
   });
 });

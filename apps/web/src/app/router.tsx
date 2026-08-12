@@ -1,14 +1,12 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { LoginPage } from "../features/auth/login-page";
+import { AppShell } from "./app-shell";
+import { HelpPage } from "./help-page";
+import { HomePage } from "./home-page";
 import { ProtectedRoute } from "./protected-route";
-import { PrototypeEntryPage } from "./prototype-entry-page";
 
 export function createAppRouter() {
   return createBrowserRouter([
-    {
-      element: <Navigate replace to="/login" />,
-      path: "/",
-    },
     {
       element: <LoginPage />,
       path: "/login",
@@ -16,13 +14,29 @@ export function createAppRouter() {
     {
       element: (
         <ProtectedRoute>
-          <PrototypeEntryPage />
+          <AppShell />
+        </ProtectedRoute>
+      ),
+      path: "/",
+      children: [
+        { element: <HomePage />, index: true },
+        { element: <HelpPage />, path: "ajuda" },
+      ],
+    },
+    {
+      element: (
+        <ProtectedRoute>
+          <Navigate replace to="/" />
         </ProtectedRoute>
       ),
       path: "/protected",
     },
     {
-      element: <Navigate replace to="/login" />,
+      element: (
+        <ProtectedRoute>
+          <Navigate replace to="/" />
+        </ProtectedRoute>
+      ),
       path: "*",
     },
   ]);

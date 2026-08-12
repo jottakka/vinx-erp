@@ -1,6 +1,8 @@
+import { Box, CircularProgress, Stack, Typography } from "@mui/material";
 import type { ReactNode } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useSession } from "../features/auth/session-provider";
+import { isKnownAppPath } from "./app-navigation";
 
 type ProtectedRouteProps = {
   children: ReactNode;
@@ -8,13 +10,37 @@ type ProtectedRouteProps = {
 
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { bootstrap, status } = useSession();
+  const location = useLocation();
 
   if (status === "pending") {
-    return null;
+    return (
+      <Box
+        aria-busy="true"
+        component="main"
+        sx={{
+          alignItems: "center",
+          bgcolor: "background.default",
+          display: "flex",
+          justifyContent: "center",
+          minHeight: "100dvh",
+          p: 2,
+        }}
+      >
+        <Stack role="status" spacing={2} sx={{ alignItems: "center" }}>
+          <CircularProgress aria-hidden="true" />
+          <Typography>Carregando aplicativo…</Typography>
+        </Stack>
+      </Box>
+    );
   }
 
   if (!bootstrap) {
-    return <Navigate replace to="/login" />;
+    const returnPath =
+      !location.search && !location.hash && isKnownAppPath(location.pathname)
+        ? { returnPath: location.pathname }
+        : undefined;
+
+    return <Navigate replace state={returnPath} to="/login" />;
   }
 
   return children;

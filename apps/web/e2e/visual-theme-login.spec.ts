@@ -31,12 +31,11 @@ async function expectSelectedAppearance(page: Page, optionName: string) {
   await page.keyboard.press("Escape");
 }
 
-async function enterPrototype(page: Page) {
+async function enterApplication(page: Page) {
   await waitForLogin(page);
   await page.getByRole("button", { name: "Entrar" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Protótipo autenticado" }),
-  ).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
 }
 
 async function readSemanticSurface(page: Page) {
@@ -78,10 +77,8 @@ test("Scenario: Maria uses the professional development entry", async ({
   await page.getByLabel("Perfil de desenvolvimento").fill("maria");
   await page.getByRole("button", { name: "Entrar" }).click();
 
-  await expect(page).toHaveURL(/\/protected$/);
-  await expect(
-    page.getByRole("heading", { name: "Protótipo autenticado" }),
-  ).toHaveCount(1);
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "Início" })).toHaveCount(1);
   await expect
     .poll(() =>
       page.evaluate(
@@ -106,15 +103,16 @@ test("Scenario: Invalid development profile remains recoverable", async ({
   }
 });
 
-test("successful Maria entry reaches /protected with only Alfa and Beta", async ({
+test("successful Maria entry reaches all-authorized home with only Alfa and Beta", async ({
   page,
 }) => {
-  await enterPrototype(page);
+  await enterApplication(page);
 
-  await expect(page).toHaveURL(/\/protected$/);
-  await expect(page.getByText("Alfa: prototype.view")).toBeVisible();
-  await expect(page.getByText("Beta: prototype.view")).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("group", { name: "Empresa Alfa" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Empresa Beta" })).toBeVisible();
   await expect(page.getByText("Gama", { exact: true })).not.toBeVisible();
+  await expect(page.getByText("prototype.view")).not.toBeVisible();
 });
 
 test("invalid profile stays on /login with a visible actionable error", async ({
@@ -153,9 +151,7 @@ test("reload returns to /login while the selected visual mode restores", async (
 
   await expect(page).toHaveURL(/\/login$/);
   await expectSelectedAppearance(page, "Tema: escuro");
-  await expect(
-    page.getByRole("heading", { name: "Protótipo autenticado" }),
-  ).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "Início" })).not.toBeVisible();
 });
 
 test("dark, light and emulated system modes expose semantic computed palette roles", async ({
@@ -198,7 +194,7 @@ test("mobile login at 320 CSS pixels has no horizontal overflow", async ({
     .toBe(true);
 });
 
-test("login and the temporary protected entry have no automated WCAG AA violations", async ({
+test("login and the authenticated Home have no automated WCAG AA violations", async ({
   page,
 }) => {
   await waitForLogin(page);
@@ -209,9 +205,7 @@ test("login and the temporary protected entry have no automated WCAG AA violatio
   expect(loginResults.violations).toEqual([]);
 
   await page.getByRole("button", { name: "Entrar" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Protótipo autenticado" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
   const protectedResults = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
     .analyze();
@@ -233,9 +227,7 @@ test("keyboard-only login and forced colors retain named controls and focus land
   await expect(profile).toBeVisible();
   await expect(enter).toBeVisible();
   await page.keyboard.press("Enter");
-  await expect(
-    page.getByRole("heading", { name: "Protótipo autenticado" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
 });
 
 test("compact density changes the selected visual density and survives reload without a mock session", async ({
@@ -248,9 +240,7 @@ test("compact density changes the selected visual density and survives reload wi
 
   await expect(page).toHaveURL(/\/login$/);
   await expectSelectedAppearance(page, "Densidade: compacta");
-  await expect(
-    page.getByRole("heading", { name: "Protótipo autenticado" }),
-  ).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "Início" })).not.toBeVisible();
 });
 
 test("explicit light mode remains unchanged when the operating-system scheme changes", async ({
