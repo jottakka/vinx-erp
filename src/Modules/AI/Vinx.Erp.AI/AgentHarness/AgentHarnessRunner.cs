@@ -44,7 +44,8 @@ public sealed class AgentHarnessRunner(
                 Observe(AgentRunPhase.ModelRequested, null, null, null);
                 var turn = await model.CompleteAsync(
                     new AgentModelRequest(request, allowedDescriptors, priorResults),
-                    executionSource.Token);
+                    executionSource.Token)
+                    .WaitAsync(executionSource.Token);
                 executionSource.Token.ThrowIfCancellationRequested();
 
                 if (turn.AssistantMessage is not null)
@@ -94,8 +95,18 @@ public sealed class AgentHarnessRunner(
                 var invocation = new AgentToolInvocation(runId, context, call);
                 Observe(AgentRunPhase.ToolInvocationStarted, descriptor.Name, descriptor.Risk, null);
                 executionSource.Token.ThrowIfCancellationRequested();
-                var result = await registration.Tool.InvokeAsync(invocation, executionSource.Token);
+                var result = await registration.Tool.InvokeAsync(invocation, executionSource.Token)
+                    .WaitAsync(executionSource.Token);
                 executionSource.Token.ThrowIfCancellationRequested();
+                if (result is null || !string.Equals(result.ToolName, descriptor.Name, StringComparison.Ordinal))
+                {
+                    return Complete(new AgentRunOutcome(
+                        AgentRunOutcomeKind.ValidationError,
+                        "tool_result_invalid",
+                        null,
+                        descriptor.Name));
+                }
+
                 priorResults.Add(result);
                 toolTurns++;
             }

@@ -154,7 +154,88 @@ public sealed class AgentHarnessRunnerTests
     }
 
     [Fact]
-    public async Task Run_propagates_external_cancellation_after_profile_timeout_without_completion_event()
+    public async Task Run_maps_profile_timeout_when_model_ignores_cancellation()
+    {
+        var observer = new RecordingAgentRunObserver();
+        var harness = CreateHarness(new NonCooperativeAgentModel(), observer);
+
+        var outcome = await harness.RunAsync(
+                CreateContext(timeout: TimeSpan.FromMilliseconds(20)),
+                CreateRequest(),
+                CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(AgentRunOutcomeKind.ValidationError, outcome.Kind);
+        Assert.Equal("agent_timeout", outcome.SafeCode);
+        Assert.Equal(
+            [AgentRunPhase.RunStarted, AgentRunPhase.ModelRequested, AgentRunPhase.RunCompleted],
+            observer.Events.Select(item => item.Phase));
+    }
+
+    [Fact]
+    public async Task Run_maps_profile_timeout_when_tool_ignores_cancellation_without_next_model_request()
+    {
+        var completion = new TaskCompletionSource<AgentToolResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tool = new RecordingAgentTool("payments.read", invoke: (_, _) => completion.Task);
+        var model = new ScriptedAgentModel([
+            AgentModelTurn.Tool(ScriptedAgentModel.CreateCall("payments.read", "{}")),
+            AgentModelTurn.Final("must not be requested")]);
+        var harness = CreateHarness(model, new RecordingAgentRunObserver(), tool);
+
+        var outcome = await harness.RunAsync(
+                CreateContext(timeout: TimeSpan.FromMilliseconds(20)),
+                CreateRequest(),
+                CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(AgentRunOutcomeKind.ValidationError, outcome.Kind);
+        Assert.Equal("agent_timeout", outcome.SafeCode);
+        Assert.Single(tool.Invocations);
+        Assert.Single(model.Requests);
+    }
+
+    [Fact]
+    public async Task Run_rejects_null_tool_result_without_requesting_next_model_turn()
+    {
+        var tool = new RecordingAgentTool(
+            "payments.read",
+            invoke: (_, _) => Task.FromResult<AgentToolResult>(null!));
+        var model = new ScriptedAgentModel([
+            AgentModelTurn.Tool(ScriptedAgentModel.CreateCall("payments.read", "{}")),
+            AgentModelTurn.Final("must not be requested")]);
+        var harness = CreateHarness(model, new RecordingAgentRunObserver(), tool);
+
+        var outcome = await harness.RunAsync(CreateContext(), CreateRequest(), CancellationToken.None);
+
+        Assert.Equal(AgentRunOutcomeKind.ValidationError, outcome.Kind);
+        Assert.Equal("tool_result_invalid", outcome.SafeCode);
+        Assert.Equal("payments.read", outcome.ToolName);
+        Assert.Single(tool.Invocations);
+        Assert.Single(model.Requests);
+    }
+
+    [Fact]
+    public async Task Run_rejects_tool_result_for_another_tool_without_requesting_next_model_turn()
+    {
+        var tool = new RecordingAgentTool(
+            "payments.read",
+            invoke: (_, _) => Task.FromResult(RecordingAgentTool.CreateResult("payments.admin")));
+        var model = new ScriptedAgentModel([
+            AgentModelTurn.Tool(ScriptedAgentModel.CreateCall("payments.read", "{}")),
+            AgentModelTurn.Final("must not be requested")]);
+        var harness = CreateHarness(model, new RecordingAgentRunObserver(), tool);
+
+        var outcome = await harness.RunAsync(CreateContext(), CreateRequest(), CancellationToken.None);
+
+        Assert.Equal(AgentRunOutcomeKind.ValidationError, outcome.Kind);
+        Assert.Equal("tool_result_invalid", outcome.SafeCode);
+        Assert.Equal("payments.read", outcome.ToolName);
+        Assert.Single(tool.Invocations);
+        Assert.Single(model.Requests);
+    }
+
+    [Fact]
+    public async Task Run_maps_profile_timeout_when_model_later_throws_unrelated_cancellation()
     {
         var expected = new OperationCanceledException(CancellationToken.None);
         var observer = new RecordingAgentRunObserver();
@@ -162,12 +243,14 @@ public sealed class AgentHarnessRunnerTests
             new TimeoutIgnoringCancellationThrowingModel(TimeSpan.FromMilliseconds(100), expected),
             observer);
 
-        var actual = await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            harness.RunAsync(CreateContext(timeout: TimeSpan.FromMilliseconds(10)), CreateRequest(), CancellationToken.None));
+        var outcome = await harness.RunAsync(
+            CreateContext(timeout: TimeSpan.FromMilliseconds(10)),
+            CreateRequest(),
+            CancellationToken.None);
 
-        Assert.Same(expected, actual);
-        Assert.Equal(CancellationToken.None, actual.CancellationToken);
-        Assert.DoesNotContain(observer.Events, item => item.Phase == AgentRunPhase.RunCompleted);
+        Assert.Equal(AgentRunOutcomeKind.ValidationError, outcome.Kind);
+        Assert.Equal("agent_timeout", outcome.SafeCode);
+        Assert.Single(observer.Events, item => item.Phase == AgentRunPhase.RunCompleted);
     }
 
     [Fact]

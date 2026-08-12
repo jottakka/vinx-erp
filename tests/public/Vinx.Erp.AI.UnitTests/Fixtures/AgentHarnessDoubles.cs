@@ -42,6 +42,13 @@ internal sealed class DelayedAgentModel(TimeSpan delay) : IAgentModel
     }
 }
 
+internal sealed class NonCooperativeAgentModel : IAgentModel
+{
+    private readonly TaskCompletionSource<AgentModelTurn> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task<AgentModelTurn> CompleteAsync(AgentModelRequest request, CancellationToken cancellationToken) => completion.Task;
+}
+
 internal sealed class ThrowingAgentModel(Exception exception) : IAgentModel
 {
     public Task<AgentModelTurn> CompleteAsync(AgentModelRequest request, CancellationToken cancellationToken) =>
@@ -150,7 +157,10 @@ internal sealed class RecordingAgentTool : IAgentTool
             risk,
             requiresExplicitCompany,
             requiresIdempotency: risk != AgentToolRisk.ReadOnly,
-            new AgentToolMcpHints(name, readOnlyHint: risk == AgentToolRisk.ReadOnly));
+            new AgentToolMcpHints(
+                name,
+                readOnlyHint: risk == AgentToolRisk.ReadOnly,
+                idempotentHint: risk != AgentToolRisk.ReadOnly));
     }
 
     public static AgentToolResult CreateResult(string name, bool success = true, string safeCode = "tool_succeeded")
