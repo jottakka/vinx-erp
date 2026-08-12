@@ -5,9 +5,26 @@ async function waitForLogin(page: Page) {
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: "Entrar" })).toBeVisible();
   await expect(
-    page.getByRole("combobox", { name: "Modo de cor" }),
+    page.getByRole("button", { name: "Abrir preferências visuais" }),
   ).toBeEnabled();
   await expect(page.getByRole("button", { name: "Entrar" })).toBeEnabled();
+}
+
+async function chooseAppearance(page: Page, optionName: string) {
+  await page
+    .getByRole("button", { name: "Abrir preferências visuais" })
+    .click();
+  await page.getByRole("menuitem", { name: optionName }).click();
+}
+
+async function expectSelectedAppearance(page: Page, optionName: string) {
+  await page
+    .getByRole("button", { name: "Abrir preferências visuais" })
+    .click();
+  await expect(
+    page.getByRole("menuitem", { name: optionName }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Escape");
 }
 
 async function enterPrototype(page: Page) {
@@ -73,19 +90,13 @@ test("reload returns to /login while the selected visual mode restores", async (
   page,
 }) => {
   await waitForLogin(page);
-  await page
-    .getByRole("combobox", { name: "Modo de cor" })
-    .selectOption("dark");
+  await chooseAppearance(page, "Tema: escuro");
 
-  await expect(page.getByRole("combobox", { name: "Modo de cor" })).toHaveValue(
-    "dark",
-  );
+  await expectSelectedAppearance(page, "Tema: escuro");
   await page.reload();
 
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("combobox", { name: "Modo de cor" })).toHaveValue(
-    "dark",
-  );
+  await expectSelectedAppearance(page, "Tema: escuro");
   await expect(
     page.getByRole("heading", { name: "Protótipo autenticado" }),
   ).not.toBeVisible();
@@ -96,25 +107,19 @@ test("dark, light and emulated system modes expose semantic computed palette rol
 }) => {
   await waitForLogin(page);
 
-  await page
-    .getByRole("combobox", { name: "Modo de cor" })
-    .selectOption("light");
+  await chooseAppearance(page, "Tema: claro");
   const light = await readSemanticSurface(page);
   expect(light.backgroundRole).not.toBe("");
   expect(light.background).not.toBe("");
 
-  await page
-    .getByRole("combobox", { name: "Modo de cor" })
-    .selectOption("dark");
+  await chooseAppearance(page, "Tema: escuro");
   const dark = await readSemanticSurface(page);
   expect(dark.backgroundRole).not.toBe("");
   expect(dark.backgroundRole).not.toBe(light.backgroundRole);
   expect(dark.background).not.toBe(light.background);
 
   await page.emulateMedia({ colorScheme: "dark" });
-  await page
-    .getByRole("combobox", { name: "Modo de cor" })
-    .selectOption("system");
+  await chooseAppearance(page, "Tema: sistema");
   const system = await readSemanticSurface(page);
   expect(system.scheme).toBe("dark");
   expect(system.background).toBe(dark.background);
@@ -181,16 +186,12 @@ test("compact density changes the selected visual density and survives reload wi
   page,
 }) => {
   await waitForLogin(page);
-  const density = page.getByRole("combobox", { name: "Densidade" });
-
-  await density.selectOption("compact");
-  await expect(density).toHaveValue("compact");
+  await chooseAppearance(page, "Densidade: compacta");
+  await expectSelectedAppearance(page, "Densidade: compacta");
   await page.reload();
 
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("combobox", { name: "Densidade" })).toHaveValue(
-    "compact",
-  );
+  await expectSelectedAppearance(page, "Densidade: compacta");
   await expect(
     page.getByRole("heading", { name: "Protótipo autenticado" }),
   ).not.toBeVisible();
@@ -201,18 +202,31 @@ test("explicit light mode remains unchanged when the operating-system scheme cha
 }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await waitForLogin(page);
-  await page
-    .getByRole("combobox", { name: "Modo de cor" })
-    .selectOption("light");
+  await chooseAppearance(page, "Tema: claro");
 
   const before = await readSemanticSurface(page);
   await page.emulateMedia({ colorScheme: "light" });
   const after = await readSemanticSurface(page);
 
-  await expect(page.getByRole("combobox", { name: "Modo de cor" })).toHaveValue(
-    "light",
-  );
+  await expectSelectedAppearance(page, "Tema: claro");
   expect(after.scheme).toBe("light");
   expect(after.background).toBe(before.background);
   expect(after.backgroundRole).toBe(before.backgroundRole);
+});
+
+test("keyboard closes the appearance menu and restores focus to its trigger", async ({
+  page,
+}) => {
+  await waitForLogin(page);
+  const trigger = page.getByRole("button", {
+    name: "Abrir preferências visuais",
+  });
+
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await expect(page.getByRole("menu")).not.toBeVisible();
+  await expect(trigger).toBeFocused();
 });
