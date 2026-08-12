@@ -141,11 +141,15 @@ tentar cleanup e relançar primária se cleanup passar; quando ambos falharem,
 lançar `AggregateException` com primária primeiro. Marcar descarte concluído só
 depois de sucesso, permitindo nova tentativa após falha. Na factory, usar helper
 único para agregar primária e todas as falhas de cleanup, mantendo a tentativa
-de host, JWT e fixture.
+de host, JWT e fixture. Criar entrada interna de factory que recebe a fixture
+controlada e induz falha de migração ou seed; o construtor/entradas públicas
+continuam instanciando fixture real.
 
 - [ ] **Step 4: Rodar GREEN focal**
 
-Rodar mesmo filtro do Step 2; esperado: ambos passam.
+Rodar mesmo filtro do Step 2, incluindo
+`PrepareAsync_preserves_primary_failure_when_cleanup_also_fails`; esperado:
+todos passam.
 
 ### Task 4: Manifesto e gate
 

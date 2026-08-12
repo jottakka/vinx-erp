@@ -39,4 +39,5 @@ falhar e manter isolamento em duas inicializações simultâneas.
 Uma seam interna, usada apenas pelo projeto de testes, abstrai start, endpoint e
 dispose do container. A construção normal continua com `PostgreSqlBuilder`; a
 double exercita a falha de cleanup. O caminho de sucesso e o teste concorrente
-usam Testcontainers PostgreSQL real.
+usam Testcontainers PostgreSQL real. Uma entrada interna da factory recebe uma
+fixture controlada apenas nos testes de falha de migração/seed e cleanup.
