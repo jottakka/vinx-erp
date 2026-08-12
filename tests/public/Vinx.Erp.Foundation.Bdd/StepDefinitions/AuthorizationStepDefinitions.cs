@@ -70,7 +70,8 @@ public sealed class AuthorizationStepDefinitions
         var targetMembership = new Membership(Guid.NewGuid(), otherCompany.Id, target.Id, Factory.ActorUserId, requestId);
         var administratorRole = new Role(Guid.NewGuid(), company.Id, "Foundation administrator", Factory.ActorUserId, requestId);
         var targetRole = new Role(Guid.NewGuid(), company.Id, "Operator", Factory.ActorUserId, requestId);
-        var capability = new Capability(Guid.NewGuid(), "foundation.roles.assign");
+        var capability = await administrator.Capabilities.SingleAsync(candidate =>
+            candidate.Name == KnownCapabilities.RolesAssign);
         var capabilityGrant = new RoleCapability(
             Guid.NewGuid(), company.Id, administratorRole.Id, capability.Id, CapabilityScope.Company, Factory.ActorUserId, requestId);
         var roleAssignment = new RoleAssignment(
@@ -85,7 +86,6 @@ public sealed class AuthorizationStepDefinitions
             targetMembership,
             administratorRole,
             targetRole,
-            capability,
             capabilityGrant,
             roleAssignment);
         await administrator.SaveChangesAsync();

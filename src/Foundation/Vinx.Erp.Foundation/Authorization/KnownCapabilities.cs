@@ -3,7 +3,14 @@ namespace Vinx.Erp.Foundation.Authorization;
 public static class KnownCapabilities
 {
     public const string RolesAssign = "foundation.roles.assign";
+    public static readonly Guid RolesAssignId = Guid.Parse("00341b57-025e-5a71-a205-f0a6854a991f");
+
     public const string FilesUpload = "foundation.files.upload";
+    public static readonly Guid FilesUploadId = Guid.Parse("e09997ad-8dda-58f6-8e9f-568bf84c9ab3");
+
     public const string FilesConfirm = "foundation.files.confirm";
+    public static readonly Guid FilesConfirmId = Guid.Parse("4687cfe7-2318-58ca-8ac9-fff0dad042b0");
+
     public const string MembershipsRevoke = "foundation.memberships.revoke";
+    public static readonly Guid MembershipsRevokeId = Guid.Parse("46285f1b-bda6-5fba-b0e9-74515120b076");
 }
