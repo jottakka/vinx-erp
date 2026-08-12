@@ -159,6 +159,28 @@ public sealed class AiDependencyTests
         }
     }
 
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"Items":{}}""")]
+    [InlineData("""{"Items":{"ProjectReference":{}}}""")]
+    [InlineData("""{"Items":{"ProjectReference":[{}]}}""")]
+    public void Project_graph_rejects_missing_or_malformed_reference_collection(string standardOutput)
+    {
+        Assert.Throws<InvalidOperationException>(() => ParseProjectReferences(
+            standardOutput,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public void Project_graph_accepts_explicit_empty_reference_collection()
+    {
+        var projectReferences = ParseProjectReferences(
+            """{"Items":{"ProjectReference":[]}}""",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+        Assert.Empty(projectReferences);
+    }
+
     private static IReadOnlyCollection<string> FindProjectGraph(string rootProjectPath)
     {
         var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -250,29 +272,40 @@ public sealed class AiDependencyTests
                 $"MSBuild project-reference evaluation failed with exit code {process.ExitCode}.");
         }
 
-        using var document = JsonDocument.Parse(standardOutput.Result);
+        return ParseProjectReferences(standardOutput.Result, context.GlobalProperties);
+    }
+
+    private static IReadOnlyCollection<ProjectEvaluationContext> ParseProjectReferences(
+        string standardOutput,
+        IReadOnlyDictionary<string, string> parentGlobalProperties)
+    {
+        using var document = JsonDocument.Parse(standardOutput);
         if (!document.RootElement.TryGetProperty("Items", out var items) ||
             !items.TryGetProperty("ProjectReference", out var projectReferences) ||
             projectReferences.ValueKind != JsonValueKind.Array)
         {
-            return [];
+            throw new InvalidOperationException(
+                "MSBuild project-reference evaluation did not contain an Items.ProjectReference array.");
         }
 
         return projectReferences.EnumerateArray()
-            .Select(projectReference => CreateProjectEvaluationContext(projectReference, context.GlobalProperties))
-            .Where(projectReference => projectReference is not null)
-            .Select(projectReference => projectReference!)
+            .Select(projectReference => CreateProjectEvaluationContext(projectReference, parentGlobalProperties))
             .ToArray();
     }
 
-    private static ProjectEvaluationContext? CreateProjectEvaluationContext(
+    private static ProjectEvaluationContext CreateProjectEvaluationContext(
         JsonElement projectReference,
         IReadOnlyDictionary<string, string> parentGlobalProperties)
     {
+        if (projectReference.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException("MSBuild project-reference evaluation contained a non-object reference.");
+        }
+
         var fullPath = GetMetadata(projectReference, "FullPath");
         if (string.IsNullOrWhiteSpace(fullPath))
         {
-            return null;
+            throw new InvalidOperationException("MSBuild project-reference evaluation contained a reference without FullPath.");
         }
 
         var globalProperties = new Dictionary<string, string>(
