@@ -1,6 +1,6 @@
 import {
-  resolveCompanyAppearanceSlot,
   type CompanyAppearanceSlot,
+  resolveCompanyAppearanceSlot,
 } from "../../app/theme/company-appearance-slot";
 
 const localCompanySlots: Readonly<Record<string, CompanyAppearanceSlot>> = {

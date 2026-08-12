@@ -37,12 +37,14 @@ describe("CompanyBadge", () => {
     expect(resolveCompanyAppearance("nova-empresa", "Nova Empresa")).toEqual(
       resolveCompanyAppearance("nova-empresa", "Nova Empresa"),
     );
-    expect(resolveCompanyAppearance("nova-empresa", "Nova Empresa")).toMatchObject({
+    expect(
+      resolveCompanyAppearance("nova-empresa", "Nova Empresa"),
+    ).toMatchObject({
       monogram: "NE",
     });
-    expect(resolveCompanyAppearance("nova-empresa", "Nova Empresa").slot).not.toBe(
-      "neutral",
-    );
+    expect(
+      resolveCompanyAppearance("nova-empresa", "Nova Empresa").slot,
+    ).not.toBe("neutral");
   });
 
   it("reserves neutral appearance for an absent or invalid company identifier", () => {
@@ -52,8 +54,8 @@ describe("CompanyBadge", () => {
     expect(resolveCompanyAppearance("   ", "Sem identificador").slot).toBe(
       "neutral",
     );
-    expect(resolveCompanyAppearance("!invalido", "Sem identificador").slot).toBe(
-      "neutral",
-    );
+    expect(
+      resolveCompanyAppearance("!invalido", "Sem identificador").slot,
+    ).toBe("neutral");
   });
 });
