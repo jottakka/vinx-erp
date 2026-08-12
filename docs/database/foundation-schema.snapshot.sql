@@ -80,6 +80,7 @@ CREATE FUNCTION foundation.current_actor_memberships() RETURNS TABLE(membership_
     INNER JOIN foundation.companies AS company ON company.id = membership.company_id
     WHERE membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid
       AND membership.deleted_at IS NULL
+      AND company.deleted_at IS NULL
     ORDER BY company.name, company.id;
 $$;
 

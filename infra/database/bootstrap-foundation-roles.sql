@@ -32,6 +32,23 @@ BEGIN
 END
 $$;
 
+DO $$
+DECLARE
+    member_name name;
+BEGIN
+    FOR member_name IN
+        SELECT member.rolname
+        FROM pg_auth_members AS membership
+        INNER JOIN pg_roles AS role ON role.oid = membership.roleid
+        INNER JOIN pg_roles AS member ON member.oid = membership.member
+        WHERE role.rolname = 'vinx_authorization_owner'
+          AND member.rolname <> 'vinx_migrator'
+    LOOP
+        EXECUTE format('REVOKE vinx_authorization_owner FROM %I', member_name);
+    END LOOP;
+END
+$$;
+
 GRANT vinx_audit_owner TO vinx_migrator WITH INHERIT FALSE, SET TRUE;
 GRANT vinx_identity_owner TO vinx_migrator WITH INHERIT FALSE, SET TRUE;
 GRANT vinx_authorization_owner TO vinx_migrator WITH INHERIT FALSE, SET TRUE;

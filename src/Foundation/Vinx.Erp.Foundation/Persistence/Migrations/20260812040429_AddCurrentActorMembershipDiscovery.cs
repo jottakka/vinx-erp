@@ -40,6 +40,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     INNER JOIN foundation.companies AS company ON company.id = membership.company_id
                     WHERE membership.user_id = NULLIF(current_setting('app.user_id', true), '')::uuid
                       AND membership.deleted_at IS NULL
+                      AND company.deleted_at IS NULL
                     ORDER BY company.name, company.id;
                 $function$;
 

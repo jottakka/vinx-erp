@@ -64,6 +64,53 @@ public sealed class FoundationPostgresFixtureTests
     }
 
     [Fact]
+    public async Task ReapplyBootstrapAsync_removes_an_unexpected_runtime_membership_in_the_authorization_owner()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        var actorId = Guid.NewGuid();
+        var companyId = Guid.NewGuid();
+        await using (var seed = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.groups (id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+            VALUES (@group_id, 'Grupo', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp());
+            INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+            VALUES (@company_id, @group_id, 'Empresa', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp());
+            INSERT INTO foundation.users (id, display_name, email, created_at)
+            VALUES (@actor_id, 'Actor', 'bootstrap-role@example.test', clock_timestamp());
+            INSERT INTO foundation.memberships (id, company_id, user_id, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+            VALUES (gen_random_uuid(), @company_id, @actor_id, @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp());
+            """, administrator))
+        {
+            seed.Parameters.AddWithValue("group_id", Guid.NewGuid());
+            seed.Parameters.AddWithValue("company_id", companyId);
+            seed.Parameters.AddWithValue("actor_id", actorId);
+            seed.Parameters.AddWithValue("request_id", Guid.NewGuid());
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        await using (var contaminate = new NpgsqlCommand(
+            "GRANT vinx_authorization_owner TO vinx_runtime WITH INHERIT TRUE, SET TRUE", administrator))
+        {
+            await contaminate.ExecuteNonQueryAsync();
+        }
+
+        await fixture.ReapplyBootstrapAsync();
+
+        await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+        await using var setOwner = new NpgsqlCommand("SET ROLE vinx_authorization_owner", runtime);
+        var exception = await Assert.ThrowsAsync<PostgresException>(async () => await setOwner.ExecuteNonQueryAsync());
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+
+        await using var globalRead = new NpgsqlCommand("SELECT count(*) FROM foundation.memberships", runtime);
+        Assert.Equal(0L, await globalRead.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public async Task StartAsync_creates_the_isolated_non_superuser_roles_and_migrator_can_set_them()
     {
         await using var fixture = new FoundationPostgresFixture();

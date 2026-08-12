@@ -115,12 +115,16 @@ The first migration is `InitialFoundationBaseline`.
 
 A fronteira atual de ownership usa `vinx_migrator LOGIN NOINHERIT
 NOBYPASSRLS`, `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`,
-`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
-`vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O último possui somente
-`USAGE` em `foundation`, `SELECT` em `foundation.users` e `UPDATE` apenas na
-coluna `sessions_valid_after`, necessário para o `FOR UPDATE` da função de
-admissão de sessão. O runtime não recebe esse `UPDATE` nem leitura direta de
-`users`. Essas roles são distintas das roles legadas do Supabase: `anon`,
+`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`,
+`vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
+`vinx_authorization_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O owner de
+identidade possui somente `USAGE` em `foundation`, `SELECT` em
+`foundation.users` e `UPDATE` apenas na coluna `sessions_valid_after`,
+necessário para o `FOR UPDATE` da função de admissão de sessão. O owner de
+autorização recebe leitura somente de `memberships` e `companies` para
+`current_actor_memberships()`, e suas policies RLS exclusivas não se aplicam
+ao runtime. O runtime não recebe esses `UPDATE`s nem leitura global dessas
+tabelas. Essas roles são distintas das roles legadas do Supabase: `anon`,
 `authenticated` e `service_role`.
 
 ## Module responsibilities

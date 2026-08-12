@@ -102,17 +102,17 @@ public sealed class MembershipDiscoveryMigrationTests
             VALUES
                 (@actor_id, 'Actor', 'actor-memberships@example.test', clock_timestamp()),
                 (@other_actor_id, 'Other actor', 'other-memberships@example.test', clock_timestamp());
-            INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+            INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at, deleted_at)
             VALUES
-                (@alfa_company_id, @group_id, 'Alfa', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp()),
-                (@beta_company_id, @group_id, 'Beta', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp()),
-                (@deleted_company_id, @group_id, 'Zeta', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp()),
-                (@other_company_id, @group_id, 'Aardvark', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp());
+                (@alfa_company_id, @group_id, 'Alfa', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp(), NULL),
+                (@beta_company_id, @group_id, 'Beta', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp(), NULL),
+                (@deleted_company_id, @group_id, 'Zeta', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp(), clock_timestamp()),
+                (@other_company_id, @group_id, 'Aardvark', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp(), NULL);
             INSERT INTO foundation.memberships (id, company_id, user_id, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at, deleted_at)
             VALUES
                 (@alfa_membership_id, @alfa_company_id, @actor_id, @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp(), NULL),
                 (@beta_membership_id, @beta_company_id, @actor_id, @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp(), NULL),
-                (gen_random_uuid(), @deleted_company_id, @actor_id, @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp(), clock_timestamp()),
+                (gen_random_uuid(), @deleted_company_id, @actor_id, @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp(), NULL),
                 (gen_random_uuid(), @other_company_id, @other_actor_id, @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp(), NULL);
             """, administrator))
         {
