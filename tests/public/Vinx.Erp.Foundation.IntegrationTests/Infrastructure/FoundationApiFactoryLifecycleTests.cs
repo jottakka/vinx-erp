@@ -57,6 +57,37 @@ public sealed class FoundationApiFactoryLifecycleTests
             calls);
     }
 
+    [Fact]
+    public async Task CreateWithAuthenticatedIdentityAsync_preserves_seed_failure_when_all_cleanups_also_fail()
+    {
+        var primaryFailure = new InvalidOperationException("seed-failure");
+        var hostCleanupFailure = new InvalidOperationException("host-cleanup-failure");
+        var jwtCleanupFailure = new InvalidOperationException("jwt-cleanup-failure");
+        var fixtureCleanupFailure = new InvalidOperationException("fixture-cleanup-failure");
+        var calls = new List<string>();
+        var fixture = new ControlledFixture(
+            calls,
+            migrateException: null,
+            disposeException: fixtureCleanupFailure,
+            createAdministratorDbContextException: primaryFailure);
+
+        var exception = await Assert.ThrowsAsync<AggregateException>(() =>
+            FoundationApiFactory.CreateForSeedLifecycleTestAsync(
+                fixture,
+                () => FailCleanupAsync(calls, "host-dispose", hostCleanupFailure),
+                () => FailCleanupAsync(calls, "jwt-dispose", jwtCleanupFailure)));
+
+        Assert.Collection(
+            exception.InnerExceptions,
+            actual => Assert.Same(primaryFailure, actual),
+            actual => Assert.Same(hostCleanupFailure, actual),
+            actual => Assert.Same(jwtCleanupFailure, actual),
+            actual => Assert.Same(fixtureCleanupFailure, actual));
+        Assert.Equal(
+            ["start", "migrate", "seed", "host-dispose", "jwt-dispose", "fixture-dispose"],
+            calls);
+    }
+
     private static ValueTask FailCleanupAsync(List<string> calls, string cleanupName, Exception exception)
     {
         calls.Add(cleanupName);
@@ -66,7 +97,8 @@ public sealed class FoundationApiFactoryLifecycleTests
     private sealed class ControlledFixture(
         List<string> calls,
         Exception? migrateException,
-        Exception disposeException) : IFoundationFixtureLifecycle
+        Exception disposeException,
+        Exception? createAdministratorDbContextException = null) : IFoundationFixtureLifecycle
     {
         public string RuntimeConnectionString =>
             "Host=127.0.0.1;Port=5432;Database=fixture;Username=postgres;Password=test;Pooling=false";
@@ -83,8 +115,16 @@ public sealed class FoundationApiFactoryLifecycleTests
             return migrateException is null ? Task.CompletedTask : Task.FromException(migrateException);
         }
 
-        public FoundationDbContext CreateAdministratorDbContext() =>
-            throw new NotSupportedException("The lifecycle failure test does not seed data.");
+        public FoundationDbContext CreateAdministratorDbContext()
+        {
+            calls.Add("seed");
+            if (createAdministratorDbContextException is not null)
+            {
+                throw createAdministratorDbContextException;
+            }
+
+            throw new NotSupportedException("The lifecycle test does not persist seed data.");
+        }
 
         public ValueTask DisposeAsync()
         {

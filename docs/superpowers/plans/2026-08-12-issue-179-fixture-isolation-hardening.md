@@ -20,7 +20,7 @@ usam seam restrito à infraestrutura de testes.
 - Sem retry, polling ou `Task.Delay` de readiness; hipótese não comprovada.
 - Nunca expor senha ou connection string completa.
 - A PR parte de #177. A reestimativa após os REDs e a seam de lifecycle é de
-  aproximadamente 700 linhas manuais em cinco arquivos; continua abaixo do
+  aproximadamente 750 linhas manuais em sete arquivos; continua abaixo do
   limite de 800. O conjunto empilhado não é a base de revisão desta fatia;
   após merge de #177, recalcular a diff contra `main`. Parar/redividir se
   exceder 800 linhas.
@@ -153,17 +153,18 @@ tentativa após falha.
 - [x] **Step 4: Rodar GREEN focal**
 
 Rodar mesmo filtro do Step 2, incluindo
-`PrepareAsync_preserves_primary_failure_when_cleanup_also_fails`; esperado:
+`PrepareAsync_preserves_primary_failure_when_all_cleanups_also_fail` e
+`CreateWithAuthenticatedIdentityAsync_preserves_seed_failure_when_all_cleanups_also_fail`; esperado:
 todos passam.
 
 ### Task 4: Manifesto e gate
 
-- [ ] **Step 1: Mapear BDDs**
+- [x] **Step 1: Mapear BDDs**
 
 Criar manifesto curto com os cinco cenários e seus testes reais; marcar acesso
 como N/A com motivo explícito.
 
-- [ ] **Step 2: Repetir concorrência serialmente**
+- [x] **Step 2: Repetir concorrência serialmente**
 
 ```bash
 for run in 1 2 3 4 5; do
@@ -173,7 +174,7 @@ done
 
 Esperado: cinco execuções passam sem `SSLRequest response H`.
 
-- [ ] **Step 3: Gate público**
+- [x] **Step 3: Gate público**
 
 ```bash
 dotnet format Vinx.Erp.sln whitespace --verify-no-changes --no-restore

@@ -108,6 +108,12 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         FileStorage? fileStorage = null)
     {
         var factory = await CreateAsync(actorUserId, correlationId, fileStorage);
+        return await SeedAuthenticatedActorAndReturnAsync(factory);
+    }
+
+    private static async Task<FoundationApiFactory> SeedAuthenticatedActorAndReturnAsync(
+        FoundationApiFactory factory)
+    {
         try
         {
             await factory.SeedAuthenticatedActorAsync();
@@ -146,6 +152,21 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             disposeHostAsync: disposeHostAsync,
             disposeJwtAsync: disposeJwtAsync);
         return await PrepareAsync(factory);
+    }
+
+    internal static async Task<FoundationApiFactory> CreateForSeedLifecycleTestAsync(
+        IFoundationFixtureLifecycle fixture,
+        Func<ValueTask> disposeHostAsync,
+        Func<ValueTask> disposeJwtAsync)
+    {
+        var factory = new FoundationApiFactory(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            CreateTestPrincipalClaims(null, null, null, null),
+            fixture: fixture,
+            disposeHostAsync: disposeHostAsync,
+            disposeJwtAsync: disposeJwtAsync);
+        return await SeedAuthenticatedActorAndReturnAsync(await PrepareAsync(factory));
     }
 
     public static async Task<FoundationApiFactory> CreateWithJwtBearerAsync()
