@@ -14,6 +14,7 @@ namespace Vinx.Erp.Foundation.Bdd.StepDefinitions;
 public sealed class AuthorizationStepDefinitions
 {
     private FoundationApiFactory? _factory;
+    private HttpClient? _client;
     private HttpResponseMessage? _response;
     private AuthorizationResult<AssignRoleToMembershipResult>? _assignmentResult;
     private AuthorizationResult<RevokeMembershipResult>? _revocationResult;
@@ -322,6 +323,16 @@ public sealed class AuthorizationStepDefinitions
         _targetMembershipId = alfaMembership.Id;
     }
 
+    [Given("her authenticated session lists Alfa and Beta before revocation")]
+    public async Task GivenHerAuthenticatedSessionListsAlfaAndBetaBeforeRevocation()
+    {
+        _client = Factory.CreateClient();
+        _response = await _client.GetAsync("/foundation/memberships");
+        _response.EnsureSuccessStatusCode();
+        var memberships = await _response.Content.ReadFromJsonAsync<List<MembershipResponse>>();
+        Assert.Equal(["Alfa", "Beta"], memberships!.Select(membership => membership.CompanyName));
+    }
+
     [Given("a role belongs to company {string}")]
     public Task GivenARoleBelongsToCompany(string companyName)
     {
@@ -381,7 +392,7 @@ public sealed class AuthorizationStepDefinitions
     public async Task ThenTheCommandSucceedsAndHerSameSessionListsOnlyBetaMemberships()
     {
         Assert.True(_revocationResult?.IsSuccess);
-        _response = await Factory.CreateClient().GetAsync("/foundation/memberships");
+        _response = await Client.GetAsync("/foundation/memberships");
         _response.EnsureSuccessStatusCode();
         var memberships = await _response.Content.ReadFromJsonAsync<List<MembershipResponse>>();
         Assert.Equal(["Beta"], memberships!.Select(membership => membership.CompanyName));
@@ -409,6 +420,9 @@ public sealed class AuthorizationStepDefinitions
 
     private FoundationApiFactory Factory =>
         _factory ?? throw new InvalidOperationException("The test host was not initialized.");
+
+    private HttpClient Client =>
+        _client ?? throw new InvalidOperationException("The authenticated session was not established.");
 
     private IReadOnlyList<MembershipResponse> MembershipMap =>
         _membershipMap

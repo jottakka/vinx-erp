@@ -15,6 +15,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 
 public sealed class RevokeMembershipServiceIntegrationTests
 {
+    private const int RaceLockClassId = 190754;
     [Theory]
     [InlineData(CapabilityScope.Self)]
     [InlineData(CapabilityScope.Team)]
@@ -76,6 +77,8 @@ public sealed class RevokeMembershipServiceIntegrationTests
         Assert.Equal(scenario.TargetMembershipId, audit.ResourceId);
         Assert.Equal(scenario.CompanyId, audit.RequestedCompanyId);
         Assert.Equal(factory.ActorUserId, audit.ActorUserId);
+        Assert.Single(await administrator.IdempotencyRecords.Where(record =>
+            record.CommandName == "foundation.memberships.revoke").ToListAsync());
     }
 
     [Fact]
@@ -224,22 +227,54 @@ public sealed class RevokeMembershipServiceIntegrationTests
     }
 
     [Fact]
-    public async Task Sixteen_concurrent_retries_create_one_transition_audit_and_idempotency_record()
+    public async Task Sixteen_coordinated_retries_create_one_transition_audit_and_idempotency_record()
     {
         await using var factory = await FoundationApiFactory.CreateAsync();
+        var logCapture = new RevocationLogCapture(typeof(RevokeMembershipService).FullName!);
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logCapture);
         var scenario = await SeedScenarioAsync(factory);
         var requestId = Guid.NewGuid();
+        await InstallMembershipRevocationRaceBarrierAsync(factory);
+        await using var coordinator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await AcquireRaceCoordinatorLockAsync(coordinator);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-        var results = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ =>
-            RevokeAsync(factory, scenario.CompanyId, scenario.TargetMembershipId, requestId)));
+        try
+        {
+            var attempts = Enumerable.Range(0, 16).Select(_ => RevokeAsync(
+                factory,
+                scenario.CompanyId,
+                scenario.TargetMembershipId,
+                requestId,
+                cancellation.Token));
+            var allAttempts = Task.WhenAll(attempts);
+            await WaitForRaceArrivalsAsync(coordinator, expectedArrivals: 16, cancellation.Token);
+            await ReleaseRaceCoordinatorLockAsync(coordinator);
+            var results = await allAttempts;
 
-        Assert.All(results, result => Assert.True(result.IsSuccess));
-        Assert.Single(results.Select(result => result.Value!.MembershipId).Distinct());
-        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        Assert.Equal(1, await administrator.IdempotencyRecords.CountAsync(record =>
-            record.CommandName == "foundation.memberships.revoke"));
-        Assert.Equal(1, await administrator.AuditEvents.CountAsync(audit =>
-            audit.Action == "foundation.memberships.revoke" && audit.Outcome == AuditOutcome.Success));
+            Assert.All(results, result => Assert.True(result.IsSuccess));
+            Assert.Single(results.Select(result => result.Value!.MembershipId).Distinct());
+            await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+            Assert.NotNull(await DeletedAtAsync(administrator, scenario.TargetMembershipId));
+            Assert.Equal(1, await administrator.IdempotencyRecords.CountAsync(record =>
+                record.CommandName == "foundation.memberships.revoke"));
+            Assert.Equal(1, await administrator.AuditEvents.CountAsync(audit =>
+                audit.Action == "foundation.memberships.revoke" && audit.Outcome == AuditOutcome.Success));
+
+            var retries = logCapture.Entries.Where(entry => entry.Level == LogLevel.Warning).ToList();
+            Assert.NotEmpty(retries);
+            Assert.All(retries, retry => AssertRetryLog(retry));
+            var transition = Assert.Single(logCapture.Entries, entry => entry.Level == LogLevel.Information);
+            Assert.Equal("membership_revocation", transition.Properties["Operation"]);
+            Assert.Equal("foundation", transition.Properties["Module"]);
+            Assert.Equal("revoked", transition.Properties["Result"]);
+            Assert.Equal("active_membership_revoked", transition.Properties["Reason"]);
+        }
+        finally
+        {
+            await ReleaseRaceCoordinatorLockAsync(coordinator);
+            await RemoveMembershipRevocationRaceBarrierAsync(factory);
+        }
     }
 
     [Fact]
@@ -340,6 +375,99 @@ public sealed class RevokeMembershipServiceIntegrationTests
         await command.ExecuteNonQueryAsync();
     }
 
+    private static async Task InstallMembershipRevocationRaceBarrierAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"""
+            CREATE OR REPLACE FUNCTION audit.coordinate_membership_revocation_race_for_test()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                IF NEW.action = 'foundation.memberships.revoke' THEN
+                    PERFORM pg_advisory_lock_shared({RaceLockClassId}, 2);
+                    PERFORM pg_advisory_lock({RaceLockClassId}, 1);
+                    PERFORM pg_advisory_unlock({RaceLockClassId}, 1);
+                    PERFORM pg_advisory_unlock_shared({RaceLockClassId}, 2);
+                END IF;
+                RETURN NEW;
+            END;
+            $$;
+
+            CREATE TRIGGER tr_coordinate_membership_revocation_race_for_test
+            BEFORE INSERT ON audit.audit_events
+            FOR EACH ROW
+            EXECUTE FUNCTION audit.coordinate_membership_revocation_race_for_test();
+            """, administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task RemoveMembershipRevocationRaceBarrierAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            DROP TRIGGER IF EXISTS tr_coordinate_membership_revocation_race_for_test ON audit.audit_events;
+            DROP FUNCTION IF EXISTS audit.coordinate_membership_revocation_race_for_test();
+            """, administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task AcquireRaceCoordinatorLockAsync(NpgsqlConnection coordinator)
+    {
+        await using var command = new NpgsqlCommand(
+            $"SELECT pg_advisory_lock({RaceLockClassId}, 1);", coordinator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task ReleaseRaceCoordinatorLockAsync(NpgsqlConnection coordinator)
+    {
+        await using var command = new NpgsqlCommand(
+            $"SELECT pg_advisory_unlock({RaceLockClassId}, 1);", coordinator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task WaitForRaceArrivalsAsync(
+        NpgsqlConnection coordinator,
+        int expectedArrivals,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            await using var command = new NpgsqlCommand(
+                $"""
+                SELECT count(*)
+                FROM pg_locks
+                WHERE locktype = 'advisory'
+                  AND classid = {RaceLockClassId}
+                  AND objid = 2
+                  AND objsubid = 2
+                  AND mode = 'ShareLock'
+                  AND granted
+                """, coordinator);
+            var arrivals = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+            if (arrivals == expectedArrivals)
+            {
+                return;
+            }
+
+            await Task.Delay(50, cancellationToken);
+        }
+
+        throw new Xunit.Sdk.XunitException("The membership revocations did not reach the race barrier.");
+    }
+
+    private static void AssertRetryLog(CapturedLog log)
+    {
+        Assert.NotNull(log.Exception);
+        Assert.Equal("membership_revocation", log.Properties["Operation"]);
+        Assert.Equal("foundation", log.Properties["Module"]);
+        Assert.Equal("retrying", log.Properties["Result"]);
+        Assert.Equal("concurrent_write", log.Properties["Reason"]);
+        Assert.Equal(["Module", "Operation", "Reason", "Result"], log.Properties.Keys.OrderBy(key => key));
+    }
+
     private static string? ErrorCode(AuthorizationResult<RevokeMembershipResult> result) =>
         result.ErrorCode?.ToStableCode();
 
@@ -363,7 +491,19 @@ public sealed class RevokeMembershipServiceIntegrationTests
             _categoryName = categoryName;
         }
 
-        public List<CapturedLog> Entries { get; } = [];
+        private readonly List<CapturedLog> _entries = [];
+        private readonly Lock _entriesLock = new();
+
+        public IReadOnlyList<CapturedLog> Entries
+        {
+            get
+            {
+                lock (_entriesLock)
+                {
+                    return _entries.ToList();
+                }
+            }
+        }
 
         public ILogger CreateLogger(string categoryName) =>
             categoryName == _categoryName ? this : NullLogger.Instance;
@@ -386,7 +526,10 @@ public sealed class RevokeMembershipServiceIntegrationTests
             var properties = ((IEnumerable<KeyValuePair<string, object?>>)state!)
                 .Where(pair => pair.Key != "{OriginalFormat}")
                 .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-            Entries.Add(new CapturedLog(logLevel, exception, properties));
+            lock (_entriesLock)
+            {
+                _entries.Add(new CapturedLog(logLevel, exception, properties));
+            }
         }
     }
 }
