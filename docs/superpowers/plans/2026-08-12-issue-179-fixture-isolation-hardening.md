@@ -134,16 +134,18 @@ Esperado: falha pelo comportamento atual.
 
 - [ ] **Step 3: Implementar cleanup mínimo**
 
-Definir seam interna com `StartAsync`, endpoint publicado, connection string e
-`DisposeAsync`; o construtor público continua criando `PostgreSqlContainer` pelo
-builder real e o construtor interno recebe a seam. Capturar exceção primária,
-tentar cleanup e relançar primária se cleanup passar; quando ambos falharem,
-lançar `AggregateException` com primária primeiro. Marcar descarte concluído só
-depois de sucesso, permitindo nova tentativa após falha. Na factory, usar helper
-único para agregar primária e todas as falhas de cleanup, mantendo a tentativa
-de host, JWT e fixture. Criar entrada interna de factory que recebe a fixture
-controlada e induz falha de migração ou seed; o construtor/entradas públicas
-continuam instanciando fixture real.
+Definir `IFoundationPostgresContainer` interno com `StartAsync`, `Hostname`,
+`GetMappedPublicPort`, `GetConnectionString` e `DisposeAsync`; adaptador real
+encapsula `PostgreSqlContainer`, e construtor interno do fixture recebe a seam.
+Definir `IFoundationFixtureLifecycle` interno com `RuntimeConnectionString`,
+`StartAsync`, `MigrateAsync`, `CreateAdministratorDbContext` e `DisposeAsync`.
+O construtor/entradas públicas continuam instanciando fixture real; a entrada
+interna de factory recebe lifecycle controlado e delegates de descarte de host e
+JWT. Centralizar em `CompleteAsync(Exception? primaryFailure, params
+Func<ValueTask>[] cleanupSteps)`: tentar todos os cleanups, relançar primária se
+não houver falha secundária e lançar `AggregateException` com primária primeiro
+quando houver. Marcar descarte concluído só depois de sucesso, permitindo nova
+tentativa após falha.
 
 - [ ] **Step 4: Rodar GREEN focal**
 
