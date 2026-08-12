@@ -7,7 +7,7 @@ using Vinx.Erp.Foundation.Persistence.Interceptors;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
-public sealed class FoundationPostgresFixture : IAsyncDisposable
+public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
 {
     private const string BootstrapResourceName =
         "Vinx.Erp.Foundation.IntegrationTests.Infrastructure.bootstrap-foundation-roles.sql";
@@ -142,8 +142,8 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
         }
         catch (Exception primaryFailure)
         {
-            await CompleteAsync(primaryFailure, DisposeAsync);
-            throw new InvalidOperationException("Unreachable.");
+            await FixtureCleanup.CompleteAsync(primaryFailure, DisposeAsync);
+            throw;
         }
     }
 
@@ -255,11 +255,26 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
         return new FoundationDbContext(options);
     }
 
+}
+
+internal interface IFoundationFixtureLifecycle : IAsyncDisposable
+{
+    string RuntimeConnectionString { get; }
+
+    Task StartAsync();
+
+    Task MigrateAsync();
+
+    FoundationDbContext CreateAdministratorDbContext();
+}
+
+internal static class FixtureCleanup
+{
     internal static async ValueTask CompleteAsync(
-        Exception primaryFailure,
+        Exception? primaryFailure,
         params Func<ValueTask>[] cleanupSteps)
     {
-        List<Exception>? cleanupFailures = null;
+        List<Exception>? failures = primaryFailure is null ? null : [primaryFailure];
         foreach (var cleanupStep in cleanupSteps)
         {
             try
@@ -268,16 +283,21 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             }
             catch (Exception cleanupFailure)
             {
-                (cleanupFailures ??= []).Add(cleanupFailure);
+                (failures ??= []).Add(cleanupFailure);
             }
         }
 
-        if (cleanupFailures is { Count: > 0 })
+        if (failures is not { Count: > 0 })
         {
-            throw new AggregateException([primaryFailure, .. cleanupFailures]);
+            return;
         }
 
-        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+        if (failures.Count == 1)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        }
+
+        throw new AggregateException(failures);
     }
 }
 
