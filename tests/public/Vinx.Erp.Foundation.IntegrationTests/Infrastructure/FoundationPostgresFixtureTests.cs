@@ -29,6 +29,7 @@ public sealed class FoundationPostgresFixtureTests
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => FoundationPostgresFixture.VerifyEndpointAsync(
                     settings,
+                    expectedEndpoint: null,
                     "endpoint-connect",
                     CancellationToken.None));
 
@@ -75,6 +76,60 @@ public sealed class FoundationPostgresFixtureTests
         Assert.False(string.IsNullOrWhiteSpace(reader.GetString(0)));
         Assert.Equal(5432, reader.GetInt32(1));
         Assert.StartsWith("PostgreSQL", reader.GetString(2), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task VerifyEndpointAsync_rejects_postgresql_with_unexpected_identity()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+
+        var settings = new NpgsqlConnectionStringBuilder(fixture.AdministratorConnectionString)
+        {
+            Pooling = false
+        };
+        var password = settings.Password
+            ?? throw new InvalidOperationException("The administrator connection string did not include a password.");
+        var unexpectedEndpoint = fixture.Endpoint with
+        {
+            Database = $"unexpected_{Guid.NewGuid():N}"
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => FoundationPostgresFixture.VerifyEndpointAsync(
+                settings,
+                unexpectedEndpoint,
+                "endpoint-connect",
+                CancellationToken.None));
+
+        Assert.Contains("phase=endpoint-connect", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(password, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Concurrent_fixtures_use_distinct_verified_postgresql_endpoints()
+    {
+        await using var first = new FoundationPostgresFixture();
+        await using var second = new FoundationPostgresFixture();
+
+        await Task.WhenAll(first.StartAsync(), second.StartAsync());
+
+        Assert.NotEqual(first.Endpoint.Database, second.Endpoint.Database);
+        Assert.NotEqual(first.Endpoint.Port, second.Endpoint.Port);
+        Assert.False(new NpgsqlConnectionStringBuilder(first.AdministratorConnectionString).Pooling);
+        Assert.False(new NpgsqlConnectionStringBuilder(second.AdministratorConnectionString).Pooling);
+
+        await Task.WhenAll(
+            FoundationPostgresFixture.VerifyEndpointAsync(
+                new NpgsqlConnectionStringBuilder(first.AdministratorConnectionString),
+                first.Endpoint,
+                "endpoint-connect",
+                CancellationToken.None),
+            FoundationPostgresFixture.VerifyEndpointAsync(
+                new NpgsqlConnectionStringBuilder(second.AdministratorConnectionString),
+                second.Endpoint,
+                "endpoint-connect",
+                CancellationToken.None));
     }
 
     [Fact]

@@ -11,10 +11,9 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
 {
     private const string BootstrapResourceName =
         "Vinx.Erp.Foundation.IntegrationTests.Infrastructure.bootstrap-foundation-roles.sql";
+    private const string AdministratorUsername = "postgres";
 
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder()
-        .WithImage("postgres:17.9-alpine")
-        .Build();
+    private readonly PostgreSqlContainer _container;
     private string? _administratorConnectionString;
     private string? _migratorConnectionString;
     private string? _runtimeConnectionString;
@@ -22,14 +21,33 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
     private bool _started;
     private bool _disposed;
 
+    public FoundationPostgresFixture()
+    {
+        var database = $"vinx_fixture_{Guid.NewGuid():N}";
+        var password = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        _container = new PostgreSqlBuilder()
+            .WithImage("postgres:17.9-alpine")
+            .WithDatabase(database)
+            .WithUsername(AdministratorUsername)
+            .WithPassword(password)
+            .Build();
+    }
+
     public string MigratorConnectionString => _migratorConnectionString
         ?? throw new InvalidOperationException("The fixture has not been started.");
 
     public string RuntimeConnectionString => _runtimeConnectionString
         ?? throw new InvalidOperationException("The fixture has not been started.");
 
+    internal string AdministratorConnectionString => _administratorConnectionString
+        ?? throw new InvalidOperationException("The fixture has not been started.");
+
+    internal FoundationPostgresEndpoint Endpoint => _endpoint
+        ?? throw new InvalidOperationException("The fixture has not been started.");
+
     internal static async Task VerifyEndpointAsync(
         NpgsqlConnectionStringBuilder settings,
+        FoundationPostgresEndpoint? expectedEndpoint,
         string phase,
         CancellationToken cancellationToken)
     {
@@ -43,7 +61,7 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             await using var connection = new NpgsqlConnection(settings.ConnectionString);
             await connection.OpenAsync(cancellationToken);
             await using var command = new NpgsqlCommand(
-                "SELECT current_database(), inet_server_port(), version()",
+                "SELECT current_database(), current_user, inet_server_port(), version()",
                 connection);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))
@@ -52,10 +70,14 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             }
 
             var database = reader.GetString(0);
-            var port = reader.GetInt32(1);
-            var version = reader.GetString(2);
+            var username = reader.GetString(1);
+            var port = reader.GetInt32(2);
+            var version = reader.GetString(3);
             if (string.IsNullOrWhiteSpace(database) || port != 5432 ||
-                !version.StartsWith("PostgreSQL", StringComparison.Ordinal))
+                !version.StartsWith("PostgreSQL", StringComparison.Ordinal) ||
+                (expectedEndpoint is not null &&
+                 (!string.Equals(database, expectedEndpoint.Database, StringComparison.Ordinal) ||
+                  !string.Equals(username, expectedEndpoint.Username, StringComparison.Ordinal))))
             {
                 throw new InvalidOperationException("The endpoint verification returned unexpected metadata.");
             }
@@ -99,7 +121,7 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
                 Pooling = _endpoint.Pooling
             };
             _administratorConnectionString = administratorSettings.ConnectionString;
-            await VerifyEndpointAsync(administratorSettings, "endpoint-connect", CancellationToken.None);
+            await VerifyEndpointAsync(administratorSettings, _endpoint, "endpoint-connect", CancellationToken.None);
 
             await using var connection = await OpenAdministratorConnectionAsync();
             await ExecuteBootstrapAsync(connection);
