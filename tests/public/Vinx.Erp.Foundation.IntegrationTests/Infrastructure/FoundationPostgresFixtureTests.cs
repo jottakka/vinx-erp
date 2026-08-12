@@ -79,7 +79,7 @@ public sealed class FoundationPostgresFixtureTests
     }
 
     [Fact]
-    public async Task VerifyEndpointAsync_rejects_postgresql_with_unexpected_identity()
+    public async Task VerifyEndpointAsync_rejects_postgresql_with_unexpected_database()
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
@@ -92,7 +92,34 @@ public sealed class FoundationPostgresFixtureTests
             ?? throw new InvalidOperationException("The administrator connection string did not include a password.");
         var unexpectedEndpoint = fixture.Endpoint with
         {
-            Database = $"unexpected_{Guid.NewGuid():N}",
+            Database = $"unexpected_{Guid.NewGuid():N}"
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => FoundationPostgresFixture.VerifyEndpointAsync(
+                settings,
+                unexpectedEndpoint,
+                "endpoint-connect",
+                CancellationToken.None));
+
+        Assert.Contains("phase=endpoint-connect", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(password, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task VerifyEndpointAsync_rejects_postgresql_with_unexpected_username()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+
+        var settings = new NpgsqlConnectionStringBuilder(fixture.AdministratorConnectionString)
+        {
+            Pooling = false
+        };
+        var password = settings.Password
+            ?? throw new InvalidOperationException("The administrator connection string did not include a password.");
+        var unexpectedEndpoint = fixture.Endpoint with
+        {
             Username = $"unexpected_{Guid.NewGuid():N}"
         };
 
@@ -128,18 +155,33 @@ public sealed class FoundationPostgresFixtureTests
         Assert.StartsWith("PostgreSQL", secondIdentity.Version, StringComparison.Ordinal);
         Assert.NotEqual(firstIdentity.Database, secondIdentity.Database);
         Assert.NotEqual(first.Endpoint.Port, second.Endpoint.Port);
-        Assert.False(new NpgsqlConnectionStringBuilder(first.AdministratorConnectionString).Pooling);
-        Assert.False(new NpgsqlConnectionStringBuilder(second.AdministratorConnectionString).Pooling);
+        var firstSettings = new NpgsqlConnectionStringBuilder(first.AdministratorConnectionString);
+        var secondSettings = new NpgsqlConnectionStringBuilder(second.AdministratorConnectionString);
+        Assert.False(firstSettings.Pooling);
+        Assert.False(secondSettings.Pooling);
 
         await Task.WhenAll(
             FoundationPostgresFixture.VerifyEndpointAsync(
-                new NpgsqlConnectionStringBuilder(first.AdministratorConnectionString),
+                firstSettings,
                 first.Endpoint,
                 "endpoint-connect",
                 CancellationToken.None),
             FoundationPostgresFixture.VerifyEndpointAsync(
-                new NpgsqlConnectionStringBuilder(second.AdministratorConnectionString),
+                secondSettings,
                 second.Endpoint,
+                "endpoint-connect",
+                CancellationToken.None));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => FoundationPostgresFixture.VerifyEndpointAsync(
+                firstSettings,
+                second.Endpoint,
+                "endpoint-connect",
+                CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => FoundationPostgresFixture.VerifyEndpointAsync(
+                secondSettings,
+                first.Endpoint,
                 "endpoint-connect",
                 CancellationToken.None));
     }
