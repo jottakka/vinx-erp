@@ -75,4 +75,37 @@ describe("AppearanceMenu", () => {
 
     await waitFor(() => expect(trigger).toHaveFocus());
   });
+
+  it("keeps one menu and the final selection after repeated preference changes", async () => {
+    const user = userEvent.setup();
+    render(
+      <VinxThemeProvider>
+        <AppearanceMenu />
+        <PreferenceProbe />
+      </VinxThemeProvider>,
+    );
+
+    const trigger = screen.getByRole("button", {
+      name: "Abrir preferências visuais",
+    });
+    await user.click(trigger);
+    await user.click(
+      screen.getByRole("menuitem", { name: "Densidade: compacta" }),
+    );
+    await user.click(trigger);
+    await user.click(
+      screen.getByRole("menuitem", { name: "Densidade: confortável" }),
+    );
+    await user.click(trigger);
+
+    expect(
+      screen.getAllByRole("menu", { name: "Abrir preferências visuais" }),
+    ).toHaveLength(1);
+    expect(
+      screen.getByRole("menuitem", { name: "Densidade: confortável" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("density-gap")).toHaveTextContent(
+      "comfortable:24",
+    );
+  });
 });
