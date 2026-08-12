@@ -1,9 +1,14 @@
+using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Observability;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -56,6 +61,68 @@ public sealed class MembershipMapEndpointTests
         var response = await factory.CreateClient().GetAsync("/foundation/memberships");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Membership_map_discovery_failure_returns_a_minimal_stable_service_error()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var client = factory.CreateClient();
+
+        using (var admitted = await client.GetAsync("/foundation/memberships"))
+        {
+            admitted.EnsureSuccessStatusCode();
+        }
+
+        await RevokeMembershipDiscoveryAsync(factory);
+        using var telemetry = new AuthorizationTelemetryCollector();
+
+        var response = await client.GetAsync("/foundation/memberships");
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("{\"code\":\"audit_unavailable\"}", responseBody);
+        Assert.DoesNotContain("Npgsql", responseBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Postgres", responseBody, StringComparison.OrdinalIgnoreCase);
+        telemetry.AssertRecorded("membership_map", "authorization");
+    }
+
+    [Fact]
+    public async Task Membership_map_discovery_failure_is_logged_with_safe_operational_context()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await RevokeMembershipDiscoveryAsync(factory);
+        using var logProvider = new MembershipMapLogProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(logProvider));
+        await using var runtime = factory.Fixture.CreateRuntimeDbContext();
+        var service = new ActorMembershipMapService(
+            runtime,
+            new AuthorizationTelemetry(),
+            loggerFactory.CreateLogger<ActorMembershipMapService>()
+        );
+
+        var result = await service.GetCurrentActorAsync(
+            new Vinx.Erp.Foundation.Identity.ActorContext(
+                factory.ActorUserId,
+                factory.CorrelationId
+            ),
+            CancellationToken.None
+        );
+
+        Assert.Equal("audit_unavailable", result.ErrorCode?.ToStableCode());
+        var log = Assert.Single(logProvider.Entries);
+        Assert.Equal(LogLevel.Error, log.Level);
+        Assert.NotNull(log.Exception);
+        Assert.Equal(
+            new Dictionary<string, object?>
+            {
+                ["Operation"] = "membership_map",
+                ["Module"] = "authorization",
+                ["Result"] = "unavailable",
+                ["Reason"] = "discovery_or_projection_failed",
+            },
+            log.Properties
+        );
     }
 
     private static async Task<MembershipMapSeed> SeedMembershipMapAsync(
@@ -182,6 +249,100 @@ public sealed class MembershipMapEndpointTests
             beta.Id,
             gama.Id
         );
+    }
+
+    private static async Task RevokeMembershipDiscoveryAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "REVOKE EXECUTE ON FUNCTION foundation.current_actor_memberships() FROM vinx_runtime;",
+            administrator
+        );
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private sealed class AuthorizationTelemetryCollector : IDisposable
+    {
+        private readonly ConcurrentQueue<IReadOnlyDictionary<string, string>> _measurements = new();
+        private readonly MeterListener _listener = new();
+
+        public AuthorizationTelemetryCollector()
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (
+                    instrument.Meter.Name == "Vinx.Erp.Foundation.Authorization"
+                    && instrument.Name == "foundation.authorization.audit_unavailable"
+                )
+                {
+                    listener.EnableMeasurementEvents(instrument);
+                }
+            };
+            _listener.SetMeasurementEventCallback<long>(
+                (_, _, tags, _) =>
+                {
+                    _measurements.Enqueue(
+                        tags.ToArray()
+                            .ToDictionary(
+                                tag => tag.Key,
+                                tag => tag.Value?.ToString() ?? string.Empty,
+                                StringComparer.Ordinal
+                            )
+                    );
+                }
+            );
+            _listener.Start();
+        }
+
+        public void AssertRecorded(string operation, string phase) =>
+            Assert.Contains(
+                _measurements,
+                measurement =>
+                    measurement.Count == 2
+                    && measurement.GetValueOrDefault("operation") == operation
+                    && measurement.GetValueOrDefault("phase") == phase
+            );
+
+        public void Dispose() => _listener.Dispose();
+    }
+
+    private sealed record CapturedLog(
+        LogLevel Level,
+        Exception? Exception,
+        IReadOnlyDictionary<string, object?> Properties
+    );
+
+    private sealed class MembershipMapLogProvider : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<CapturedLog> _entries = new();
+
+        public IReadOnlyCollection<CapturedLog> Entries => _entries.ToArray();
+
+        public ILogger CreateLogger(string categoryName) => new MembershipMapLogger(_entries);
+
+        public void Dispose() { }
+
+        private sealed class MembershipMapLogger(ConcurrentQueue<CapturedLog> entries) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state)
+                where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter
+            )
+            {
+                var properties = ((IEnumerable<KeyValuePair<string, object?>>)state!)
+                    .Where(pair => pair.Key != "{OriginalFormat}")
+                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                entries.Enqueue(new CapturedLog(logLevel, exception, properties));
+            }
+        }
     }
 
     private sealed record MembershipMapSeed(

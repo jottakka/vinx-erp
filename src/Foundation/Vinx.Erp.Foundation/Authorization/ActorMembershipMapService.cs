@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
@@ -7,9 +8,17 @@ namespace Vinx.Erp.Foundation.Authorization;
 
 public sealed class ActorMembershipMapService(
     FoundationDbContext database,
-    AuthorizationTelemetry telemetry
+    AuthorizationTelemetry telemetry,
+    ILogger<ActorMembershipMapService> logger
 )
 {
+    private const string Operation = "membership_map";
+    private const string Module = "authorization";
+    private const string UnavailableResult = "unavailable";
+    private const string UnavailableReason = "discovery_or_projection_failed";
+    private const string UnavailableEventTemplate =
+        "Membership map {Operation} {Module} {Result} {Reason}";
+
     public async Task<
         AuthorizationResult<IReadOnlyList<MembershipCapabilitySummary>>
     > GetCurrentActorAsync(ActorContext actor, CancellationToken cancellationToken)
@@ -56,8 +65,16 @@ public sealed class ActorMembershipMapService(
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            logger.LogError(
+                exception,
+                UnavailableEventTemplate,
+                Operation,
+                Module,
+                UnavailableResult,
+                UnavailableReason
+            );
             telemetry.RecordAuditUnavailable(
                 AuthorizationOperation.MembershipMap,
                 AuditUnavailablePhase.Authorization

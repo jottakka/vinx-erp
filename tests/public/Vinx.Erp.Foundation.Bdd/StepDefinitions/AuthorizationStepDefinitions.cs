@@ -145,6 +145,16 @@ public sealed class AuthorizationStepDefinitions
         return Task.CompletedTask;
     }
 
+    [Then("the membership map effective grants use Company scope")]
+    public Task ThenTheMembershipMapEffectiveGrantsUseCompanyScope()
+    {
+        Assert.All(
+            MembershipMap.Take(2),
+            membership => Assert.Equal(["Company"], Assert.Single(membership.Capabilities).Scopes)
+        );
+        return Task.CompletedTask;
+    }
+
     [Then("Gama has no effective capabilities")]
     public Task ThenGamaHasNoEffectiveCapabilities()
     {
