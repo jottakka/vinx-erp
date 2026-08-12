@@ -187,6 +187,38 @@ public sealed class FoundationPostgresFixtureTests
     }
 
     [Fact]
+    public async Task StartAsync_preserves_primary_failure_when_cleanup_also_fails()
+    {
+        var primaryFailure = new InvalidOperationException("primary-start-failure");
+        var cleanupFailure = new InvalidOperationException("cleanup-failure");
+        var container = new ControlledPostgresContainer(
+            startException: primaryFailure,
+            firstDisposeException: cleanupFailure);
+        var fixture = new FoundationPostgresFixture(container);
+
+        var exception = await Assert.ThrowsAsync<AggregateException>(() => fixture.StartAsync());
+
+        Assert.Collection(
+            exception.InnerExceptions,
+            actual => Assert.Same(primaryFailure, actual),
+            actual => Assert.Same(cleanupFailure, actual));
+    }
+
+    [Fact]
+    public async Task DisposeAsync_retries_after_a_failed_container_cleanup()
+    {
+        var cleanupFailure = new InvalidOperationException("cleanup-failure");
+        var container = new ControlledPostgresContainer(firstDisposeException: cleanupFailure);
+        var fixture = new FoundationPostgresFixture(container);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.DisposeAsync().AsTask());
+
+        Assert.Same(cleanupFailure, exception);
+        await fixture.DisposeAsync();
+        Assert.Equal(2, container.DisposeCallCount);
+    }
+
+    [Fact]
     public async Task StartAsync_grants_public_schema_privileges_only_to_the_migrator()
     {
         await using var fixture = new FoundationPostgresFixture();
@@ -387,5 +419,42 @@ public sealed class FoundationPostgresFixtureTests
         await stream.ReadExactlyAsync(request);
         await stream.WriteAsync(new byte[] { (byte)'H' });
         await stream.FlushAsync();
+    }
+
+    private sealed class ControlledPostgresContainer(
+        Exception? startException = null,
+        Exception? firstDisposeException = null) : IFoundationPostgresContainer
+    {
+        private readonly Exception? _startException = startException;
+        private Exception? _firstDisposeException = firstDisposeException;
+
+        public int DisposeCallCount { get; private set; }
+        public string Hostname => "127.0.0.1";
+
+        public string GetConnectionString() =>
+            "Host=127.0.0.1;Port=5432;Database=fixture;Username=postgres;Password=test;Pooling=false";
+
+        public int GetMappedPublicPort(int containerPort) => containerPort;
+
+        public Task StartAsync()
+        {
+            if (_startException is not null)
+            {
+                return Task.FromException(_startException);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCallCount++;
+            if (Interlocked.Exchange(ref _firstDisposeException, null) is { } exception)
+            {
+                return ValueTask.FromException(exception);
+            }
+
+            return ValueTask.CompletedTask;
+        }
     }
 }

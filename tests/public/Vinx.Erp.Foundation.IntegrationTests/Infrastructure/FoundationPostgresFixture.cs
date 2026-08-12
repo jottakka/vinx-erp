@@ -13,7 +13,7 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
         "Vinx.Erp.Foundation.IntegrationTests.Infrastructure.bootstrap-foundation-roles.sql";
     private const string AdministratorUsername = "postgres";
 
-    private readonly PostgreSqlContainer _container;
+    private readonly IFoundationPostgresContainer _container;
     private string? _administratorConnectionString;
     private string? _migratorConnectionString;
     private string? _runtimeConnectionString;
@@ -25,12 +25,17 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
     {
         var database = $"vinx_fixture_{Guid.NewGuid():N}";
         var password = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        _container = new PostgreSqlBuilder()
+        _container = new TestcontainersPostgresContainer(new PostgreSqlBuilder()
             .WithImage("postgres:17.9-alpine")
             .WithDatabase(database)
             .WithUsername(AdministratorUsername)
             .WithPassword(password)
-            .Build();
+            .Build());
+    }
+
+    internal FoundationPostgresFixture(IFoundationPostgresContainer container)
+    {
+        _container = container;
     }
 
     public string MigratorConnectionString => _migratorConnectionString
@@ -135,10 +140,10 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             _runtimeConnectionString = BuildConnectionString("vinx_runtime", runtimePassword);
             _started = true;
         }
-        catch
+        catch (Exception primaryFailure)
         {
-            await DisposeAsync();
-            throw;
+            await CompleteAsync(primaryFailure, DisposeAsync);
+            throw new InvalidOperationException("Unreachable.");
         }
     }
 
@@ -183,9 +188,9 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             return;
         }
 
+        await _container.DisposeAsync();
         _disposed = true;
         _started = false;
-        await _container.DisposeAsync();
     }
 
     private async Task ExecuteBootstrapAsync(NpgsqlConnection connection)
@@ -249,6 +254,55 @@ public sealed class FoundationPostgresFixture : IAsyncDisposable
             .Options;
         return new FoundationDbContext(options);
     }
+
+    internal static async ValueTask CompleteAsync(
+        Exception primaryFailure,
+        params Func<ValueTask>[] cleanupSteps)
+    {
+        List<Exception>? cleanupFailures = null;
+        foreach (var cleanupStep in cleanupSteps)
+        {
+            try
+            {
+                await cleanupStep();
+            }
+            catch (Exception cleanupFailure)
+            {
+                (cleanupFailures ??= []).Add(cleanupFailure);
+            }
+        }
+
+        if (cleanupFailures is { Count: > 0 })
+        {
+            throw new AggregateException([primaryFailure, .. cleanupFailures]);
+        }
+
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+    }
+}
+
+internal interface IFoundationPostgresContainer : IAsyncDisposable
+{
+    string Hostname { get; }
+
+    string GetConnectionString();
+
+    int GetMappedPublicPort(int containerPort);
+
+    Task StartAsync();
+}
+
+internal sealed class TestcontainersPostgresContainer(PostgreSqlContainer container) : IFoundationPostgresContainer
+{
+    public string Hostname => container.Hostname;
+
+    public string GetConnectionString() => container.GetConnectionString();
+
+    public int GetMappedPublicPort(int containerPort) => container.GetMappedPublicPort(containerPort);
+
+    public Task StartAsync() => container.StartAsync();
+
+    public ValueTask DisposeAsync() => container.DisposeAsync();
 }
 
 internal sealed record FoundationPostgresEndpoint(
