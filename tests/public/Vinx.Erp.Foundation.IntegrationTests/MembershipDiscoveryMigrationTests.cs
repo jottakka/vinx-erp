@@ -93,10 +93,8 @@ public sealed class MembershipDiscoveryMigrationTests
             SELECT tablename, policyname, permissive, cmd, roles, qual, with_check
             FROM pg_policies
             WHERE schemaname = 'foundation'
-              AND policyname IN (
-                  'companies_authorization_owner_read',
-                  'memberships_authorization_owner_read')
-            ORDER BY tablename
+              AND roles @> ARRAY['vinx_authorization_owner']::name[]
+            ORDER BY tablename, policyname
             """, administrator);
         await using var reader = await command.ExecuteReaderAsync();
         var policies = new List<(string Table, string Name, string Permissive, string Command, string[] Roles, string Qual, string? WithCheck)>();
@@ -122,6 +120,28 @@ public sealed class MembershipDiscoveryMigrationTests
                 policy,
                 "memberships",
                 "memberships_authorization_owner_read"));
+
+        await reader.CloseAsync();
+        await using var memberships = new NpgsqlCommand(
+            """
+            SELECT member.rolname, membership.inherit_option, membership.set_option
+            FROM pg_auth_members AS membership
+            INNER JOIN pg_roles AS role ON role.oid = membership.roleid
+            INNER JOIN pg_roles AS member ON member.oid = membership.member
+            WHERE role.rolname = 'vinx_authorization_owner'
+            ORDER BY member.rolname
+            """, administrator);
+        await using var membershipReader = await memberships.ExecuteReaderAsync();
+        var directMembers = new List<(string Member, bool Inherit, bool Set)>();
+        while (await membershipReader.ReadAsync())
+        {
+            directMembers.Add((
+                membershipReader.GetString(0),
+                membershipReader.GetBoolean(1),
+                membershipReader.GetBoolean(2)));
+        }
+
+        Assert.Equal([("vinx_migrator", false, true)], directMembers);
     }
 
     [Fact]
