@@ -22,6 +22,7 @@ public sealed class AuthorizationTelemetry
     private static string ToTagValue(AuthorizationOperation operation) => operation switch
     {
         AuthorizationOperation.CapabilityMap => "capability_map",
+        AuthorizationOperation.MembershipMap => "membership_map",
         AuthorizationOperation.RoleAssignment => "role_assignment",
         _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unsupported authorization operation.")
     };
@@ -40,6 +41,7 @@ public sealed class AuthorizationTelemetry
 internal enum AuthorizationOperation
 {
     CapabilityMap,
+    MembershipMap,
     RoleAssignment
 }
 

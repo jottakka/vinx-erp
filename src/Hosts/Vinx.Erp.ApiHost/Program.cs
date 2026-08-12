@@ -49,6 +49,7 @@ builder.Services.AddDbContext<FoundationDbContext>(options => options
     .AddInterceptors(new RowVersionInterceptor()));
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
+builder.Services.AddScoped<ActorMembershipMapService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<DocumentUploadService>();
@@ -93,6 +94,16 @@ app.MapGet("/foundation/capabilities", async (
     var result = await service.GetCapabilitiesAsync(
         httpContext.GetRequiredActorContext(),
         companyId,
+        cancellationToken);
+    return result.ToMinimalApiResult();
+}).RequireAuthorization();
+app.MapGet("/foundation/memberships", async (
+    HttpContext httpContext,
+    ActorMembershipMapService service,
+    CancellationToken cancellationToken) =>
+{
+    var result = await service.GetCurrentActorAsync(
+        httpContext.GetRequiredActorContext(),
         cancellationToken);
     return result.ToMinimalApiResult();
 }).RequireAuthorization();
