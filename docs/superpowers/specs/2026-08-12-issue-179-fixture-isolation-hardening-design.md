@@ -14,10 +14,12 @@ falhar e manter isolamento em duas inicializações simultâneas.
   ambos são configurados antes de criar o container. A senha nunca entra em
   record, exceção, log ou documentação.
 - A prova semântica consulta `current_database()`, `current_user`,
-  `inet_server_port()` e `version()` e compara banco/usuário/porta/versão com a
-  identidade esperada.
+  `inet_server_port()` e `version()` e compara banco/usuário/porta com a
+  identidade esperada; a versão confirma somente a família PostgreSQL.
 - Erro primário de criação não pode ser substituído pelo erro de descarte. Se
-  ambos falharem, a exceção expõe ambos, mantendo o primário primeiro.
+  ambos falharem, a exceção expõe ambos, mantendo o primário primeiro. A factory
+  aplica a mesma regra ao bootstrap, migração e seed, ainda tentando descartar
+  host, JWT e fixture.
 - Retry de readiness externa não entra nesta fatia: o `H` observável ainda não
   tem causa transitória reproduzida. Não haverá `Task.Delay`, polling ou retry
   sem evidência.
@@ -34,6 +36,7 @@ falhar e manter isolamento em duas inicializações simultâneas.
 
 ## Limites
 
-As doubles de container, se necessárias para erro de cleanup, ficam em
-infraestrutura de testes. O caminho de sucesso e o teste concorrente usam
-Testcontainers PostgreSQL real.
+Uma seam interna, usada apenas pelo projeto de testes, abstrai start, endpoint e
+dispose do container. A construção normal continua com `PostgreSqlBuilder`; a
+double exercita a falha de cleanup. O caminho de sucesso e o teste concorrente
+usam Testcontainers PostgreSQL real.

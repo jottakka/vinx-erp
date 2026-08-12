@@ -111,15 +111,18 @@ Esperado: todos passam com PostgreSQL real e sem segredo no erro.
 
 **Files:**
 
-- Modificar: `FoundationPostgresFixture.cs` e `FoundationApiFactory.cs` somente se a factory repetir o padrão.
+- Modificar: `FoundationPostgresFixture.cs` e `FoundationApiFactory.cs`.
 - Modificar: teste de infraestrutura e criar double test-only mínima, se necessária.
 
 - [ ] **Step 1: Escrever RED de falha dupla**
 
-Usar container/double test-only que lança falha primária durante start/probe e
-falha no primeiro dispose. Exigir que resultado mantenha ambas as exceções e
-que segundo dispose faça nova tentativa. A mutação que pega é marcar
-`_disposed=true` antes de descartar ou relançar somente cleanup.
+Usar seam interna test-only de container que lança falha primária durante
+start/probe e falha no primeiro dispose. Exigir que resultado mantenha ambas as
+exceções e que segundo dispose faça nova tentativa. Repetir contra
+`FoundationApiFactory` com falha de migração/seed e cleanup, exigindo primária
+primeiro e tentativa de todos recursos. A mutação que pega é marcar
+`_disposed=true` antes de descartar, relançar somente cleanup ou descartar
+silenciosamente falhas secundárias.
 
 - [ ] **Step 2: Rodar RED**
 
@@ -131,10 +134,14 @@ Esperado: falha pelo comportamento atual.
 
 - [ ] **Step 3: Implementar cleanup mínimo**
 
-Capturar exceção primária, tentar cleanup e relançar primária se cleanup passar;
-quando ambos falharem, lançar `AggregateException` com primária primeiro.
-Marcar descarte concluído só depois de sucesso, permitindo nova tentativa após
-falha. A factory continua descartando host, JWT e fixture mesmo se um falhar.
+Definir seam interna com `StartAsync`, endpoint publicado, connection string e
+`DisposeAsync`; o construtor público continua criando `PostgreSqlContainer` pelo
+builder real e o construtor interno recebe a seam. Capturar exceção primária,
+tentar cleanup e relançar primária se cleanup passar; quando ambos falharem,
+lançar `AggregateException` com primária primeiro. Marcar descarte concluído só
+depois de sucesso, permitindo nova tentativa após falha. Na factory, usar helper
+único para agregar primária e todas as falhas de cleanup, mantendo a tentativa
+de host, JWT e fixture.
 
 - [ ] **Step 4: Rodar GREEN focal**
 
