@@ -89,7 +89,70 @@ public sealed class AgentToolRegistryTests
         Assert.Contains("\"ok\":true", arguments, StringComparison.Ordinal);
     }
 
-    private static AgentToolDescriptor CreateDescriptor(string name, string version)
+    [Fact]
+    public void Read_only_descriptor_rejects_mcp_write_or_destructive_hints()
+    {
+        Assert.Throws<ArgumentException>(() => CreateDescriptor(
+            "payments.read",
+            "1.0.0",
+            readOnlyHint: false));
+        Assert.Throws<ArgumentException>(() => CreateDescriptor(
+            "payments.read",
+            "1.0.0",
+            destructiveHint: true));
+    }
+
+    [Fact]
+    public void Write_descriptor_requires_idempotent_non_read_only_contract()
+    {
+        Assert.Throws<ArgumentException>(() => CreateDescriptor(
+            "payments.write",
+            "1.0.0",
+            risk: AgentToolRisk.InternalWrite,
+            requiresIdempotency: false,
+            readOnlyHint: false,
+            idempotentHint: true));
+        Assert.Throws<ArgumentException>(() => CreateDescriptor(
+            "payments.write",
+            "1.0.0",
+            risk: AgentToolRisk.InternalWrite,
+            requiresIdempotency: true,
+            readOnlyHint: true,
+            idempotentHint: true));
+        Assert.Throws<ArgumentException>(() => CreateDescriptor(
+            "payments.write",
+            "1.0.0",
+            risk: AgentToolRisk.InternalWrite,
+            requiresIdempotency: true,
+            readOnlyHint: false,
+            idempotentHint: false));
+    }
+
+    [Fact]
+    public void Destructive_external_write_descriptor_can_be_consistent()
+    {
+        var descriptor = CreateDescriptor(
+            "payments.submit",
+            "1.0.0",
+            risk: AgentToolRisk.ExternalWrite,
+            requiresIdempotency: true,
+            readOnlyHint: false,
+            destructiveHint: true,
+            idempotentHint: true);
+
+        Assert.Equal(AgentToolRisk.ExternalWrite, descriptor.Risk);
+        Assert.True(descriptor.McpHints.DestructiveHint);
+        Assert.True(descriptor.RequiresIdempotency);
+    }
+
+    private static AgentToolDescriptor CreateDescriptor(
+        string name,
+        string version,
+        AgentToolRisk risk = AgentToolRisk.ReadOnly,
+        bool requiresIdempotency = false,
+        bool? readOnlyHint = null,
+        bool destructiveHint = false,
+        bool idempotentHint = false)
     {
         using var schema = JsonDocument.Parse("""{"type":"object"}""");
         using var output = JsonDocument.Parse("""{"type":"object"}""");
@@ -100,10 +163,14 @@ public sealed class AgentToolRegistryTests
             schema.RootElement,
             output.RootElement,
             "payments.read",
-            AgentToolRisk.ReadOnly,
+            risk,
             requiresExplicitCompany: false,
-            requiresIdempotency: false,
-            new AgentToolMcpHints("Read payments", readOnlyHint: true));
+            requiresIdempotency,
+            new AgentToolMcpHints(
+                "Read payments",
+                readOnlyHint ?? risk == AgentToolRisk.ReadOnly,
+                destructiveHint,
+                idempotentHint));
     }
 
     private static AgentToolCall CreateCall(string name, string json)

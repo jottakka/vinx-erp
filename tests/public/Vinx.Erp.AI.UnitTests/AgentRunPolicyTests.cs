@@ -51,6 +51,9 @@ public sealed class AgentRunPolicyTests
             risk,
             requiresExplicitCompany: true,
             requiresIdempotency: risk != AgentToolRisk.ReadOnly,
-            new AgentToolMcpHints("Read payments", readOnlyHint: risk == AgentToolRisk.ReadOnly));
+            new AgentToolMcpHints(
+                "Read payments",
+                readOnlyHint: risk == AgentToolRisk.ReadOnly,
+                idempotentHint: risk != AgentToolRisk.ReadOnly));
     }
 }

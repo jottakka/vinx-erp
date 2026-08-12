@@ -67,6 +67,7 @@ public sealed record AgentToolDescriptor
         ArgumentException.ThrowIfNullOrWhiteSpace(requiredCapability);
         ArgumentNullException.ThrowIfNull(mcpHints);
         if (!Enum.IsDefined(risk)) throw new ArgumentOutOfRangeException(nameof(risk));
+        ValidateMcpSafetyContract(risk, requiresIdempotency, mcpHints);
 
         Name = name;
         Version = version;
@@ -99,6 +100,38 @@ public sealed record AgentToolDescriptor
         RequiresExplicitCompany,
         RequiresIdempotency,
         McpHints);
+
+    private static void ValidateMcpSafetyContract(
+        AgentToolRisk risk,
+        bool requiresIdempotency,
+        AgentToolMcpHints mcpHints)
+    {
+        if (risk == AgentToolRisk.ReadOnly)
+        {
+            if (!mcpHints.ReadOnlyHint || mcpHints.DestructiveHint)
+            {
+                throw new ArgumentException(
+                    "Read-only tools must expose non-destructive read-only MCP hints.",
+                    nameof(mcpHints));
+            }
+
+            return;
+        }
+
+        if (mcpHints.ReadOnlyHint || !mcpHints.IdempotentHint)
+        {
+            throw new ArgumentException(
+                "Write tools must expose non-read-only idempotent MCP hints.",
+                nameof(mcpHints));
+        }
+
+        if (!requiresIdempotency)
+        {
+            throw new ArgumentException(
+                "Write tools must require an idempotency key.",
+                nameof(requiresIdempotency));
+        }
+    }
 }
 
 public sealed record AgentToolCall
