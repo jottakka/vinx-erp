@@ -92,7 +92,8 @@ public sealed class FoundationPostgresFixtureTests
             ?? throw new InvalidOperationException("The administrator connection string did not include a password.");
         var unexpectedEndpoint = fixture.Endpoint with
         {
-            Database = $"unexpected_{Guid.NewGuid():N}"
+            Database = $"unexpected_{Guid.NewGuid():N}",
+            Username = $"unexpected_{Guid.NewGuid():N}"
         };
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -114,7 +115,18 @@ public sealed class FoundationPostgresFixtureTests
 
         await Task.WhenAll(first.StartAsync(), second.StartAsync());
 
-        Assert.NotEqual(first.Endpoint.Database, second.Endpoint.Database);
+        var firstIdentity = await ReadIdentityAsync(first);
+        var secondIdentity = await ReadIdentityAsync(second);
+
+        Assert.Equal(first.Endpoint.Database, firstIdentity.Database);
+        Assert.Equal(first.Endpoint.Username, firstIdentity.Username);
+        Assert.Equal(5432, firstIdentity.Port);
+        Assert.StartsWith("PostgreSQL", firstIdentity.Version, StringComparison.Ordinal);
+        Assert.Equal(second.Endpoint.Database, secondIdentity.Database);
+        Assert.Equal(second.Endpoint.Username, secondIdentity.Username);
+        Assert.Equal(5432, secondIdentity.Port);
+        Assert.StartsWith("PostgreSQL", secondIdentity.Version, StringComparison.Ordinal);
+        Assert.NotEqual(firstIdentity.Database, secondIdentity.Database);
         Assert.NotEqual(first.Endpoint.Port, second.Endpoint.Port);
         Assert.False(new NpgsqlConnectionStringBuilder(first.AdministratorConnectionString).Pooling);
         Assert.False(new NpgsqlConnectionStringBuilder(second.AdministratorConnectionString).Pooling);
@@ -307,6 +319,22 @@ public sealed class FoundationPostgresFixtureTests
             "SELECT has_database_privilege('vinx_audit_owner', current_database(), 'CREATE')", connection);
         return (bool)(await command.ExecuteScalarAsync()
             ?? throw new InvalidOperationException("The privilege query returned no result."));
+    }
+
+    private static async Task<(string Database, string Username, int Port, string Version)> ReadIdentityAsync(
+        FoundationPostgresFixture fixture)
+    {
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT current_database(), current_user, inet_server_port(), version()",
+            connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetInt32(2),
+            reader.GetString(3));
     }
 
     private static async Task AcceptSslRequestAndReturnIncompatibleHandshakeAsync(TcpListener listener)
