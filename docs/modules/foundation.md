@@ -59,6 +59,20 @@ externa ou dados de autenticação. Falha de descoberta retorna `503` seguro.
 `GET /foundation/capabilities?companyId=` continua sendo o contrato de uma
 única empresa e preserva suas negações auditáveis.
 
+`RevokeMembershipService` é um serviço interno de aplicação, registrado no
+host sem rota HTTP, MCP ou interface. O comando traz empresa, membership e
+`request_id`; exige membership ativa do ator e a capability
+`foundation.memberships.revoke` exatamente em escopo `company`. A autorização
+é sempre avaliada antes da idempotência. Depois dela, um replay com o mesmo
+payload vence a busca da membership já excluída e devolve o sucesso original;
+payload diferente retorna `idempotency_conflict` e novo `request_id` para a
+membership revogada retorna `resource_not_found`. O alvo de outra empresa não
+é revelado. A transição faz soft-delete, idempotência e auditoria
+`foundation.memberships.revoke` na mesma transação; falha de auditoria desfaz
+tudo. A operação registra a métrica segura `membership_revocation` quando a
+auditoria ou a transação ficam indisponíveis. Ela não revoga sessão nem altera
+as memberships de outras empresas.
+
 `POST /foundation/identity/sessions/revoke-all` não recebe corpo, usuário,
 empresa nem alvo. Ele usa somente o `ActorContext` estabelecido pelo gate e
 revoga todas as sessões da própria pessoa pela função transacional existente.
@@ -136,9 +150,9 @@ ao runtime. O runtime não recebe `UPDATE` amplo nem leitura global dessas
 tabelas. Essas roles são distintas das roles legadas do Supabase: `anon`,
 `authenticated` e `service_role`.
 
-A revogação de membership é transição de domínio idempotente: marca somente o
-soft-delete e a auditoria técnica da própria membership. Ela não revoga
-sessões nem altera `sessions_valid_after`. O runtime recebe `UPDATE` apenas nas
+A revogação de membership marca somente o soft-delete e a auditoria técnica da
+própria membership. Ela não revoga sessões nem altera `sessions_valid_after`.
+O runtime recebe `UPDATE` apenas nas
 colunas de ciclo de vida da revogação, auditoria de alteração e `row_version`;
 `INSERT`, `DELETE` e chaves da membership continuam negados, sob a policy RLS
 de empresa já existente.

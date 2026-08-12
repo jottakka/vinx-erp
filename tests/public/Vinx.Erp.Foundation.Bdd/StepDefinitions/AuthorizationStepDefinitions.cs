@@ -16,6 +16,7 @@ public sealed class AuthorizationStepDefinitions
     private FoundationApiFactory? _factory;
     private HttpResponseMessage? _response;
     private AuthorizationResult<AssignRoleToMembershipResult>? _assignmentResult;
+    private AuthorizationResult<RevokeMembershipResult>? _revocationResult;
     private Guid _companyId;
     private Guid _roleId;
     private Guid _targetMembershipId;
@@ -286,6 +287,41 @@ public sealed class AuthorizationStepDefinitions
         _targetMembershipId = targetMembership.Id;
     }
 
+    [Given("Ana may revoke her membership in Alfa")]
+    public async Task GivenAnaMayRevokeHerMembershipInAlfa()
+    {
+        _factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var administrator = Factory.Fixture.CreateAdministratorDbContext();
+        var requestId = Guid.NewGuid();
+        var group = new Group(Guid.NewGuid(), "Vinx Group", Factory.ActorUserId, requestId);
+        var alfa = new Company(Guid.NewGuid(), group.Id, "Alfa", Factory.ActorUserId, requestId);
+        var beta = new Company(Guid.NewGuid(), group.Id, "Beta", Factory.ActorUserId, requestId);
+        var alfaMembership = new Membership(
+            Guid.NewGuid(), alfa.Id, Factory.ActorUserId, Factory.ActorUserId, requestId);
+        var betaMembership = new Membership(
+            Guid.NewGuid(), beta.Id, Factory.ActorUserId, Factory.ActorUserId, requestId);
+        var administratorRole = new Role(
+            Guid.NewGuid(), alfa.Id, "Foundation administrator", Factory.ActorUserId, requestId);
+        var capability = await administrator.Capabilities.SingleAsync(candidate =>
+            candidate.Name == KnownCapabilities.MembershipsRevoke);
+
+        administrator.AddRange(
+            group,
+            alfa,
+            beta,
+            alfaMembership,
+            betaMembership,
+            administratorRole,
+            new RoleCapability(
+                Guid.NewGuid(), alfa.Id, administratorRole.Id, capability.Id, CapabilityScope.Company,
+                Factory.ActorUserId, requestId),
+            new RoleAssignment(
+                Guid.NewGuid(), alfa.Id, administratorRole.Id, alfaMembership.Id, Factory.ActorUserId, requestId));
+        await administrator.SaveChangesAsync();
+        _companyId = alfa.Id;
+        _targetMembershipId = alfaMembership.Id;
+    }
+
     [Given("a role belongs to company {string}")]
     public Task GivenARoleBelongsToCompany(string companyName)
     {
@@ -320,6 +356,17 @@ public sealed class AuthorizationStepDefinitions
         );
     }
 
+    [When("she revokes her Alfa membership through the internal service")]
+    public async Task WhenSheRevokesHerAlfaMembershipThroughTheInternalService()
+    {
+        await using var scope = Factory.Services.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<RevokeMembershipService>();
+        _revocationResult = await service.RevokeAsync(
+            new ActorContext(Factory.ActorUserId, Factory.CorrelationId),
+            new RevokeMembershipCommand(_companyId, _targetMembershipId, Guid.NewGuid()),
+            CancellationToken.None);
+    }
+
     [Then("the command is denied with code {string}")]
     public Task ThenTheCommandIsDeniedWithCode(string expectedCode)
     {
@@ -328,6 +375,16 @@ public sealed class AuthorizationStepDefinitions
             ?? throw new InvalidOperationException("The role assignment command was not executed.");
         Assert.Equal(expectedCode, result.ErrorCode?.ToStableCode());
         return Task.CompletedTask;
+    }
+
+    [Then("the command succeeds and her same session lists only Beta memberships")]
+    public async Task ThenTheCommandSucceedsAndHerSameSessionListsOnlyBetaMemberships()
+    {
+        Assert.True(_revocationResult?.IsSuccess);
+        _response = await Factory.CreateClient().GetAsync("/foundation/memberships");
+        _response.EnsureSuccessStatusCode();
+        var memberships = await _response.Content.ReadFromJsonAsync<List<MembershipResponse>>();
+        Assert.Equal(["Beta"], memberships!.Select(membership => membership.CompanyName));
     }
 
     [Then("the authorization denial contains the requested company and correlation identifier")]
