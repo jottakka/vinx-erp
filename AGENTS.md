@@ -32,6 +32,8 @@
 ## Documentação
 
 - Escreva documentação em português, com linguagem clara e compacta, mantendo apenas detalhes importantes e duráveis.
+- Em C#, use XML `<summary>` compacto para métodos públicos ou helpers cuja intenção, garantia de segurança, concorrência ou transação não seja óbvia. Adicione `<param>` e `<returns>` somente quando ampliarem o contrato.
+- Comentários inline devem explicar o motivo, a restrição ou a garantia relevante; não narre linha a linha nem repita o código. Prefira uma frase curta quando fizer sentido.
 
 ## Memória operacional
 
