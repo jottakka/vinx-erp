@@ -10,6 +10,33 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 
 public sealed class RoleAssignmentServiceIntegrationTests
 {
+    [Theory]
+    [InlineData(CapabilityScope.Self)]
+    [InlineData(CapabilityScope.Team)]
+    [InlineData(CapabilityScope.Unit)]
+    [InlineData(CapabilityScope.Group)]
+    public async Task Restricted_scope_does_not_authorize_a_company_role_assignment(CapabilityScope scope)
+    {
+        await using var factory = await FoundationApiFactory.CreateAsync();
+        var scenario = await SeedScenarioAsync(factory, administratorScope: scope);
+
+        var result = await InvokeAssignmentAsync(
+            factory,
+            scenario.CompanyId,
+            scenario.AssignableRoleId,
+            scenario.TargetMembershipId,
+            Guid.NewGuid());
+
+        Assert.Equal("capability_denied", ErrorCode(result));
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.RoleAssignments.Where(assignment =>
+            assignment.RoleId == scenario.AssignableRoleId).ToListAsync());
+        Assert.Empty(await administrator.IdempotencyRecords.Where(record =>
+            record.CommandName == "foundation.roles.assign").ToListAsync());
+        Assert.Single(await administrator.AuditEvents.Where(audit =>
+            audit.Action == "capability_denied" && audit.Outcome == AuditOutcome.Denied).ToListAsync());
+    }
+
     [Fact]
     public async Task Replaying_the_same_assignment_request_returns_the_stored_result_without_duplicate_state_or_audit()
     {
@@ -147,7 +174,8 @@ public sealed class RoleAssignmentServiceIntegrationTests
 
     internal static async Task<AssignmentScenario> SeedScenarioAsync(
         FoundationApiFactory factory,
-        bool crossCompanyTarget = false)
+        bool crossCompanyTarget = false,
+        CapabilityScope administratorScope = CapabilityScope.Company)
     {
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var requestId = Guid.NewGuid();
@@ -166,9 +194,10 @@ public sealed class RoleAssignmentServiceIntegrationTests
         var administratorRole = new Role(Guid.NewGuid(), company.Id, "Foundation administrator", factory.ActorUserId, requestId);
         var assignableRole = new Role(Guid.NewGuid(), company.Id, "Operator", factory.ActorUserId, requestId);
         var alternateRole = new Role(Guid.NewGuid(), company.Id, "Reviewer", factory.ActorUserId, requestId);
-        var capability = new Capability(Guid.NewGuid(), "foundation.roles.assign");
+        var capability = await administrator.Capabilities.SingleAsync(candidate =>
+            candidate.Name == KnownCapabilities.RolesAssign);
         var grant = new RoleCapability(
-            Guid.NewGuid(), company.Id, administratorRole.Id, capability.Id, CapabilityScope.Company, factory.ActorUserId, requestId);
+            Guid.NewGuid(), company.Id, administratorRole.Id, capability.Id, administratorScope, factory.ActorUserId, requestId);
         var administratorAssignment = new RoleAssignment(
             Guid.NewGuid(), company.Id, administratorRole.Id, actorMembership.Id, factory.ActorUserId, requestId);
 
@@ -183,7 +212,6 @@ public sealed class RoleAssignmentServiceIntegrationTests
             administratorRole,
             assignableRole,
             alternateRole,
-            capability,
             grant,
             administratorAssignment);
         await administrator.SaveChangesAsync();

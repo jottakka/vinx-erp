@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Npgsql;
@@ -249,10 +250,11 @@ public sealed class FoundationSchemaTests
 
         await using var policyCommand = new NpgsqlCommand(
             """
-            SELECT tablename, qual, with_check
+            SELECT tablename, permissive, cmd, roles, qual, with_check
             FROM pg_policies
             WHERE schemaname = 'foundation'
               AND tablename = ANY (@table_names)
+              AND policyname = tablename || '_company_isolation'
             ORDER BY tablename
             """, connection);
         policyCommand.Parameters.AddWithValue("table_names", ExpectedRlsTables);
@@ -261,8 +263,11 @@ public sealed class FoundationSchemaTests
         while (await policyReader.ReadAsync())
         {
             policyTables.Add(policyReader.GetString(0));
-            AssertFailClosedCompanySetting(policyReader.GetString(1));
-            AssertFailClosedCompanySetting(policyReader.GetString(2));
+            Assert.Equal("PERMISSIVE", policyReader.GetString(1));
+            Assert.Equal("ALL", policyReader.GetString(2));
+            Assert.Equal(["public"], policyReader.GetFieldValue<string[]>(3));
+            AssertFailClosedCompanySetting(policyReader.GetString(4));
+            AssertFailClosedCompanySetting(policyReader.GetString(5));
         }
         Assert.Equal(ExpectedRlsTables, policyTables);
     }
@@ -305,7 +310,8 @@ public sealed class FoundationSchemaTests
         var group = new Group(Guid.NewGuid(), "Vinx Group", actorId, requestId);
         var company = new Company(Guid.NewGuid(), group.Id, "Vinx Obras", actorId, requestId);
         var role = new Role(Guid.NewGuid(), company.Id, "Operator", actorId, requestId);
-        var capability = new Capability(Guid.NewGuid(), "foundation.roles.assign");
+        var capability = await administrator.Capabilities.SingleAsync(candidate =>
+            candidate.Name == KnownCapabilities.RolesAssign);
         var invalidGrant = new RoleCapability(
             Guid.NewGuid(),
             company.Id,
@@ -315,7 +321,7 @@ public sealed class FoundationSchemaTests
             actorId,
             requestId);
 
-        administrator.AddRange(group, company, role, capability, invalidGrant);
+        administrator.AddRange(group, company, role, invalidGrant);
 
         var exception = await Assert.ThrowsAsync<DbUpdateException>(async () =>
             await administrator.SaveChangesAsync());

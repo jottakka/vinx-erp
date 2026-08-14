@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Audit;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -256,6 +257,34 @@ public sealed class DocumentUploadEndpointTests
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal("capability_denied", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Theory]
+    [InlineData(CapabilityScope.Self)]
+    [InlineData(CapabilityScope.Team)]
+    [InlineData(CapabilityScope.Unit)]
+    [InlineData(CapabilityScope.Group)]
+    public async Task Restricted_scopes_do_not_authorize_company_upload_commands(CapabilityScope scope)
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, uploadScope: scope, confirmationScope: scope);
+
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/upload-intentions", NewIntent(scenario.CompanyId));
+        var confirmationResponse = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), Guid.NewGuid()));
+
+        Assert.Equal(HttpStatusCode.Forbidden, intentResponse.StatusCode);
+        Assert.Equal("capability_denied", (await intentResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(HttpStatusCode.Forbidden, confirmationResponse.StatusCode);
+        Assert.Equal("capability_denied", (await confirmationResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.Files.ToListAsync());
+        Assert.Empty(await administrator.IdempotencyRecords.ToListAsync());
+        Assert.Equal(2, await administrator.AuditEvents.CountAsync(audit =>
+            audit.Action == "capability_denied" && audit.Outcome == AuditOutcome.Denied));
     }
 
     [Fact]
@@ -578,7 +607,9 @@ public sealed class DocumentUploadEndpointTests
     private static async Task<UploadScenario> SeedScenarioAsync(
         FoundationApiFactory factory,
         bool grantUpload = true,
-        bool grantConfirmation = true)
+        bool grantConfirmation = true,
+        CapabilityScope uploadScope = CapabilityScope.Company,
+        CapabilityScope confirmationScope = CapabilityScope.Company)
     {
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var request = Guid.NewGuid();
@@ -586,20 +617,22 @@ public sealed class DocumentUploadEndpointTests
         var company = new Company(Guid.NewGuid(), group.Id, "Vinx Obras", factory.ActorUserId, request);
         var membership = new Membership(Guid.NewGuid(), company.Id, factory.ActorUserId, factory.ActorUserId, request);
         var role = new Role(Guid.NewGuid(), company.Id, "Document operator", factory.ActorUserId, request);
-        var uploadCapability = new Capability(Guid.NewGuid(), "foundation.files.upload");
-        var confirmCapability = new Capability(Guid.NewGuid(), "foundation.files.confirm");
+        var uploadCapability = await administrator.Capabilities.SingleAsync(capability =>
+            capability.Name == KnownCapabilities.FilesUpload);
+        var confirmCapability = await administrator.Capabilities.SingleAsync(capability =>
+            capability.Name == KnownCapabilities.FilesConfirm);
         var assignment = new RoleAssignment(Guid.NewGuid(), company.Id, role.Id, membership.Id, factory.ActorUserId, request);
-        administrator.AddRange(group, company, membership, role, uploadCapability, confirmCapability, assignment);
+        administrator.AddRange(group, company, membership, role, assignment);
         if (grantUpload)
         {
             administrator.RoleCapabilities.Add(new RoleCapability(
-                Guid.NewGuid(), company.Id, role.Id, uploadCapability.Id, CapabilityScope.Company, factory.ActorUserId, request));
+                Guid.NewGuid(), company.Id, role.Id, uploadCapability.Id, uploadScope, factory.ActorUserId, request));
         }
 
         if (grantConfirmation)
         {
             administrator.RoleCapabilities.Add(new RoleCapability(
-                Guid.NewGuid(), company.Id, role.Id, confirmCapability.Id, CapabilityScope.Company, factory.ActorUserId, request));
+                Guid.NewGuid(), company.Id, role.Id, confirmCapability.Id, confirmationScope, factory.ActorUserId, request));
         }
 
         await administrator.SaveChangesAsync();

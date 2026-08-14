@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Net.Http.Headers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.JsonWebTokens;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
@@ -291,14 +292,15 @@ public sealed class AuthorizationEndpointTests
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var actorMembership = await administrator.Memberships.SingleAsync();
         var role = new Role(Guid.NewGuid(), companyId, "Foundation administrator", factory.ActorUserId, Guid.NewGuid());
-        var capability = new Capability(Guid.NewGuid(), "foundation.roles.assign");
+        var capability = await administrator.Capabilities.SingleAsync(candidate =>
+            candidate.Name == KnownCapabilities.RolesAssign);
         var companyGrant = new RoleCapability(
             Guid.NewGuid(), companyId, role.Id, capability.Id, CapabilityScope.Company, factory.ActorUserId, Guid.NewGuid());
         var teamGrant = new RoleCapability(
             Guid.NewGuid(), companyId, role.Id, capability.Id, CapabilityScope.Team, factory.ActorUserId, Guid.NewGuid());
         var assignment = new RoleAssignment(
             Guid.NewGuid(), companyId, role.Id, actorMembership.Id, factory.ActorUserId, Guid.NewGuid());
-        administrator.AddRange(role, capability, companyGrant, teamGrant, assignment);
+        administrator.AddRange(role, companyGrant, teamGrant, assignment);
         await administrator.SaveChangesAsync();
         return companyId;
     }

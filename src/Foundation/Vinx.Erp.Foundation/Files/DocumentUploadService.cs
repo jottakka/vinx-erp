@@ -18,14 +18,17 @@ public sealed class DocumentUploadService(
     FoundationDbContext database,
     FileStorage storage,
     AuditAppender auditAppender,
-    ILogger<DocumentUploadService> logger)
+    ILogger<DocumentUploadService> logger,
+    CapabilityEvaluator capabilityEvaluator)
 {
     private const string IntentCommandName = "foundation.files.upload.intent";
     private const string ConfirmationCommandName = "foundation.files.upload.confirm";
     private const string InspectionOperationName = "foundation.files.upload.inspect";
     private const string AuditOperationName = "foundation.files.upload.audit";
-    private const string UploadCapability = "foundation.files.upload";
-    private const string ConfirmCapability = "foundation.files.confirm";
+    private static readonly CapabilityRequirement UploadCapability =
+        new(KnownCapabilities.FilesUpload, CapabilityScope.Company);
+    private static readonly CapabilityRequirement ConfirmCapability =
+        new(KnownCapabilities.FilesConfirm, CapabilityScope.Company);
 
     public async Task<DocumentUploadResult<DocumentUploadIntentResult>> CreateIntentAsync(
         ActorContext actor,
@@ -45,7 +48,7 @@ public sealed class DocumentUploadService(
                     actor, command.CompanyId, "membership_required", StatusCodes.Status403Forbidden, cancellationToken);
             }
 
-            if (!await HasCapabilityAsync(command.CompanyId, membership.Id, UploadCapability, cancellationToken))
+            if (!await capabilityEvaluator.HasGrantAsync(command.CompanyId, membership.Id, UploadCapability, cancellationToken))
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return await ReturnAuditedDenialAsync<DocumentUploadIntentResult>(
@@ -210,7 +213,7 @@ public sealed class DocumentUploadService(
                 actor, command.CompanyId, "membership_required", StatusCodes.Status403Forbidden, cancellationToken));
         }
 
-        if (!await HasCapabilityAsync(command.CompanyId, membership.Id, ConfirmCapability, cancellationToken))
+        if (!await capabilityEvaluator.HasGrantAsync(command.CompanyId, membership.Id, ConfirmCapability, cancellationToken))
         {
             await transaction.RollbackAsync(cancellationToken);
             return ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
@@ -267,7 +270,7 @@ public sealed class DocumentUploadService(
                 actor, command.CompanyId, "membership_required", StatusCodes.Status403Forbidden, cancellationToken);
         }
 
-        if (!await HasCapabilityAsync(command.CompanyId, membership.Id, ConfirmCapability, cancellationToken))
+        if (!await capabilityEvaluator.HasGrantAsync(command.CompanyId, membership.Id, ConfirmCapability, cancellationToken))
         {
             await transaction.RollbackAsync(cancellationToken);
             return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
@@ -534,22 +537,6 @@ public sealed class DocumentUploadService(
             && record.CommandName == commandName
             && record.RequestId == requestId,
             cancellationToken);
-
-    private Task<bool> HasCapabilityAsync(
-        Guid companyId,
-        Guid membershipId,
-        string capabilityName,
-        CancellationToken cancellationToken) =>
-        (from assignment in database.RoleAssignments.AsNoTracking()
-         join role in database.Roles.AsNoTracking() on assignment.RoleId equals role.Id
-         join grant in database.RoleCapabilities.AsNoTracking() on role.Id equals grant.RoleId
-         join capability in database.Capabilities.AsNoTracking() on grant.CapabilityId equals capability.Id
-         where assignment.CompanyId == companyId
-             && assignment.MembershipId == membershipId
-             && role.CompanyId == companyId
-             && grant.CompanyId == companyId
-             && capability.Name == capabilityName
-         select capability.Id).AnyAsync(cancellationToken);
 
     private Task AcquireConfirmationLockAsync(
         long lockKey,

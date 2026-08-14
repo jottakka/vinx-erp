@@ -8,6 +8,27 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class RlsPolicyTests
 {
     [Fact]
+    public async Task Runtime_query_without_company_context_returns_zero_membership_rows()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var (companyA, _) = await SeedTwoCompaniesAsync(fixture);
+
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var user = new User(actorId, "Membership actor", "membership-actor@example.test");
+        var membership = new Membership(Guid.NewGuid(), companyA.Id, user.Id, actorId, requestId);
+        administrator.AddRange(user, membership);
+        await administrator.SaveChangesAsync();
+
+        await using var runtime = fixture.CreateRuntimeDbContext();
+
+        Assert.Empty(await runtime.Memberships.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
     public async Task Runtime_query_without_company_context_returns_zero_company_rows()
     {
         await using var fixture = new FoundationPostgresFixture();
