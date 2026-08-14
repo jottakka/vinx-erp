@@ -22,6 +22,8 @@ public sealed class AuthorizationStepDefinitions
     private Guid _roleId;
     private Guid _targetMembershipId;
     private IReadOnlyList<MembershipResponse>? _membershipMap;
+    private IReadOnlyList<Guid>? _authorizedCompanyIds;
+    private IReadOnlyList<MembershipCapabilitySummary>? _authorizationSnapshot;
 
     [Given("Ana has memberships in Alfa, Beta and Gama")]
     public async Task GivenAnaHasMembershipsInAlfaBetaAndGama()
@@ -161,6 +163,36 @@ public sealed class AuthorizationStepDefinitions
     public Task ThenGamaHasNoEffectiveCapabilities()
     {
         Assert.Empty(MembershipMap[2].Capabilities);
+        return Task.CompletedTask;
+    }
+
+    [When("the server resolves her payment read set with a forged Gama input")]
+    public async Task WhenTheServerResolvesHerPaymentReadSetWithAForgedGamaInput()
+    {
+        await using var scope = Factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var actor = new ActorContext(Factory.ActorUserId, Factory.CorrelationId);
+        var snapshot = await resolver.ResolveSnapshotAsync(actor, CancellationToken.None);
+        var result = await resolver.ResolveAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            CancellationToken.None);
+        _authorizationSnapshot = snapshot.Value?.Companies;
+        _authorizedCompanyIds = result.Value?.CompanyIds.ToArray();
+    }
+
+    [Then("the authorized company set contains only Alfa")]
+    public Task ThenTheAuthorizedCompanySetContainsOnlyAlfa()
+    {
+        Assert.Equal([_authorizationSnapshot!.Single(company => company.CompanyName == "Alfa").CompanyId], _authorizedCompanyIds);
+        return Task.CompletedTask;
+    }
+
+    [Then("the unfiltered snapshot retains Gama with no effective capabilities")]
+    public Task ThenTheUnfilteredSnapshotRetainsGamaWithNoEffectiveCapabilities()
+    {
+        var gama = _authorizationSnapshot!.Single(company => company.CompanyName == "Gama");
+        Assert.Empty(gama.Capabilities);
         return Task.CompletedTask;
     }
 

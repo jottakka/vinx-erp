@@ -59,6 +59,16 @@ externa ou dados de autenticação. Falha de descoberta retorna `503` seguro.
 `GET /foundation/capabilities?companyId=` continua sendo o contrato de uma
 única empresa e preserva suas negações auditáveis.
 
+O resolver interno de contexto parte somente do `ActorContext` e materializa
+um snapshot sem filtro de memberships ativas, nome legível e capabilities por
+empresa. Um `CapabilityRequirement` de escopo `company` deriva desse snapshot
+o conjunto exato de empresas autorizado para leitura; a aplicação RLS usa
+esse conjunto apenas durante a transação atual. O conjunto multiempresa não
+participa de `INSERT`, `UPDATE`, `DELETE` nem de `WITH CHECK`: comandos
+continuam usando `app.company_id`, e revogação só aparece no próximo snapshot.
+Falha de identidade, setup ou banco não produz conjunto parcial; a operação
+falha fechada e registra somente contexto operacional seguro.
+
 `RevokeMembershipService` é um serviço interno de aplicação, registrado no
 host sem rota HTTP, MCP ou interface. O comando traz empresa, membership e
 `request_id`; exige membership ativa do ator e a capability
