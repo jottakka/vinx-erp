@@ -37,9 +37,7 @@ export function NavigationList({ label, onNavigate }: NavigationListProps) {
 
           return (
             <Fragment key={group}>
-              <ListSubheader component="div">
-                {navigationGroupLabels[group]}
-              </ListSubheader>
+              <ListSubheader>{navigationGroupLabels[group]}</ListSubheader>
               {items.map((item) => {
                 const Icon = item.icon;
 

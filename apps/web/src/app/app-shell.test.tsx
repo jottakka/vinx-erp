@@ -103,6 +103,10 @@ describe("AppShell", () => {
 
     await screen.findByRole("heading", { name: "Início" });
     expect(screen.getAllByText("Módulos").length).toBeGreaterThan(0);
+    const modulesHeader = within(
+      screen.getByRole("navigation", { name: "Navegação lateral" }),
+    ).getByText("Módulos");
+    expect(modulesHeader.closest("li")).toBeInTheDocument();
   });
 
   it("navigates from a module card to its preparation route", async () => {
