@@ -28,3 +28,9 @@ Scenario: Membership revocation keeps the same session isolated to Beta
   And her authenticated session lists Alfa and Beta before revocation
   When she revokes her Alfa membership through the internal service
   Then the command succeeds and her same session lists only Beta memberships
+
+Scenario: Authorized company set ignores forged Gama input and preserves snapshot state
+  Given Ana has memberships in Alfa, Beta and Gama
+  When the server resolves her payment read set with a forged Gama input
+  Then the authorized company set contains only Alfa
+  And the unfiltered snapshot retains Gama with no effective capabilities
