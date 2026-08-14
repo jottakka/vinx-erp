@@ -4,6 +4,30 @@ import { describe, expect, it, vi } from "vitest";
 import { PaguaiPrototypePage } from "./paguai-prototype-page";
 
 describe("PaguaiPrototypePage", () => {
+  it("exposes named tab and panel semantics for each local section", async () => {
+    const user = userEvent.setup();
+    render(<PaguaiPrototypePage />);
+
+    const tablist = screen.getByRole("tablist", {
+      name: "Seções do Paguai",
+    });
+    const requestsTab = within(tablist).getByRole("tab", {
+      name: "Solicitações",
+    });
+    expect(requestsTab).toHaveAttribute(
+      "aria-controls",
+      "paguai-panel-requests",
+    );
+    expect(
+      screen.getByRole("tabpanel", { name: "Solicitações" }),
+    ).toHaveAttribute("id", "paguai-panel-requests");
+
+    await user.click(within(tablist).getByRole("tab", { name: "Financeiro" }));
+    expect(
+      screen.getByRole("tabpanel", { name: "Financeiro" }),
+    ).toHaveAttribute("id", "paguai-panel-finance");
+  });
+
   it("requires an explicit company before creating a local draft", async () => {
     const user = userEvent.setup();
     render(<PaguaiPrototypePage />);

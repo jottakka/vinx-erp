@@ -125,58 +125,103 @@ export function PaguaiPrototypePage() {
       </Stack>
       <PrototypeNotice />
       {demoEvents.map((event) => (
-        <Typography key={event} role="status">
-          {event}
+        <Typography key={event.id} role="status">
+          {event.message}
         </Typography>
       ))}
       <Tabs
+        aria-label="Seções do Paguai"
         onChange={(_, value: PaguaiSection) => actions.setSection(value)}
         value={section}
       >
-        <Tab label="Solicitações" value="requests" />
-        <Tab label="Conferência" value="conference" />
-        <Tab label="Financeiro" value="finance" />
-        <Tab label="Políticas" value="policies" />
+        <Tab
+          aria-controls="paguai-panel-requests"
+          id="paguai-tab-requests"
+          label="Solicitações"
+          value="requests"
+        />
+        <Tab
+          aria-controls="paguai-panel-conference"
+          id="paguai-tab-conference"
+          label="Conferência"
+          value="conference"
+        />
+        <Tab
+          aria-controls="paguai-panel-finance"
+          id="paguai-tab-finance"
+          label="Financeiro"
+          value="finance"
+        />
+        <Tab
+          aria-controls="paguai-panel-policies"
+          id="paguai-tab-policies"
+          label="Políticas"
+          value="policies"
+        />
       </Tabs>
 
       {section === "requests" ? (
-        <PaguaiRequestsPanel
-          filters={filters}
-          onCompanyFilter={actions.setCompanyFilter}
-          onNewRequest={() => setDraftOpen(true)}
-          onSelect={(id) => {
-            actions.select(id);
-            setDetailOpen(true);
-          }}
-          onStatusFilter={actions.setStatusFilter}
-          requests={requests}
-        />
+        <Stack
+          aria-labelledby="paguai-tab-requests"
+          id="paguai-panel-requests"
+          role="tabpanel"
+        >
+          <PaguaiRequestsPanel
+            filters={filters}
+            onCompanyFilter={actions.setCompanyFilter}
+            onNewRequest={() => setDraftOpen(true)}
+            onSelect={(id) => {
+              actions.select(id);
+              setDetailOpen(true);
+            }}
+            onStatusFilter={actions.setStatusFilter}
+            requests={requests}
+          />
+        </Stack>
       ) : null}
 
       {section === "conference" ? (
-        <PaguaiConferencePanel
-          onReturn={openReturnDialog}
-          onSelect={actions.select}
-          requests={conferenceRequests}
-          selected={selected}
-          selectedRequestRef={selectedRequestRef}
-        />
+        <Stack
+          aria-labelledby="paguai-tab-conference"
+          id="paguai-panel-conference"
+          role="tabpanel"
+        >
+          <PaguaiConferencePanel
+            onReturn={openReturnDialog}
+            onSelect={actions.select}
+            requests={conferenceRequests}
+            selected={selected}
+            selectedRequestRef={selectedRequestRef}
+          />
+        </Stack>
       ) : null}
 
       {section === "finance" ? (
-        <PaguaiFinancePanel
-          onConfirm={confirmPayment}
-          onProofChange={setProofState}
-          proofState={proofState}
-          request={financeRequest}
-        />
+        <Stack
+          aria-labelledby="paguai-tab-finance"
+          id="paguai-panel-finance"
+          role="tabpanel"
+        >
+          <PaguaiFinancePanel
+            onConfirm={confirmPayment}
+            onProofChange={setProofState}
+            proofState={proofState}
+            request={financeRequest}
+          />
+        </Stack>
       ) : null}
 
       {section === "policies" ? (
-        <PaguaiPoliciesPanel
-          audience={policyAudience}
-          onAudienceChange={actions.setPolicyAudience}
-        />
+        <Stack
+          aria-labelledby="paguai-tab-policies"
+          id="paguai-panel-policies"
+          role="tabpanel"
+        >
+          <PaguaiPoliciesPanel
+            audience={policyAudience}
+            onAudienceChange={actions.setPolicyAudience}
+          />
+        </Stack>
       ) : null}
 
       <PaguaiDraftDialog

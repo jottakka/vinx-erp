@@ -139,6 +139,33 @@ export function createVinxTheme(density: Density): Theme & {
   colorSchemes: VinxColorSchemes;
 } {
   return createTheme({
+    components: {
+      MuiCssBaseline: {
+        styleOverrides: {
+          "@media (forced-colors: active)": {
+            body: {
+              backgroundColor: "Canvas !important",
+              color: "CanvasText !important",
+            },
+            "body *": {
+              borderColor: "CanvasText !important",
+              color: "CanvasText !important",
+            },
+            a: {
+              color: "LinkText !important",
+            },
+            "button, [role='button']": {
+              backgroundColor: "ButtonFace !important",
+              color: "ButtonText !important",
+            },
+            "input, select, textarea": {
+              backgroundColor: "Field !important",
+              color: "FieldText !important",
+            },
+          },
+        },
+      },
+    },
     cssVariables: {
       colorSchemeSelector: "data",
       cssVarPrefix: "vinx",

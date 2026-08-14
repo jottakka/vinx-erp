@@ -153,7 +153,7 @@ test("Scenario: theme, keyboard, narrow viewport and axe remain usable", async (
   await page.keyboard.press("Escape");
   await expect(newRequest).toBeFocused();
 
-  await page.setViewportSize({ height: 844, width: 390 });
+  await page.setViewportSize({ height: 844, width: 320 });
   await expect
     .poll(() =>
       page.evaluate(
@@ -162,6 +162,7 @@ test("Scenario: theme, keyboard, narrow viewport and axe remain usable", async (
     )
     .toBe(true);
 
+  await page.emulateMedia({ forcedColors: "active" });
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
     .analyze();

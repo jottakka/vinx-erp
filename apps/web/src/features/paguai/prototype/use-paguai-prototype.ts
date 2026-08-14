@@ -18,14 +18,26 @@ export function paguaiReducer(
     case "createDraft":
       return {
         ...state,
-        demoEvents: [...state.demoEvents, "Alteração local de demonstração"],
+        demoEvents: [
+          ...state.demoEvents,
+          {
+            id: `draft-${action.request.id}`,
+            message: "Alteração local de demonstração",
+          },
+        ],
         requests: [action.request, ...state.requests],
         selectedId: action.request.id,
       };
     case "returnRequest":
       return {
         ...state,
-        demoEvents: [...state.demoEvents, "Solicitação devolvida para ajustes"],
+        demoEvents: [
+          ...state.demoEvents,
+          {
+            id: `return-${action.id}`,
+            message: "Solicitação devolvida para ajustes",
+          },
+        ],
         requests: state.requests.map((request) =>
           request.id === action.id
             ? {
@@ -39,7 +51,13 @@ export function paguaiReducer(
     case "confirmPayment":
       return {
         ...state,
-        demoEvents: [...state.demoEvents, "Pagamento confirmado localmente"],
+        demoEvents: [
+          ...state.demoEvents,
+          {
+            id: `payment-${action.id}`,
+            message: "Pagamento confirmado localmente",
+          },
+        ],
         requests: state.requests.map((request) =>
           request.id === action.id ? { ...request, status: "paid" } : request,
         ),

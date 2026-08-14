@@ -39,13 +39,18 @@ export type PaguaiFilters = {
   status: PaguaiRequestStatus | "all";
 };
 
+export type PaguaiDemoEvent = {
+  id: string;
+  message: string;
+};
+
 export type PaguaiState = {
   requests: readonly PaguaiRequest[];
   selectedId: string | null;
   section: PaguaiSection;
   filters: PaguaiFilters;
   policyAudience: "Solicitantes" | "Gestores" | "Administradores";
-  demoEvents: readonly string[];
+  demoEvents: readonly PaguaiDemoEvent[];
 };
 
 export type PaguaiAction =
