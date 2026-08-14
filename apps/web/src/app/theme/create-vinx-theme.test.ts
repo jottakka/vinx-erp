@@ -71,7 +71,7 @@ describe("vinx semantic theme", () => {
     ).toBeGreaterThanOrEqual(4.5);
     expect(
       contrastRatio(light.primary.main, light.background.default),
-    ).toBeGreaterThanOrEqual(3);
+    ).toBeGreaterThanOrEqual(4.5);
     for (const palette of palettes) {
       for (const slot of Object.values(palette.companyAccent)) {
         expect(

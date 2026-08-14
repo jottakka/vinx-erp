@@ -21,7 +21,7 @@ type PalettePrimitives = {
 export const lightPalette = {
   primary: {
     light: "#c98761",
-    main: "#a85f39",
+    main: "#a45a34",
     dark: "#7f4326",
     contrastText: "#fffaf2",
   },
