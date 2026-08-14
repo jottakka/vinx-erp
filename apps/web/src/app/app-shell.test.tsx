@@ -98,6 +98,13 @@ describe("AppShell", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders the navigation with concrete group labels", async () => {
+    renderShell("/", await signedInGateway());
+
+    await screen.findByRole("heading", { name: "Início" });
+    expect(screen.getAllByText("Módulos").length).toBeGreaterThan(0);
+  });
+
   it("navigates from a module card to its preparation route", async () => {
     const user = userEvent.setup();
     const router = renderShell("/", await signedInGateway());
@@ -195,6 +202,8 @@ describe("AppShell", () => {
 
     trigger.focus();
     await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-controls", "vinx-mobile-navigation");
     await screen.findByRole("navigation", {
       hidden: true,
       name: "Navegação principal",

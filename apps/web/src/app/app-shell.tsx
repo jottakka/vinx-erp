@@ -1,73 +1,9 @@
-import HelpOutlinedIcon from "@mui/icons-material/HelpOutlined";
-import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
-import {
-  Alert,
-  AppBar,
-  Box,
-  Button,
-  Drawer,
-  IconButton,
-  Link,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Toolbar,
-} from "@mui/material";
+import { Alert, Box, Drawer, Link, Toolbar } from "@mui/material";
 import { useState } from "react";
-import {
-  NavLink,
-  Outlet,
-  Link as RouterLink,
-  useLocation,
-} from "react-router-dom";
+import { Outlet } from "react-router-dom";
 import { useSession } from "../features/auth/session-provider";
-import { AppLogo } from "../shared/ui/app-logo";
-import { AppearanceMenu } from "../shared/ui/appearance-menu";
-import { appRouteManifest, navigationGroups } from "./app-route-manifest";
-
-function NavigationList({
-  label,
-  onNavigate,
-}: {
-  label: string;
-  onNavigate?: () => void;
-}) {
-  const location = useLocation();
-
-  return (
-    <Box aria-label={label} component="nav">
-      <List>
-        {navigationGroups
-          .flatMap((group) =>
-            appRouteManifest.filter(
-              (item) => item.group === group && item.navigation,
-            ),
-          )
-          .map((item) => {
-            const Icon = item.icon;
-
-            return (
-              <ListItem disablePadding key={item.path}>
-                <ListItemButton
-                  component={NavLink}
-                  onClick={onNavigate}
-                  selected={location.pathname === item.path}
-                  to={item.path}
-                >
-                  <ListItemIcon>
-                    <Icon />
-                  </ListItemIcon>
-                  <ListItemText primary={item.label} />
-                </ListItemButton>
-              </ListItem>
-            );
-          })}
-      </List>
-    </Box>
-  );
-}
+import { AppHeader } from "./shell/app-header";
+import { NavigationList } from "./shell/navigation-list";
 
 export function AppShell() {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
@@ -97,51 +33,12 @@ export function AppShell() {
       >
         Pular para o conteúdo principal
       </Link>
-      <AppBar
-        color="transparent"
-        elevation={0}
-        position="fixed"
-        sx={(theme) => ({
-          borderBottom: 1,
-          borderColor: "divider",
-          ml: { md: `${theme.vinx.layout.navigationWidth}px` },
-          width: { md: `calc(100% - ${theme.vinx.layout.navigationWidth}px)` },
-        })}
-      >
-        <Toolbar>
-          <IconButton
-            aria-label="Abrir navegação"
-            onClick={() => setMobileNavigationOpen(true)}
-            sx={{ display: { md: "none" }, mr: 1 }}
-          >
-            <MenuOutlinedIcon />
-          </IconButton>
-          <Box
-            aria-label="Ir para início"
-            component={RouterLink}
-            sx={{ color: "inherit", textDecoration: "none" }}
-            to="/"
-          >
-            <AppLogo compact />
-          </Box>
-          <Box sx={{ flexGrow: 1 }} />
-          <AppearanceMenu />
-          <IconButton
-            aria-label="Abrir ajuda"
-            component={RouterLink}
-            to="/ajuda"
-          >
-            <HelpOutlinedIcon />
-          </IconButton>
-          <Button
-            disabled={isSigningOut}
-            onClick={() => void signOut()}
-            sx={(theme) => ({ minHeight: theme.vinx.layout.controlMinHeight })}
-          >
-            {isSigningOut ? "Saindo…" : "Sair"}
-          </Button>
-        </Toolbar>
-      </AppBar>
+      <AppHeader
+        isSigningOut={isSigningOut}
+        mobileNavigationOpen={mobileNavigationOpen}
+        onOpenNavigation={() => setMobileNavigationOpen(true)}
+        onSignOut={() => void signOut()}
+      />
       <Drawer
         open
         sx={(theme) => ({
@@ -162,6 +59,7 @@ export function AppShell() {
         open={mobileNavigationOpen}
         slotProps={{
           paper: {
+            id: "vinx-mobile-navigation",
             sx: (theme) => ({
               boxSizing: "border-box",
               width: theme.vinx.layout.navigationWidth,
