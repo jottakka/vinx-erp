@@ -5,6 +5,16 @@
 Aprovada para planejamento em 11 de agosto de 2026. Esta decisão não adiciona
 pacotes nem altera comportamento de produção.
 
+**Atualização de 13/08/2026:** o adiamento do Microsoft Agent Framework e a
+proibição de `FunctionInvokingChatClient`/invocação de ferramentas pelo
+framework foram **superados** por
+`2026-08-13-package-first-harness.md`, por instrução corretiva do responsável.
+O harness do Microsoft Agent Framework agora executa o loop de ferramentas em
+produção, com aprovação fail-closed controlada pelo VINX. Os invariantes de
+segurança desta decisão continuam válidos e foram preservados: a ordem de
+política da seção 4, a confirmação como decisão do servidor (nunca do modelo)
+e a proibição de o modelo escolher empresa, provedor ou capability.
+
 ## Objetivo
 
 Entregar um agente supervisionado que possa servir a UI, WhatsApp e clientes
@@ -34,6 +44,12 @@ testes determinísticos independentes do modelo.
 
 ### 1. Adotar `Microsoft.Extensions.AI` na fronteira de modelos
 
+> **Superado em 13/08/2026** por `2026-08-13-package-first-harness.md`: o
+> harness usa o loop de ferramentas do Microsoft Agent Framework (que envolve
+> invocação de função gerenciada pelo framework), com aprovação fail-closed
+> mantida pelo gate VINX. A adoção de `IChatClient` como fronteira comum
+> permanece válida.
+
 Os adaptadores de provedor usarão `Microsoft.Extensions.AI.Abstractions` e
 `IChatClient` como fronteira comum para mensagens, conteúdo multimodal,
 streaming e propostas de tool call.
@@ -41,7 +57,8 @@ streaming e propostas de tool call.
 O harness consome propostas de tool call manualmente. Ele não usará
 `FunctionInvokingChatClient`, `UseFunctionInvocation()` ou outro recurso que
 invoque uma ferramenta automaticamente. Uma resposta do modelo nunca é uma
-autorização para executar uma ação.
+autorização para executar uma ação. *(Trecho superado em 13/08/2026; a
+invariante "resposta do modelo não é autorização" permanece válida.)*
 
 O `IChatClient` substitui serialização repetida de turnos e conteúdo de modelo;
 não substitui a política do agente. O núcleo VINX permanece pequeno: recebe o
@@ -88,6 +105,9 @@ identificador de pessoa fornecido pelo cliente.
 
 ### 4. Manter autoridade de segurança dentro do VINX
 
+> Esta seção permanece válida e é preservada pela implementação
+> package-first de 13/08/2026.
+
 O fluxo obrigatório para cada proposta de ferramenta é:
 
 ```text
@@ -130,7 +150,7 @@ Modelo propõe escrita
 | `Microsoft.Extensions.AI` | Adotar | Padroniza a fronteira .NET de modelos sem tomar posse de autorização ou execução. |
 | SDK C# de MCP | Adotar quando `Mcp.Host` começar | Evita implementar JSON-RPC e Streamable HTTP. |
 | Semantic Kernel | Não usar em V1 | Auto-invocação é seu caminho padrão; mesmo no modo manual, acrescentaria abstração sobreposta ao loop supervisionado necessário. |
-| Microsoft Agent Framework | Adiar | Oferece harness, sessões e workflows úteis, mas V1 precisa provar que sua integração preserva a ordem de política VINX e a aprovação durável antes de terceirizar o loop. |
+| Microsoft Agent Framework | Adiar *(superado em 13/08/2026: adotado no PR 1 da issue #127, com gate de aprovação VINX fail-closed; ver `2026-08-13-package-first-harness.md`)* | Oferece harness, sessões e workflows úteis, mas V1 precisa provar que sua integração preserva a ordem de política VINX e a aprovação durável antes de terceirizar o loop. |
 | OpenAI Agents SDK | Não usar em V1 | O runtime é Python/TypeScript e toma posse de turnos, ferramentas, guardrails e sessões; adicionaria outro runtime ao monólito .NET. |
 | LangGraph | Não usar em V1 | É runtime Python/JS para estado, persistência e humano-no-loop, responsabilidades que Foundation precisa controlar para comandos do ERP. |
 
@@ -138,6 +158,9 @@ Microsoft Agent Framework pode ser reavaliado depois de V1 se houver uma versão
 estável adequada, suporte comprovado aos dois protocolos de provedor, teste de
 integração que prove a política antes da validação de domínio e integração com
 a aprovação Foundation sem duplicar estado ou auditoria.
+*(Superado em 13/08/2026: a reavaliação ocorreu antes de V1 e resultou na
+adoção package-first; os critérios de prova de política e de integração com a
+aprovação Foundation continuam como condição para os próximos PRs.)*
 
 ## Escopo de V1
 
@@ -169,7 +192,9 @@ V2 só começa após dados de uso e avaliação de V1. Itens candidatos são:
 
 - workflows longos e retomáveis que tenham necessidade comprovada de runtime
   adicional;
-- nova avaliação de Microsoft Agent Framework para um caso isolado;
+- nova avaliação de Microsoft Agent Framework para um caso isolado *(item
+  sem objeto desde 13/08/2026: o framework foi avaliado e adotado na
+  sequência package-first; ver `2026-08-13-package-first-harness.md`)*;
 - memória explícita e governada fora do provedor, com retenção, exclusão e
   autorização próprias;
 - mais ferramentas de domínio, OCR especializado e revisão humana específica;
@@ -179,6 +204,10 @@ Nenhum item de V2 reduz as garantias de empresa explícita, capability,
 aprovação, auditoria ou idempotência.
 
 ## Sequência de implementação condicionada
+
+> O bloqueio abaixo foi **superado em 13/08/2026**: a issue #127 foi
+> replanejada como a sequência package-first (PR 1: prova do harness com
+> pacotes Microsoft; PR 2: política/aprovação; PR 3: provedores; PR 4: MCP).
 
 As PRs de harness em rascunho permanecem bloqueadas até serem replanejadas
 contra esta decisão. A implementação começa por uma fatia estreita de núcleo e
@@ -202,8 +231,11 @@ dependência indivisível.
 
 ## Critérios de aceite arquiteturais
 
-- Nenhuma tool call é automaticamente executada por biblioteca, adaptador ou
-  provedor.
+- ~~Nenhuma tool call é automaticamente executada por biblioteca, adaptador ou
+  provedor.~~ *(Superado em 13/08/2026: o harness do Microsoft Agent Framework
+  executa leituras autorizadas diretamente. Critério vigente: nenhuma escrita
+  executa sem confirmação explícita do servidor, e uma resposta do modelo
+  nunca é uma autorização.)*
 - Todo comando passa por contexto confiável, empresa explícita, capability e
   política de risco antes de sua validação semântica e do serviço de aplicação.
 - Toda escrita tem auditoria e idempotência; as de risco têm confirmação
