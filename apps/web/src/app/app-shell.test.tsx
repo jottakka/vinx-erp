@@ -87,6 +87,49 @@ describe("AppShell", () => {
     expect(futureCompanyRouter.state.location.pathname).toBe("/");
   });
 
+  it("keeps Home free of fake operational metrics", async () => {
+    renderShell("/", await signedInGateway());
+
+    expect(
+      await screen.findByRole("heading", { name: "Início" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/pendências hoje|atividade da equipe/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("navigates from a module card to its preparation route", async () => {
+    const user = userEvent.setup();
+    const router = renderShell("/", await signedInGateway());
+    await screen.findByRole("heading", { name: "Início" });
+    const moduleSection = screen
+      .getByRole("heading", { name: "Estrutura em evolução" })
+      .closest("section");
+
+    expect(moduleSection).not.toBeNull();
+    if (!moduleSection) {
+      throw new Error("Module section not found");
+    }
+
+    expect(
+      await within(moduleSection).findByRole("link", { name: /Paguai/ }),
+    ).toBeVisible();
+    expect(
+      within(moduleSection).getByRole("link", { name: /Atendimento/ }),
+    ).toBeVisible();
+    expect(
+      within(moduleSection).getByRole("link", { name: /Kanban/ }),
+    ).toBeVisible();
+    expect(
+      within(moduleSection).getByRole("link", { name: /Pessoas/ }),
+    ).toBeVisible();
+
+    await user.click(
+      within(moduleSection).getByRole("link", { name: /Paguai/ }),
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe("/paguai"));
+  });
+
   it("shows an honest no-authorized-company state with a working help route", async () => {
     const router = renderShell(
       "/",

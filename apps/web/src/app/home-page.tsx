@@ -3,6 +3,7 @@ import {
   Box,
   Button,
   Card,
+  CardActionArea,
   CardContent,
   Stack,
   Typography,
@@ -10,11 +11,14 @@ import {
 import { Link as RouterLink } from "react-router-dom";
 import { useSession } from "../features/auth/session-provider";
 import { CompanyBadge } from "../shared/ui/company-badge";
-
-const upcomingAreas = ["Paguai", "Atendimento", "Kanban", "Pessoas"] as const;
+import { PageHeader } from "../shared/ui/page-header";
+import { appRouteManifest } from "./app-route-manifest";
 
 export function HomePage() {
   const { bootstrap } = useSession();
+  const moduleCards = appRouteManifest.filter(
+    (route) => route.group === "modules" && route.navigation,
+  );
 
   if (!bootstrap) {
     return null;
@@ -22,15 +26,22 @@ export function HomePage() {
 
   return (
     <Stack spacing={4}>
-      <Stack spacing={1}>
-        <Typography component="h1" variant="h4">
-          Início
-        </Typography>
-        <Typography variant="h6">Olá, {bootstrap.user.name}</Typography>
-        <Typography color="text.secondary">
-          Você está visualizando todas as empresas autorizadas.
-        </Typography>
-      </Stack>
+      <PageHeader
+        description="Uma visão geral das empresas autorizadas e das áreas de trabalho do VINX."
+        eyebrow={`Olá, ${bootstrap.user.name}`}
+        title="Início"
+      />
+      <Card variant="outlined">
+        <CardContent>
+          <Stack spacing={1}>
+            <Typography variant="h6">Contexto atual</Typography>
+            <Typography color="text.secondary">
+              Consulte empresas e abra áreas em preparação sem misturar
+              contextos ou inventar dados operacionais.
+            </Typography>
+          </Stack>
+        </CardContent>
+      </Card>
       <Card component="section" variant="outlined">
         <CardContent>
           <Stack spacing={2}>
@@ -101,8 +112,8 @@ export function HomePage() {
             Estrutura em evolução
           </Typography>
           <Typography color="text.secondary">
-            Estas áreas serão disponibilizadas progressivamente. Ainda não há
-            ações ou dados operacionais nesta tela.
+            Estas áreas serão disponibilizadas progressivamente, com destinos
+            honestos enquanto os módulos são preparados.
           </Typography>
         </Stack>
         <Box
@@ -117,16 +128,33 @@ export function HomePage() {
             p: 0,
           }}
         >
-          {upcomingAreas.map((area) => (
-            <Card component="li" key={area} variant="outlined">
-              <CardContent>
-                <Typography component="h3" variant="h6">
-                  {area}
-                </Typography>
-                <Typography color="text.secondary">Em preparação</Typography>
-              </CardContent>
-            </Card>
-          ))}
+          {moduleCards.map((route) => {
+            const Icon = route.icon;
+
+            return (
+              <Card component="li" key={route.path} variant="outlined">
+                <CardActionArea
+                  component={RouterLink}
+                  sx={{ height: "100%" }}
+                  to={route.path}
+                >
+                  <CardContent>
+                    <Stack direction="row" spacing={1.5}>
+                      <Icon color="primary" />
+                      <Stack spacing={0.5}>
+                        <Typography component="h3" variant="h6">
+                          {route.label}
+                        </Typography>
+                        <Typography color="text.secondary">
+                          Módulo em preparação
+                        </Typography>
+                      </Stack>
+                    </Stack>
+                  </CardContent>
+                </CardActionArea>
+              </Card>
+            );
+          })}
         </Box>
       </Stack>
     </Stack>
