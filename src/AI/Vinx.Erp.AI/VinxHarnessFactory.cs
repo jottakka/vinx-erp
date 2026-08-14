@@ -17,6 +17,7 @@ public static class VinxHarnessFactory
     public static HarnessAgent Create(
         IChatClient chatClient,
         HarnessProbeWriteCounter writeCounter,
+        Guid executionRequestId,
         ILoggerFactory? loggerFactory = null)
     {
         var options = new HarnessAgentOptions
@@ -28,7 +29,7 @@ public static class VinxHarnessFactory
                 Tools =
                 [
                     HarnessProbeTools.CreateStatusTool(),
-                    HarnessProbeTools.CreateWriteTool(writeCounter),
+                    HarnessProbeTools.CreateWriteTool(writeCounter, executionRequestId),
                 ],
 
                 // O gate processa uma aprovação por resposta; lotes com várias

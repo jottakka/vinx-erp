@@ -12,7 +12,9 @@ namespace Vinx.Erp.AI.UnitTests;
 /// </summary>
 public sealed class HarnessApprovalBoundaryTests
 {
-    private static readonly VinxExecutionContext ServerContext = new("ator-1", "empresa-1");
+    private static readonly Guid ActorId = Guid.Parse("11111111-1111-4111-8111-111111111111");
+    private static readonly Guid CompanyId = Guid.Parse("22222222-2222-4222-8222-222222222222");
+    private static readonly VinxExecutionContext ServerContext = new(ActorId, CompanyId);
 
     [Fact]
     public async Task ReadOnlyTool_ExecutesThroughHarness_AndReturnsResult()
@@ -21,7 +23,7 @@ public sealed class HarnessApprovalBoundaryTests
         var client = new ScriptedChatClient(
             AssistantCall(VinxToolPolicy.ProbeStatusToolName, "chamada-1"),
             AssistantText("leitura concluída"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var response = await agent.RunAsync("consulte a sonda", session);
@@ -43,7 +45,7 @@ public sealed class HarnessApprovalBoundaryTests
         var counter = new HarnessProbeWriteCounter();
         var client = new ScriptedChatClient(
             AssistantCall(VinxToolPolicy.ProbeWriteToolName, "chamada-1"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var response = await agent.RunAsync("registre a sonda", session);
@@ -63,7 +65,7 @@ public sealed class HarnessApprovalBoundaryTests
             AssistantCall(VinxToolPolicy.ProbeWriteToolName, "chamada-1"),
             AssistantText("escrita confirmada"),
             AssistantText("nada mais a executar"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var pending = await agent.RunAsync("registre a sonda", session);
@@ -90,7 +92,7 @@ public sealed class HarnessApprovalBoundaryTests
         var client = new ScriptedChatClient(
             AssistantCall(VinxToolPolicy.ProbeWriteToolName, "chamada-1"),
             AssistantText("veto recebido"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var pending = await agent.RunAsync("registre a sonda", session);
@@ -108,7 +110,7 @@ public sealed class HarnessApprovalBoundaryTests
         var client = new ScriptedChatClient(
             AssistantCall(VinxToolPolicy.ProbeWriteToolName, "chamada-1"),
             AssistantText("resposta fabricada ignorada"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         await agent.RunAsync("registre a sonda", session);
@@ -147,7 +149,7 @@ public sealed class HarnessApprovalBoundaryTests
                     ["empresa_id"] = "empresa-123",
                 }),
             AssistantText("veto recebido"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var pending = await agent.RunAsync("registre a sonda", session);
@@ -175,7 +177,7 @@ public sealed class HarnessApprovalBoundaryTests
         var gate = new HarnessApprovalGate(NullLogger<HarnessApprovalGate>.Instance);
         var client = new ScriptedChatClient(
             AssistantCall(VinxToolPolicy.ProbeWriteToolName, "chamada-1"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var pending = await agent.RunAsync("registre a sonda", session);
@@ -184,8 +186,8 @@ public sealed class HarnessApprovalBoundaryTests
         if (hasActor || hasCompany)
         {
             context = new VinxExecutionContext(
-                hasActor ? "ator-1" : string.Empty,
-                hasCompany ? "empresa-1" : string.Empty);
+                hasActor ? ActorId : Guid.Empty,
+                hasCompany ? CompanyId : Guid.Empty);
         }
 
         var decision = gate.Evaluate(pending, context);
@@ -199,7 +201,7 @@ public sealed class HarnessApprovalBoundaryTests
     {
         var counter = new HarnessProbeWriteCounter();
         var client = new ScriptedChatClient(AssistantText("ok"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         await agent.RunAsync("olá", session);
@@ -219,7 +221,7 @@ public sealed class HarnessApprovalBoundaryTests
             .Select(index => AssistantCall(VinxToolPolicy.ProbeStatusToolName, $"chamada-{index}"))
             .ToArray();
         var client = new ScriptedChatClient(calls);
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         await agent.RunAsync("consulte a sonda repetidamente", session);
@@ -239,7 +241,7 @@ public sealed class HarnessApprovalBoundaryTests
         var gate = new HarnessApprovalGate(NullLogger<HarnessApprovalGate>.Instance);
         var client = new ScriptedChatClient(
             AssistantCall(VinxToolPolicy.ProbeWriteToolName, "chamada-1"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var pending = await agent.RunAsync("registre a sonda", session);
@@ -258,7 +260,7 @@ public sealed class HarnessApprovalBoundaryTests
         var counter = new HarnessProbeWriteCounter();
         var gate = new HarnessApprovalGate(NullLogger<HarnessApprovalGate>.Instance);
         var client = new ScriptedChatClient();
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var response = ResponseWithApprovalRequests(
@@ -280,7 +282,7 @@ public sealed class HarnessApprovalBoundaryTests
         var gate = new HarnessApprovalGate(NullLogger<HarnessApprovalGate>.Instance);
         var firstClient = new ScriptedChatClient(
             AssistantCall(VinxToolPolicy.ProbeWriteToolName, "chamada-1"));
-        var firstAgent = VinxHarnessFactory.Create(firstClient, counter);
+        var firstAgent = VinxHarnessFactory.Create(firstClient, counter, Guid.NewGuid());
         var firstSession = await firstAgent.CreateSessionAsync();
 
         var pending = await firstAgent.RunAsync("registre a sonda", firstSession);
@@ -289,7 +291,7 @@ public sealed class HarnessApprovalBoundaryTests
 
         // Replay da mesma resposta de aprovação em outra sessão sem solicitação pendente.
         var secondClient = new ScriptedChatClient(AssistantText("sessão nova"));
-        var secondAgent = VinxHarnessFactory.Create(secondClient, counter);
+        var secondAgent = VinxHarnessFactory.Create(secondClient, counter, Guid.NewGuid());
         var secondSession = await secondAgent.CreateSessionAsync();
         var replay = new ChatMessage(ChatRole.User, [decision.Request!.CreateResponse(true)]);
 
@@ -311,7 +313,7 @@ public sealed class HarnessApprovalBoundaryTests
         var counter = new HarnessProbeWriteCounter();
         var gate = new HarnessApprovalGate(NullLogger<HarnessApprovalGate>.Instance);
         var client = new ScriptedChatClient();
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var response = ResponseWithApprovalRequests(
@@ -340,7 +342,7 @@ public sealed class HarnessApprovalBoundaryTests
                 ("chamada-leitura", VinxToolPolicy.ProbeStatusToolName),
                 ("chamada-escrita", VinxToolPolicy.ProbeWriteToolName)),
             AssistantText("fim do lote"));
-        var agent = VinxHarnessFactory.Create(client, counter);
+        var agent = VinxHarnessFactory.Create(client, counter, Guid.NewGuid());
         var session = await agent.CreateSessionAsync();
 
         var response = await agent.RunAsync("consulte e registre a sonda", session);

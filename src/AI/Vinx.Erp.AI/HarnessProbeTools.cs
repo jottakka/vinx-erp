@@ -5,25 +5,41 @@ namespace Vinx.Erp.AI;
 /// <summary>
 /// Contador de efeito colateral da sonda de escrita. Serve apenas para provar
 /// em testes que a ferramenta de escrita só executa após confirmação do
-/// servidor; não acessa nenhum dado do ERP.
+/// servidor; não acessa nenhum dado do ERP. A escrita é idempotente por
+/// <c>RequestId</c> de execução: um replay com o mesmo <c>RequestId</c> devolve
+/// o resultado original sem repetir a mutação.
 /// </summary>
 public sealed class HarnessProbeWriteCounter
 {
+    private readonly object gate = new();
+    private readonly Dictionary<Guid, string> resultsByRequestId = new();
     private int count;
 
     public int Count => Volatile.Read(ref count);
 
-    public string RecordWrite()
+    public string RecordWrite(Guid requestId)
     {
-        Interlocked.Increment(ref count);
-        return "sonda de escrita registrada";
+        lock (gate)
+        {
+            if (resultsByRequestId.TryGetValue(requestId, out var existing))
+            {
+                return existing;
+            }
+
+            count++;
+            var result = $"sonda de escrita registrada para {requestId}";
+            resultsByRequestId[requestId] = result;
+            return result;
+        }
     }
 }
 
 /// <summary>
 /// Duas ferramentas de sonda inertes (sem dados do ERP, sem efeitos reais e
 /// não registradas em nenhum host): uma leitura executada diretamente pelo
-/// framework e uma escrita que só executa com confirmação do servidor.
+/// framework e uma escrita que só executa com confirmação do servidor. A
+/// ferramenta de escrita recebe o <c>RequestId</c> de execução do coordenador,
+/// nunca do modelo, e é idempotente por esse identificador.
 /// </summary>
 public static class HarnessProbeTools
 {
@@ -35,13 +51,14 @@ public static class HarnessProbeTools
             Description = "Sonda somente leitura do harness VINX; retorna estado estático do servidor.",
         }));
 
-    public static AIFunction CreateWriteTool(HarnessProbeWriteCounter counter) => ApplyPolicy(AIFunctionFactory.Create(
-        counter.RecordWrite,
-        new AIFunctionFactoryOptions
-        {
-            Name = VinxToolPolicy.ProbeWriteToolName,
-            Description = "Sonda de escrita do harness VINX; exige confirmação explícita do servidor.",
-        }));
+    public static AIFunction CreateWriteTool(HarnessProbeWriteCounter counter, Guid executionRequestId) =>
+        ApplyPolicy(AIFunctionFactory.Create(
+            () => counter.RecordWrite(executionRequestId),
+            new AIFunctionFactoryOptions
+            {
+                Name = VinxToolPolicy.ProbeWriteToolName,
+                Description = "Sonda de escrita do harness VINX; exige confirmação explícita do servidor.",
+            }));
 
     /// <summary>
     /// O registro dirige o envolvimento pela classificação da allowlist:

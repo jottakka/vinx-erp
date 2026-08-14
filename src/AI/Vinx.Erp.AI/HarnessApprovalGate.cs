@@ -29,8 +29,9 @@ public sealed record VinxApprovalDecision(
 /// Fronteira de aprovação do VINX (código do servidor). Consome
 /// <see cref="ToolApprovalRequestContent"/> emitido pelo harness e decide com
 /// contexto fornecido pelo servidor, allowlist e classificação de risco.
-/// Aprovações duráveis, auditoria e idempotência chegam no PR 2; nada aqui
-/// promete execução exatamente-uma-vez.
+/// Aprovações duráveis, auditoria e idempotência vivem na Foundation e são
+/// orquestradas por <see cref="HarnessConfirmationCoordinator"/>; o gate nunca
+/// retoma uma sessão por conta própria nem promete execução exatamente-uma-vez.
 /// </summary>
 public sealed class HarnessApprovalGate
 {
@@ -105,10 +106,12 @@ public sealed class HarnessApprovalGate
     /// com solicitação presente, contexto válido e ferramenta classificada como
     /// escrita pela allowlist é executada; qualquer outra combinação lança
     /// <see cref="InvalidOperationException"/> e nada executa.
-    /// A aprovação deve ser a interação imediatamente seguinte com a sessão:
-    /// uma resposta de aprovação sem correspondência com a solicitação pendente
-    /// é consumida como entrada comum e descarta a pendência (fail-closed,
-    /// nunca executa); o PR 2 tornará esses no-ops silenciosos erros explícitos.
+    /// A aprovação deve ser a interação imediatamente seguinte com a sessão: uma
+    /// resposta de aprovação sem correspondência com a solicitação pendente não
+    /// é um no-op silencioso — <see cref="ThrowIfUnmatchedApprovalResponse"/>
+    /// lança erro explícito (fail-closed) e nada executa, e o
+    /// <see cref="HarnessConfirmationCoordinator"/> remove o estado da proposta
+    /// ao consumi-la, expirá-la ou vetá-la.
     /// </summary>
     public Task<AgentResponse> ApproveAsync(
         AIAgent agent,
@@ -136,6 +139,39 @@ public sealed class HarnessApprovalGate
         LogDecision(GetToolName(request), VinxApprovalOutcome.Denied, "veto do servidor");
         var vetoMessage = new ChatMessage(ChatRole.User, [request.CreateResponse(false, "negado pela política VINX")]);
         return agent.RunAsync(vetoMessage, session, cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Garante que nenhuma resposta de aprovação sem correspondência seja
+    /// entregue à sessão como se fosse entrada comum (no-op silencioso). Se a
+    /// mensagem contém uma <see cref="ToolApprovalResponseContent"/> cujo
+    /// <c>CallId</c> não coincide com a solicitação pendente, lança
+    /// <see cref="InvalidOperationException"/> (fail-closed). É a fronteira que
+    /// transforma esses no-ops em erros explícitos; o host deve invocá-la antes
+    /// de qualquer entrega de mensagem à sessão.
+    /// </summary>
+    public static void ThrowIfUnmatchedApprovalResponse(
+        ChatMessage message,
+        ToolApprovalRequestContent? pendingRequest)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        var pendingCallId = (pendingRequest?.ToolCall as FunctionCallContent)?.CallId;
+        foreach (var content in message.Contents)
+        {
+            if (content is not ToolApprovalResponseContent response)
+            {
+                continue;
+            }
+
+            var responseCallId = (response.ToolCall as FunctionCallContent)?.CallId;
+            if (pendingCallId is null ||
+                !string.Equals(responseCallId, pendingCallId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Resposta de aprovação sem correspondência com a solicitação pendente (fail-closed).");
+            }
+        }
     }
 
     private static string? GetToolName(ToolApprovalRequestContent request) =>
