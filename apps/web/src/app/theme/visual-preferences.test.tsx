@@ -105,20 +105,20 @@ describe("visual preferences", () => {
     );
   });
 
-  it("follows a later system scheme change while mode remains system", () => {
+  it("keeps default light mode when the system scheme changes later", () => {
     const system = createMatchMediaMock(false);
     vi.stubGlobal("matchMedia", system.matchMedia);
     renderHarness();
 
-    expect(screen.getByTestId("selected-mode")).toHaveTextContent("system");
+    expect(screen.getByTestId("selected-mode")).toHaveTextContent("light");
     expect(screen.getByTestId("surface-scheme")).toHaveTextContent("light");
 
     act(() => {
       system.emit(true);
     });
 
-    expect(screen.getByTestId("selected-mode")).toHaveTextContent("system");
-    expect(screen.getByTestId("surface-scheme")).toHaveTextContent("dark");
+    expect(screen.getByTestId("selected-mode")).toHaveTextContent("light");
+    expect(screen.getByTestId("surface-scheme")).toHaveTextContent("light");
   });
 
   it("restores compact density and an explicit mode in a fresh provider", async () => {
