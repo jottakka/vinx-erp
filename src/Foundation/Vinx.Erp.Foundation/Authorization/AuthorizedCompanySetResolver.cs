@@ -24,17 +24,22 @@ public sealed class AuthorizedCompanySetResolver(
     private const string UnavailableEventTemplate =
         "Authorization context {Operation} {Module} {Result} {Reason}";
 
+    /// <summary>
+    /// Materializa memberships e capabilities efetivas do ator em um snapshot consistente.
+    /// </summary>
     public async Task<AuthorizationResult<ActorAuthorizationSnapshot>> ResolveSnapshotAsync(
         ActorContext actor,
         CancellationToken cancellationToken)
     {
         try
         {
+            // Mantém discovery de autorização consistente entre múltiplas queries.
             await using var transaction = await database.Database.BeginTransactionAsync(
                 System.Data.IsolationLevel.RepeatableRead,
                 cancellationToken);
             await FoundationRlsContext.ApplyActorAsync(database.Database, actor, cancellationToken);
             var snapshot = await ResolveSnapshotInTransactionAsync(cancellationToken);
+            // Leitura concluída: descarta contexto RLS transacional sem confirmar escrita.
             await transaction.RollbackAsync(cancellationToken);
             return AuthorizationResult<ActorAuthorizationSnapshot>.Success(snapshot);
         }
@@ -50,6 +55,9 @@ public sealed class AuthorizedCompanySetResolver(
         }
     }
 
+    /// <summary>
+    /// Deriva empresas autorizadas para leitura por uma capability de escopo de empresa.
+    /// </summary>
     public Task<AuthorizationResult<AuthorizedCompanySet>> ResolveAsync(
         ActorContext actor,
         CapabilityRequirement requirement,
@@ -60,6 +68,9 @@ public sealed class AuthorizedCompanySetResolver(
             (_, companyIds) => Task.FromResult(new AuthorizedCompanySet(companyIds)),
             cancellationToken);
 
+    /// <summary>
+    /// Executa leitura com snapshot de autorização e contexto RLS derivados do ator.
+    /// </summary>
     public async Task<AuthorizationResult<T>> ExecuteReadAsync<T>(
         ActorContext actor,
         CapabilityRequirement requirement,
@@ -74,6 +85,7 @@ public sealed class AuthorizedCompanySetResolver(
 
         try
         {
+            // Mantém snapshot de autorização e leitura protegida no mesmo estado do banco.
             await using var transaction = await database.Database.BeginTransactionAsync(
                 System.Data.IsolationLevel.RepeatableRead,
                 cancellationToken);
@@ -90,6 +102,7 @@ public sealed class AuthorizedCompanySetResolver(
                 companyIds,
                 cancellationToken);
             var value = await read(database, companyIds);
+            // Leitura concluída: descarta contexto RLS transacional sem confirmar escrita.
             await transaction.RollbackAsync(cancellationToken);
             return AuthorizationResult<T>.Success(value);
         }
@@ -151,6 +164,9 @@ public sealed class AuthorizedCompanySetResolver(
 
 internal static class FoundationRlsContext
 {
+    /// <summary>
+    /// Aplica identidade do ator e limpa contextos de empresa da transação atual.
+    /// </summary>
     public static async Task ApplyActorAsync(
         DatabaseFacade database,
         ActorContext actor,
@@ -170,6 +186,9 @@ internal static class FoundationRlsContext
             cancellationToken);
     }
 
+    /// <summary>
+    /// Define empresa atual usada pelas policies de isolamento da transação.
+    /// </summary>
     public static Task ApplyCompanyAsync(
         DatabaseFacade database,
         Guid companyId,
@@ -178,6 +197,9 @@ internal static class FoundationRlsContext
             $"SELECT set_config('app.company_id', {companyId.ToString()}, true)",
             cancellationToken);
 
+    /// <summary>
+    /// Define conjunto de empresas autorizado para leitura RLS na transação atual.
+    /// </summary>
     public static async Task ApplyAuthorizedReadAsync(
         DatabaseFacade database,
         IReadOnlySet<Guid> companyIds,
