@@ -24,15 +24,7 @@ export type AppRouteDefinition = {
   navigation: boolean;
 };
 
-export const appRouteManifest: readonly AppRouteDefinition[] = [
-  {
-    path: "/",
-    label: "Início",
-    group: "workspace",
-    icon: HomeOutlinedIcon,
-    element: <HomePage />,
-    navigation: true,
-  },
+const moduleRouteDefinitions = [
   {
     path: "/paguai",
     label: "Paguai",
@@ -85,6 +77,18 @@ export const appRouteManifest: readonly AppRouteDefinition[] = [
     ),
     navigation: true,
   },
+] as const satisfies readonly AppRouteDefinition[];
+
+export const appRouteManifest: readonly AppRouteDefinition[] = [
+  {
+    path: "/",
+    label: "Início",
+    group: "workspace",
+    icon: HomeOutlinedIcon,
+    element: <HomePage moduleLinks={moduleRouteDefinitions} />,
+    navigation: true,
+  },
+  ...moduleRouteDefinitions,
   {
     path: "/ajuda",
     label: "Ajuda",

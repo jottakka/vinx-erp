@@ -1,3 +1,4 @@
+import type { SvgIconComponent } from "@mui/icons-material";
 import {
   Alert,
   Box,
@@ -12,13 +13,19 @@ import { Link as RouterLink } from "react-router-dom";
 import { useSession } from "../features/auth/session-provider";
 import { CompanyBadge } from "../shared/ui/company-badge";
 import { PageHeader } from "../shared/ui/page-header";
-import { appRouteManifest } from "./app-route-manifest";
 
-export function HomePage() {
+type HomeModuleLink = {
+  icon: SvgIconComponent;
+  label: string;
+  path: string;
+};
+
+type HomePageProps = {
+  moduleLinks: readonly HomeModuleLink[];
+};
+
+export function HomePage({ moduleLinks }: HomePageProps) {
   const { bootstrap } = useSession();
-  const moduleCards = appRouteManifest.filter(
-    (route) => route.group === "modules" && route.navigation,
-  );
 
   if (!bootstrap) {
     return null;
@@ -128,7 +135,7 @@ export function HomePage() {
             p: 0,
           }}
         >
-          {moduleCards.map((route) => {
+          {moduleLinks.map((route) => {
             const Icon = route.icon;
 
             return (

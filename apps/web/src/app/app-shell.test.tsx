@@ -8,9 +8,8 @@ import type {
   MockSessionGateway,
 } from "../features/auth/session-contract";
 import { SessionProvider } from "../features/auth/session-provider";
+import { appRouteManifest } from "./app-route-manifest";
 import { AppShell } from "./app-shell";
-import { HelpPage } from "./help-page";
-import { HomePage } from "./home-page";
 import { ProtectedRoute } from "./protected-route";
 import { VinxThemeProvider } from "./theme/vinx-theme-provider";
 
@@ -38,10 +37,11 @@ function renderShell(path: string, gateway: MockSessionGateway) {
           </ProtectedRoute>
         ),
         path: "/",
-        children: [
-          { element: <HomePage />, index: true },
-          { element: <HelpPage />, path: "ajuda" },
-        ],
+        children: appRouteManifest.map(({ element, path }) =>
+          path === "/"
+            ? { element, index: true }
+            : { element, path: path.slice(1) },
+        ),
       },
     ],
     { initialEntries: [path] },
@@ -128,6 +128,14 @@ describe("AppShell", () => {
       within(moduleSection).getByRole("link", { name: /Paguai/ }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/paguai"));
+    expect(
+      await screen.findByRole("heading", { name: "Paguai" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Esta área ainda não possui dados ou ações operacionais.",
+      ),
+    ).toBeVisible();
   });
 
   it("shows an honest no-authorized-company state with a working help route", async () => {
