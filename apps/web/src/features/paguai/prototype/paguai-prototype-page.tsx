@@ -1,5 +1,5 @@
 import { Stack, Tab, Tabs, Typography } from "@mui/material";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DemoAttachmentState } from "../../prototypes/demo-attachment-field";
 import { DetailDrawer } from "../../prototypes/detail-drawer";
 import { PrototypeNotice } from "../../prototypes/prototype-notice";
@@ -34,10 +34,44 @@ export function PaguaiPrototypePage() {
   } = usePaguaiPrototype();
   const [draftOpen, setDraftOpen] = useState(false);
   const [returnRequestId, setReturnRequestId] = useState<string | null>(null);
+  const [returnDialogExited, setReturnDialogExited] = useState(true);
   const [detailOpen, setDetailOpen] = useState(false);
   const [proofState, setProofState] = useState<DemoAttachmentState>("empty");
   const draftSequence = useRef(1);
+  const returnDialogOpenerRef = useRef<HTMLButtonElement | null>(null);
+  const returnedRequestFocusId = useRef<string | null>(null);
+  const selectedRequestRef = useRef<HTMLElement | null>(null);
   const financeRequest = financeRequests[0];
+
+  useEffect(() => {
+    const requestId = returnedRequestFocusId.current;
+    const selectedRequest = selectedRequestRef.current;
+
+    if (!returnDialogExited) {
+      return;
+    }
+
+    if (requestId) {
+      if (
+        selected?.id !== requestId ||
+        selected.status !== "returned" ||
+        !selectedRequest?.isConnected
+      ) {
+        return;
+      }
+
+      selectedRequest.focus();
+      returnedRequestFocusId.current = null;
+      returnDialogOpenerRef.current = null;
+      return;
+    }
+
+    const opener = returnDialogOpenerRef.current;
+    returnDialogOpenerRef.current = null;
+    if (opener?.isConnected) {
+      opener.focus();
+    }
+  }, [returnDialogExited, selected]);
 
   function saveDraft(values: PaguaiDraftValues) {
     actions.createDraft({
@@ -57,8 +91,16 @@ export function PaguaiPrototypePage() {
     if (!returnRequestId) {
       return;
     }
+    returnedRequestFocusId.current = returnRequestId;
     actions.returnRequest(returnRequestId, values);
     setReturnRequestId(null);
+  }
+
+  function openReturnDialog(id: string, opener: HTMLButtonElement) {
+    returnDialogOpenerRef.current = opener;
+    returnedRequestFocusId.current = null;
+    setReturnDialogExited(false);
+    setReturnRequestId(id);
   }
 
   function confirmPayment() {
@@ -113,10 +155,11 @@ export function PaguaiPrototypePage() {
 
       {section === "conference" ? (
         <PaguaiConferencePanel
-          onReturn={setReturnRequestId}
+          onReturn={openReturnDialog}
           onSelect={actions.select}
           requests={conferenceRequests}
           selected={selected}
+          selectedRequestRef={selectedRequestRef}
         />
       ) : null}
 
@@ -144,6 +187,7 @@ export function PaguaiPrototypePage() {
       <PaguaiReturnDialog
         onClose={() => setReturnRequestId(null)}
         onSubmit={returnRequest}
+        onTransitionExited={() => setReturnDialogExited(true)}
         open={returnRequestId !== null}
       />
 

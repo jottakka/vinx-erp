@@ -143,12 +143,14 @@ export function PaguaiDraftDialog({
 type ReturnDialogProps = {
   onClose: () => void;
   onSubmit: (values: PaguaiReturnValues) => void;
+  onTransitionExited: () => void;
   open: boolean;
 };
 
 export function PaguaiReturnDialog({
   onClose,
   onSubmit,
+  onTransitionExited,
   open,
 }: ReturnDialogProps) {
   const form = useForm<PaguaiReturnValues>({
@@ -170,7 +172,12 @@ export function PaguaiReturnDialog({
   }
 
   return (
-    <Dialog onClose={close} open={open}>
+    <Dialog
+      disableRestoreFocus
+      onClose={close}
+      onTransitionExited={onTransitionExited}
+      open={open}
+    >
       <DialogTitle>Devolver solicitação</DialogTitle>
       <DialogContent>
         <Stack

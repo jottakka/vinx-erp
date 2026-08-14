@@ -9,6 +9,7 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
+import type { Ref } from "react";
 import type { DemoAttachmentState } from "../../prototypes/demo-attachment-field";
 import { DemoAttachmentField } from "../../prototypes/demo-attachment-field";
 import type {
@@ -130,10 +131,11 @@ export function PaguaiRequestsPanel({
 }
 
 type ConferencePanelProps = {
-  onReturn: (id: string) => void;
+  onReturn: (id: string, opener: HTMLButtonElement) => void;
   onSelect: (id: string) => void;
   requests: readonly PaguaiRequest[];
   selected?: PaguaiRequest;
+  selectedRequestRef: Ref<HTMLElement>;
 };
 
 export function PaguaiConferencePanel({
@@ -141,6 +143,7 @@ export function PaguaiConferencePanel({
   onSelect,
   requests,
   selected,
+  selectedRequestRef,
 }: ConferencePanelProps) {
   const conferenceSelection =
     selected?.status === "conference" || selected?.status === "returned"
@@ -185,6 +188,8 @@ export function PaguaiConferencePanel({
         <Card
           aria-label="Solicitação selecionada"
           component="section"
+          ref={selectedRequestRef}
+          tabIndex={-1}
           variant="outlined"
         >
           <CardContent>
@@ -208,7 +213,9 @@ export function PaguaiConferencePanel({
               {conferenceSelection.status === "conference" ? (
                 <Button
                   aria-label={`Devolver ${conferenceSelection.description} para ajuste`}
-                  onClick={() => onReturn(conferenceSelection.id)}
+                  onClick={(event) =>
+                    onReturn(conferenceSelection.id, event.currentTarget)
+                  }
                   sx={{ alignSelf: "flex-start" }}
                   variant="outlined"
                 >

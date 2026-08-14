@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PaguaiPrototypePage } from "./paguai-prototype-page";
 
 describe("PaguaiPrototypePage", () => {
@@ -84,7 +84,9 @@ describe("PaguaiPrototypePage", () => {
     await user.click(screen.getByRole("button", { name: "Cancelar" }));
     await waitFor(() => expect(returnTrigger).toHaveFocus());
 
+    const detachedOpenerFocus = vi.spyOn(returnTrigger, "focus");
     await user.click(returnTrigger);
+    detachedOpenerFocus.mockClear();
     await user.click(
       screen.getByRole("button", { name: "Confirmar devolução" }),
     );
@@ -123,6 +125,16 @@ describe("PaguaiPrototypePage", () => {
     expect(
       within(selectedRequest).getByText("Motivo: Anexe a nota fiscal correta"),
     ).toBeVisible();
+    expect(selectedRequest).toHaveAttribute("tabindex", "-1");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Devolver solicitação" }),
+      ).not.toBeInTheDocument();
+      expect(selectedRequest).toHaveFocus();
+    });
+    expect(returnTrigger).not.toBeInTheDocument();
+    expect(detachedOpenerFocus).not.toHaveBeenCalled();
+    detachedOpenerFocus.mockRestore();
   });
 
   it("guards payment confirmation until the proof reaches ready", async () => {
