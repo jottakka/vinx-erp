@@ -24,6 +24,7 @@ somente para testes).
 | validação/erros | Dada decisão negada por Evaluate (contexto ausente ou ferramenta fora da allowlist), quando `ApproveAsync` é chamado, então recusa com erro e nada executa | `HarnessApprovalBoundaryTests.ApproveAsync_AfterDeniedEvaluationForMissingContext_RefusesAndDoesNotExecute`; `HarnessApprovalBoundaryTests.ApproveAsync_AfterDeniedEvaluationForUnknownTool_RefusesAndDoesNotExecute` | coberto |
 | validação/erros | Dada resposta de aprovação genuína (`CreateResponse(true)`) reproduzida em agente/sessão sem solicitação pendente, quando enviada, então a escrita não executa | `HarnessApprovalBoundaryTests.GenuineApprovalResponse_ReplayedOnAnotherSession_DoesNotExecute` | coberto |
 | validação/erros | Dada resposta com mais de uma solicitação de aprovação pendente, quando avalia, então nega sem expor solicitação (fail-closed) e `ApproveAsync` recusa | `HarnessApprovalBoundaryTests.MultiplePendingApprovalRequests_AreDeniedFailClosed` | coberto |
+| validação/erros | Dada resposta do modelo com duas chamadas (leitura + escrita), quando executa, então a escrita nunca roda sem aprovação e o lote não é executado silenciosamente (a chamada protegida fica bloqueada em solicitação de aprovação) | `HarnessApprovalBoundaryTests.TwoToolCallsInOneResponse_WriteNeverExecutesWithoutApproval` | coberto |
 | acesso | N/A nesta fatia: as sondas não acessam dado de empresa nem dado do ERP; escopo de empresa, membership e capability chegam com o contexto confiável no PR 2 | — | adiado (PR 2) |
 | acesso | Ator/empresa fornecidos pelo modelo nos argumentos da ferramenta são ignorados; a decisão usa somente o contexto do servidor | `HarnessApprovalBoundaryTests.ModelSuppliedActorAndCompany_AreIgnored_ByServerOwnedContext` | coberto |
 | estado/exceções | Dada a mesma solicitação de aprovação, quando reenviada após execução, então a escrita não executa de novo nesta fatia (aprovação durável de uso único é do PR 2) | asserção de contador em `HarnessApprovalBoundaryTests.WriteTool_WithExplicitServerApproval_ExecutesOnce_OnSameSession` | coberto (limitado ao contrato do PR 1) |
@@ -45,6 +46,10 @@ somente para testes).
   configuração e negada; leituras não são envolvidas em
   `ApprovalRequiredAIFunction` (o registro dirige o envolvimento pela
   classificação da allowlist).
+- `AllowMultipleToolCalls = false` no `ChatOptions` do harness: o gate
+  processa uma aprovação por resposta; o comportamento real observado para um
+  lote com chamada protegida é a escrita bloqueada em solicitação de aprovação
+  pendente, sem execução do lote.
 - `IterationBound_IsRespected` aceita até `MaximumIterationsPerRequest + 1`
   chamadas ao modelo: o comportamento real do harness em 1.17.0 executa até o
   limite de iterações de ferramenta mais uma chamada final de consolidação.

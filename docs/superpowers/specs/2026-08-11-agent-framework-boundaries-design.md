@@ -192,7 +192,9 @@ V2 só começa após dados de uso e avaliação de V1. Itens candidatos são:
 
 - workflows longos e retomáveis que tenham necessidade comprovada de runtime
   adicional;
-- nova avaliação de Microsoft Agent Framework para um caso isolado;
+- nova avaliação de Microsoft Agent Framework para um caso isolado *(item
+  sem objeto desde 13/08/2026: o framework foi avaliado e adotado na
+  sequência package-first; ver `2026-08-13-package-first-harness.md`)*;
 - memória explícita e governada fora do provedor, com retenção, exclusão e
   autorização próprias;
 - mais ferramentas de domínio, OCR especializado e revisão humana específica;
@@ -229,8 +231,11 @@ dependência indivisível.
 
 ## Critérios de aceite arquiteturais
 
-- Nenhuma tool call é automaticamente executada por biblioteca, adaptador ou
-  provedor.
+- ~~Nenhuma tool call é automaticamente executada por biblioteca, adaptador ou
+  provedor.~~ *(Superado em 13/08/2026: o harness do Microsoft Agent Framework
+  executa leituras autorizadas diretamente. Critério vigente: nenhuma escrita
+  executa sem confirmação explícita do servidor, e uma resposta do modelo
+  nunca é uma autorização.)*
 - Todo comando passa por contexto confiável, empresa explícita, capability e
   política de risco antes de sua validação semântica e do serviço de aplicação.
 - Toda escrita tem auditoria e idempotência; as de risco têm confirmação

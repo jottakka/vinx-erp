@@ -30,6 +30,10 @@ public static class VinxHarnessFactory
                     HarnessProbeTools.CreateStatusTool(),
                     HarnessProbeTools.CreateWriteTool(writeCounter),
                 ],
+
+                // O gate processa uma aprovação por resposta; lotes com várias
+                // chamadas exigiriam aprovação de todas (inclusive leituras).
+                AllowMultipleToolCalls = false,
             },
             DisableWebSearch = true,
             DisableToolAutoApproval = true,

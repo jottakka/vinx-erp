@@ -50,6 +50,10 @@ injetado (agnóstico de provedor) com:
 - `DisableOpenTelemetry = true`;
 - `MaximumIterationsPerRequest = 5`.
 
+No `ChatOptions` do harness, `AllowMultipleToolCalls = false`: o gate processa
+uma aprovação por resposta, e o framework documenta que uma chamada protegida
+em um lote exigiria aprovação de todas as chamadas da resposta.
+
 O binding de resposta de aprovação permanece habilitado
 (`DisableApprovalResponseBinding` não é definido).
 
@@ -91,6 +95,11 @@ do agente e decide somente com entrada do servidor:
    resposta com mais de uma solicitação de aprovação pendente também é negada,
    sem expor solicitação para aprovação (nenhuma pendência é resolvida em
    silêncio; o turno não deve ser retomado).
+
+A aprovação deve ser a interação imediatamente seguinte com a sessão: uma
+resposta de aprovação sem correspondência com a solicitação pendente é
+consumida como entrada comum e descarta a pendência (fail-closed, nunca
+executa); o PR 2 tornará esses no-ops silenciosos erros explícitos.
 
 Decisões são registradas com `ILogger`, template constante e propriedades
 nomeadas; negações usam nível `Warning`. Sem payload, argumentos ou PII.

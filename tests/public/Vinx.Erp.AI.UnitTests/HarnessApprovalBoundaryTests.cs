@@ -331,6 +331,30 @@ public sealed class HarnessApprovalBoundaryTests
         Assert.Equal(0, counter.Count);
     }
 
+    [Fact]
+    public async Task TwoToolCallsInOneResponse_WriteNeverExecutesWithoutApproval()
+    {
+        var counter = new HarnessProbeWriteCounter();
+        var client = new ScriptedChatClient(
+            AssistantCalls(
+                ("chamada-leitura", VinxToolPolicy.ProbeStatusToolName),
+                ("chamada-escrita", VinxToolPolicy.ProbeWriteToolName)),
+            AssistantText("fim do lote"));
+        var agent = VinxHarnessFactory.Create(client, counter);
+        var session = await agent.CreateSessionAsync();
+
+        var response = await agent.RunAsync("consulte e registre a sonda", session);
+
+        // A escrita do lote nunca executa sem aprovação do servidor.
+        Assert.Equal(0, counter.Count);
+
+        // O lote não é executado silenciosamente por inteiro: a chamada
+        // protegida fica bloqueada em solicitação de aprovação pendente.
+        Assert.Contains(
+            response.Messages.SelectMany(message => message.Contents),
+            content => content is ToolApprovalRequestContent);
+    }
+
     private static AgentResponse ResponseWithApprovalRequests(params ToolApprovalRequestContent[] requests) =>
         new(new ChatMessage(ChatRole.Assistant, [.. requests]));
 
@@ -343,5 +367,13 @@ public sealed class HarnessApprovalBoundaryTests
     {
         var call = new FunctionCallContent(callId, toolName, arguments);
         return new ChatMessage(ChatRole.Assistant, [call]);
+    }
+
+    private static ChatMessage AssistantCalls(params (string CallId, string ToolName)[] calls)
+    {
+        var contents = calls
+            .Select(call => (AIContent)new FunctionCallContent(call.CallId, call.ToolName))
+            .ToList();
+        return new ChatMessage(ChatRole.Assistant, contents);
     }
 }

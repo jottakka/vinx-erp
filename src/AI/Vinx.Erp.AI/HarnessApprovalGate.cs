@@ -105,6 +105,10 @@ public sealed class HarnessApprovalGate
     /// com solicitação presente, contexto válido e ferramenta classificada como
     /// escrita pela allowlist é executada; qualquer outra combinação lança
     /// <see cref="InvalidOperationException"/> e nada executa.
+    /// A aprovação deve ser a interação imediatamente seguinte com a sessão:
+    /// uma resposta de aprovação sem correspondência com a solicitação pendente
+    /// é consumida como entrada comum e descarta a pendência (fail-closed,
+    /// nunca executa); o PR 2 tornará esses no-ops silenciosos erros explícitos.
     /// </summary>
     public Task<AgentResponse> ApproveAsync(
         AIAgent agent,
@@ -149,8 +153,10 @@ public sealed class HarnessApprovalGate
         {
             refusal = "contexto confiável ausente";
         }
-        else if (!VinxToolPolicy.TryClassify(decision.ToolName, out var risk) || risk != VinxToolRisk.Write)
+        else if (!VinxToolPolicy.TryClassify(GetToolName(decision.Request), out var risk) || risk != VinxToolRisk.Write)
         {
+            // Classifica o nome derivado da própria solicitação, sem confiar
+            // no campo relatado pela decisão.
             refusal = "ferramenta fora da allowlist de escritas";
         }
 
