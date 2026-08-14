@@ -23,8 +23,12 @@ export function DemoAttachmentField({
         : "empty";
 
   return (
-    <Stack spacing={1} sx={{ alignItems: "flex-start" }}>
-      <Typography component="span" variant="subtitle2">
+    <Stack
+      component="fieldset"
+      spacing={1}
+      sx={{ alignItems: "flex-start", border: 0, m: 0, minWidth: 0, p: 0 }}
+    >
+      <Typography component="legend" sx={{ p: 0 }} variant="subtitle2">
         {label}
         {required ? " (obrigatório)" : null}
       </Typography>

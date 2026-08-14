@@ -1,6 +1,6 @@
 import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 import { Box, Drawer, IconButton, Stack, Typography } from "@mui/material";
-import type { ReactNode } from "react";
+import { type ReactNode, useId } from "react";
 
 type DetailDrawerProps = {
   actions?: ReactNode;
@@ -17,11 +17,23 @@ export function DetailDrawer({
   open,
   title,
 }: DetailDrawerProps) {
+  const titleId = useId();
+
   return (
-    <Drawer anchor="right" onClose={onClose} open={open}>
+    <Drawer
+      anchor="right"
+      onClose={onClose}
+      open={open}
+      slotProps={{
+        paper: {
+          "aria-labelledby": titleId,
+          role: "dialog",
+        },
+      }}
+    >
       <Box sx={{ maxWidth: "100vw", p: 3, width: { sm: 480, xs: "100vw" } }}>
         <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
-          <Typography component="h2" sx={{ flex: 1 }} variant="h6">
+          <Typography component="h2" id={titleId} sx={{ flex: 1 }} variant="h6">
             {title}
           </Typography>
           <IconButton aria-label="Fechar detalhes" onClick={onClose}>
