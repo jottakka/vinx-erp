@@ -9,6 +9,20 @@ import {
 import { createMockSessionGateway } from "./mock-session-gateway";
 import type { BootstrapSnapshot, MockSessionGateway } from "./session-contract";
 
+const genericBootstrapErrorMessage =
+  "Não foi possível carregar a sessão. Recarregue a página ou entre novamente.";
+
+/**
+ * O gateway mock produz apenas mensagens first-party, então elas podem ser
+ * exibidas; qualquer rejeição não-Error recebe um texto genérico para não
+ * expor detalhes internos ao usuário.
+ */
+function safeErrorMessage(reason: unknown): string {
+  return reason instanceof Error
+    ? reason.message
+    : genericBootstrapErrorMessage;
+}
+
 export type SessionStatus = "anonymous" | "authenticated" | "pending";
 
 type SessionContextValue = {
@@ -26,12 +40,6 @@ type SessionProviderProps = {
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error
-    ? error.message
-    : "Não foi possível entrar no protótipo";
-}
 
 export function SessionProvider({ children, gateway }: SessionProviderProps) {
   const [sessionGateway] = useState(
@@ -61,7 +69,7 @@ export function SessionProvider({ children, gateway }: SessionProviderProps) {
         }
 
         setBootstrap(null);
-        setError(errorMessage(reason));
+        setError(safeErrorMessage(reason));
         setStatus("anonymous");
       },
     );
@@ -87,7 +95,7 @@ export function SessionProvider({ children, gateway }: SessionProviderProps) {
       return true;
     } catch (reason) {
       setBootstrap(null);
-      setError(errorMessage(reason));
+      setError(safeErrorMessage(reason));
       setStatus("anonymous");
       return false;
     } finally {

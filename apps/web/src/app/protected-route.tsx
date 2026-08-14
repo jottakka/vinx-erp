@@ -1,4 +1,4 @@
-import { Box, CircularProgress, Stack, Typography } from "@mui/material";
+import { Box, Skeleton, Stack, Typography } from "@mui/material";
 import type { ReactNode } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useSession } from "../features/auth/session-provider";
@@ -18,17 +18,17 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
         aria-busy="true"
         component="main"
         sx={{
-          alignItems: "center",
           bgcolor: "background.default",
-          display: "flex",
-          justifyContent: "center",
           minHeight: "100dvh",
-          p: 2,
+          p: { sm: 4, xs: 2 },
         }}
       >
-        <Stack role="status" spacing={2} sx={{ alignItems: "center" }}>
-          <CircularProgress aria-hidden="true" />
+        <Stack role="status" spacing={2} sx={{ maxWidth: "36rem" }}>
           <Typography>Carregando aplicativo…</Typography>
+          <Skeleton aria-hidden="true" variant="rectangular" />
+          <Skeleton aria-hidden="true" height={24} variant="rectangular" />
+          <Skeleton aria-hidden="true" variant="rectangular" />
+          <Skeleton aria-hidden="true" height={160} variant="rectangular" />
         </Stack>
       </Box>
     );

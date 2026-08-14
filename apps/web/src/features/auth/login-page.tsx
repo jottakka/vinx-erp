@@ -47,14 +47,23 @@ export function LoginPage() {
     <PublicLayout>
       <Stack sx={(theme) => ({ gap: `${theme.vinx.layout.contentGap}px` })}>
         <Stack spacing={1}>
+          <Typography
+            color="primary"
+            component="p"
+            sx={{
+              fontWeight: 700,
+              letterSpacing: "0.24em",
+              textTransform: "uppercase",
+            }}
+            variant="overline"
+          >
+            Protótipo local
+          </Typography>
           <Typography component="h1" variant="h4">
             Entrada do ambiente de desenvolvimento
           </Typography>
           <Typography color="text.secondary" component="p">
             Use o perfil de desenvolvimento autorizado para validar a interface.
-          </Typography>
-          <Typography color="text.secondary" component="p" variant="body2">
-            Entrada interna do protótipo. Não é autenticação de produção.
           </Typography>
         </Stack>
         <Stack component="form" onSubmit={submit} spacing={2}>
@@ -83,6 +92,7 @@ export function LoginPage() {
           <Button
             disabled={pending}
             fullWidth
+            size="large"
             sx={(theme) => ({
               minHeight: theme.vinx.layout.controlMinHeight,
             })}
@@ -91,6 +101,14 @@ export function LoginPage() {
           >
             {pending ? "Entrando…" : "Entrar"}
           </Button>
+          <Typography
+            color="text.secondary"
+            component="p"
+            sx={{ textAlign: "center" }}
+            variant="caption"
+          >
+            Entrada interna do protótipo. Não é autenticação de produção.
+          </Typography>
         </Stack>
       </Stack>
     </PublicLayout>

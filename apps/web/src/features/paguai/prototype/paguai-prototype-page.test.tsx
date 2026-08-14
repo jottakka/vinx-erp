@@ -1,12 +1,17 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { FeedbackProvider } from "../../../shared/ui/feedback-provider";
 import { PaguaiPrototypePage } from "./paguai-prototype-page";
 
 describe("PaguaiPrototypePage", () => {
   it("exposes named tab and panel semantics for each local section", async () => {
     const user = userEvent.setup();
-    render(<PaguaiPrototypePage />);
+    render(
+      <FeedbackProvider>
+        <PaguaiPrototypePage />
+      </FeedbackProvider>,
+    );
 
     const tablist = screen.getByRole("tablist", {
       name: "Seções do Paguai",
@@ -30,7 +35,11 @@ describe("PaguaiPrototypePage", () => {
 
   it("requires an explicit company before creating a local draft", async () => {
     const user = userEvent.setup();
-    render(<PaguaiPrototypePage />);
+    render(
+      <FeedbackProvider>
+        <PaguaiPrototypePage />
+      </FeedbackProvider>,
+    );
 
     const opener = screen.getByRole("button", { name: "Nova solicitação" });
     await user.click(opener);
@@ -57,7 +66,11 @@ describe("PaguaiPrototypePage", () => {
 
   it("keeps request-list filters out of Conference and Finance", async () => {
     const user = userEvent.setup();
-    render(<PaguaiPrototypePage />);
+    render(
+      <FeedbackProvider>
+        <PaguaiPrototypePage />
+      </FeedbackProvider>,
+    );
 
     await user.click(
       screen.getByRole("combobox", { name: "Filtrar por empresa" }),
@@ -88,7 +101,11 @@ describe("PaguaiPrototypePage", () => {
 
   it("returns a concrete company request and preserves its local reason", async () => {
     const user = userEvent.setup();
-    render(<PaguaiPrototypePage />);
+    render(
+      <FeedbackProvider>
+        <PaguaiPrototypePage />
+      </FeedbackProvider>,
+    );
 
     await user.click(screen.getByRole("tab", { name: "Conferência" }));
     await user.click(
@@ -163,7 +180,11 @@ describe("PaguaiPrototypePage", () => {
 
   it("guards payment confirmation until the proof reaches ready", async () => {
     const user = userEvent.setup();
-    render(<PaguaiPrototypePage />);
+    render(
+      <FeedbackProvider>
+        <PaguaiPrototypePage />
+      </FeedbackProvider>,
+    );
 
     await user.click(screen.getByRole("tab", { name: "Financeiro" }));
     const confirm = screen.getByRole("button", { name: "Confirmar pagamento" });
@@ -184,7 +205,11 @@ describe("PaguaiPrototypePage", () => {
 
   it("edits policy audience locally and keeps the simulation boundary visible", async () => {
     const user = userEvent.setup();
-    render(<PaguaiPrototypePage />);
+    render(
+      <FeedbackProvider>
+        <PaguaiPrototypePage />
+      </FeedbackProvider>,
+    );
 
     expect(screen.getByText("Dados de demonstração")).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "Políticas" }));

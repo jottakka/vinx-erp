@@ -1,4 +1,5 @@
 import {
+  Alert,
   Button,
   Card,
   CardContent,
@@ -99,6 +100,11 @@ export function PaguaiRequestsPanel({
           </Select>
         </FormControl>
       </Stack>
+      {requests.length ? null : (
+        <Alert severity="info">
+          Nenhuma solicitação corresponde aos filtros escolhidos.
+        </Alert>
+      )}
       {requests.map((request) => (
         <Card component="article" key={request.id} variant="outlined">
           <CardContent>
@@ -182,7 +188,7 @@ export function PaguaiConferencePanel({
           ))}
         </Stack>
       ) : (
-        <Typography>Não há solicitações em conferência.</Typography>
+        <Alert severity="info">Não há solicitações em conferência.</Alert>
       )}
       {conferenceSelection ? (
         <Card
@@ -226,7 +232,7 @@ export function PaguaiConferencePanel({
           </CardContent>
         </Card>
       ) : (
-        <Typography color="text.secondary">
+        <Typography color="text.secondary" sx={{ fontStyle: "italic" }}>
           Selecione uma solicitação para conferir.
         </Typography>
       )}
@@ -279,7 +285,7 @@ export function PaguaiFinancePanel({
           </CardContent>
         </Card>
       ) : (
-        <Typography>Não há pagamentos pendentes.</Typography>
+        <Alert severity="info">Não há pagamentos pendentes.</Alert>
       )}
     </Stack>
   );

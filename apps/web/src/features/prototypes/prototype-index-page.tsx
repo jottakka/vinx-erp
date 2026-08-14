@@ -1,4 +1,12 @@
-import { Card, CardContent, Stack, Typography } from "@mui/material";
+import {
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Stack,
+  Typography,
+} from "@mui/material";
+import { Link as RouterLink } from "react-router-dom";
 import { PrototypeNotice } from "./prototype-notice";
 
 export const prototypeCatalog = [
@@ -56,14 +64,15 @@ export function PrototypeIndexPage() {
                   {prototype.description}
                 </Typography>
                 {prototype.available ? (
-                  <>
-                    <a href={prototype.path}>
+                  <Box>
+                    <Button
+                      component={RouterLink}
+                      to={prototype.path}
+                      variant="outlined"
+                    >
                       Abrir protótipo {prototype.label}
-                    </a>
-                    <Typography>
-                      {prototype.label}: em preparação nesta série
-                    </Typography>
-                  </>
+                    </Button>
+                  </Box>
                 ) : (
                   <Typography>
                     {prototype.label}: em preparação nesta série

@@ -25,11 +25,13 @@ export const appRouteCatalog = [
 
 export const prototypePath = "/prototipos" as const;
 export const paguaiPrototypePath = "/prototipos/paguai" as const;
+export const agentPath = "/agente" as const;
 
 export type AppPath =
   | (typeof appRouteCatalog)[number]["path"]
   | typeof prototypePath
-  | typeof paguaiPrototypePath;
+  | typeof paguaiPrototypePath
+  | typeof agentPath;
 export type AppNavigationLink = Pick<
   AppRouteCatalogEntry,
   "group" | "label" | "navigation" | "path"
@@ -39,6 +41,7 @@ export const APP_PATHS: readonly AppPath[] = [
   ...appRouteCatalog.map((route) => route.path),
   prototypePath,
   paguaiPrototypePath,
+  agentPath,
 ];
 
 export function isKnownAppPath(value: unknown): value is AppPath {

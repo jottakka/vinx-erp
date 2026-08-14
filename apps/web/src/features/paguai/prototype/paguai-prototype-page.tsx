@@ -1,5 +1,6 @@
-import { Stack, Tab, Tabs, Typography } from "@mui/material";
+import { Fade, Stack, Tab, Tabs, Typography } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
+import { useFeedback } from "../../../shared/ui/feedback-provider";
 import type { DemoAttachmentState } from "../../prototypes/demo-attachment-field";
 import { DetailDrawer } from "../../prototypes/detail-drawer";
 import { PrototypeNotice } from "../../prototypes/prototype-notice";
@@ -32,16 +33,34 @@ export function PaguaiPrototypePage() {
     section,
     selected,
   } = usePaguaiPrototype();
+  const { notify } = useFeedback();
   const [draftOpen, setDraftOpen] = useState(false);
   const [returnRequestId, setReturnRequestId] = useState<string | null>(null);
   const [returnDialogExited, setReturnDialogExited] = useState(true);
   const [detailOpen, setDetailOpen] = useState(false);
   const [proofState, setProofState] = useState<DemoAttachmentState>("empty");
+  const notifiedEventIds = useRef<ReadonlySet<string>>(new Set());
   const draftSequence = useRef(1);
   const returnDialogOpenerRef = useRef<HTMLButtonElement | null>(null);
   const returnedRequestFocusId = useRef<string | null>(null);
   const selectedRequestRef = useRef<HTMLElement | null>(null);
   const financeRequest = financeRequests[0];
+
+  useEffect(() => {
+    const pendingEvents = demoEvents.filter(
+      (event) => !notifiedEventIds.current.has(event.id),
+    );
+
+    if (!pendingEvents.length) {
+      return;
+    }
+
+    notifiedEventIds.current = new Set([
+      ...notifiedEventIds.current,
+      ...pendingEvents.map((event) => event.id),
+    ]);
+    notify(pendingEvents[pendingEvents.length - 1].message);
+  }, [demoEvents, notify]);
 
   useEffect(() => {
     const requestId = returnedRequestFocusId.current;
@@ -124,11 +143,6 @@ export function PaguaiPrototypePage() {
         </Typography>
       </Stack>
       <PrototypeNotice />
-      {demoEvents.map((event) => (
-        <Typography key={event.id} role="status">
-          {event.message}
-        </Typography>
-      ))}
       <Tabs
         aria-label="Seções do Paguai"
         onChange={(_, value: PaguaiSection) => actions.setSection(value)}
@@ -161,67 +175,75 @@ export function PaguaiPrototypePage() {
       </Tabs>
 
       {section === "requests" ? (
-        <Stack
-          aria-labelledby="paguai-tab-requests"
-          id="paguai-panel-requests"
-          role="tabpanel"
-        >
-          <PaguaiRequestsPanel
-            filters={filters}
-            onCompanyFilter={actions.setCompanyFilter}
-            onNewRequest={() => setDraftOpen(true)}
-            onSelect={(id) => {
-              actions.select(id);
-              setDetailOpen(true);
-            }}
-            onStatusFilter={actions.setStatusFilter}
-            requests={requests}
-          />
-        </Stack>
+        <Fade appear in key="requests">
+          <Stack
+            aria-labelledby="paguai-tab-requests"
+            id="paguai-panel-requests"
+            role="tabpanel"
+          >
+            <PaguaiRequestsPanel
+              filters={filters}
+              onCompanyFilter={actions.setCompanyFilter}
+              onNewRequest={() => setDraftOpen(true)}
+              onSelect={(id) => {
+                actions.select(id);
+                setDetailOpen(true);
+              }}
+              onStatusFilter={actions.setStatusFilter}
+              requests={requests}
+            />
+          </Stack>
+        </Fade>
       ) : null}
 
       {section === "conference" ? (
-        <Stack
-          aria-labelledby="paguai-tab-conference"
-          id="paguai-panel-conference"
-          role="tabpanel"
-        >
-          <PaguaiConferencePanel
-            onReturn={openReturnDialog}
-            onSelect={actions.select}
-            requests={conferenceRequests}
-            selected={selected}
-            selectedRequestRef={selectedRequestRef}
-          />
-        </Stack>
+        <Fade appear in key="conference">
+          <Stack
+            aria-labelledby="paguai-tab-conference"
+            id="paguai-panel-conference"
+            role="tabpanel"
+          >
+            <PaguaiConferencePanel
+              onReturn={openReturnDialog}
+              onSelect={actions.select}
+              requests={conferenceRequests}
+              selected={selected}
+              selectedRequestRef={selectedRequestRef}
+            />
+          </Stack>
+        </Fade>
       ) : null}
 
       {section === "finance" ? (
-        <Stack
-          aria-labelledby="paguai-tab-finance"
-          id="paguai-panel-finance"
-          role="tabpanel"
-        >
-          <PaguaiFinancePanel
-            onConfirm={confirmPayment}
-            onProofChange={setProofState}
-            proofState={proofState}
-            request={financeRequest}
-          />
-        </Stack>
+        <Fade appear in key="finance">
+          <Stack
+            aria-labelledby="paguai-tab-finance"
+            id="paguai-panel-finance"
+            role="tabpanel"
+          >
+            <PaguaiFinancePanel
+              onConfirm={confirmPayment}
+              onProofChange={setProofState}
+              proofState={proofState}
+              request={financeRequest}
+            />
+          </Stack>
+        </Fade>
       ) : null}
 
       {section === "policies" ? (
-        <Stack
-          aria-labelledby="paguai-tab-policies"
-          id="paguai-panel-policies"
-          role="tabpanel"
-        >
-          <PaguaiPoliciesPanel
-            audience={policyAudience}
-            onAudienceChange={actions.setPolicyAudience}
-          />
-        </Stack>
+        <Fade appear in key="policies">
+          <Stack
+            aria-labelledby="paguai-tab-policies"
+            id="paguai-panel-policies"
+            role="tabpanel"
+          >
+            <PaguaiPoliciesPanel
+              audience={policyAudience}
+              onAudienceChange={actions.setPolicyAudience}
+            />
+          </Stack>
+        </Fade>
       ) : null}
 
       <PaguaiDraftDialog

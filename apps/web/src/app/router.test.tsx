@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createMockSessionGateway } from "../features/auth/mock-session-gateway";
 import type { MockSessionGateway } from "../features/auth/session-contract";
 import { SessionProvider } from "../features/auth/session-provider";
+import { FeedbackProvider } from "../shared/ui/feedback-provider";
 import { selectPrototypeRoutes } from "./app-route-manifest";
 import { createAppRouter } from "./router";
 import { VinxThemeProvider } from "./theme/vinx-theme-provider";
@@ -16,7 +17,9 @@ function renderRoute(path: string, gateway: MockSessionGateway) {
   render(
     <VinxThemeProvider>
       <SessionProvider gateway={gateway}>
-        <RouterProvider router={router} />
+        <FeedbackProvider>
+          <RouterProvider router={router} />
+        </FeedbackProvider>
       </SessionProvider>
     </VinxThemeProvider>,
   );

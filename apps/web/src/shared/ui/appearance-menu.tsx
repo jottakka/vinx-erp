@@ -1,5 +1,5 @@
 import PaletteOutlinedIcon from "@mui/icons-material/PaletteOutlined";
-import { IconButton, Menu, MenuItem } from "@mui/material";
+import { Divider, IconButton, Menu, MenuItem } from "@mui/material";
 import { useColorScheme } from "@mui/material/styles";
 import { useState } from "react";
 import { useVisualPreferences } from "../../app/theme/vinx-theme-provider";
@@ -73,6 +73,7 @@ export function AppearanceMenu() {
         >
           Tema: escuro
         </MenuItem>
+        <Divider sx={{ my: 0.5 }} variant="middle" />
         <MenuItem
           aria-checked={density === "comfortable"}
           onClick={() => selectDensity("comfortable")}

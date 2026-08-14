@@ -4,12 +4,14 @@ import HelpOutlinedIcon from "@mui/icons-material/HelpOutlined";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import ScienceOutlinedIcon from "@mui/icons-material/ScienceOutlined";
+import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
 import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
-import { CircularProgress, Stack, Typography } from "@mui/material";
+import { Skeleton, Stack } from "@mui/material";
 import { lazy, type ReactElement, Suspense } from "react";
 import {
   type AppRouteCatalogEntry,
+  agentPath,
   appRouteCatalog,
   type AppNavigationLink as CatalogNavigationLink,
 } from "../shared/routing/app-paths";
@@ -111,11 +113,13 @@ function PrototypeRouteFallback() {
     <Stack
       aria-label="Carregando protótipo"
       role="status"
-      spacing={1}
-      sx={{ alignItems: "center", py: 6 }}
+      spacing={2}
+      sx={{ maxWidth: "36rem", py: 4 }}
     >
-      <CircularProgress aria-hidden />
-      <Typography>Carregando protótipo…</Typography>
+      <Skeleton aria-hidden variant="rectangular" width="60%" />
+      <Skeleton aria-hidden height={24} variant="rectangular" />
+      <Skeleton aria-hidden height={120} variant="rectangular" />
+      <Skeleton aria-hidden height={120} variant="rectangular" />
     </Stack>
   );
 }
@@ -164,6 +168,35 @@ const prototypeRoutes: readonly AppRouteDefinition[] = import.meta.env.DEV
   ? createPrototypeRoutes()
   : [];
 
+function createAgentRoutes(): readonly AppRouteDefinition[] {
+  if (!import.meta.env.DEV) {
+    return [];
+  }
+
+  const AgentPage = lazy(() =>
+    import("../features/agent/agent-page").then((module) => ({
+      default: module.AgentPage,
+    })),
+  );
+
+  return [
+    {
+      element: (
+        <Suspense fallback={<PrototypeRouteFallback />}>
+          <AgentPage />
+        </Suspense>
+      ),
+      group: "workspace",
+      icon: SmartToyOutlinedIcon,
+      label: "Agente",
+      navigation: true,
+      path: agentPath,
+    },
+  ];
+}
+
+const agentRoutes: readonly AppRouteDefinition[] = createAgentRoutes();
+
 export function selectPrototypeRoutes(enabled: boolean) {
   return enabled ? prototypeRoutes : [];
 }
@@ -171,4 +204,5 @@ export function selectPrototypeRoutes(enabled: boolean) {
 export const appRouteManifest: readonly AppRouteDefinition[] = [
   ...productRouteManifest,
   ...selectPrototypeRoutes(import.meta.env.DEV),
+  ...agentRoutes,
 ];

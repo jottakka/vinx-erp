@@ -168,3 +168,43 @@ test("Scenario: theme, keyboard, narrow viewport and axe remain usable", async (
     .analyze();
   expect(results.violations).toEqual([]);
 });
+
+test("Scenario: agent dock shares the local conversation with the dedicated page", async ({
+  page,
+}) => {
+  await enterHome(page);
+  await page.getByRole("button", { name: "Abrir painel do agente" }).click();
+  const dock = page.getByRole("complementary", { name: "Painel do agente" });
+  await expect(dock).toBeVisible();
+
+  await dock
+    .getByLabel("Mensagem para o agente")
+    .fill("Preciso antecipar um pagamento");
+  await dock.getByRole("button", { name: "Enviar" }).click();
+  await expect(dock.getByText("Preciso antecipar um pagamento")).toBeVisible();
+  await expect(dock.getByText(/fontes locais/i)).toBeVisible();
+  await expect(
+    dock.getByRole("button", { name: "Aprovar execução" }),
+  ).toBeVisible();
+
+  await dock
+    .getByRole("button", { name: "Abrir página dedicada do agente" })
+    .click();
+  await expect(page).toHaveURL(/\/agente$/);
+  await expect(page.getByRole("heading", { name: "Agente" })).toBeVisible();
+  await expect(page.getByText("Preciso antecipar um pagamento")).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "Voltar ao painel do agente" })
+    .click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(
+    page.getByRole("complementary", { name: "Painel do agente" }),
+  ).toBeVisible();
+  await expect(page.getByText("Preciso antecipar um pagamento")).toBeVisible();
+
+  const agentScan = await new AxeBuilder({ page })
+    .include("#vinx-agent-dock")
+    .analyze();
+  expect(agentScan.violations).toEqual([]);
+});

@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { DemoAttachmentField } from "./demo-attachment-field";
 import { DetailDrawer } from "./detail-drawer";
@@ -44,9 +45,21 @@ describe("PrototypeIndexPage", () => {
   it.each(["Paguai", "Kanban", "Atendimento", "Pessoas"])(
     "lists the planned %s surface honestly",
     (name) => {
-      render(<PrototypeIndexPage />);
+      render(
+        <MemoryRouter>
+          <PrototypeIndexPage />
+        </MemoryRouter>,
+      );
 
       expect(screen.getByRole("heading", { name })).toBeVisible();
+
+      if (name === "Paguai") {
+        expect(
+          screen.getByRole("link", { name: `Abrir protótipo ${name}` }),
+        ).toBeVisible();
+        return;
+      }
+
       expect(
         screen.getByText(`${name}: em preparação nesta série`),
       ).toBeVisible();

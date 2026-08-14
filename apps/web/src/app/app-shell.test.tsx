@@ -112,6 +112,41 @@ describe("AppShell", () => {
     }
   });
 
+  it("identifies the signed-in user in the header", async () => {
+    renderShell("/", await signedInGateway());
+
+    await screen.findByRole("heading", { name: "Início" });
+    expect(screen.getByLabelText("Sessão ativa: Maria")).toBeInTheDocument();
+    expect(screen.getByText("M")).toBeInTheDocument();
+  });
+
+  it("collapses and expands the desktop navigation without losing access", async () => {
+    const user = userEvent.setup();
+    const router = renderShell("/", await signedInGateway());
+    await screen.findByRole("heading", { name: "Início" });
+
+    const collapseButton = screen.getByRole("button", {
+      name: "Recolher navegação lateral",
+    });
+    await user.click(collapseButton);
+
+    const navigation = screen.getByRole("navigation", {
+      name: "Navegação lateral",
+    });
+    expect(
+      within(navigation).getByRole("link", { name: "Ajuda" }),
+    ).toBeInTheDocument();
+    expect(within(navigation).queryByText("Suporte")).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Expandir navegação lateral" }),
+    );
+    expect(within(navigation).getByText("Suporte")).toBeInTheDocument();
+
+    await user.click(within(navigation).getByRole("link", { name: "Ajuda" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/ajuda"));
+  });
+
   it("navigates from a module card to its preparation route", async () => {
     const user = userEvent.setup();
     const router = renderShell("/", await signedInGateway());

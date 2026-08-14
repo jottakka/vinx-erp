@@ -9,6 +9,7 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import { Link as RouterLink } from "react-router-dom";
 import { useSession } from "../features/auth/session-provider";
 import {
@@ -49,18 +50,15 @@ export function HomePage({ navigationLinks }: HomePageProps) {
         eyebrow={`Olá, ${bootstrap.user.name}`}
         title="Início"
       />
-      <Card variant="outlined">
-        <CardContent>
-          <Stack spacing={1}>
-            <Typography variant="h6">Contexto atual</Typography>
-            <Typography color="text.secondary">
-              Consulte empresas e abra áreas em preparação sem misturar
-              contextos ou inventar dados operacionais.
-            </Typography>
-          </Stack>
-        </CardContent>
-      </Card>
-      <Card component="section" variant="outlined">
+      <Card
+        component="section"
+        sx={{
+          borderColor: "divider",
+          borderLeft: 3,
+          borderLeftColor: "primary.main",
+        }}
+        variant="outlined"
+      >
         <CardContent>
           <Stack spacing={2}>
             <Typography component="h2" variant="h6">
@@ -68,7 +66,8 @@ export function HomePage({ navigationLinks }: HomePageProps) {
             </Typography>
             <Typography color="text.secondary">
               Consulte a ajuda para entender a navegação, suas empresas e as
-              preferências visuais.
+              preferências visuais. As áreas abaixo respeitam o contexto da
+              empresa selecionada, sem misturar dados operacionais.
             </Typography>
             <Box>
               <Button component={RouterLink} to="/ajuda" variant="outlined">
@@ -80,6 +79,18 @@ export function HomePage({ navigationLinks }: HomePageProps) {
       </Card>
       <Stack component="section" spacing={2}>
         <Stack spacing={0.5}>
+          <Typography
+            color="primary"
+            component="p"
+            sx={{
+              fontWeight: 700,
+              letterSpacing: "0.2em",
+              textTransform: "uppercase",
+            }}
+            variant="overline"
+          >
+            Contexto
+          </Typography>
           <Typography component="h2" variant="h6">
             Empresas autorizadas
           </Typography>
@@ -102,7 +113,13 @@ export function HomePage({ navigationLinks }: HomePageProps) {
                   <Stack spacing={1.5}>
                     <CompanyBadge id={company.id} name={company.name} />
                     <Typography color="text.secondary">
-                      Empresa disponível nesta visualização.
+                      {company.capabilities.length
+                        ? `Acesso autorizado a ${company.capabilities.length} ${
+                            company.capabilities.length === 1
+                              ? "capacidade"
+                              : "capacidades"
+                          } desta empresa.`
+                        : "Nenhuma capacidade liberada para esta empresa."}
                     </Typography>
                   </Stack>
                 </CardContent>
@@ -126,6 +143,18 @@ export function HomePage({ navigationLinks }: HomePageProps) {
       </Stack>
       <Stack component="section" spacing={2}>
         <Stack spacing={0.5}>
+          <Typography
+            color="primary"
+            component="p"
+            sx={{
+              fontWeight: 700,
+              letterSpacing: "0.2em",
+              textTransform: "uppercase",
+            }}
+            variant="overline"
+          >
+            Módulos
+          </Typography>
           <Typography component="h2" variant="h6">
             Estrutura em evolução
           </Typography>
@@ -151,15 +180,43 @@ export function HomePage({ navigationLinks }: HomePageProps) {
             const prototypePath = getAvailablePrototypePath(route.path);
 
             return (
-              <Card component="li" key={route.path} variant="outlined">
+              <Card
+                component="li"
+                key={route.path}
+                sx={(theme) => ({
+                  transition: theme.transitions.create(
+                    ["transform", "box-shadow"],
+                    { duration: theme.transitions.duration.shortest },
+                  ),
+                  "&:hover": {
+                    boxShadow: theme.shadows[4],
+                    transform: "translateY(-2px)",
+                  },
+                })}
+                variant="outlined"
+              >
                 <CardActionArea
                   component={RouterLink}
                   sx={{ height: "100%" }}
                   to={route.path}
                 >
                   <CardContent>
-                    <Stack direction="row" spacing={1.5}>
-                      <Icon color="primary" />
+                    <Stack spacing={1.5}>
+                      <Box
+                        aria-hidden="true"
+                        sx={(theme) => ({
+                          alignItems: "center",
+                          bgcolor: alpha(theme.palette.primary.main, 0.12),
+                          borderRadius: 2,
+                          color: "primary.main",
+                          display: "flex",
+                          height: 44,
+                          justifyContent: "center",
+                          width: 44,
+                        })}
+                      >
+                        <Icon />
+                      </Box>
                       <Stack spacing={0.5}>
                         <Typography component="h3" variant="h6">
                           {route.label}
