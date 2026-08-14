@@ -1,4 +1,7 @@
-import type { CompanyAppearanceSlot } from "../../app/theme/company-appearance-slot";
+import {
+  type CompanyAppearanceSlot,
+  resolveCompanyAppearanceSlot,
+} from "../../app/theme/company-appearance-slot";
 
 const localCompanySlots: Readonly<Record<string, CompanyAppearanceSlot>> = {
   alfa: "alpha",
@@ -29,6 +32,8 @@ export function resolveCompanyAppearance(
 ): { monogram: string; slot: CompanyAppearanceSlot } {
   return {
     monogram: createMonogram(name),
-    slot: localCompanySlots[id.trim().toLowerCase()] ?? "neutral",
+    slot:
+      localCompanySlots[id.trim().toLowerCase()] ??
+      resolveCompanyAppearanceSlot(id),
   };
 }

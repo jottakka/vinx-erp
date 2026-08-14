@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createVinxStorageManager, vinxTheme } from "./create-vinx-theme";
+import {
+  createVinxStorageManager,
+  createVinxTheme,
+  vinxTheme,
+} from "./create-vinx-theme";
 import { readDensity } from "./visual-preferences";
 
 function relativeLuminance(color: string) {
@@ -33,10 +37,9 @@ function contrastRatio(foreground: string, background: string) {
 }
 
 const palettes = [
-  vinxTheme.colorSchemes.light.palette,
-  vinxTheme.colorSchemes.dark.palette,
+  ["light", vinxTheme.colorSchemes.light.palette] as const,
+  ["dark", vinxTheme.colorSchemes.dark.palette] as const,
 ];
-const light = vinxTheme.colorSchemes.light.palette;
 
 describe("vinx semantic theme", () => {
   beforeEach(() => {
@@ -51,14 +54,63 @@ describe("vinx semantic theme", () => {
     expect(vinxTheme.colorSchemes.light.palette.navigation).toBeDefined();
   });
 
-  it("uses valid contrast pairs for text, focus and every company slot", () => {
-    expect(
-      contrastRatio(light.text.primary, light.background.default),
-    ).toBeGreaterThanOrEqual(4.5);
-    expect(
-      contrastRatio(light.primary.main, light.background.default),
-    ).toBeGreaterThanOrEqual(3);
-    for (const palette of palettes) {
+  it("derives smaller usable layout tokens for compact density", () => {
+    const comfortable = createVinxTheme("comfortable");
+    const compact = createVinxTheme("compact");
+
+    expect(compact.vinx.layout.contentGap).toBeLessThan(
+      comfortable.vinx.layout.contentGap,
+    );
+    expect(compact.vinx.layout.controlMinHeight).toBeGreaterThanOrEqual(24);
+  });
+
+  it.each([
+    [
+      "light text on default",
+      vinxTheme.colorSchemes.light.palette.text.primary,
+      vinxTheme.colorSchemes.light.palette.background.default,
+    ],
+    [
+      "light text on paper",
+      vinxTheme.colorSchemes.light.palette.text.primary,
+      vinxTheme.colorSchemes.light.palette.background.paper,
+    ],
+    [
+      "light primary on default",
+      vinxTheme.colorSchemes.light.palette.primary.main,
+      vinxTheme.colorSchemes.light.palette.background.default,
+    ],
+    [
+      "light primary on paper",
+      vinxTheme.colorSchemes.light.palette.primary.main,
+      vinxTheme.colorSchemes.light.palette.background.paper,
+    ],
+    [
+      "dark text on default",
+      vinxTheme.colorSchemes.dark.palette.text.primary,
+      vinxTheme.colorSchemes.dark.palette.background.default,
+    ],
+    [
+      "dark text on paper",
+      vinxTheme.colorSchemes.dark.palette.text.primary,
+      vinxTheme.colorSchemes.dark.palette.background.paper,
+    ],
+    [
+      "dark primary on default",
+      vinxTheme.colorSchemes.dark.palette.primary.main,
+      vinxTheme.colorSchemes.dark.palette.background.default,
+    ],
+    [
+      "dark primary on paper",
+      vinxTheme.colorSchemes.dark.palette.primary.main,
+      vinxTheme.colorSchemes.dark.palette.background.paper,
+    ],
+  ])("keeps AA contrast for %s", (_name, foreground, background) => {
+    expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("uses valid contrast pairs for every company slot", () => {
+    for (const [, palette] of palettes) {
       for (const slot of Object.values(palette.companyAccent)) {
         expect(
           contrastRatio(slot.contrastText, slot.main),
@@ -67,7 +119,7 @@ describe("vinx semantic theme", () => {
     }
   });
 
-  it("returns MUI defaults when storage is blocked or contains an invalid mode", () => {
+  it("normalizes mode storage defaults and invalid values to light", () => {
     const events = new Map<string, EventListener>();
     const throwingWindow = {
       localStorage: {
@@ -89,8 +141,8 @@ describe("vinx semantic theme", () => {
       manager({ key: "mui-mode", storageWindow: throwingWindow }).set("dark"),
     ).not.toThrow();
     expect(
-      manager({ key: "mui-mode", storageWindow: throwingWindow }).get("system"),
-    ).toBe("system");
+      manager({ key: "mui-mode", storageWindow: throwingWindow }).get("dark"),
+    ).toBe("light");
     expect(
       manager({ key: "mui-mode", storageWindow: throwingWindow }).subscribe(
         () => {},
@@ -106,11 +158,65 @@ describe("vinx semantic theme", () => {
       removeEventListener: () => {},
     } as unknown as Window;
 
+    const missingModeWindow = {
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {},
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as Window;
+    expect(
+      manager({ key: "mui-mode", storageWindow: missingModeWindow }).get(
+        "dark",
+      ),
+    ).toBe("light");
+
     expect(
       manager({ key: "mui-mode", storageWindow: invalidModeWindow }).get(
-        "system",
+        "dark",
       ),
-    ).toBe("system");
+    ).toBe("light");
+
+    const legacySystemWindow = {
+      ...invalidModeWindow,
+      localStorage: { getItem: () => "system", setItem: () => {} },
+    } as unknown as Window;
+    expect(
+      manager({ key: "mui-mode", storageWindow: legacySystemWindow }).get(
+        "dark",
+      ),
+    ).toBe("light");
+  });
+
+  it("normalizes invalid mode storage events to light", () => {
+    let listener: ((event: StorageEvent) => void) | undefined;
+    const modeWindow = {
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {},
+      },
+      addEventListener: (_type: string, nextListener: EventListener) => {
+        listener = nextListener as (event: StorageEvent) => void;
+      },
+      removeEventListener: () => {},
+    } as unknown as Window;
+    const manager = createVinxStorageManager({ key: "vinx.visual.v1" });
+    const changes: unknown[] = [];
+
+    manager({ key: "mui-mode", storageWindow: modeWindow }).subscribe((value) =>
+      changes.push(value),
+    );
+    listener?.({
+      key: "vinx.visual.v1.mui-mode",
+      newValue: "system",
+    } as StorageEvent);
+    listener?.({
+      key: "vinx.visual.v1.mui-mode",
+      newValue: null,
+    } as StorageEvent);
+
+    expect(changes).toEqual(["light", "light"]);
   });
 
   it("returns MUI defaults for invalid MUI color-scheme keys in reads and subscriptions", () => {
@@ -134,7 +240,7 @@ describe("vinx semantic theme", () => {
       });
       const changes: unknown[] = [];
 
-      expect(schemeStorage.get("light")).toBe("light");
+      expect(schemeStorage.get("dark")).toBe("dark");
       schemeStorage.subscribe((value) => changes.push(value));
       listener?.({
         key: `vinx.visual.v1.${storageKey}`,

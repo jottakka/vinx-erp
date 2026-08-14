@@ -1,8 +1,20 @@
-import { createTheme, type StorageManager } from "@mui/material/styles";
+import {
+  createTheme,
+  type StorageManager,
+  type Theme,
+} from "@mui/material/styles";
 import "./theme-augmentation";
 import { darkPalette, lightPalette } from "./palette-primitives";
+import type { Density } from "./visual-preferences";
 
-const supportedModes = new Set(["light", "dark", "system"]);
+export type VinxLayoutTokens = {
+  contentGap: number;
+  contentPadding: number;
+  controlMinHeight: number;
+  navigationWidth: number;
+};
+
+const supportedModes = new Set(["light", "dark"]);
 const supportedSchemes = new Set(["light", "dark"]);
 const modeKeys = new Set(["mui-mode", "mode"]);
 const schemeKeys = new Set(["mui-color-scheme", "scheme-light", "scheme-dark"]);
@@ -33,19 +45,20 @@ export function createVinxStorageManager({
           const value = storageWindow?.localStorage.getItem(prefixedKey);
 
           if (value === null || value === undefined) {
-            return defaultValue;
+            return modeKey ? "light" : defaultValue;
           }
 
-          if (
-            (modeKey && !supportedModes.has(value)) ||
-            (schemeKey && !supportedSchemes.has(value))
-          ) {
+          if (modeKey && !supportedModes.has(value)) {
+            return "light";
+          }
+
+          if (schemeKey && !supportedSchemes.has(value)) {
             return defaultValue;
           }
 
           return value;
         } catch {
-          return defaultValue;
+          return modeKey ? "light" : defaultValue;
         }
       },
       set(value: unknown) {
@@ -66,9 +79,17 @@ export function createVinxStorageManager({
           }
 
           if (
+            modeKey &&
+            (event.newValue === null || !supportedModes.has(event.newValue))
+          ) {
+            handler("light");
+            return;
+          }
+
+          if (
+            schemeKey &&
             event.newValue !== null &&
-            ((modeKey && !supportedModes.has(event.newValue)) ||
-              (schemeKey && !supportedSchemes.has(event.newValue)))
+            !supportedSchemes.has(event.newValue)
           ) {
             handler(undefined);
             return;
@@ -94,22 +115,40 @@ export function createVinxStorageManager({
   };
 }
 
-const baseVinxTheme = createTheme({
-  cssVariables: {
-    colorSchemeSelector: "data",
-    cssVarPrefix: "vinx",
+const layoutTokens: Record<Density, VinxLayoutTokens> = {
+  comfortable: {
+    contentGap: 24,
+    contentPadding: 32,
+    controlMinHeight: 40,
+    navigationWidth: 280,
   },
-  colorSchemes: {
-    light: { palette: lightPalette },
-    dark: { palette: darkPalette },
+  compact: {
+    contentGap: 16,
+    contentPadding: 24,
+    controlMinHeight: 32,
+    navigationWidth: 240,
   },
-});
+};
 
 type VinxColorSchemes = {
   light: { palette: typeof lightPalette };
   dark: { palette: typeof darkPalette };
 };
 
-export const vinxTheme = baseVinxTheme as typeof baseVinxTheme & {
+export function createVinxTheme(density: Density): Theme & {
   colorSchemes: VinxColorSchemes;
-};
+} {
+  return createTheme({
+    cssVariables: {
+      colorSchemeSelector: "data",
+      cssVarPrefix: "vinx",
+    },
+    colorSchemes: {
+      light: { palette: lightPalette },
+      dark: { palette: darkPalette },
+    },
+    vinx: { layout: layoutTokens[density] },
+  }) as Theme & { colorSchemes: VinxColorSchemes };
+}
+
+export const vinxTheme = createVinxTheme("comfortable");

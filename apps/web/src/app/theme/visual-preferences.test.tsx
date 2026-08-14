@@ -3,10 +3,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { vinxTheme } from "./create-vinx-theme";
-import {
-  VinxThemeProvider,
-  VisualPreferencesControls,
-} from "./vinx-theme-provider";
+import { useVisualPreferences, VinxThemeProvider } from "./vinx-theme-provider";
 
 function createMatchMediaMock(initialMatches: boolean) {
   let matches = initialMatches;
@@ -44,19 +41,30 @@ function createMatchMediaMock(initialMatches: boolean) {
 }
 
 function PreferenceConsumer() {
-  const { colorScheme, mode } = useColorScheme();
+  const { colorScheme, mode, setMode } = useColorScheme();
+  const { density, setDensity } = useVisualPreferences();
   const theme = useTheme();
 
   return (
     <>
-      <VisualPreferencesControls />
+      <button onClick={() => setMode("light")} type="button">
+        Usar modo claro
+      </button>
+      <button onClick={() => setMode("dark")} type="button">
+        Usar modo escuro
+      </button>
+      <button onClick={() => setDensity("compact")} type="button">
+        Usar densidade compacta
+      </button>
       <output data-testid="selected-mode">{mode ?? "unresolved"}</output>
+      <output data-testid="selected-density">{density}</output>
       <output data-testid="surface-scheme">
         {colorScheme ?? "unresolved"}
       </output>
       <output data-testid="surface-background">
         {theme.palette.background.default}
       </output>
+      <output data-testid="content-gap">{theme.vinx.layout.contentGap}</output>
     </>
   );
 }
@@ -84,11 +92,7 @@ describe("visual preferences", () => {
     vi.stubGlobal("matchMedia", system.matchMedia);
     renderHarness();
 
-    const modeControl = await screen.findByRole("combobox", {
-      name: "Modo de cor",
-    });
-    expect(modeControl).not.toBeDisabled();
-    await user.selectOptions(modeControl, "light");
+    await user.click(screen.getByRole("button", { name: "Usar modo claro" }));
     expect(screen.getByTestId("selected-mode")).toHaveTextContent("light");
     expect(screen.getByTestId("surface-scheme")).toHaveTextContent("light");
 
@@ -101,20 +105,20 @@ describe("visual preferences", () => {
     );
   });
 
-  it("follows a later system scheme change while mode remains system", () => {
+  it("keeps default light mode when the system scheme changes later", () => {
     const system = createMatchMediaMock(false);
     vi.stubGlobal("matchMedia", system.matchMedia);
     renderHarness();
 
-    expect(screen.getByTestId("selected-mode")).toHaveTextContent("system");
+    expect(screen.getByTestId("selected-mode")).toHaveTextContent("light");
     expect(screen.getByTestId("surface-scheme")).toHaveTextContent("light");
 
     act(() => {
       system.emit(true);
     });
 
-    expect(screen.getByTestId("selected-mode")).toHaveTextContent("system");
-    expect(screen.getByTestId("surface-scheme")).toHaveTextContent("dark");
+    expect(screen.getByTestId("selected-mode")).toHaveTextContent("light");
+    expect(screen.getByTestId("surface-scheme")).toHaveTextContent("light");
   });
 
   it("restores compact density and an explicit mode in a fresh provider", async () => {
@@ -123,23 +127,17 @@ describe("visual preferences", () => {
     vi.stubGlobal("matchMedia", system.matchMedia);
     const firstRender = renderHarness();
 
-    await user.selectOptions(
-      await screen.findByRole("combobox", { name: "Modo de cor" }),
-      "dark",
-    );
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Densidade" }),
-      "compact",
+    await user.click(screen.getByRole("button", { name: "Usar modo escuro" }));
+    await user.click(
+      screen.getByRole("button", { name: "Usar densidade compacta" }),
     );
     firstRender.unmount();
 
     renderHarness();
 
-    expect(
-      await screen.findByRole("combobox", { name: "Modo de cor" }),
-    ).toHaveValue("dark");
-    expect(screen.getByRole("combobox", { name: "Densidade" })).toHaveValue(
-      "compact",
-    );
+    expect(screen.getByTestId("selected-mode")).toHaveTextContent("dark");
+    expect(screen.getByTestId("surface-scheme")).toHaveTextContent("dark");
+    expect(screen.getByTestId("selected-density")).toHaveTextContent("compact");
+    expect(screen.getByTestId("content-gap")).toHaveTextContent("16");
   });
 });

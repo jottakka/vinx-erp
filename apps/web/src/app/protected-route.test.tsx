@@ -1,21 +1,25 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { LoginPage } from "../features/auth/login-page";
 import { createMockSessionGateway } from "../features/auth/mock-session-gateway";
+import type { MockSessionGateway } from "../features/auth/session-contract";
 import { SessionProvider } from "../features/auth/session-provider";
 import { ProtectedRoute } from "./protected-route";
-import { PrototypeEntryPage } from "./prototype-entry-page";
+import { VinxThemeProvider } from "./theme/vinx-theme-provider";
 
-function renderPrototypeRoute(initialPath: string) {
+function ProtectedContent() {
+  return <h1>Conteúdo protegido</h1>;
+}
+
+function renderProtectedRoute(initialPath: string) {
   const router = createMemoryRouter(
     [
       { element: <LoginPage />, path: "/login" },
       {
         element: (
           <ProtectedRoute>
-            <PrototypeEntryPage />
+            <ProtectedContent />
           </ProtectedRoute>
         ),
         path: "/protected",
@@ -25,34 +29,59 @@ function renderPrototypeRoute(initialPath: string) {
   );
 
   return render(
-    <SessionProvider gateway={createMockSessionGateway()}>
-      <RouterProvider router={router} />
-    </SessionProvider>,
+    <VinxThemeProvider>
+      <SessionProvider gateway={createMockSessionGateway()}>
+        <RouterProvider router={router} />
+      </SessionProvider>
+    </VinxThemeProvider>,
   );
 }
 
 describe("ProtectedRoute", () => {
   it("redirects an anonymous deep link to the login route", async () => {
-    renderPrototypeRoute("/protected");
+    renderProtectedRoute("/protected");
 
     expect(
-      await screen.findByRole("heading", { name: "Entrar" }),
+      await screen.findByRole("heading", {
+        name: "Entrada do ambiente de desenvolvimento",
+      }),
     ).toBeVisible();
-    expect(screen.queryByText("Protótipo autenticado")).not.toBeInTheDocument();
+    expect(screen.queryByText("Conteúdo protegido")).not.toBeInTheDocument();
   });
 
-  it("redirects to login after logout", async () => {
-    const user = userEvent.setup();
-    renderPrototypeRoute("/login");
-
-    await user.click(await screen.findByRole("button", { name: "Entrar" }));
-    await user.click(
-      await screen.findByRole("button", { name: "Sair do protótipo" }),
+  it("shows an accessible loading state while protected bootstrap is pending", () => {
+    const gateway: MockSessionGateway = {
+      getBootstrap: () => new Promise(() => {}),
+      login: async () => {
+        throw new Error("not used");
+      },
+      logout: async () => {},
+    };
+    const router = createMemoryRouter(
+      [
+        {
+          element: (
+            <ProtectedRoute>
+              <ProtectedContent />
+            </ProtectedRoute>
+          ),
+          path: "/protected",
+        },
+      ],
+      { initialEntries: ["/protected"] },
     );
 
-    expect(
-      await screen.findByRole("heading", { name: "Entrar" }),
-    ).toBeVisible();
-    expect(screen.queryByText("Protótipo autenticado")).not.toBeInTheDocument();
+    render(
+      <VinxThemeProvider>
+        <SessionProvider gateway={gateway}>
+          <RouterProvider router={router} />
+        </SessionProvider>
+      </VinxThemeProvider>,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Carregando aplicativo",
+    );
+    expect(screen.queryByText("Conteúdo protegido")).not.toBeInTheDocument();
   });
 });
