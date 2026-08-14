@@ -46,6 +46,7 @@
 - `apps/web/src/app/app-shell.tsx`
 - `apps/web/src/app/app-shell.test.tsx`
 - `apps/web/src/app/home-page.tsx`
+- `apps/web/src/app/help-page.tsx`
 - `apps/web/src/app/router.tsx`
 - `apps/web/src/app/router.test.tsx`
 - `apps/web/src/features/auth/login-page.tsx`
@@ -572,6 +573,7 @@ git commit -m "refactor(web): split workspace shell rendering"
 
 - Modify: `apps/web/e2e/app-shell-home.spec.ts`
 - Modify: `apps/web/e2e/visual-theme-login.spec.ts`
+- Modify: `apps/web/src/app/help-page.tsx`
 - Modify: `docs/manuals/frontend/app-shell-home.md`
 - Modify: `docs/manuals/frontend/visual-preferences.md`
 - Create: `docs/verification/frontend-workspace-shell-test-cases.md`
@@ -606,13 +608,19 @@ Replace the obsolete `Tema: sistema` scenario in
 explicit light mode; it proves that OS changes no longer override the chosen
 theme.
 
+Add a browser assertion on `/ajuda` that the appearance guidance names only
+the light and dark themes and does not mention a system theme. This must fail
+before updating the stale Help copy.
+
 - [ ] **Step 2: Run the focused browser scenario**
 
 ```bash
-npm --prefix apps/web run test:e2e -- app-shell-home.spec.ts
+npm --prefix apps/web run test:e2e -- app-shell-home.spec.ts visual-theme-login.spec.ts
 ```
 
-Expected before final fixes: FAIL at the first missing route or copy mismatch.
+Expected before final fixes: FAIL on the obsolete `Tema: sistema` selector or
+the stale Help copy; the module-route scenario may already pass because those
+routes were implemented test-first in Task 2.
 
 - [ ] **Step 3: Update manuals and verification manifest**
 
@@ -633,6 +641,9 @@ o escopo futuro. Eles ainda não exibem dados nem ações operacionais.
 Map each BDD to its Vitest/Playwright path and current status in
 `docs/verification/frontend-workspace-shell-test-cases.md`.
 
+Update `help-page.tsx` to describe exactly `tema claro ou escuro` while keeping
+density guidance unchanged.
+
 - [ ] **Step 4: Run the full focused frontend gate**
 
 ```bash
@@ -641,6 +652,7 @@ npm --prefix apps/web run format:check
 npm --prefix apps/web test -- --run
 npm --prefix apps/web run build
 npm --prefix apps/web run test:e2e -- app-shell-home.spec.ts visual-theme-login.spec.ts
+./scripts/verify-public.sh
 ```
 
 Expected: all commands PASS.
@@ -648,7 +660,7 @@ Expected: all commands PASS.
 - [ ] **Step 5: Commit documentation and browser proof**
 
 ```bash
-git add apps/web/e2e/app-shell-home.spec.ts apps/web/e2e/visual-theme-login.spec.ts docs/manuals/frontend/app-shell-home.md docs/manuals/frontend/visual-preferences.md docs/verification/frontend-workspace-shell-test-cases.md
+git add apps/web/e2e/app-shell-home.spec.ts apps/web/e2e/visual-theme-login.spec.ts apps/web/src/app/help-page.tsx docs/manuals/frontend/app-shell-home.md docs/manuals/frontend/visual-preferences.md docs/verification/frontend-workspace-shell-test-cases.md
 git commit -m "test(web): verify neutral workspace shell"
 ```
 
