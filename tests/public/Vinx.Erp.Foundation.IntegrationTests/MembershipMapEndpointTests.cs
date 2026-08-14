@@ -37,7 +37,9 @@ public sealed class MembershipMapEndpointTests
         Assert.Equal(["Alfa", "Beta", "Gama"], snapshot.Value!.Companies.Select(company => company.CompanyName));
         Assert.Empty(snapshot.Value.Companies.Single(company => company.CompanyId == seeded.GamaCompanyId).Capabilities);
         Assert.Null(authorized.ErrorCode);
-        Assert.Equal([seeded.AlfaCompanyId], authorized.Value!.CompanyIds);
+        Assert.Equal(
+            new[] { seeded.AlfaCompanyId, seeded.BetaCompanyId }.OrderBy(companyId => companyId),
+            authorized.Value!.CompanyIds.OrderBy(companyId => companyId));
     }
 
     [Fact]
@@ -54,15 +56,64 @@ public sealed class MembershipMapEndpointTests
         await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
         {
             var membership = await administrator.Memberships.SingleAsync(candidate =>
-                candidate.Id == seeded.AlfaMembershipId);
+            candidate.Id == seeded.BetaMembershipId);
             membership.Revoke("membership_revoked", factory.ActorUserId, Guid.NewGuid());
             await administrator.SaveChangesAsync();
         }
 
         var after = await resolver.ResolveAsync(actor, requirement, CancellationToken.None);
 
-        Assert.Equal([seeded.AlfaCompanyId], before.Value!.CompanyIds);
-        Assert.Empty(after.Value!.CompanyIds);
+        Assert.Equal(
+            new[] { seeded.AlfaCompanyId, seeded.BetaCompanyId }.OrderBy(companyId => companyId),
+            before.Value!.CompanyIds.OrderBy(companyId => companyId));
+        Assert.Equal([seeded.AlfaCompanyId], after.Value!.CompanyIds);
+    }
+
+    [Fact]
+    public async Task In_flight_read_keeps_the_materialized_membership_visible_after_concurrent_revoke()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seeded = await SeedMembershipMapAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var actor = new Vinx.Erp.Foundation.Identity.ActorContext(factory.ActorUserId, factory.CorrelationId);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = resolver.ExecuteReadAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            async (database, _) =>
+            {
+                started.SetResult();
+                await release.Task;
+                return await database.Memberships
+                    .AsNoTracking()
+                    .Where(membership =>
+                        membership.Id == seeded.BetaMembershipId
+                        && membership.DeletedAt == null)
+                    .Select(membership => membership.Id)
+                    .ToListAsync();
+            },
+            CancellationToken.None);
+
+        await started.Task;
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var membership = await administrator.Memberships.SingleAsync(candidate =>
+                candidate.Id == seeded.BetaMembershipId);
+            membership.Revoke("membership_revoked", factory.ActorUserId, Guid.NewGuid());
+            await administrator.SaveChangesAsync();
+        }
+
+        release.SetResult();
+        var inFlightResult = await inFlight;
+        var next = await resolver.ResolveAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            CancellationToken.None);
+
+        Assert.Equal([seeded.BetaMembershipId], inFlightResult.Value);
+        Assert.Equal([seeded.AlfaCompanyId], next.Value!.CompanyIds);
     }
 
     [Fact]
@@ -90,7 +141,7 @@ public sealed class MembershipMapEndpointTests
         await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
         {
             var membership = await administrator.Memberships.SingleAsync(candidate =>
-                candidate.Id == seeded.AlfaMembershipId);
+                candidate.Id == seeded.BetaMembershipId);
             membership.Revoke("membership_revoked", factory.ActorUserId, Guid.NewGuid());
             await administrator.SaveChangesAsync();
         }
@@ -102,8 +153,10 @@ public sealed class MembershipMapEndpointTests
             new CapabilityRequirement("payment.approve", CapabilityScope.Company),
             CancellationToken.None);
 
-        Assert.Equal([seeded.AlfaCompanyId], inFlightResult.Value);
-        Assert.Empty(next.Value!.CompanyIds);
+        Assert.Equal(
+            new[] { seeded.AlfaCompanyId, seeded.BetaCompanyId }.OrderBy(companyId => companyId),
+            inFlightResult.Value!.OrderBy(companyId => companyId));
+        Assert.Equal([seeded.AlfaCompanyId], next.Value!.CompanyIds);
     }
 
     [Fact]
@@ -152,7 +205,7 @@ public sealed class MembershipMapEndpointTests
         Assert.Equal(seeded.GamaCompanyId, memberships[2].CompanyId);
         Assert.Equal("payment.approve", Assert.Single(memberships[0].Capabilities).Name);
         Assert.Equal(["Company"], Assert.Single(memberships[0].Capabilities).Scopes);
-        Assert.Equal("foundation.files.upload", Assert.Single(memberships[1].Capabilities).Name);
+        Assert.Equal("payment.approve", Assert.Single(memberships[1].Capabilities).Name);
         Assert.Equal(["Company"], Assert.Single(memberships[1].Capabilities).Scopes);
         Assert.Empty(memberships[2].Capabilities);
 
@@ -300,10 +353,6 @@ public sealed class MembershipMapEndpointTests
             requestId
         );
         var paymentApprove = new Capability(Guid.NewGuid(), "payment.approve");
-        var filesUpload = await administrator.Capabilities.SingleAsync(capability =>
-            capability.Name == KnownCapabilities.FilesUpload
-        );
-
         administrator.AddRange(
             otherUser,
             paymentApprove,
@@ -347,7 +396,7 @@ public sealed class MembershipMapEndpointTests
                 Guid.NewGuid(),
                 beta.Id,
                 betaRole.Id,
-                filesUpload.Id,
+                paymentApprove.Id,
                 CapabilityScope.Company,
                 factory.ActorUserId,
                 requestId

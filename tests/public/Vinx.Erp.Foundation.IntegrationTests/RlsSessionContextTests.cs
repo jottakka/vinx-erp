@@ -39,7 +39,9 @@ public sealed class RlsSessionContextTests
             CancellationToken.None);
 
         Assert.Null(result.ErrorCode);
-        Assert.Equal([seeded.AlfaCompanyId], result.Value);
+        Assert.Equal(
+            new[] { seeded.AlfaCompanyId, seeded.BetaCompanyId }.OrderBy(companyId => companyId),
+            result.Value!.OrderBy(companyId => companyId));
         await using var runtime = factory.Fixture.CreateRuntimeDbContext();
         Assert.Empty(await runtime.Companies.AsNoTracking().ToListAsync());
     }
