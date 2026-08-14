@@ -35,6 +35,13 @@ describe("AppearanceMenu", () => {
     expect(
       screen.getByRole("menu", { name: "Abrir preferências visuais" }),
     ).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Tema: claro" })).toBeVisible();
+    expect(
+      screen.getByRole("menuitem", { name: "Tema: escuro" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("menuitem", { name: "Tema: sistema" }),
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole("menuitem", { name: "Tema: escuro" }));
 
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();

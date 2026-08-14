@@ -42,7 +42,7 @@ export function VinxThemeProvider({ children }: VinxThemeProviderProps) {
   return (
     <ThemeProvider
       colorSchemeStorageKey="scheme"
-      defaultMode="system"
+      defaultMode="light"
       disableTransitionOnChange
       modeStorageKey="mode"
       noSsr

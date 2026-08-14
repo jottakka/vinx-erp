@@ -14,7 +14,7 @@ export type VinxLayoutTokens = {
   navigationWidth: number;
 };
 
-const supportedModes = new Set(["light", "dark", "system"]);
+const supportedModes = new Set(["light", "dark"]);
 const supportedSchemes = new Set(["light", "dark"]);
 const modeKeys = new Set(["mui-mode", "mode"]);
 const schemeKeys = new Set(["mui-color-scheme", "scheme-light", "scheme-dark"]);

@@ -103,8 +103,8 @@ describe("vinx semantic theme", () => {
       manager({ key: "mui-mode", storageWindow: throwingWindow }).set("dark"),
     ).not.toThrow();
     expect(
-      manager({ key: "mui-mode", storageWindow: throwingWindow }).get("system"),
-    ).toBe("system");
+      manager({ key: "mui-mode", storageWindow: throwingWindow }).get("light"),
+    ).toBe("light");
     expect(
       manager({ key: "mui-mode", storageWindow: throwingWindow }).subscribe(
         () => {},
@@ -122,9 +122,19 @@ describe("vinx semantic theme", () => {
 
     expect(
       manager({ key: "mui-mode", storageWindow: invalidModeWindow }).get(
-        "system",
+        "light",
       ),
-    ).toBe("system");
+    ).toBe("light");
+
+    const legacySystemWindow = {
+      ...invalidModeWindow,
+      localStorage: { getItem: () => "system", setItem: () => {} },
+    } as unknown as Window;
+    expect(
+      manager({ key: "mui-mode", storageWindow: legacySystemWindow }).get(
+        "light",
+      ),
+    ).toBe("light");
   });
 
   it("returns MUI defaults for invalid MUI color-scheme keys in reads and subscriptions", () => {

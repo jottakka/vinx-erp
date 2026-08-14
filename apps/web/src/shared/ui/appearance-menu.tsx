@@ -1,12 +1,11 @@
 import PaletteOutlinedIcon from "@mui/icons-material/PaletteOutlined";
-import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
-import { IconButton, ListItemIcon, Menu, MenuItem } from "@mui/material";
+import { IconButton, Menu, MenuItem } from "@mui/material";
 import { useColorScheme } from "@mui/material/styles";
 import { useState } from "react";
 import { useVisualPreferences } from "../../app/theme/vinx-theme-provider";
 import type { Density } from "../../app/theme/visual-preferences";
 
-type ColorMode = "light" | "dark" | "system";
+type ColorMode = "light" | "dark";
 
 const menuId = "vinx-appearance-menu";
 const triggerId = "vinx-appearance-menu-trigger";
@@ -59,19 +58,9 @@ export function AppearanceMenu() {
         }}
       >
         <MenuItem
-          aria-selected={(mode ?? "system") === "system"}
-          onClick={() => selectMode("system")}
-          selected={(mode ?? "system") === "system"}
-        >
-          <ListItemIcon>
-            <SettingsOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          Tema: sistema
-        </MenuItem>
-        <MenuItem
-          aria-selected={mode === "light"}
+          aria-selected={(mode ?? "light") === "light"}
           onClick={() => selectMode("light")}
-          selected={mode === "light"}
+          selected={(mode ?? "light") === "light"}
         >
           Tema: claro
         </MenuItem>
