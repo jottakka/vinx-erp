@@ -7,6 +7,7 @@ Foundation owns the cross-cutting contracts that every ERP module consumes. It d
 - Groups, companies, units, teams, users, employees and active memberships.
 - Roles, named capabilities and scope grants: `self`, `team`, `unit`, `company` and `group`.
 - Configurable approval policies and alçadas. A sole owner approver is data configuration, never a hard-coded module rule.
+- Durable single-use approvals (`foundation.approvals`) that authorize confirmed module writes, consumed exactly once.
 - Identity and file-storage provider boundaries: `IdentityProvider` and `FileStorage`.
 - Durable audit, correlation context, redaction, OpenTelemetry conventions, health checks, idempotency keys and outbox technical contracts.
 
@@ -88,9 +89,56 @@ Configure a API com `SUPABASE_AUTH_ISSUER` e `SUPABASE_AUTH_AUDIENCE`;
 `FOUNDATION_RUNTIME_CONNECTION`, `SUPABASE_STORAGE_URL` e
 `SUPABASE_STORAGE_SERVICE_ROLE_KEY` continuam obrigatórias para a infraestrutura.
 
+## Aprovações duráveis
+
+`foundation.approvals` registra propostas de escrita que exigem confirmação
+explícita. O ciclo é `prepare → confirm` ou `prepare → veto`, sempre com a
+empresa e o ator autenticado resolvidos no servidor; nenhuma etapa aceita
+empresa ou permissão vindas do modelo ou do cliente.
+
+`PrepareApprovalService` (`ai.approvals.prepare`) exige membership ativa do
+ator e a capability `ai.writes.confirm` exatamente em escopo `company`,
+somente depois do parsing estrutural do comando; validação semântica de
+recursos acontece no módulo de origem, depois da autorização. Um replay do
+mesmo `RequestId` de preparação devolve a mesma aprovação sem nova auditoria;
+payload diferente retorna `idempotency_conflict`. Uma segunda preparação do
+mesmo ator na mesma empresa enquanto existe proposta viva é negada
+(`proposal_conflict`) com negação auditada, nunca substitui silenciosamente a
+proposta anterior.
+
+`ConfirmApprovalService` (`ai.approvals.confirm`) re-deriva o hash canônico do
+payload (ordenação recursiva de chaves, invariante de cultura, SHA-256 em hex
+minúsculo de 64 caracteres) e o compara com o hash gravado junto da versão de
+política. A reivindicação é um único `UPDATE` condicional que usa o relógio do
+banco (`now()`) para consumo e expiração e vence uma única vez: o vencedor
+recebe `Claimed`, repetições com o mesmo `RequestId` de confirmação recebem
+`Replay`, confirmações concorrentes ou divergentes recebem `Conflict` e
+propostas desconhecidas, expiradas ou vetadas recebem `ProposalUnavailable`.
+O resultado carrega o `ProposalId` opaco de volta ao chamador. O veto
+(`ai.approvals.veto`) é soft-delete idempotente com o motivo fixo
+`approval_vetoed` e impede qualquer consumo posterior; uma proposta consumida
+é estado terminal e não pode ser vetada.
+
+Os três escopos de `RequestId` são distintos: o de preparação controla a
+idempotência da criação, o de confirmação controla reivindicação/replay e o de
+execução é estável entre reinicializações para que o domínio devolva o
+resultado original da escrita confirmada. Falha de auditoria desfaz a
+mutação; indisponibilidade de auditoria ou transação registra a métrica segura
+`approval_confirmation`.
+
+A tabela ativa RLS com isolamento de empresa **e** de ator
+(`approvals_company_isolation`, fail-closed quando os contextos estão
+ausentes) e `FORCE ROW LEVEL SECURITY`. O runtime recebe `SELECT` e `INSERT`
+em nível de tabela e `UPDATE` apenas nas colunas de ciclo de vida
+(confirmação, consumo, resultado, auditoria de alteração, `row_version` e
+soft-delete); `DELETE` permanece negado. Invariantes: `expires_at` sempre
+posterior a `created_at`, `proposal_id` único, índice único parcial para o
+`RequestId` de confirmação e hash de payload validado por formato. A retenção
+e limpeza de aprovações expiradas está adiada para a issue #201.
+
 ## Contract version
 
-`1.0`
+`1.1`
 
 ## Modelo de entidades
 
@@ -156,6 +204,15 @@ O runtime recebe `UPDATE` apenas nas
 colunas de ciclo de vida da revogação, auditoria de alteração e `row_version`;
 `INSERT`, `DELETE` e chaves da membership continuam negados, sob a policy RLS
 de empresa já existente.
+
+`AddFoundationApprovals` cria `foundation.approvals` com RLS forçada,
+policy de isolamento por empresa e ator, grants restritos do runtime e as
+restrições de verificação do ciclo (expiração posterior à criação e veto
+completo). O downgrade falha fechado enquanto existirem linhas. A migração de
+baixo acoplamento `AddAiWritesConfirmCapability` insere a capability
+`ai.writes.confirm` com UUID estável (UUIDv5), preserva linha legada de mesmo
+nome, falha se o UUID estiver ocupado por outro nome e bloqueia downgrade
+enquanto a capability tiver grants.
 
 ## Module responsibilities
 

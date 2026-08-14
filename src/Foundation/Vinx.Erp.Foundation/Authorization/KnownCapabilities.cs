@@ -13,4 +13,10 @@ public static class KnownCapabilities
 
     public const string MembershipsRevoke = "foundation.memberships.revoke";
     public static readonly Guid MembershipsRevokeId = Guid.Parse("46285f1b-bda6-5fba-b0e9-74515120b076");
+
+    // Primeira capability cross-module (prefixo ai.*): confirmação de escritas
+    // de ferramentas do harness. UUID canônico derivado por nome (UUIDv5 de
+    // https://vinx.erp/capabilities/ai.writes.confirm).
+    public const string AiWritesConfirm = "ai.writes.confirm";
+    public static readonly Guid AiWritesConfirmId = Guid.Parse("9e77f769-2093-55a5-a482-85ed3e83dc88");
 }

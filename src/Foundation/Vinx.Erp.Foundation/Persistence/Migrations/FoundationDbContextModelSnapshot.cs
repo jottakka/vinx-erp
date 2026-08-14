@@ -447,6 +447,130 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.ToTable("files", "foundation");
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.FoundationApproval", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("action");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<Guid?>("ConfirmationRequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("confirmation_request_id");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("consumed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by_user_id");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("PayloadHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payload_hash");
+
+                    b.Property<string>("PolicyVersion")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("policy_version");
+
+                    b.Property<Guid>("ProposalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("proposal_id");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("result_json");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("row_version");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_approvals");
+
+                    b.HasAlternateKey("CompanyId", "Id")
+                        .HasName("ak_approvals_company_id_id");
+
+                    b.HasIndex("ActorUserId")
+                        .HasDatabaseName("ix_approvals_actor_user_id");
+
+                    b.HasIndex("ConfirmationRequestId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_approvals_confirmation_request_id")
+                        .HasFilter("confirmation_request_id IS NOT NULL");
+
+                    b.HasIndex("ProposalId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_approvals_proposal_id");
+
+                    b.HasIndex("CompanyId", "ActorUserId")
+                        .HasDatabaseName("ix_approvals_company_id_actor_user_id")
+                        .HasFilter("consumed_at IS NULL AND deleted_at IS NULL");
+
+                    b.ToTable("approvals", "foundation", t =>
+                        {
+                            t.HasCheckConstraint("ck_approvals_expires_after_creation", "expires_at > created_at");
+
+                            t.HasCheckConstraint("ck_approvals_payload_hash_format", "payload_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_approvals_veto_complete", "(deleted_at IS NULL AND deleted_by_user_id IS NULL AND deleted_reason IS NULL) OR (deleted_at IS NOT NULL AND deleted_by_user_id IS NOT NULL AND deleted_reason = 'approval_vetoed')");
+                        });
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Group", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1193,6 +1317,27 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Navigation("Company");
 
                     b.Navigation("UploaderMembership");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.FoundationApproval", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.User", "ActorUser")
+                        .WithMany()
+                        .HasForeignKey("ActorUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_approvals_users_actor_user_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.Company", "Company")
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_approvals_companies_company_id");
+
+                    b.Navigation("ActorUser");
+
+                    b.Navigation("Company");
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.IdempotencyRecord", b =>

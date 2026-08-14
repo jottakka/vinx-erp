@@ -25,6 +25,8 @@ public sealed class AuthorizationTelemetry
         AuthorizationOperation.MembershipMap => "membership_map",
         AuthorizationOperation.RoleAssignment => "role_assignment",
         AuthorizationOperation.MembershipRevocation => "membership_revocation",
+        AuthorizationOperation.ApprovalPreparation => "approval_preparation",
+        AuthorizationOperation.ApprovalConfirmation => "approval_confirmation",
         _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unsupported authorization operation.")
     };
 
@@ -44,7 +46,9 @@ internal enum AuthorizationOperation
     CapabilityMap,
     MembershipMap,
     RoleAssignment,
-    MembershipRevocation
+    MembershipRevocation,
+    ApprovalPreparation,
+    ApprovalConfirmation
 }
 
 internal enum AuditUnavailablePhase
