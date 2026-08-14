@@ -45,15 +45,31 @@ public sealed class HarnessApprovalGate
     /// Avalia a resposta do agente. O contexto confiável vem exclusivamente do
     /// servidor; valores de ator/empresa presentes nos argumentos do modelo são
     /// ignorados. Falta de contexto ou ferramenta fora da allowlist nega.
+    /// Respostas com mais de uma solicitação de aprovação pendente são negadas
+    /// (fail-closed), sem expor solicitação para aprovação. Solicitação de
+    /// aprovação para leitura é tratada como erro de configuração e negada,
+    /// pois leituras não são envolvidas em <see cref="ApprovalRequiredAIFunction"/>.
     /// </summary>
     public VinxApprovalDecision Evaluate(AgentResponse response, VinxExecutionContext? context)
     {
-        var request = FindApprovalRequest(response);
-        if (request is null)
+        var requestCount = CountApprovalRequests(response);
+        if (requestCount == 0)
         {
             return new VinxApprovalDecision(VinxApprovalOutcome.None, null, null, null, null);
         }
 
+        if (requestCount > 1)
+        {
+            LogDecision(null, VinxApprovalOutcome.Denied, "múltiplas solicitações de aprovação na mesma resposta");
+            return new VinxApprovalDecision(
+                VinxApprovalOutcome.Denied,
+                null,
+                null,
+                null,
+                "múltiplas solicitações de aprovação na mesma resposta");
+        }
+
+        var request = FindApprovalRequest(response)!;
         var toolName = GetToolName(request);
 
         if (context is null || !context.IsValid)
@@ -77,22 +93,29 @@ public sealed class HarnessApprovalGate
                 VinxApprovalOutcome.PendingConfirmation, request, risk, toolName, "escrita exige confirmação explícita");
         }
 
-        LogDecision(toolName, VinxApprovalOutcome.PendingConfirmation, "leitura permitida pela allowlist");
+        LogDecision(toolName, VinxApprovalOutcome.Denied, "leitura não deveria exigir aprovação");
         return new VinxApprovalDecision(
-            VinxApprovalOutcome.PendingConfirmation, request, risk, toolName, "leitura permitida pela allowlist");
+            VinxApprovalOutcome.Denied, request, risk, toolName, "leitura não deveria exigir aprovação");
     }
 
     /// <summary>
     /// Confirma explicitamente a proposta (decisão do servidor, nunca do modelo)
-    /// e retoma o agente na mesma sessão.
+    /// e retoma o agente na mesma sessão. A própria chamada revalida o gate:
+    /// somente uma decisão <see cref="VinxApprovalOutcome.PendingConfirmation"/>
+    /// com solicitação presente, contexto válido e ferramenta classificada como
+    /// escrita pela allowlist é executada; qualquer outra combinação lança
+    /// <see cref="InvalidOperationException"/> e nada executa.
     /// </summary>
     public Task<AgentResponse> ApproveAsync(
         AIAgent agent,
         AgentSession session,
-        ToolApprovalRequestContent request,
-        VinxExecutionContext context,
+        VinxApprovalDecision decision,
+        VinxExecutionContext? context,
         CancellationToken cancellationToken = default)
     {
+        ValidateApproval(decision, context);
+
+        var request = decision.Request!;
         LogDecision(GetToolName(request), VinxApprovalOutcome.PendingConfirmation, "aprovação concedida pelo servidor");
         var approvalMessage = new ChatMessage(ChatRole.User, [request.CreateResponse(true)]);
         return agent.RunAsync(approvalMessage, session, cancellationToken: cancellationToken);
@@ -113,6 +136,47 @@ public sealed class HarnessApprovalGate
 
     private static string? GetToolName(ToolApprovalRequestContent request) =>
         (request.ToolCall as FunctionCallContent)?.Name;
+
+    private void ValidateApproval(VinxApprovalDecision decision, VinxExecutionContext? context)
+    {
+        string? refusal = null;
+
+        if (decision.Outcome != VinxApprovalOutcome.PendingConfirmation || decision.Request is null)
+        {
+            refusal = "decisão sem aprovação pendente válida";
+        }
+        else if (context is null || !context.IsValid)
+        {
+            refusal = "contexto confiável ausente";
+        }
+        else if (!VinxToolPolicy.TryClassify(decision.ToolName, out var risk) || risk != VinxToolRisk.Write)
+        {
+            refusal = "ferramenta fora da allowlist de escritas";
+        }
+
+        if (refusal is not null)
+        {
+            LogDecision(decision.ToolName, VinxApprovalOutcome.Denied, refusal);
+            throw new InvalidOperationException($"Aprovação recusada pelo gate VINX: {refusal}.");
+        }
+    }
+
+    private static int CountApprovalRequests(AgentResponse response)
+    {
+        var count = 0;
+        foreach (var message in response.Messages)
+        {
+            foreach (var content in message.Contents)
+            {
+                if (content is ToolApprovalRequestContent)
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
 
     private static ToolApprovalRequestContent? FindApprovalRequest(AgentResponse response)
     {

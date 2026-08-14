@@ -63,6 +63,11 @@ Duas ferramentas inertes, sem dados do ERP e não registradas em nenhum host:
   memória, envolvida em `ApprovalRequiredAIFunction`; nunca executa sem
   confirmação do servidor.
 
+O registro dirige o envolvimento: cada ferramenta passa pela classificação de
+`VinxToolPolicy.TryClassify`; ferramentas de escrita são envolvidas em
+`ApprovalRequiredAIFunction`, leituras executam diretamente e nomes fora da
+allowlist falham no registro. Assim classificação e envolvimento não divergem.
+
 ## Fronteira de aprovação do servidor
 
 `HarnessApprovalGate` consome `ToolApprovalRequestContent` exposto na resposta
@@ -72,12 +77,20 @@ do agente e decide somente com entrada do servidor:
    por código do servidor; valores equivalentes nos argumentos do modelo são
    ignorados;
 2. allowlist por nome de ferramenta (`VinxToolPolicy`);
-3. classificação de risco: leitura é permitida; escrita exige confirmação
-   explícita;
-4. aprovação: `requestContent.CreateResponse(true)` e retomada com
+3. classificação de risco: somente escrita classificada como `Write` pode ser
+   aprovada; solicitação de aprovação para leitura é tratada como erro de
+   configuração e negada;
+4. aprovação: `ApproveAsync` recebe a decisão do gate e revalida o próprio
+   gate antes de executar (`PendingConfirmation`, solicitação presente,
+   contexto válido e ferramenta `Write` na allowlist); qualquer outra
+   combinação lança erro e nada executa. Só então emite
+   `requestContent.CreateResponse(true)` e retoma com
    `agent.RunAsync(mensagem, sessão)` na mesma `AgentSession`;
 5. veto: `CreateResponse(false)` devolvido na mesma sessão;
-6. falta de contexto ou ferramenta fora da allowlist nega (fail-closed).
+6. falta de contexto ou ferramenta fora da allowlist nega (fail-closed);
+   resposta com mais de uma solicitação de aprovação pendente também é negada,
+   sem expor solicitação para aprovação (nenhuma pendência é resolvida em
+   silêncio; o turno não deve ser retomado).
 
 Decisões são registradas com `ILogger`, template constante e propriedades
 nomeadas; negações usam nível `Warning`. Sem payload, argumentos ou PII.

@@ -72,13 +72,13 @@ public sealed class HarnessApprovalBoundaryTests
         Assert.Equal(VinxApprovalOutcome.PendingConfirmation, decision.Outcome);
         Assert.Equal(VinxToolRisk.Write, decision.Risk);
 
-        var approved = await gate.ApproveAsync(agent, session, decision.Request!, ServerContext);
+        var approved = await gate.ApproveAsync(agent, session, decision, ServerContext);
 
         Assert.Equal(1, counter.Count);
         Assert.Equal("escrita confirmada", approved.Text);
 
         // A mesma solicitação não pode executar a escrita duas vezes.
-        await gate.ApproveAsync(agent, session, decision.Request!, ServerContext);
+        await gate.ApproveAsync(agent, session, decision, ServerContext);
         Assert.Equal(1, counter.Count);
     }
 
@@ -231,6 +231,108 @@ public sealed class HarnessApprovalBoundaryTests
             $"Esperadas no máximo {VinxHarnessFactory.MaximumIterationsPerRequest + 1} chamadas; obtidas {client.Requests.Count}.");
         Assert.Equal(0, counter.Count);
     }
+
+    [Fact]
+    public async Task ApproveAsync_AfterDeniedEvaluationForMissingContext_RefusesAndDoesNotExecute()
+    {
+        var counter = new HarnessProbeWriteCounter();
+        var gate = new HarnessApprovalGate(NullLogger<HarnessApprovalGate>.Instance);
+        var client = new ScriptedChatClient(
+            AssistantCall(VinxToolPolicy.ProbeWriteToolName, "chamada-1"));
+        var agent = VinxHarnessFactory.Create(client, counter);
+        var session = await agent.CreateSessionAsync();
+
+        var pending = await agent.RunAsync("registre a sonda", session);
+        var denied = gate.Evaluate(pending, context: null);
+        Assert.Equal(VinxApprovalOutcome.Denied, denied.Outcome);
+
+        // Mesmo passando contexto válido depois, a decisão negada não aprova.
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => gate.ApproveAsync(agent, session, denied, ServerContext));
+        Assert.Equal(0, counter.Count);
+    }
+
+    [Fact]
+    public async Task ApproveAsync_AfterDeniedEvaluationForUnknownTool_RefusesAndDoesNotExecute()
+    {
+        var counter = new HarnessProbeWriteCounter();
+        var gate = new HarnessApprovalGate(NullLogger<HarnessApprovalGate>.Instance);
+        var client = new ScriptedChatClient();
+        var agent = VinxHarnessFactory.Create(client, counter);
+        var session = await agent.CreateSessionAsync();
+
+        var response = ResponseWithApprovalRequests(
+            new ToolApprovalRequestContent(
+                "pedido-desconhecido",
+                new FunctionCallContent("chamada-x", "FerramentaForaDaAllowlist")));
+        var denied = gate.Evaluate(response, ServerContext);
+        Assert.Equal(VinxApprovalOutcome.Denied, denied.Outcome);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => gate.ApproveAsync(agent, session, denied, ServerContext));
+        Assert.Equal(0, counter.Count);
+    }
+
+    [Fact]
+    public async Task GenuineApprovalResponse_ReplayedOnAnotherSession_DoesNotExecute()
+    {
+        var counter = new HarnessProbeWriteCounter();
+        var gate = new HarnessApprovalGate(NullLogger<HarnessApprovalGate>.Instance);
+        var firstClient = new ScriptedChatClient(
+            AssistantCall(VinxToolPolicy.ProbeWriteToolName, "chamada-1"));
+        var firstAgent = VinxHarnessFactory.Create(firstClient, counter);
+        var firstSession = await firstAgent.CreateSessionAsync();
+
+        var pending = await firstAgent.RunAsync("registre a sonda", firstSession);
+        var decision = gate.Evaluate(pending, ServerContext);
+        Assert.Equal(VinxApprovalOutcome.PendingConfirmation, decision.Outcome);
+
+        // Replay da mesma resposta de aprovação em outra sessão sem solicitação pendente.
+        var secondClient = new ScriptedChatClient(AssistantText("sessão nova"));
+        var secondAgent = VinxHarnessFactory.Create(secondClient, counter);
+        var secondSession = await secondAgent.CreateSessionAsync();
+        var replay = new ChatMessage(ChatRole.User, [decision.Request!.CreateResponse(true)]);
+
+        try
+        {
+            await secondAgent.RunAsync(replay, secondSession);
+        }
+        catch (InvalidOperationException)
+        {
+            // Comportamento fail-closed aceitável do framework.
+        }
+
+        Assert.Equal(0, counter.Count);
+    }
+
+    [Fact]
+    public async Task MultiplePendingApprovalRequests_AreDeniedFailClosed()
+    {
+        var counter = new HarnessProbeWriteCounter();
+        var gate = new HarnessApprovalGate(NullLogger<HarnessApprovalGate>.Instance);
+        var client = new ScriptedChatClient();
+        var agent = VinxHarnessFactory.Create(client, counter);
+        var session = await agent.CreateSessionAsync();
+
+        var response = ResponseWithApprovalRequests(
+            new ToolApprovalRequestContent(
+                "pedido-1",
+                new FunctionCallContent("chamada-1", VinxToolPolicy.ProbeWriteToolName)),
+            new ToolApprovalRequestContent(
+                "pedido-2",
+                new FunctionCallContent("chamada-2", VinxToolPolicy.ProbeWriteToolName)));
+
+        var denied = gate.Evaluate(response, ServerContext);
+
+        Assert.Equal(VinxApprovalOutcome.Denied, denied.Outcome);
+        Assert.Null(denied.Request);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => gate.ApproveAsync(agent, session, denied, ServerContext));
+        Assert.Equal(0, counter.Count);
+    }
+
+    private static AgentResponse ResponseWithApprovalRequests(params ToolApprovalRequestContent[] requests) =>
+        new(new ChatMessage(ChatRole.Assistant, [.. requests]));
 
     private static ChatMessage AssistantText(string text) => new(ChatRole.Assistant, text);
 
