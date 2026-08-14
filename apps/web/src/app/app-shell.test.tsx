@@ -126,7 +126,9 @@ describe("AppShell", () => {
     }
 
     expect(
-      await within(moduleSection).findByRole("link", { name: /Paguai/ }),
+      await within(moduleSection).findByRole("link", {
+        name: "Paguai Módulo em preparação",
+      }),
     ).toBeVisible();
     expect(
       within(moduleSection).getByRole("link", { name: /Atendimento/ }),
@@ -142,7 +144,9 @@ describe("AppShell", () => {
     ).toBeVisible();
 
     await user.click(
-      within(moduleSection).getByRole("link", { name: /Paguai/ }),
+      within(moduleSection).getByRole("link", {
+        name: "Paguai Módulo em preparação",
+      }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/paguai"));
     expect(
@@ -153,6 +157,54 @@ describe("AppShell", () => {
         "Esta área ainda não possui dados ou ações operacionais.",
       ),
     ).toBeVisible();
+  });
+
+  it("keeps product routes primary and exposes only the available Paguai prototype action in development", async () => {
+    const router = renderShell("/", await signedInGateway());
+
+    await screen.findByRole("heading", { name: "Início" });
+    const moduleSection = screen
+      .getByRole("heading", { name: "Estrutura em evolução" })
+      .closest("section");
+
+    expect(moduleSection).not.toBeNull();
+    if (!moduleSection) {
+      throw new Error("Module section not found");
+    }
+
+    const paguaiCard = within(moduleSection)
+      .getByRole("link", { name: "Paguai Módulo em preparação" })
+      .closest("li");
+    expect(paguaiCard).not.toBeNull();
+    if (!paguaiCard) {
+      throw new Error("Paguai card not found");
+    }
+
+    expect(
+      within(paguaiCard).getByRole("link", {
+        name: "Paguai Módulo em preparação",
+      }),
+    ).toHaveAttribute("href", "/paguai");
+    expect(
+      within(paguaiCard).getByRole("link", {
+        name: "Abrir protótipo Paguai",
+      }),
+    ).toHaveAttribute("href", "/prototipos/paguai");
+
+    for (const label of ["Kanban", "Atendimento", "Pessoas"]) {
+      const card = within(moduleSection)
+        .getByRole("link", { name: `${label} Módulo em preparação` })
+        .closest("li");
+      expect(card).not.toBeNull();
+      if (!card) {
+        throw new Error(`${label} card not found`);
+      }
+      expect(
+        within(card).queryByRole("link", { name: /Abrir protótipo/ }),
+      ).not.toBeInTheDocument();
+    }
+
+    expect(router.state.location.pathname).toBe("/");
   });
 
   it("shows an honest no-authorized-company state with a working help route", async () => {

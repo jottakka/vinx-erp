@@ -129,3 +129,31 @@ test("Scenario: Authorized user visits preparation modules, chooses themes and r
   await page.keyboard.press("Escape");
   await expect(navigationTrigger).toBeFocused();
 });
+
+test("production preview hides demonstration navigation and Home prototype actions", async ({
+  page,
+}) => {
+  await enterHome(page);
+
+  await expect(
+    page
+      .getByRole("navigation", { name: "Navegação lateral" })
+      .getByText("Demonstração", { exact: true }),
+  ).not.toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Abrir protótipo Paguai" }),
+  ).not.toBeVisible();
+});
+
+for (const path of ["/prototipos", "/prototipos/paguai"]) {
+  test(`production preview resolves ${path} through authenticated wildcard to Home`, async ({
+    page,
+  }) => {
+    await page.goto(path);
+    await expect(page).toHaveURL(/\/login$/);
+    await page.getByRole("button", { name: "Entrar" }).click();
+
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
+  });
+}

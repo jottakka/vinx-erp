@@ -11,7 +11,10 @@ import {
 } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
 import { useSession } from "../features/auth/session-provider";
-import type { AppNavigationLink } from "../shared/routing/app-paths";
+import {
+  type AppNavigationLink,
+  paguaiPrototypePath,
+} from "../shared/routing/app-paths";
 import { CompanyBadge } from "../shared/ui/company-badge";
 import { PageHeader } from "../shared/ui/page-header";
 
@@ -20,6 +23,14 @@ type HomePageProps = {
     icon: SvgIconComponent;
   })[];
 };
+
+export function getAvailablePrototypePath(modulePath: string) {
+  if (!import.meta.env.DEV || modulePath !== "/paguai") {
+    return undefined;
+  }
+
+  return paguaiPrototypePath;
+}
 
 export function HomePage({ navigationLinks }: HomePageProps) {
   const { bootstrap } = useSession();
@@ -137,6 +148,7 @@ export function HomePage({ navigationLinks }: HomePageProps) {
         >
           {moduleLinks.map((route) => {
             const Icon = route.icon;
+            const prototypePath = getAvailablePrototypePath(route.path);
 
             return (
               <Card component="li" key={route.path} variant="outlined">
@@ -159,6 +171,17 @@ export function HomePage({ navigationLinks }: HomePageProps) {
                     </Stack>
                   </CardContent>
                 </CardActionArea>
+                {prototypePath ? (
+                  <Box sx={{ px: 2, pb: 2 }}>
+                    <Button
+                      component={RouterLink}
+                      to={prototypePath}
+                      variant="outlined"
+                    >
+                      Abrir protótipo {route.label}
+                    </Button>
+                  </Box>
+                ) : null}
               </Card>
             );
           })}
