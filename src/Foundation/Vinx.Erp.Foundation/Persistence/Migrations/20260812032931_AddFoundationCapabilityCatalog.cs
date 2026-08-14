@@ -39,7 +39,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 EXCEPTION
                     WHEN foreign_key_violation THEN
                         RAISE EXCEPTION 'cannot downgrade Foundation capability catalog while capabilities are referenced'
-                            USING ERRCODE = '23514';
+                            USING ERRCODE = '23503';
                 END;
                 $block$;
                 """);
