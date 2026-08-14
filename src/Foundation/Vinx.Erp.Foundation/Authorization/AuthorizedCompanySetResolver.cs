@@ -30,7 +30,9 @@ public sealed class AuthorizedCompanySetResolver(
     {
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                System.Data.IsolationLevel.RepeatableRead,
+                cancellationToken);
             await FoundationRlsContext.ApplyActorAsync(database.Database, actor, cancellationToken);
             var snapshot = await ResolveSnapshotInTransactionAsync(cancellationToken);
             await transaction.RollbackAsync(cancellationToken);
@@ -72,7 +74,9 @@ public sealed class AuthorizedCompanySetResolver(
 
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                System.Data.IsolationLevel.RepeatableRead,
+                cancellationToken);
             await FoundationRlsContext.ApplyActorAsync(database.Database, actor, cancellationToken);
             var snapshot = await ResolveSnapshotInTransactionAsync(cancellationToken);
             var companyIds = snapshot.Companies
