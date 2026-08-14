@@ -1,10 +1,9 @@
 import { Card, CardContent, Stack, Typography } from "@mui/material";
-import { Link } from "react-router-dom";
 import { PrototypeNotice } from "./prototype-notice";
 
 export const prototypeCatalog = [
   {
-    available: false,
+    available: true,
     description: "Solicitações, conferência, financeiro e políticas",
     id: "paguai",
     label: "Paguai",
@@ -57,7 +56,14 @@ export function PrototypeIndexPage() {
                   {prototype.description}
                 </Typography>
                 {prototype.available ? (
-                  <Link to={prototype.path}>Abrir protótipo</Link>
+                  <>
+                    <a href={prototype.path}>
+                      Abrir protótipo {prototype.label}
+                    </a>
+                    <Typography>
+                      {prototype.label}: em preparação nesta série
+                    </Typography>
+                  </>
                 ) : (
                   <Typography>
                     {prototype.label}: em preparação nesta série

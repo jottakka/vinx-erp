@@ -7,6 +7,7 @@ import ScienceOutlinedIcon from "@mui/icons-material/ScienceOutlined";
 import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import type { ReactElement } from "react";
+import { PaguaiPrototypePage } from "../features/paguai/prototype/paguai-prototype-page";
 import { PrototypeIndexPage } from "../features/prototypes/prototype-index-page";
 import {
   type AppRouteCatalogEntry,
@@ -114,6 +115,14 @@ const prototypeRoutes = [
     label: "Demonstração",
     navigation: true,
     path: "/prototipos",
+  },
+  {
+    element: <PaguaiPrototypePage />,
+    group: "support",
+    icon: ScienceOutlinedIcon,
+    label: "Paguai (demonstração)",
+    navigation: false,
+    path: "/prototipos/paguai",
   },
 ] as const satisfies readonly AppRouteDefinition[];
 
