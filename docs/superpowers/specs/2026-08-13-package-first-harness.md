@@ -97,26 +97,34 @@ do agente e decide somente com entrada do servidor:
    silêncio; o turno não deve ser retomado).
 
 A aprovação deve ser a interação imediatamente seguinte com a sessão: uma
-resposta de aprovação sem correspondência com a solicitação pendente é
-consumida como entrada comum e descarta a pendência (fail-closed, nunca
-executa); o PR 2 tornará esses no-ops silenciosos erros explícitos.
+resposta de aprovação sem correspondência com a solicitação pendente era
+consumida como entrada comum e descartava a pendência (fail-closed, nunca
+executa); o PR 2 cumpriu a promessa: esses no-ops silenciosos viraram erros
+explícitos via `HarnessApprovalGate.ThrowIfUnmatchedApprovalResponse`
+(spec `2026-08-14-vinx-policy-approval.md`).
 
 Decisões são registradas com `ILogger`, template constante e propriedades
 nomeadas; negações usam nível `Warning`. Sem payload, argumentos ou PII.
 
 Contrato explícito: aprovações duráveis de uso único, auditoria e
-idempotência pertencem ao PR 2. Nada nesta fatia promete execução
-exatamente-uma-vez.
+idempotência pertenciam ao PR 2 — **cumpridas** na spec
+`2026-08-14-vinx-policy-approval.md` (tabela `foundation.approvals`, serviços
+de preparação/confirmação/veto, coordenador single-flight e escrita de sonda
+idempotente por `RequestId` de execução). Nada nesta fatia prometia execução
+exatamente-uma-vez, e o PR 2 mantém essa posição: aprovação single-use +
+idempotência própria da execução.
 
 ## Limites do PR 1
 
 - Somente ferramentas de sonda; nenhuma ferramenta de domínio.
-- Ator/empresa reais, auditoria e idempotência chegam no PR 2.
+- Ator/empresa reais, auditoria e idempotência chegam no PR 2 — **entregues**
+  pelo PR 2 (spec `2026-08-14-vinx-policy-approval.md`); `VinxExecutionContext`
+  passou a `Guid` com `Guid.Empty` inválido.
 - Adaptadores de provedor (OpenAI-compatible, Anthropic) chegam no PR 3.
 - Integração MCP chega no PR 4.
-- O contrato de módulo `docs/modules/ai.md` fica adiado até o PR 2, quando o
-  módulo passa a possuir contexto confiável e fronteira auditável; a sonda não
-  tem ownership nem escopo de empresa para declarar.
+- O contrato de módulo `docs/modules/ai.md` ficava adiado até o PR 2 —
+  **criado** no PR 2, quando o módulo passou a possuir contexto confiável e
+  fronteira auditável.
 
 ## Validação local exigida
 
