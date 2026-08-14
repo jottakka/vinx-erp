@@ -22,3 +22,9 @@ Scenario: Role assignment across companies is denied and audited
   When Ana assigns the role to the membership using company "Vinx Obras"
   Then the command is denied with code "resource_not_found"
   And the authorization denial contains the requested company and correlation identifier
+
+Scenario: Membership revocation keeps the same session isolated to Beta
+  Given Ana may revoke her membership in Alfa
+  And her authenticated session lists Alfa and Beta before revocation
+  When she revokes her Alfa membership through the internal service
+  Then the command succeeds and her same session lists only Beta memberships
