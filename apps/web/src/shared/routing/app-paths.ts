@@ -23,15 +23,20 @@ export const appRouteCatalog = [
   { group: "support", label: "Ajuda", navigation: true, path: "/ajuda" },
 ] as const satisfies readonly AppRouteCatalogEntry[];
 
-export type AppPath = (typeof appRouteCatalog)[number]["path"];
+export const prototypePath = "/prototipos" as const;
+
+export type AppPath =
+  | (typeof appRouteCatalog)[number]["path"]
+  | typeof prototypePath;
 export type AppNavigationLink = Pick<
   AppRouteCatalogEntry,
   "group" | "label" | "navigation" | "path"
 >;
 
-export const APP_PATHS: readonly AppPath[] = appRouteCatalog.map(
-  (route) => route.path,
-);
+export const APP_PATHS: readonly AppPath[] = [
+  ...appRouteCatalog.map((route) => route.path),
+  prototypePath,
+];
 
 export function isKnownAppPath(value: unknown): value is AppPath {
   return typeof value === "string" && APP_PATHS.includes(value as AppPath);

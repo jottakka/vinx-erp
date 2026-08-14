@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createMockSessionGateway } from "../features/auth/mock-session-gateway";
 import type { MockSessionGateway } from "../features/auth/session-contract";
 import { SessionProvider } from "../features/auth/session-provider";
+import { selectPrototypeRoutes } from "./app-route-manifest";
 import { createAppRouter } from "./router";
 import { VinxThemeProvider } from "./theme/vinx-theme-provider";
 
@@ -30,6 +31,20 @@ async function signedInGateway() {
 }
 
 describe("application routes", () => {
+  it("exposes the prototype index only in development", async () => {
+    const router = renderRoute("/prototipos", await signedInGateway());
+
+    expect(
+      await screen.findByRole("heading", { name: "Protótipos planejados" }),
+    ).toBeVisible();
+    expect(screen.getByText("Dados de demonstração")).toBeVisible();
+    expect(router.state.location.pathname).toBe("/prototipos");
+  });
+
+  it("returns no prototype route definitions when disabled", () => {
+    expect(selectPrototypeRoutes(false)).toEqual([]);
+  });
+
   it.each([
     ["/paguai", "Paguai"],
     ["/atendimento", "Atendimento"],

@@ -3,11 +3,12 @@ import GroupsOutlinedIcon from "@mui/icons-material/GroupsOutlined";
 import HelpOutlinedIcon from "@mui/icons-material/HelpOutlined";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
+import ScienceOutlinedIcon from "@mui/icons-material/ScienceOutlined";
 import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import type { ReactElement } from "react";
+import { PrototypeIndexPage } from "../features/prototypes/prototype-index-page";
 import {
-  type AppPath,
   type AppRouteCatalogEntry,
   appRouteCatalog,
   type AppNavigationLink as CatalogNavigationLink,
@@ -34,7 +35,9 @@ type AppRoutePresentation = {
   render: AppRouteRenderer;
 };
 
-const routePresentation: Record<AppPath, AppRoutePresentation> = {
+type ProductAppPath = (typeof appRouteCatalog)[number]["path"];
+
+const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
   "/": {
     icon: HomeOutlinedIcon,
     render: (navigationLinks) => <HomePage navigationLinks={navigationLinks} />,
@@ -81,13 +84,13 @@ const routePresentation: Record<AppPath, AppRoutePresentation> = {
   },
 };
 
-const appRouteDefinitions = appRouteCatalog.map((route) => ({
+const productRouteDefinitions = appRouteCatalog.map((route) => ({
   ...route,
   ...routePresentation[route.path],
 }));
 
 export const appNavigationLinks: readonly AppNavigationLink[] =
-  appRouteDefinitions
+  productRouteDefinitions
     .filter((route) => route.navigation)
     .map(({ group, icon, label, navigation, path }) => ({
       group,
@@ -97,8 +100,28 @@ export const appNavigationLinks: readonly AppNavigationLink[] =
       path,
     }));
 
-export const appRouteManifest: readonly AppRouteDefinition[] =
-  appRouteDefinitions.map(({ render, ...route }) => ({
+const productRouteManifest: readonly AppRouteDefinition[] =
+  productRouteDefinitions.map(({ render, ...route }) => ({
     ...route,
     element: render(appNavigationLinks),
   }));
+
+const prototypeRoutes = [
+  {
+    element: <PrototypeIndexPage />,
+    group: "support",
+    icon: ScienceOutlinedIcon,
+    label: "Demonstração",
+    navigation: true,
+    path: "/prototipos",
+  },
+] as const satisfies readonly AppRouteDefinition[];
+
+export function selectPrototypeRoutes(enabled: boolean) {
+  return enabled ? prototypeRoutes : [];
+}
+
+export const appRouteManifest: readonly AppRouteDefinition[] = [
+  ...productRouteManifest,
+  ...selectPrototypeRoutes(import.meta.env.DEV),
+];
