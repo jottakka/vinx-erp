@@ -18,7 +18,7 @@ async function chooseAppearance(page: Page, optionName: string) {
   await page
     .getByRole("button", { name: "Abrir preferências visuais" })
     .click();
-  await page.getByRole("menuitem", { name: optionName }).click();
+  await page.getByRole("menuitemradio", { name: optionName }).click();
 }
 
 async function expectSelectedAppearance(page: Page, optionName: string) {
@@ -26,8 +26,8 @@ async function expectSelectedAppearance(page: Page, optionName: string) {
     .getByRole("button", { name: "Abrir preferências visuais" })
     .click();
   await expect(
-    page.getByRole("menuitem", { name: optionName }),
-  ).toHaveAttribute("aria-selected", "true");
+    page.getByRole("menuitemradio", { name: optionName }),
+  ).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
 }
 
@@ -161,12 +161,14 @@ test("appearance menu exposes only light and dark themes", async ({ page }) => {
     .getByRole("button", { name: "Abrir preferências visuais" })
     .click();
   await expect(
-    page.getByRole("menuitem", { name: "Tema: claro" }),
+    page.getByRole("menuitemradio", { name: "Tema: claro" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("menuitem", { name: "Tema: escuro" }),
+    page.getByRole("menuitemradio", { name: "Tema: escuro" }),
   ).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: /^Tema:/ })).toHaveCount(2);
+  await expect(page.getByRole("menuitemradio", { name: /^Tema:/ })).toHaveCount(
+    2,
+  );
 });
 
 test("Help describes only the light and dark themes", async ({ page }) => {
@@ -207,6 +209,10 @@ test("login and the authenticated Home have no automated WCAG AA violations", as
 
   await page.getByRole("button", { name: "Entrar" }).click();
   await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
+  await page
+    .getByRole("button", { name: "Abrir preferências visuais" })
+    .click();
+  await expect(page.getByRole("menu").locator("..")).toHaveCSS("opacity", "1");
   const protectedResults = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
     .analyze();

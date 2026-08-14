@@ -58,29 +58,33 @@ export function AppearanceMenu() {
         }}
       >
         <MenuItem
-          aria-selected={(mode ?? "light") === "light"}
+          aria-checked={(mode ?? "light") === "light"}
           onClick={() => selectMode("light")}
+          role="menuitemradio"
           selected={(mode ?? "light") === "light"}
         >
           Tema: claro
         </MenuItem>
         <MenuItem
-          aria-selected={mode === "dark"}
+          aria-checked={mode === "dark"}
           onClick={() => selectMode("dark")}
+          role="menuitemradio"
           selected={mode === "dark"}
         >
           Tema: escuro
         </MenuItem>
         <MenuItem
-          aria-selected={density === "comfortable"}
+          aria-checked={density === "comfortable"}
           onClick={() => selectDensity("comfortable")}
+          role="menuitemradio"
           selected={density === "comfortable"}
         >
           Densidade: confortável
         </MenuItem>
         <MenuItem
-          aria-selected={density === "compact"}
+          aria-checked={density === "compact"}
           onClick={() => selectDensity("compact")}
+          role="menuitemradio"
           selected={density === "compact"}
         >
           Densidade: compacta

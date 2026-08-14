@@ -11,21 +11,21 @@ import {
 } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
 import { useSession } from "../features/auth/session-provider";
+import type { AppNavigationLink } from "../shared/routing/app-paths";
 import { CompanyBadge } from "../shared/ui/company-badge";
 import { PageHeader } from "../shared/ui/page-header";
 
-type HomeModuleLink = {
-  icon: SvgIconComponent;
-  label: string;
-  path: string;
-};
-
 type HomePageProps = {
-  moduleLinks: readonly HomeModuleLink[];
+  navigationLinks: readonly (AppNavigationLink & {
+    icon: SvgIconComponent;
+  })[];
 };
 
-export function HomePage({ moduleLinks }: HomePageProps) {
+export function HomePage({ navigationLinks }: HomePageProps) {
   const { bootstrap } = useSession();
+  const moduleLinks = navigationLinks.filter(
+    (route) => route.navigation && route.group === "modules",
+  );
 
   if (!bootstrap) {
     return null;

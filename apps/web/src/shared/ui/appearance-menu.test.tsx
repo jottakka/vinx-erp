@@ -35,14 +35,18 @@ describe("AppearanceMenu", () => {
     expect(
       screen.getByRole("menu", { name: "Abrir preferências visuais" }),
     ).toBeVisible();
-    expect(screen.getByRole("menuitem", { name: "Tema: claro" })).toBeVisible();
     expect(
-      screen.getByRole("menuitem", { name: "Tema: escuro" }),
+      screen.getByRole("menuitemradio", { name: "Tema: claro" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("menuitemradio", { name: "Tema: escuro" }),
     ).toBeVisible();
     expect(
       screen.queryByRole("menuitem", { name: "Tema: sistema" }),
     ).not.toBeInTheDocument();
-    await user.click(screen.getByRole("menuitem", { name: "Tema: escuro" }));
+    await user.click(
+      screen.getByRole("menuitemradio", { name: "Tema: escuro" }),
+    );
 
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 
@@ -50,11 +54,11 @@ describe("AppearanceMenu", () => {
       screen.getByRole("button", { name: "Abrir preferências visuais" }),
     );
     expect(
-      screen.getByRole("menuitem", { name: "Tema: escuro" }),
-    ).toHaveAttribute("aria-selected", "true");
+      screen.getByRole("menuitemradio", { name: "Tema: escuro" }),
+    ).toHaveAttribute("aria-checked", "true");
 
     await user.click(
-      screen.getByRole("menuitem", { name: "Densidade: compacta" }),
+      screen.getByRole("menuitemradio", { name: "Densidade: compacta" }),
     );
 
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -97,11 +101,11 @@ describe("AppearanceMenu", () => {
     });
     await user.click(trigger);
     await user.click(
-      screen.getByRole("menuitem", { name: "Densidade: compacta" }),
+      screen.getByRole("menuitemradio", { name: "Densidade: compacta" }),
     );
     await user.click(trigger);
     await user.click(
-      screen.getByRole("menuitem", { name: "Densidade: confortável" }),
+      screen.getByRole("menuitemradio", { name: "Densidade: confortável" }),
     );
     await user.click(trigger);
 
@@ -109,8 +113,8 @@ describe("AppearanceMenu", () => {
       screen.getAllByRole("menu", { name: "Abrir preferências visuais" }),
     ).toHaveLength(1);
     expect(
-      screen.getByRole("menuitem", { name: "Densidade: confortável" }),
-    ).toHaveAttribute("aria-selected", "true");
+      screen.getByRole("menuitemradio", { name: "Densidade: confortável" }),
+    ).toHaveAttribute("aria-checked", "true");
     expect(screen.getByTestId("density-gap")).toHaveTextContent(
       "comfortable:24",
     );

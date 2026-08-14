@@ -135,6 +135,8 @@ describe("visual preferences", () => {
 
     renderHarness();
 
+    expect(screen.getByTestId("selected-mode")).toHaveTextContent("dark");
+    expect(screen.getByTestId("surface-scheme")).toHaveTextContent("dark");
     expect(screen.getByTestId("selected-density")).toHaveTextContent("compact");
     expect(screen.getByTestId("content-gap")).toHaveTextContent("16");
   });

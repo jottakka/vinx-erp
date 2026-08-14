@@ -98,15 +98,18 @@ describe("AppShell", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders the navigation with concrete group labels", async () => {
+  it("renders all concrete navigation group labels", async () => {
     renderShell("/", await signedInGateway());
 
     await screen.findByRole("heading", { name: "Início" });
-    expect(screen.getAllByText("Módulos").length).toBeGreaterThan(0);
-    const modulesHeader = within(
-      screen.getByRole("navigation", { name: "Navegação lateral" }),
-    ).getByText("Módulos");
-    expect(modulesHeader.closest("li")).toBeInTheDocument();
+    const navigation = screen.getByRole("navigation", {
+      name: "Navegação lateral",
+    });
+    for (const label of ["Espaço de trabalho", "Módulos", "Suporte"]) {
+      expect(
+        within(navigation).getByText(label).closest("li"),
+      ).toBeInTheDocument();
+    }
   });
 
   it("navigates from a module card to its preparation route", async () => {
@@ -133,6 +136,9 @@ describe("AppShell", () => {
     ).toBeVisible();
     expect(
       within(moduleSection).getByRole("link", { name: /Pessoas/ }),
+    ).toBeVisible();
+    expect(
+      within(moduleSection).getByTestId("PaymentsOutlinedIcon"),
     ).toBeVisible();
 
     await user.click(
@@ -223,6 +229,8 @@ describe("AppShell", () => {
       ).not.toBeInTheDocument(),
     );
     expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).not.toHaveAttribute("aria-controls");
 
     await user.click(trigger);
     const reopenedMobileNavigation = await screen.findByRole("navigation", {
@@ -238,6 +246,8 @@ describe("AppShell", () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/ajuda"));
     expect(transitions).toHaveBeenCalledTimes(1);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).not.toHaveAttribute("aria-controls");
     unsubscribe();
   });
 });

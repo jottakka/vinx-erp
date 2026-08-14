@@ -25,6 +25,8 @@ test("Scenario: Mobile drawer opens, closes predictably and restores focus witho
   await page.keyboard.press("Escape");
   await expect(drawerNavigation).not.toBeVisible();
   await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(trigger).not.toHaveAttribute("aria-controls");
 
   await trigger.click();
   await expect(drawerNavigation).toBeVisible();
@@ -39,6 +41,8 @@ test("Scenario: Mobile drawer opens, closes predictably and restores focus witho
 
   await expect(page).toHaveURL(/\/ajuda$/);
   await expect(page.getByRole("heading", { name: "Ajuda" })).toHaveCount(1);
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await expect(trigger).not.toHaveAttribute("aria-controls");
   await expect
     .poll(() =>
       page.evaluate(
@@ -74,6 +78,9 @@ test("Scenario: Authorized user visits preparation modules, chooses themes and r
   page,
 }) => {
   await enterHome(page);
+  const homeModuleSection = page
+    .getByRole("heading", { name: "Estrutura em evolução" })
+    .locator("xpath=ancestor::section[1]");
 
   for (const [name, path] of [
     ["Paguai", "/paguai"],
@@ -81,7 +88,7 @@ test("Scenario: Authorized user visits preparation modules, chooses themes and r
     ["Kanban", "/kanban"],
     ["Pessoas", "/pessoas"],
   ] as const) {
-    await page.getByRole("link", { name }).first().click();
+    await homeModuleSection.getByRole("link", { name }).click();
     await expect(page).toHaveURL(new RegExp(`${path}$`));
     await expect(page.getByRole("heading", { name })).toBeVisible();
     await expect(
@@ -98,9 +105,17 @@ test("Scenario: Authorized user visits preparation modules, chooses themes and r
     name: "Abrir preferências visuais",
   });
   await appearanceTrigger.click();
-  await page.getByRole("menuitem", { name: "Tema: claro" }).click();
+  await page.getByRole("menuitemradio", { name: "Tema: claro" }).click();
   await appearanceTrigger.click();
-  await page.getByRole("menuitem", { name: "Tema: escuro" }).click();
+  await expect(
+    page.getByRole("menuitemradio", { name: "Tema: claro" }),
+  ).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("menuitemradio", { name: "Tema: escuro" }).click();
+  await appearanceTrigger.click();
+  await expect(
+    page.getByRole("menuitemradio", { name: "Tema: escuro" }),
+  ).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
 
   await page.setViewportSize({ height: 800, width: 320 });
   const navigationTrigger = page.getByRole("button", {

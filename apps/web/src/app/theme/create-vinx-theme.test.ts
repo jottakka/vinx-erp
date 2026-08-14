@@ -37,10 +37,9 @@ function contrastRatio(foreground: string, background: string) {
 }
 
 const palettes = [
-  vinxTheme.colorSchemes.light.palette,
-  vinxTheme.colorSchemes.dark.palette,
+  ["light", vinxTheme.colorSchemes.light.palette] as const,
+  ["dark", vinxTheme.colorSchemes.dark.palette] as const,
 ];
-const light = vinxTheme.colorSchemes.light.palette;
 
 describe("vinx semantic theme", () => {
   beforeEach(() => {
@@ -65,14 +64,53 @@ describe("vinx semantic theme", () => {
     expect(compact.vinx.layout.controlMinHeight).toBeGreaterThanOrEqual(24);
   });
 
-  it("uses valid contrast pairs for text, focus and every company slot", () => {
-    expect(
-      contrastRatio(light.text.primary, light.background.default),
-    ).toBeGreaterThanOrEqual(4.5);
-    expect(
-      contrastRatio(light.primary.main, light.background.default),
-    ).toBeGreaterThanOrEqual(4.5);
-    for (const palette of palettes) {
+  it.each([
+    [
+      "light text on default",
+      vinxTheme.colorSchemes.light.palette.text.primary,
+      vinxTheme.colorSchemes.light.palette.background.default,
+    ],
+    [
+      "light text on paper",
+      vinxTheme.colorSchemes.light.palette.text.primary,
+      vinxTheme.colorSchemes.light.palette.background.paper,
+    ],
+    [
+      "light primary on default",
+      vinxTheme.colorSchemes.light.palette.primary.main,
+      vinxTheme.colorSchemes.light.palette.background.default,
+    ],
+    [
+      "light primary on paper",
+      vinxTheme.colorSchemes.light.palette.primary.main,
+      vinxTheme.colorSchemes.light.palette.background.paper,
+    ],
+    [
+      "dark text on default",
+      vinxTheme.colorSchemes.dark.palette.text.primary,
+      vinxTheme.colorSchemes.dark.palette.background.default,
+    ],
+    [
+      "dark text on paper",
+      vinxTheme.colorSchemes.dark.palette.text.primary,
+      vinxTheme.colorSchemes.dark.palette.background.paper,
+    ],
+    [
+      "dark primary on default",
+      vinxTheme.colorSchemes.dark.palette.primary.main,
+      vinxTheme.colorSchemes.dark.palette.background.default,
+    ],
+    [
+      "dark primary on paper",
+      vinxTheme.colorSchemes.dark.palette.primary.main,
+      vinxTheme.colorSchemes.dark.palette.background.paper,
+    ],
+  ])("keeps AA contrast for %s", (_name, foreground, background) => {
+    expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("uses valid contrast pairs for every company slot", () => {
+    for (const [, palette] of palettes) {
       for (const slot of Object.values(palette.companyAccent)) {
         expect(
           contrastRatio(slot.contrastText, slot.main),

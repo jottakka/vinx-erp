@@ -6,95 +6,99 @@ import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import type { ReactElement } from "react";
-import type { AppPath } from "../shared/routing/app-paths";
+import {
+  type AppPath,
+  type AppRouteCatalogEntry,
+  appRouteCatalog,
+  type AppNavigationLink as CatalogNavigationLink,
+} from "../shared/routing/app-paths";
 import { FeaturePreparationPage } from "./feature-preparation-page";
 import { HelpPage } from "./help-page";
 import { HomePage } from "./home-page";
 
-export const navigationGroups = ["workspace", "modules", "support"] as const;
-
-type AppNavigationGroup = (typeof navigationGroups)[number];
-
-export type AppRouteDefinition = {
-  path: AppPath;
-  label: string;
-  group: AppNavigationGroup;
-  icon: SvgIconComponent;
+export type AppRouteDefinition = AppRouteCatalogEntry & {
   element: ReactElement;
-  navigation: boolean;
+  icon: SvgIconComponent;
 };
 
-const moduleRouteDefinitions = [
-  {
-    path: "/paguai",
-    label: "Paguai",
-    group: "modules",
+export type AppNavigationLink = CatalogNavigationLink & {
+  icon: SvgIconComponent;
+};
+
+type AppRouteRenderer = (
+  navigationLinks: readonly AppNavigationLink[],
+) => ReactElement;
+
+type AppRoutePresentation = {
+  icon: SvgIconComponent;
+  render: AppRouteRenderer;
+};
+
+const routePresentation: Record<AppPath, AppRoutePresentation> = {
+  "/": {
+    icon: HomeOutlinedIcon,
+    render: (navigationLinks) => <HomePage navigationLinks={navigationLinks} />,
+  },
+  "/ajuda": {
+    icon: HelpOutlinedIcon,
+    render: (navigationLinks) => <HelpPage navigationLinks={navigationLinks} />,
+  },
+  "/paguai": {
     icon: PaymentsOutlinedIcon,
-    element: (
+    render: () => (
       <FeaturePreparationPage
         feature="Paguai"
         scope="Solicitações, conferência e fluxo financeiro."
       />
     ),
-    navigation: true,
   },
-  {
-    path: "/atendimento",
-    label: "Atendimento",
-    group: "modules",
+  "/atendimento": {
     icon: SupportAgentOutlinedIcon,
-    element: (
+    render: () => (
       <FeaturePreparationPage
         feature="Atendimento"
         scope="Fila, tickets e histórico de atendimento."
       />
     ),
-    navigation: true,
   },
-  {
-    path: "/kanban",
-    label: "Kanban",
-    group: "modules",
+  "/kanban": {
     icon: ViewKanbanOutlinedIcon,
-    element: (
+    render: () => (
       <FeaturePreparationPage
         feature="Kanban"
         scope="Quadros, cards e acompanhamento do trabalho."
       />
     ),
-    navigation: true,
   },
-  {
-    path: "/pessoas",
-    label: "Pessoas",
-    group: "modules",
+  "/pessoas": {
     icon: GroupsOutlinedIcon,
-    element: (
+    render: () => (
       <FeaturePreparationPage
         feature="Pessoas"
         scope="Diretório, ausências e visão de equipe."
       />
     ),
-    navigation: true,
   },
-] as const satisfies readonly AppRouteDefinition[];
+};
 
-export const appRouteManifest: readonly AppRouteDefinition[] = [
-  {
-    path: "/",
-    label: "Início",
-    group: "workspace",
-    icon: HomeOutlinedIcon,
-    element: <HomePage moduleLinks={moduleRouteDefinitions} />,
-    navigation: true,
-  },
-  ...moduleRouteDefinitions,
-  {
-    path: "/ajuda",
-    label: "Ajuda",
-    group: "support",
-    icon: HelpOutlinedIcon,
-    element: <HelpPage />,
-    navigation: true,
-  },
-] as const;
+const appRouteDefinitions = appRouteCatalog.map((route) => ({
+  ...route,
+  ...routePresentation[route.path],
+}));
+
+export const appNavigationLinks: readonly AppNavigationLink[] =
+  appRouteDefinitions
+    .filter((route) => route.navigation)
+    .map(({ group, icon, label, navigation, path }) => ({
+      group,
+      icon,
+      label,
+      navigation,
+      path,
+    }));
+
+export const appRouteManifest: readonly AppRouteDefinition[] =
+  appRouteDefinitions.map(({ render, ...route }) => ({
+    ...route,
+    element: render(appNavigationLinks),
+  }));

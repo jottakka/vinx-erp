@@ -136,15 +136,17 @@ describe("LoginPage", () => {
       screen.getByRole("button", { name: "Abrir preferências visuais" }),
     );
 
-    expect(screen.getByRole("menuitem", { name: "Tema: claro" })).toBeVisible();
     expect(
-      screen.getByRole("menuitem", { name: "Tema: escuro" }),
+      screen.getByRole("menuitemradio", { name: "Tema: claro" }),
     ).toBeVisible();
     expect(
-      screen.queryByRole("menuitem", { name: "Tema: sistema" }),
+      screen.getByRole("menuitemradio", { name: "Tema: escuro" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("menuitemradio", { name: "Tema: sistema" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("menuitem", { name: "Densidade: confortável" }),
+      screen.getByRole("menuitemradio", { name: "Densidade: confortável" }),
     ).toBeVisible();
   });
 
@@ -162,7 +164,7 @@ describe("LoginPage", () => {
       screen.getByRole("button", { name: "Abrir preferências visuais" }),
     );
     await user.click(
-      screen.getByRole("menuitem", { name: "Densidade: compacta" }),
+      screen.getByRole("menuitemradio", { name: "Densidade: compacta" }),
     );
 
     await waitFor(() => {

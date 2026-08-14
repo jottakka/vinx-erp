@@ -1,8 +1,12 @@
 import { Link, List, ListItem, Stack, Typography } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
-import { appRouteManifest } from "./app-route-manifest";
+import type { AppNavigationLink } from "../shared/routing/app-paths";
 
-export function HelpPage() {
+type HelpPageProps = {
+  navigationLinks: readonly AppNavigationLink[];
+};
+
+export function HelpPage({ navigationLinks }: HelpPageProps) {
   return (
     <Stack spacing={4}>
       <Stack spacing={1}>
@@ -23,7 +27,7 @@ export function HelpPage() {
           aplicativo.
         </Typography>
         <List>
-          {appRouteManifest
+          {navigationLinks
             .filter((item) => item.navigation)
             .map((item) => (
               <ListItem disableGutters key={item.path}>

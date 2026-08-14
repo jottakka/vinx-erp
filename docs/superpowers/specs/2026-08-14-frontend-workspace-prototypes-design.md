@@ -241,8 +241,13 @@ adicionado se arrastar a largura virar requisito explícito.
 O conjunto completo ultrapassa 25 arquivos e 800 linhas manuais. Ele será
 entregue em quatro PRs empilhados, cada um revisável:
 
-1. **Shell neutro e pontos de extensão** — 12–18 arquivos, 600–900 linhas:
-   temas, registro tipado, cabeçalho, regiões, home e infraestrutura do painel.
+1. **Shell neutro e pontos de extensão** — concluído com 21 arquivos fora de
+   teste e 1.600–1.700 linhas manuais alteradas: temas, catálogo/registro de
+   rotas, cabeçalho, navegação, Home, Ajuda e documentação. A fatia coesa
+   ultrapassou o alvo consultivo de 800 linhas porque testes de acessibilidade
+   e compatibilidade foram necessários para preservar menu, foco mobile,
+   preferências e retornos seguros. O desenho já aprovado permanece o único
+   registro de aprovação; esta estimativa não afirma aprovação humana adicional.
 2. **Laboratório, Paguai e Kanban** — 20–25 arquivos, 700–1.100 linhas:
    infraestrutura de protótipos, solicitações, conferência, financeiro, quadro,
    detalhe e movimento local.

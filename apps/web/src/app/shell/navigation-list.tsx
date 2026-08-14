@@ -9,11 +9,13 @@ import {
 } from "@mui/material";
 import { Fragment } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { appRouteManifest, navigationGroups } from "../app-route-manifest";
+import {
+  type AppNavigationGroup,
+  navigationGroups,
+} from "../../shared/routing/app-paths";
+import { appRouteManifest } from "../app-route-manifest";
 
-type NavigationGroupId = (typeof navigationGroups)[number];
-
-const navigationGroupLabels: Record<NavigationGroupId, string> = {
+const navigationGroupLabels: Record<AppNavigationGroup, string> = {
   modules: "Módulos",
   support: "Suporte",
   workspace: "Espaço de trabalho",
