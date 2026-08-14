@@ -52,6 +52,7 @@ builder.Services.AddScoped<CapabilityMapService>();
 builder.Services.AddScoped<ActorMembershipMapService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
+builder.Services.AddScoped<RevokeMembershipService>();
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddSingleton<IIdentityProvider>(new SupabaseIdentityProvider(normalizedAuthIssuer));
 builder.Services.AddScoped<InternalIdentityResolver>();

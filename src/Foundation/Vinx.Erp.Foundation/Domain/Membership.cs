@@ -18,4 +18,18 @@ public sealed class Membership : SoftDeletableEntity, ICompanyScoped
 
     public Company Company { get; private set; } = null!;
     public User User { get; private set; } = null!;
+
+    public void Revoke(string reason, Guid actorUserId, Guid requestId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (DeletedAt is not null)
+        {
+            return;
+        }
+
+        DeletedAt = DateTimeOffset.UtcNow;
+        DeletedByUserId = actorUserId;
+        DeletedReason = reason;
+        RecordUpdate(actorUserId, requestId);
+    }
 }
