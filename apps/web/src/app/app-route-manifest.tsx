@@ -6,9 +6,8 @@ import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import ScienceOutlinedIcon from "@mui/icons-material/ScienceOutlined";
 import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
-import type { ReactElement } from "react";
-import { PaguaiPrototypePage } from "../features/paguai/prototype/paguai-prototype-page";
-import { PrototypeIndexPage } from "../features/prototypes/prototype-index-page";
+import { CircularProgress, Stack, Typography } from "@mui/material";
+import { lazy, type ReactElement, Suspense } from "react";
 import {
   type AppRouteCatalogEntry,
   appRouteCatalog,
@@ -107,24 +106,63 @@ const productRouteManifest: readonly AppRouteDefinition[] =
     element: render(appNavigationLinks),
   }));
 
-const prototypeRoutes = [
-  {
-    element: <PrototypeIndexPage />,
-    group: "support",
-    icon: ScienceOutlinedIcon,
-    label: "Demonstração",
-    navigation: true,
-    path: "/prototipos",
-  },
-  {
-    element: <PaguaiPrototypePage />,
-    group: "support",
-    icon: ScienceOutlinedIcon,
-    label: "Paguai (demonstração)",
-    navigation: false,
-    path: "/prototipos/paguai",
-  },
-] as const satisfies readonly AppRouteDefinition[];
+function PrototypeRouteFallback() {
+  return (
+    <Stack
+      aria-label="Carregando protótipo"
+      role="status"
+      spacing={1}
+      sx={{ alignItems: "center", py: 6 }}
+    >
+      <CircularProgress aria-hidden />
+      <Typography>Carregando protótipo…</Typography>
+    </Stack>
+  );
+}
+
+function createPrototypeRoutes(): readonly AppRouteDefinition[] {
+  const PrototypeIndexPage = lazy(() =>
+    import("../features/prototypes/prototype-index-page").then((module) => ({
+      default: module.PrototypeIndexPage,
+    })),
+  );
+  const PaguaiPrototypePage = lazy(() =>
+    import("../features/paguai/prototype/paguai-prototype-page").then(
+      (module) => ({ default: module.PaguaiPrototypePage }),
+    ),
+  );
+
+  return [
+    {
+      element: (
+        <Suspense fallback={<PrototypeRouteFallback />}>
+          <PrototypeIndexPage />
+        </Suspense>
+      ),
+      group: "support",
+      icon: ScienceOutlinedIcon,
+      label: "Demonstração",
+      navigation: true,
+      path: "/prototipos",
+    },
+    {
+      element: (
+        <Suspense fallback={<PrototypeRouteFallback />}>
+          <PaguaiPrototypePage />
+        </Suspense>
+      ),
+      group: "support",
+      icon: ScienceOutlinedIcon,
+      label: "Paguai (demonstração)",
+      navigation: false,
+      path: "/prototipos/paguai",
+    },
+  ];
+}
+
+const prototypeRoutes: readonly AppRouteDefinition[] = import.meta.env.DEV
+  ? createPrototypeRoutes()
+  : [];
 
 export function selectPrototypeRoutes(enabled: boolean) {
   return enabled ? prototypeRoutes : [];

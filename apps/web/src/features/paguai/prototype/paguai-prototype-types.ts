@@ -11,6 +11,17 @@ export type PaguaiRequestStatus =
   | "paid"
   | "returned";
 
+export const paguaiReturnCategories = [
+  "Dados incorretos",
+  "Documento ausente",
+  "Outro",
+] as const;
+
+export type PaguaiReturnReason = {
+  category: (typeof paguaiReturnCategories)[number];
+  description: string;
+};
+
 export type PaguaiRequest = {
   id: string;
   description: string;
@@ -20,6 +31,7 @@ export type PaguaiRequest = {
   dueDate: string;
   invoiceState: "metadata" | "authorized";
   proofRequired: boolean;
+  returnReason?: PaguaiReturnReason;
 };
 
 export type PaguaiFilters = {
@@ -38,7 +50,7 @@ export type PaguaiState = {
 
 export type PaguaiAction =
   | { type: "createDraft"; request: PaguaiRequest }
-  | { type: "returnRequest"; id: string; reason: string }
+  | { type: "returnRequest"; id: string; reason: PaguaiReturnReason }
   | { type: "confirmPayment"; id: string }
   | { type: "select"; id: string | null }
   | { type: "setSection"; section: PaguaiSection }

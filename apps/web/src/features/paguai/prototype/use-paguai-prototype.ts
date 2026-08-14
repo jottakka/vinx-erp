@@ -5,6 +5,7 @@ import type {
   PaguaiCompany,
   PaguaiFilters,
   PaguaiRequest,
+  PaguaiReturnReason,
   PaguaiSection,
   PaguaiState,
 } from "./paguai-prototype-types";
@@ -27,7 +28,11 @@ export function paguaiReducer(
         demoEvents: [...state.demoEvents, "Solicitação devolvida para ajustes"],
         requests: state.requests.map((request) =>
           request.id === action.id
-            ? { ...request, status: "returned" }
+            ? {
+                ...request,
+                returnReason: action.reason,
+                status: "returned",
+              }
             : request,
         ),
       };
@@ -78,13 +83,19 @@ export function usePaguaiPrototype() {
   const selected = state.requests.find(
     (request) => request.id === state.selectedId,
   );
+  const conferenceRequests = state.requests.filter(
+    (request) => request.status === "conference",
+  );
+  const financeRequests = state.requests.filter(
+    (request) => request.status === "finance",
+  );
 
   return {
     actions: {
       confirmPayment: (id: string) => dispatch({ id, type: "confirmPayment" }),
       createDraft: (request: PaguaiRequest) =>
         dispatch({ request, type: "createDraft" }),
-      returnRequest: (id: string, reason: string) =>
+      returnRequest: (id: string, reason: PaguaiReturnReason) =>
         dispatch({ id, reason, type: "returnRequest" }),
       select: (id: string | null) => dispatch({ id, type: "select" }),
       setCompanyFilter: (company: PaguaiCompany | "all") =>
@@ -96,8 +107,10 @@ export function usePaguaiPrototype() {
       setStatusFilter: (status: PaguaiFilters["status"]) =>
         dispatch({ status, type: "setStatusFilter" }),
     },
-    filters: state.filters,
+    conferenceRequests,
     demoEvents: state.demoEvents,
+    filters: state.filters,
+    financeRequests,
     policyAudience: state.policyAudience,
     requests,
     selected,

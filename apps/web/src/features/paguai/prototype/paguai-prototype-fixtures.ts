@@ -22,6 +22,16 @@ export const paguaiRequestFixtures: readonly PaguaiRequest[] = [
     status: "finance",
   },
   {
+    amount: 2300,
+    company: "beta",
+    description: "Consultoria tributária",
+    dueDate: "2026-09-02",
+    id: "paguai-104",
+    invoiceState: "metadata",
+    proofRequired: false,
+    status: "conference",
+  },
+  {
     amount: 480,
     company: "alfa",
     description: "Material de escritório",

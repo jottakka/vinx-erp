@@ -41,6 +41,19 @@ describe("application routes", () => {
     expect(router.state.location.pathname).toBe("/prototipos");
   });
 
+  it("loads the direct Paguai prototype route through an accessible fallback", async () => {
+    const router = renderRoute("/prototipos/paguai", await signedInGateway());
+
+    expect(
+      await screen.findByRole("status", { name: "Carregando protótipo" }),
+    ).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "Paguai" }),
+    ).toBeVisible();
+    expect(screen.getByText("Dados de demonstração")).toBeVisible();
+    expect(router.state.location.pathname).toBe("/prototipos/paguai");
+  });
+
   it("returns no prototype route definitions when disabled", () => {
     expect(selectPrototypeRoutes(false)).toEqual([]);
   });

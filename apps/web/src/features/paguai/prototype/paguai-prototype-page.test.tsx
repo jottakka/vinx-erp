@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { PaguaiPrototypePage } from "./paguai-prototype-page";
@@ -8,11 +8,20 @@ describe("PaguaiPrototypePage", () => {
     const user = userEvent.setup();
     render(<PaguaiPrototypePage />);
 
-    await user.click(screen.getByRole("button", { name: "Nova solicitação" }));
-    await user.click(screen.getByRole("button", { name: "Salvar rascunho" }));
-    expect(screen.getByText("Selecione uma empresa")).toBeVisible();
+    const opener = screen.getByRole("button", { name: "Nova solicitação" });
+    await user.click(opener);
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+    await waitFor(() => expect(opener).toHaveFocus());
 
-    await user.click(screen.getByRole("combobox", { name: "Empresa" }));
+    await user.click(opener);
+    await user.click(screen.getByRole("button", { name: "Salvar rascunho" }));
+    const company = screen.getByRole("combobox", { name: "Empresa" });
+    const companyError = screen.getByText("Selecione uma empresa");
+    expect(companyError).toHaveAttribute("id", "paguai-company-error");
+    expect(company).toHaveAttribute("aria-describedby", "paguai-company-error");
+    expect(company).toHaveFocus();
+
+    await user.click(company);
     await user.click(screen.getByRole("option", { name: "Alfa" }));
     await user.type(screen.getByLabelText("Descrição"), "Licença anual");
     await user.type(screen.getByLabelText("Valor"), "1200");
@@ -22,27 +31,79 @@ describe("PaguaiPrototypePage", () => {
     expect(screen.getByText("Alteração local de demonstração")).toBeVisible();
   });
 
-  it("requires category and description before returning a conference request", async () => {
+  it("keeps request-list filters out of Conference and Finance", async () => {
+    const user = userEvent.setup();
+    render(<PaguaiPrototypePage />);
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar por empresa" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Beta" }));
+    expect(screen.getByText("Serviço de manutenção")).toBeVisible();
+    expect(screen.getByText("Consultoria tributária")).toBeVisible();
+    expect(screen.queryByText("Renovação de licença")).not.toBeInTheDocument();
+
+    const statusFilter = screen.getByRole("combobox", {
+      name: "Filtrar por status",
+    });
+    statusFilter.focus();
+    await user.keyboard("{Enter}fin{Enter}");
+    expect(statusFilter).toHaveTextContent("Financeiro");
+    expect(screen.getByText("Serviço de manutenção")).toBeVisible();
+    expect(
+      screen.queryByText("Consultoria tributária"),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Conferência" }));
+    expect(screen.getByText("Renovação de licença")).toBeVisible();
+    expect(screen.getByText("Consultoria tributária")).toBeVisible();
+
+    await user.click(screen.getByRole("tab", { name: "Financeiro" }));
+    expect(screen.getByText("Serviço de manutenção")).toBeVisible();
+  });
+
+  it("returns a concrete company request and preserves its local reason", async () => {
     const user = userEvent.setup();
     render(<PaguaiPrototypePage />);
 
     await user.click(screen.getByRole("tab", { name: "Conferência" }));
     await user.click(
-      screen.getByRole("button", { name: "Devolver para ajuste" }),
+      screen.getByRole("button", {
+        name: "Selecionar Consultoria tributária da empresa Beta",
+      }),
+    );
+    const selectedRequest = screen.getByRole("region", {
+      name: "Solicitação selecionada",
+    });
+    expect(within(selectedRequest).getByText("Empresa: Beta")).toBeVisible();
+    const returnTrigger = within(selectedRequest).getByRole("button", {
+      name: "Devolver Consultoria tributária para ajuste",
+    });
+
+    await user.click(returnTrigger);
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+    await waitFor(() => expect(returnTrigger).toHaveFocus());
+
+    await user.click(returnTrigger);
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar devolução" }),
     );
     const dialog = screen.getByRole("dialog", { name: "Devolver solicitação" });
-
-    await user.click(
-      within(dialog).getByRole("button", { name: "Confirmar devolução" }),
+    const category = within(dialog).getByRole("combobox", {
+      name: "Categoria",
+    });
+    const categoryError = within(dialog).getByText("Selecione uma categoria");
+    expect(categoryError).toHaveAttribute("id", "paguai-return-category-error");
+    expect(category).toHaveAttribute(
+      "aria-describedby",
+      "paguai-return-category-error",
     );
-    expect(within(dialog).getByText("Selecione uma categoria")).toBeVisible();
+    expect(category).toHaveFocus();
     expect(
       within(dialog).getByText("Descreva o motivo da devolução"),
     ).toBeVisible();
 
-    await user.click(
-      within(dialog).getByRole("combobox", { name: "Categoria" }),
-    );
+    await user.click(category);
     await user.click(screen.getByRole("option", { name: "Dados incorretos" }));
     await user.type(
       within(dialog).getByLabelText("Descrição da devolução"),
@@ -54,6 +115,13 @@ describe("PaguaiPrototypePage", () => {
 
     expect(
       screen.getByText("Solicitação devolvida para ajustes"),
+    ).toBeVisible();
+    expect(within(selectedRequest).getByText("Empresa: Beta")).toBeVisible();
+    expect(
+      within(selectedRequest).getByText("Categoria: Dados incorretos"),
+    ).toBeVisible();
+    expect(
+      within(selectedRequest).getByText("Motivo: Anexe a nota fiscal correta"),
     ).toBeVisible();
   });
 
