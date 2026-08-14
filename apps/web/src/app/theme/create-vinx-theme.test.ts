@@ -81,7 +81,7 @@ describe("vinx semantic theme", () => {
     }
   });
 
-  it("returns MUI defaults when storage is blocked or contains an invalid mode", () => {
+  it("normalizes mode storage defaults and invalid values to light", () => {
     const events = new Map<string, EventListener>();
     const throwingWindow = {
       localStorage: {
@@ -103,7 +103,7 @@ describe("vinx semantic theme", () => {
       manager({ key: "mui-mode", storageWindow: throwingWindow }).set("dark"),
     ).not.toThrow();
     expect(
-      manager({ key: "mui-mode", storageWindow: throwingWindow }).get("light"),
+      manager({ key: "mui-mode", storageWindow: throwingWindow }).get("dark"),
     ).toBe("light");
     expect(
       manager({ key: "mui-mode", storageWindow: throwingWindow }).subscribe(
@@ -120,9 +120,23 @@ describe("vinx semantic theme", () => {
       removeEventListener: () => {},
     } as unknown as Window;
 
+    const missingModeWindow = {
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {},
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as Window;
+    expect(
+      manager({ key: "mui-mode", storageWindow: missingModeWindow }).get(
+        "dark",
+      ),
+    ).toBe("light");
+
     expect(
       manager({ key: "mui-mode", storageWindow: invalidModeWindow }).get(
-        "light",
+        "dark",
       ),
     ).toBe("light");
 
@@ -132,9 +146,39 @@ describe("vinx semantic theme", () => {
     } as unknown as Window;
     expect(
       manager({ key: "mui-mode", storageWindow: legacySystemWindow }).get(
-        "light",
+        "dark",
       ),
     ).toBe("light");
+  });
+
+  it("normalizes invalid mode storage events to light", () => {
+    let listener: ((event: StorageEvent) => void) | undefined;
+    const modeWindow = {
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {},
+      },
+      addEventListener: (_type: string, nextListener: EventListener) => {
+        listener = nextListener as (event: StorageEvent) => void;
+      },
+      removeEventListener: () => {},
+    } as unknown as Window;
+    const manager = createVinxStorageManager({ key: "vinx.visual.v1" });
+    const changes: unknown[] = [];
+
+    manager({ key: "mui-mode", storageWindow: modeWindow }).subscribe((value) =>
+      changes.push(value),
+    );
+    listener?.({
+      key: "vinx.visual.v1.mui-mode",
+      newValue: "system",
+    } as StorageEvent);
+    listener?.({
+      key: "vinx.visual.v1.mui-mode",
+      newValue: null,
+    } as StorageEvent);
+
+    expect(changes).toEqual(["light", "light"]);
   });
 
   it("returns MUI defaults for invalid MUI color-scheme keys in reads and subscriptions", () => {
@@ -158,7 +202,7 @@ describe("vinx semantic theme", () => {
       });
       const changes: unknown[] = [];
 
-      expect(schemeStorage.get("light")).toBe("light");
+      expect(schemeStorage.get("dark")).toBe("dark");
       schemeStorage.subscribe((value) => changes.push(value));
       listener?.({
         key: `vinx.visual.v1.${storageKey}`,

@@ -45,19 +45,20 @@ export function createVinxStorageManager({
           const value = storageWindow?.localStorage.getItem(prefixedKey);
 
           if (value === null || value === undefined) {
-            return defaultValue;
+            return modeKey ? "light" : defaultValue;
           }
 
-          if (
-            (modeKey && !supportedModes.has(value)) ||
-            (schemeKey && !supportedSchemes.has(value))
-          ) {
+          if (modeKey && !supportedModes.has(value)) {
+            return "light";
+          }
+
+          if (schemeKey && !supportedSchemes.has(value)) {
             return defaultValue;
           }
 
           return value;
         } catch {
-          return defaultValue;
+          return modeKey ? "light" : defaultValue;
         }
       },
       set(value: unknown) {
@@ -78,9 +79,17 @@ export function createVinxStorageManager({
           }
 
           if (
+            modeKey &&
+            (event.newValue === null || !supportedModes.has(event.newValue))
+          ) {
+            handler("light");
+            return;
+          }
+
+          if (
+            schemeKey &&
             event.newValue !== null &&
-            ((modeKey && !supportedModes.has(event.newValue)) ||
-              (schemeKey && !supportedSchemes.has(event.newValue)))
+            !supportedSchemes.has(event.newValue)
           ) {
             handler(undefined);
             return;
