@@ -1,6 +1,6 @@
 import { Link, List, ListItem, Stack, Typography } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
-import { appNavigationItems } from "./app-navigation";
+import { appRouteManifest } from "./app-route-manifest";
 
 export function HelpPage() {
   return (
@@ -23,13 +23,15 @@ export function HelpPage() {
           aplicativo.
         </Typography>
         <List>
-          {appNavigationItems.map((item) => (
-            <ListItem disableGutters key={item.path}>
-              <Link component={RouterLink} to={item.path}>
-                {item.label}
-              </Link>
-            </ListItem>
-          ))}
+          {appRouteManifest
+            .filter((item) => item.navigation)
+            .map((item) => (
+              <ListItem disableGutters key={item.path}>
+                <Link component={RouterLink} to={item.path}>
+                  {item.label}
+                </Link>
+              </ListItem>
+            ))}
         </List>
       </Stack>
       <Stack component="section" spacing={1}>

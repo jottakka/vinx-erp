@@ -30,6 +30,18 @@ async function signedInGateway() {
 }
 
 describe("application routes", () => {
+  it.each([
+    ["/paguai", "Paguai"],
+    ["/atendimento", "Atendimento"],
+    ["/kanban", "Kanban"],
+    ["/pessoas", "Pessoas"],
+  ])("protects and renders %s", async (path, heading) => {
+    const router = renderRoute(path, await signedInGateway());
+
+    expect(await screen.findByRole("heading", { name: heading })).toBeVisible();
+    expect(router.state.location.pathname).toBe(path);
+  });
+
   it("renders the professional all-authorized home at the authenticated root", async () => {
     const router = renderRoute("/", await signedInGateway());
 
@@ -63,10 +75,47 @@ describe("application routes", () => {
     expect(router.state.location.pathname).toBe("/ajuda");
   });
 
+  it("returns an anonymous module deep link safely after sign-in", async () => {
+    const user = userEvent.setup();
+    const router = renderRoute("/paguai", createMockSessionGateway());
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Entrada do ambiente de desenvolvimento",
+      }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Paguai" }),
+    ).toBeVisible();
+    expect(router.state.location.pathname).toBe("/paguai");
+  });
+
   it("rejects a query-bearing protected return path after sign-in", async () => {
     const user = userEvent.setup();
     const router = renderRoute(
       "/ajuda?origem=externa",
+      createMockSessionGateway(),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Entrada do ambiente de desenvolvimento",
+      }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Início" }),
+    ).toBeVisible();
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("rejects a query-bearing module return path after sign-in", async () => {
+    const user = userEvent.setup();
+    const router = renderRoute(
+      "/paguai?empresa=alfa",
       createMockSessionGateway(),
     );
 

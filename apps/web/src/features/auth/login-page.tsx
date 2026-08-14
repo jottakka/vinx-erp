@@ -1,8 +1,8 @@
 import { Alert, Button, Stack, TextField, Typography } from "@mui/material";
 import { type FormEvent, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { resolveAppPath } from "../../app/app-navigation";
 import { PublicLayout } from "../../app/public-layout";
+import { resolveAppPath } from "../../shared/routing/app-paths";
 import { useSession } from "./session-provider";
 
 const profileErrorId = "development-profile-error";

@@ -25,7 +25,7 @@ import {
 import { useSession } from "../features/auth/session-provider";
 import { AppLogo } from "../shared/ui/app-logo";
 import { AppearanceMenu } from "../shared/ui/appearance-menu";
-import { appNavigationItems } from "./app-navigation";
+import { appRouteManifest, navigationGroups } from "./app-route-manifest";
 
 function NavigationList({
   label,
@@ -39,25 +39,31 @@ function NavigationList({
   return (
     <Box aria-label={label} component="nav">
       <List>
-        {appNavigationItems.map((item) => {
-          const Icon = item.icon;
+        {navigationGroups
+          .flatMap((group) =>
+            appRouteManifest.filter(
+              (item) => item.group === group && item.navigation,
+            ),
+          )
+          .map((item) => {
+            const Icon = item.icon;
 
-          return (
-            <ListItem disablePadding key={item.path}>
-              <ListItemButton
-                component={NavLink}
-                onClick={onNavigate}
-                selected={location.pathname === item.path}
-                to={item.path}
-              >
-                <ListItemIcon>
-                  <Icon />
-                </ListItemIcon>
-                <ListItemText primary={item.label} />
-              </ListItemButton>
-            </ListItem>
-          );
-        })}
+            return (
+              <ListItem disablePadding key={item.path}>
+                <ListItemButton
+                  component={NavLink}
+                  onClick={onNavigate}
+                  selected={location.pathname === item.path}
+                  to={item.path}
+                >
+                  <ListItemIcon>
+                    <Icon />
+                  </ListItemIcon>
+                  <ListItemText primary={item.label} />
+                </ListItemButton>
+              </ListItem>
+            );
+          })}
       </List>
     </Box>
   );

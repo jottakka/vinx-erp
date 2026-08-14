@@ -1,9 +1,21 @@
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import {
+  createBrowserRouter,
+  Navigate,
+  type RouteObject,
+} from "react-router-dom";
 import { LoginPage } from "../features/auth/login-page";
+import {
+  type AppRouteDefinition,
+  appRouteManifest,
+} from "./app-route-manifest";
 import { AppShell } from "./app-shell";
-import { HelpPage } from "./help-page";
-import { HomePage } from "./home-page";
 import { ProtectedRoute } from "./protected-route";
+
+function toChildRoute({ element, path }: AppRouteDefinition): RouteObject {
+  return path === "/"
+    ? { element, index: true }
+    : { element, path: path.slice(1) };
+}
 
 export function createAppRouter() {
   return createBrowserRouter([
@@ -18,10 +30,7 @@ export function createAppRouter() {
         </ProtectedRoute>
       ),
       path: "/",
-      children: [
-        { element: <HomePage />, index: true },
-        { element: <HelpPage />, path: "ajuda" },
-      ],
+      children: appRouteManifest.map(toChildRoute),
     },
     {
       element: (

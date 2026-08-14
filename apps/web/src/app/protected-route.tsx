@@ -2,7 +2,7 @@ import { Box, CircularProgress, Stack, Typography } from "@mui/material";
 import type { ReactNode } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useSession } from "../features/auth/session-provider";
-import { isKnownAppPath } from "./app-navigation";
+import { isKnownAppPath } from "../shared/routing/app-paths";
 
 type ProtectedRouteProps = {
   children: ReactNode;
