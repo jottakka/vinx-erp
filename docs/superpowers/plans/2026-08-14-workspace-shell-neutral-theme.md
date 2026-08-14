@@ -40,6 +40,7 @@
 - `apps/web/src/app/theme/create-vinx-theme.ts`
 - `apps/web/src/app/theme/vinx-theme-provider.tsx`
 - `apps/web/src/app/theme/create-vinx-theme.test.ts`
+- `apps/web/src/app/theme/visual-preferences.test.tsx`
 - `apps/web/src/shared/ui/appearance-menu.tsx`
 - `apps/web/src/shared/ui/appearance-menu.test.tsx`
 - `apps/web/src/app/app-shell.tsx`
@@ -48,6 +49,7 @@
 - `apps/web/src/app/router.tsx`
 - `apps/web/src/app/router.test.tsx`
 - `apps/web/src/features/auth/login-page.tsx`
+- `apps/web/src/features/auth/login-page.test.tsx`
 - `apps/web/src/app/protected-route.tsx`
 - `apps/web/e2e/app-shell-home.spec.ts`
 - `apps/web/e2e/visual-theme-login.spec.ts`
@@ -66,8 +68,10 @@
 - Modify: `apps/web/src/app/theme/create-vinx-theme.ts`
 - Modify: `apps/web/src/app/theme/vinx-theme-provider.tsx`
 - Modify: `apps/web/src/app/theme/create-vinx-theme.test.ts`
+- Modify: `apps/web/src/app/theme/visual-preferences.test.tsx`
 - Modify: `apps/web/src/shared/ui/appearance-menu.tsx`
 - Modify: `apps/web/src/shared/ui/appearance-menu.test.tsx`
+- Modify: `apps/web/src/features/auth/login-page.test.tsx`
 
 **Interfaces:**
 
@@ -362,10 +366,10 @@ export type AppRouteDefinition = {
 
 export const appRouteManifest: readonly AppRouteDefinition[] = [
   { path: "/", label: "Início", group: "workspace", icon: HomeOutlinedIcon, element: <HomePage />, navigation: true },
-  { path: "/paguai", label: "Paguai", group: "modules", icon: PaymentsOutlinedIcon, element: <FeaturePreparationPage feature="Paguai" />, navigation: true },
-  { path: "/atendimento", label: "Atendimento", group: "modules", icon: SupportAgentOutlinedIcon, element: <FeaturePreparationPage feature="Atendimento" />, navigation: true },
-  { path: "/kanban", label: "Kanban", group: "modules", icon: ViewKanbanOutlinedIcon, element: <FeaturePreparationPage feature="Kanban" />, navigation: true },
-  { path: "/pessoas", label: "Pessoas", group: "modules", icon: GroupsOutlinedIcon, element: <FeaturePreparationPage feature="Pessoas" />, navigation: true },
+  { path: "/paguai", label: "Paguai", group: "modules", icon: PaymentsOutlinedIcon, element: <FeaturePreparationPage feature="Paguai" scope="Solicitações, conferência e fluxo financeiro." />, navigation: true },
+  { path: "/atendimento", label: "Atendimento", group: "modules", icon: SupportAgentOutlinedIcon, element: <FeaturePreparationPage feature="Atendimento" scope="Fila, tickets e histórico de atendimento." />, navigation: true },
+  { path: "/kanban", label: "Kanban", group: "modules", icon: ViewKanbanOutlinedIcon, element: <FeaturePreparationPage feature="Kanban" scope="Quadros, cards e acompanhamento do trabalho." />, navigation: true },
+  { path: "/pessoas", label: "Pessoas", group: "modules", icon: GroupsOutlinedIcon, element: <FeaturePreparationPage feature="Pessoas" scope="Diretório, ausências e visão de equipe." />, navigation: true },
   { path: "/ajuda", label: "Ajuda", group: "support", icon: HelpOutlinedIcon, element: <HelpPage />, navigation: true },
 ] as const;
 ```
