@@ -69,3 +69,48 @@ test("authenticated shell keeps accessible landmarks and semantic colors across 
     .analyze();
   expect(results.violations).toEqual([]);
 });
+
+test("Scenario: Authorized user visits preparation modules, chooses themes and restores mobile navigation focus", async ({
+  page,
+}) => {
+  await enterHome(page);
+
+  for (const [name, path] of [
+    ["Paguai", "/paguai"],
+    ["Atendimento", "/atendimento"],
+    ["Kanban", "/kanban"],
+    ["Pessoas", "/pessoas"],
+  ] as const) {
+    await page.getByRole("link", { name }).first().click();
+    await expect(page).toHaveURL(new RegExp(`${path}$`));
+    await expect(page.getByRole("heading", { name })).toBeVisible();
+    await expect(
+      page
+        .getByRole("main")
+        .locator("header")
+        .getByText("Módulo em preparação", { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("link", { name: "Voltar ao Início" }).click();
+    await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
+  }
+
+  const appearanceTrigger = page.getByRole("button", {
+    name: "Abrir preferências visuais",
+  });
+  await appearanceTrigger.click();
+  await page.getByRole("menuitem", { name: "Tema: claro" }).click();
+  await appearanceTrigger.click();
+  await page.getByRole("menuitem", { name: "Tema: escuro" }).click();
+
+  await page.setViewportSize({ height: 800, width: 320 });
+  const navigationTrigger = page.getByRole("button", {
+    name: "Abrir navegação",
+  });
+  await navigationTrigger.focus();
+  await navigationTrigger.press("Enter");
+  await expect(
+    page.getByRole("navigation", { name: "Navegação principal" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(navigationTrigger).toBeFocused();
+});

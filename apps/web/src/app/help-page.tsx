@@ -49,9 +49,9 @@ export function HelpPage() {
           Aparência e densidade
         </Typography>
         <Typography color="text.secondary">
-          Abra as preferências visuais no cabeçalho para escolher tema claro,
-          escuro ou do sistema, além da densidade confortável ou compacta. Essas
-          escolhas mudam somente a apresentação da interface.
+          Abra as preferências visuais no cabeçalho para escolher tema claro ou
+          escuro, além da densidade confortável ou compacta. Essas escolhas
+          mudam somente a apresentação da interface.
         </Typography>
       </Stack>
       <Stack component="section" spacing={1}>

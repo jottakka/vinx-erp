@@ -5,9 +5,8 @@ da interface.
 
 ## Tema
 
-- **Sistema** acompanha a preferência de claro ou escuro do dispositivo.
-- **Claro** mantém a interface clara.
-- **Escuro** mantém a interface escura.
+- **Tema: claro** mantém a interface clara.
+- **Tema: escuro** mantém a interface escura.
 
 ## Densidade
 
@@ -21,8 +20,6 @@ selecionam uma empresa.
 Cada empresa recebe uma cor auxiliar estável para facilitar leitura de listas
 multiempresa. Essa cor é identidade visual, nunca evidência de acesso.
 
-## Próximo local de consulta
+## Ajuda
 
-Enquanto a central `/ajuda` não estiver disponível, esta tela é a referência
-para as preferências visuais. A entrega #168 publicará este conteúdo em ajuda
-para clientes.
+A central **Ajuda** repete estas orientações para uso durante a navegação.

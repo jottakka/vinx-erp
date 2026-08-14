@@ -154,27 +154,28 @@ test("reload returns to /login while the selected visual mode restores", async (
   await expect(page.getByRole("heading", { name: "Início" })).not.toBeVisible();
 });
 
-test("dark, light and emulated system modes expose semantic computed palette roles", async ({
-  page,
-}) => {
+test("appearance menu exposes only light and dark themes", async ({ page }) => {
   await waitForLogin(page);
 
-  await chooseAppearance(page, "Tema: claro");
-  const light = await readSemanticSurface(page);
-  expect(light.backgroundRole).not.toBe("");
-  expect(light.background).not.toBe("");
+  await page
+    .getByRole("button", { name: "Abrir preferências visuais" })
+    .click();
+  await expect(
+    page.getByRole("menuitem", { name: "Tema: claro" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "Tema: escuro" }),
+  ).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /^Tema:/ })).toHaveCount(2);
+});
 
-  await chooseAppearance(page, "Tema: escuro");
-  const dark = await readSemanticSurface(page);
-  expect(dark.backgroundRole).not.toBe("");
-  expect(dark.backgroundRole).not.toBe(light.backgroundRole);
-  expect(dark.background).not.toBe(light.background);
+test("Help describes only the light and dark themes", async ({ page }) => {
+  await enterApplication(page);
+  await page.getByRole("link", { name: "Abrir ajuda" }).click();
 
-  await page.emulateMedia({ colorScheme: "dark" });
-  await chooseAppearance(page, "Tema: sistema");
-  const system = await readSemanticSurface(page);
-  expect(system.scheme).toBe("dark");
-  expect(system.background).toBe(dark.background);
+  await expect(page.getByRole("heading", { name: "Ajuda" })).toBeVisible();
+  await expect(page.getByText(/tema claro ou escuro/i)).toBeVisible();
+  await expect(page.getByText(/sistema/i)).toHaveCount(0);
 });
 
 test("mobile login at 320 CSS pixels has no horizontal overflow", async ({
