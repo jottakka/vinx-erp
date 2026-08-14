@@ -50,6 +50,29 @@ ativa não cria auditoria; barreira, revogação e colisão produzem negação
 auditada sem identificador externo. O gate cria o `ActorContext` e decide
 entre `401` e `503` antes do endpoint protegido.
 
+`GET /foundation/memberships` usa somente esse `ActorContext`. Em uma única
+transação de leitura, descobre as memberships ativas do ator e projeta as
+capabilities efetivas por empresa, em ordem de nome da empresa. Cada empresa
+recebe contexto RLS próprio antes da leitura de grants; uma membership válida
+sem grant retorna `capabilities: []`. A resposta não expõe papéis, identidade
+externa ou dados de autenticação. Falha de descoberta retorna `503` seguro.
+`GET /foundation/capabilities?companyId=` continua sendo o contrato de uma
+única empresa e preserva suas negações auditáveis.
+
+`RevokeMembershipService` é um serviço interno de aplicação, registrado no
+host sem rota HTTP, MCP ou interface. O comando traz empresa, membership e
+`request_id`; exige membership ativa do ator e a capability
+`foundation.memberships.revoke` exatamente em escopo `company`. A autorização
+é sempre avaliada antes da idempotência. Depois dela, um replay com o mesmo
+payload vence a busca da membership já excluída e devolve o sucesso original;
+payload diferente retorna `idempotency_conflict` e novo `request_id` para a
+membership revogada retorna `resource_not_found`. O alvo de outra empresa não
+é revelado. A transição faz soft-delete, idempotência e auditoria
+`foundation.memberships.revoke` na mesma transação; falha de auditoria desfaz
+tudo. A operação registra a métrica segura `membership_revocation` quando a
+auditoria ou a transação ficam indisponíveis. Ela não revoga sessão nem altera
+as memberships de outras empresas.
+
 `POST /foundation/identity/sessions/revoke-all` não recebe corpo, usuário,
 empresa nem alvo. Ele usa somente o `ActorContext` estabelecido pelo gate e
 revoga todas as sessões da própria pessoa pela função transacional existente.
@@ -115,13 +138,24 @@ The first migration is `InitialFoundationBaseline`.
 
 A fronteira atual de ownership usa `vinx_migrator LOGIN NOINHERIT
 NOBYPASSRLS`, `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`,
-`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
-`vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O último possui somente
-`USAGE` em `foundation`, `SELECT` em `foundation.users` e `UPDATE` apenas na
-coluna `sessions_valid_after`, necessário para o `FOR UPDATE` da função de
-admissão de sessão. O runtime não recebe esse `UPDATE` nem leitura direta de
-`users`. Essas roles são distintas das roles legadas do Supabase: `anon`,
+`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`,
+`vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
+`vinx_authorization_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O owner de
+identidade possui somente `USAGE` em `foundation`, `SELECT` em
+`foundation.users` e `UPDATE` apenas na coluna `sessions_valid_after`,
+necessário para o `FOR UPDATE` da função de admissão de sessão. O owner de
+autorização recebe leitura somente de `memberships` e `companies` para
+`current_actor_memberships()`, e suas policies RLS exclusivas não se aplicam
+ao runtime. O runtime não recebe `UPDATE` amplo nem leitura global dessas
+tabelas. Essas roles são distintas das roles legadas do Supabase: `anon`,
 `authenticated` e `service_role`.
+
+A revogação de membership marca somente o soft-delete e a auditoria técnica da
+própria membership. Ela não revoga sessões nem altera `sessions_valid_after`.
+O runtime recebe `UPDATE` apenas nas
+colunas de ciclo de vida da revogação, auditoria de alteração e `row_version`;
+`INSERT`, `DELETE` e chaves da membership continuam negados, sob a policy RLS
+de empresa já existente.
 
 ## Module responsibilities
 
