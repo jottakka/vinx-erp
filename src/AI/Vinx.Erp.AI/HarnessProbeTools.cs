@@ -17,6 +17,18 @@ public sealed class HarnessProbeWriteCounter
 
     public int Count => Volatile.Read(ref count);
 
+    /// <summary>Snapshot thread-safe dos <c>RequestIds</c> de execução já registrados.</summary>
+    public IReadOnlyList<Guid> RecordedRequestIds
+    {
+        get
+        {
+            lock (gate)
+            {
+                return resultsByRequestId.Keys.ToList();
+            }
+        }
+    }
+
     public string RecordWrite(Guid requestId)
     {
         lock (gate)
@@ -51,9 +63,9 @@ public static class HarnessProbeTools
             Description = "Sonda somente leitura do harness VINX; retorna estado estático do servidor.",
         }));
 
-    public static AIFunction CreateWriteTool(HarnessProbeWriteCounter counter, Guid executionRequestId) =>
+    internal static AIFunction CreateWriteTool(HarnessProbeWriteCounter counter, HarnessExecutionRequestIdSource requestIdSource) =>
         ApplyPolicy(AIFunctionFactory.Create(
-            () => counter.RecordWrite(executionRequestId),
+            () => counter.RecordWrite(requestIdSource.Resolve()),
             new AIFunctionFactoryOptions
             {
                 Name = VinxToolPolicy.ProbeWriteToolName,

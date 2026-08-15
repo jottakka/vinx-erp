@@ -8,4 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Foundation\Vinx.Erp.Foundation\Vinx.Erp.Foundation.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Vinx.Erp.AI.UnitTests" />
+  </ItemGroup>
 </Project>
