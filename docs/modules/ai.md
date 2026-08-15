@@ -72,8 +72,8 @@ não existe e a confirmação retorna `ProposalUnavailable`; não há promessa d
 replay de `AgentResponse` através de reinicialização.
 
 O shutdown fecha a porta antes de cancelar o trabalho, quiesce a varredura,
-arbitra atomicamente o início do veto, aguarda dreno limitado e impede entrega
-tardia. Não é garantida execução
+arbitra atomicamente o início das entregas de confirmação e veto, aguarda dreno
+limitado e impede entrega tardia. Não é garantida execução
 exatamente uma vez: aprovação é single-use e a escrita precisa de sua própria
 idempotência de domínio.
 
