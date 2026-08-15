@@ -384,7 +384,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
             Task<AgentResponse> deliveryTask;
             lock (gate)
             {
-                if (!IsCurrentEntryLocked(proposalId, entry))
+                if (isStopping || !IsCurrentEntryLocked(proposalId, entry))
                 {
                     throw new InvalidOperationException(
                         "Veto durável consumido sem registro local correspondente (fail-closed).");
@@ -482,7 +482,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         }
 
         var observedOwners = Task.WhenAll(ownerSnapshots.Select(ObserveAsync));
-        var cleanupTasks = entries.Select(StartOwnedCleanup).ToList();
+        var cleanupTasks = entries.Select(entry => StartOwnedCleanup(entry)).ToList();
         var finalization = Task.WhenAll(
             [
                 ObserveAsync(observedOwners),
@@ -505,19 +505,26 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         }
     }
 
-    private Task StartOwnedCleanup(PendingProposal entry)
+    private Task StartOwnedCleanup(
+        PendingProposal entry,
+        TaskCompletionSource<bool>? publishedCleanup = null)
     {
-        var cleanupTask = CleanupDetachedEntryAsync(entry);
-        lock (gate)
+        if (publishedCleanup is null)
         {
-            ownedCleanupTasks.RemoveWhere(task => task.IsCompleted);
-            ownedCleanupTasks.Add(cleanupTask);
+            lock (gate)
+            {
+                ownedCleanupTasks.RemoveWhere(task => task.IsCompleted);
+                publishedCleanup = NewTcs<bool>();
+                ownedCleanupTasks.Add(publishedCleanup.Task);
+            }
         }
 
-        return cleanupTask;
+        return CleanupDetachedEntryAsync(entry, publishedCleanup);
     }
 
-    private async Task CleanupDetachedEntryAsync(PendingProposal entry)
+    private async Task CleanupDetachedEntryAsync(
+        PendingProposal entry,
+        TaskCompletionSource<bool> publishedCleanup)
     {
         try
         {
@@ -527,6 +534,10 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Limpeza de proposta destacada falhou de forma segura.");
+        }
+        finally
+        {
+            publishedCleanup.TrySetResult(true);
         }
     }
 
@@ -703,7 +714,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
     {
         lock (gate)
         {
-            if (!IsCurrentEntryLocked(proposalId, entry))
+            if (isStopping || !IsCurrentEntryLocked(proposalId, entry))
             {
                 throw new InvalidOperationException(
                     "Resultado durável consumido sem registro local correspondente (fail-closed).");
@@ -945,6 +956,8 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
 
                 if (proposals.TryGetValue(proposalId, out var current) && ReferenceEquals(current, entry))
                 {
+                    entry.CleanupCompletion = NewTcs<bool>();
+                    ownedCleanupTasks.Add(entry.CleanupCompletion.Task);
                     proposals.Remove(proposalId);
                     detached.Add(entry);
                 }
@@ -953,7 +966,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
 
         foreach (var entry in detached)
         {
-            StartOwnedCleanup(entry);
+            StartOwnedCleanup(entry, entry.CleanupCompletion!);
         }
     }
 
@@ -1078,6 +1091,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         public DateTimeOffset? VetoDeadlineAt { get; set; }
         public Task? VetoTask { get; set; }
         public int VetoResourcesDisposed;
+        public TaskCompletionSource<bool>? CleanupCompletion { get; set; }
 
         private static TaskCompletionSource<bool> CompletedTcs()
         {
