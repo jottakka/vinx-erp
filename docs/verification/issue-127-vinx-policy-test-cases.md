@@ -11,7 +11,7 @@ determinístico. `quality/private` não faz parte desta evidência.
 | AI | `dotnet test tests/public/Vinx.Erp.AI.UnitTests --no-restore --nologo -v q` | 44/44, coberto |
 | FU | `dotnet test tests/public/Vinx.Erp.Foundation.UnitTests --no-restore --nologo -v q` | 118/118, coberto |
 | WI | `dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests --no-restore --filter FullyQualifiedName~ApprovalCoordinatorDurableLifecycleTests --blame-hang-timeout 60s --blame-hang-dump-type none -v q` | 6/6, coberto |
-| AS | `dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests --no-restore --filter FullyQualifiedName~ApprovalServicesIntegrationTests --blame-hang-timeout 60s --blame-hang-dump-type none -v q` | 31/31, coberto |
+| AS | `dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests --no-restore --filter FullyQualifiedName~ApprovalServicesIntegrationTests --blame-hang-timeout 60s --blame-hang-dump-type none -v q` | 32/32, coberto |
 | AM | `dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests --no-restore --filter FullyQualifiedName~ApprovalsMigrationTests --blame-hang-timeout 60s --blame-hang-dump-type none -v q` | 6/6, coberto |
 | ARQ | `dotnet test tests/public/Vinx.Erp.ArchitectureTests --no-restore --filter Category!=SupabaseStorage -v q` | 17/17, coberto |
 
@@ -59,6 +59,7 @@ determinístico. `quality/private` não faz parte desta evidência.
 
 | Dado / quando / então | Teste xUnit atual | Status / comando |
 |---|---|---|
+| Preparação concorrente com o mesmo `RequestId` recupera o resultado após um primeiro read vazio, sem negação ou duplicidade | `tests/public/Vinx.Erp.Foundation.IntegrationTests/ApprovalServicesIntegrationTests.cs::ApprovalServicesIntegrationTests.Concurrent_preparation_replays_when_the_first_idempotency_read_precedes_the_winner_commit` | Coberto / AS |
 | Confirmações concorrentes com o mesmo pedido produzem um claim e replays | `tests/public/Vinx.Erp.Foundation.IntegrationTests/ApprovalServicesIntegrationTests.cs::ApprovalServicesIntegrationTests.Concurrent_confirmations_with_the_same_request_produce_one_claim_and_replays` | Coberto / AS |
 | Pedidos distintos concorrentes produzem um claim e conflitos auditados | `tests/public/Vinx.Erp.Foundation.IntegrationTests/ApprovalServicesIntegrationTests.cs::ApprovalServicesIntegrationTests.Concurrent_confirmations_with_distinct_requests_produce_one_claim_and_audited_conflicts` | Coberto / AS |
 | Coordenador alcança Foundation a cada confirmação e executa uma vez | `tests/public/Vinx.Erp.Foundation.IntegrationTests/ApprovalCoordinatorDurableLifecycleTests.cs::ApprovalCoordinatorDurableLifecycleTests.Concurrent_same_confirmation_request_reaches_foundation_each_time_and_executes_once` | Coberto / WI |

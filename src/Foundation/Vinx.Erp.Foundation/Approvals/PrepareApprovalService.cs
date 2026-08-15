@@ -99,7 +99,13 @@ public sealed class PrepareApprovalService(
                     cancellationToken);
                 if (liveProposalExists)
                 {
-                    denial = AuthorizationErrorCode.ProposalConflict;
+                    await transaction.RollbackAsync(cancellationToken);
+                    return await ReturnConcurrentReplayAsync(
+                        actor,
+                        command,
+                        idempotencyHash,
+                        proposalConflictWhenAbsent: true,
+                        cancellationToken);
                 }
                 else
                 {

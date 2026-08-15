@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Data.Common;
 using System.Diagnostics.Metrics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Vinx.Erp.Foundation.Approvals;
@@ -143,6 +145,51 @@ public sealed class ApprovalServicesIntegrationTests
         Assert.Single(await administrator.Approvals.ToListAsync());
         Assert.Equal(1, await administrator.AuditEvents.CountAsync(audit =>
             audit.Action == "ai.approvals.prepare" && audit.Outcome == AuditOutcome.Success));
+    }
+
+    [Fact]
+    public async Task Concurrent_preparation_replays_when_the_first_idempotency_read_precedes_the_winner_commit()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+        var requestId = Guid.NewGuid();
+        var payload = Payload("""{"alvo":"estoque"}""");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var gate = new FirstIdempotencyReadGate();
+        await using var retrierDatabase = CreateRuntimeContext(fixture, gate);
+        var retry = CreatePrepareService(retrierDatabase).PrepareAsync(
+            new ActorContext(scenario.ActorUserId, Guid.NewGuid()),
+            new PrepareApprovalCommand(
+                scenario.CompanyId,
+                requestId,
+                Action,
+                payload,
+                PolicyVersion),
+            timeout.Token);
+
+        try
+        {
+            await gate.FirstRead.WaitAsync(timeout.Token);
+
+            var winner = await PrepareAsync(fixture, scenario, requestId, payload);
+            Assert.True(winner.IsSuccess);
+
+            gate.Release();
+            var replay = await retry.WaitAsync(timeout.Token);
+
+            Assert.True(replay.IsSuccess);
+            Assert.Equal(winner.Value, replay.Value);
+            await using var administrator = fixture.CreateAdministratorDbContext();
+            Assert.Single(await administrator.Approvals.ToListAsync());
+            Assert.Equal(1, await administrator.AuditEvents.CountAsync(audit =>
+                audit.Action == "ai.approvals.prepare" && audit.Outcome == AuditOutcome.Success));
+            Assert.Empty(await administrator.AuditEvents.Where(audit =>
+                audit.Outcome == AuditOutcome.Denied).ToListAsync());
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     [Fact]
@@ -755,11 +802,14 @@ public sealed class ApprovalServicesIntegrationTests
         return fixture;
     }
 
-    private static FoundationDbContext CreateRuntimeContext(FoundationPostgresFixture fixture) =>
+    private static FoundationDbContext CreateRuntimeContext(
+        FoundationPostgresFixture fixture,
+        params IInterceptor[] interceptors) =>
         new(new DbContextOptionsBuilder<FoundationDbContext>()
             .UseNpgsql(fixture.RuntimeConnectionString)
             .UseSnakeCaseNamingConvention()
             .AddInterceptors(new RowVersionInterceptor())
+            .AddInterceptors(interceptors)
             .Options);
 
     private static PrepareApprovalService CreatePrepareService(FoundationDbContext database) =>
@@ -883,6 +933,35 @@ public sealed class ApprovalServicesIntegrationTests
     private static JsonElement Payload(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     private static string? ErrorCode<T>(AuthorizationResult<T> result) => result.ErrorCode?.ToStableCode();
+
+    private sealed class FirstIdempotencyReadGate : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource<bool> firstRead =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int firstReadObserved;
+
+        public Task FirstRead => firstRead.Task;
+
+        public void Release() => release.TrySetResult(true);
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("idempotency_records", StringComparison.OrdinalIgnoreCase)
+                && Interlocked.Exchange(ref firstReadObserved, 1) == 0)
+            {
+                firstRead.TrySetResult(true);
+                await release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return result;
+        }
+    }
 
     private static async Task<ApprovalScenario> SeedScenarioAsync(
         FoundationPostgresFixture fixture,
