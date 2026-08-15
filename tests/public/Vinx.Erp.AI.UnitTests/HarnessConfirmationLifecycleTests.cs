@@ -412,6 +412,46 @@ public sealed class HarnessConfirmationLifecycleTests
     }
 
     [Fact]
+    public async Task Shutdown_winning_veto_handoff_never_starts_agent_delivery()
+    {
+        var clock = new ManualTimeProvider();
+        var timerGate = NewTcs<bool>();
+        clock.GateNextTimerDispose(timerGate);
+        var counter = new HarnessProbeWriteCounter();
+        var client = new GatedChatClient();
+        var pending = await PreparePendingWriteAsync(counter, client);
+        var coordinator = CreateCoordinator(clock);
+        var proposalId = Guid.NewGuid();
+        Register(coordinator, pending, proposalId, clock, Guid.NewGuid());
+        var handoffReached = NewTcs<bool>();
+        var releaseHandoff = NewTcs<bool>();
+        clock.GateUtcNowAfterNextRead(handoffReached, releaseHandoff);
+
+        var veto = Task.Run(() => coordinator.VetoAsync(proposalId, Guid.NewGuid()));
+        await handoffReached.Task;
+        var dispose = coordinator.DisposeAsync().AsTask();
+
+        try
+        {
+            Assert.False(dispose.IsCompleted);
+            releaseHandoff.TrySetResult(true);
+
+            var next = await Task.WhenAny(veto, client.DeliveryStarted.Task);
+            Assert.Same(veto, next);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => veto);
+            Assert.False(client.DeliveryStarted.Task.IsCompleted);
+            Assert.Equal(1, client.RequestCount);
+            Assert.Equal(0, counter.Count);
+        }
+        finally
+        {
+            releaseHandoff.TrySetResult(true);
+            timerGate.TrySetResult(true);
+            await dispose;
+        }
+    }
+
+    [Fact]
     public async Task Sweep_publishes_cleanup_before_removal_so_dispose_observes_gated_resource_cleanup()
     {
         var clock = new ManualTimeProvider();
@@ -789,6 +829,9 @@ public sealed class HarnessConfirmationLifecycleTests
         private DateTimeOffset now = new(2026, 8, 15, 0, 0, 0, TimeSpan.Zero);
         private long sequence;
         private TaskCompletionSource<bool>? nextDisposeGate;
+        private TaskCompletionSource<bool>? utcNowGateReached;
+        private TaskCompletionSource<bool>? utcNowGateRelease;
+        private int utcNowReadsToSkip;
 
         public void GateNextTimerDispose(TaskCompletionSource<bool> gate)
         {
@@ -798,12 +841,50 @@ public sealed class HarnessConfirmationLifecycleTests
             }
         }
 
-        public override DateTimeOffset GetUtcNow()
+        public void GateUtcNowAfterNextRead(
+            TaskCompletionSource<bool> reached,
+            TaskCompletionSource<bool> release)
         {
             lock (gate)
             {
-                return now;
+                if (utcNowGateReached is not null)
+                {
+                    throw new InvalidOperationException("Já há uma leitura de relógio bloqueada.");
+                }
+
+                utcNowReadsToSkip = 1;
+                utcNowGateReached = reached;
+                utcNowGateRelease = release;
             }
+        }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            TaskCompletionSource<bool>? reached = null;
+            TaskCompletionSource<bool>? release = null;
+            DateTimeOffset current;
+            lock (gate)
+            {
+                current = now;
+                if (utcNowGateReached is not null)
+                {
+                    if (utcNowReadsToSkip > 0)
+                    {
+                        utcNowReadsToSkip--;
+                    }
+                    else
+                    {
+                        reached = utcNowGateReached;
+                        release = utcNowGateRelease;
+                        utcNowGateReached = null;
+                        utcNowGateRelease = null;
+                    }
+                }
+            }
+
+            reached?.TrySetResult(true);
+            release?.Task.GetAwaiter().GetResult();
+            return current;
         }
 
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)

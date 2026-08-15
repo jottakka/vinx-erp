@@ -76,6 +76,8 @@ public sealed record HarnessVetoResult(
 public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
 {
     private readonly object gate = new();
+    // Lock order is vetoStartGate -> gate whenever both are needed.
+    private readonly object vetoStartGate = new();
     private readonly Dictionary<Guid, PendingProposal> proposals = new();
     private readonly HashSet<Task> ownedCleanupTasks = [];
     private readonly ConfirmApprovalDelegate confirmApproval;
@@ -382,7 +384,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
             }
 
             Task<AgentResponse> deliveryTask;
-            TaskCompletionSource<bool>? vetoStart = null;
+            TaskCompletionSource<Task>? vetoStart = null;
             lock (gate)
             {
                 if (isStopping || !IsCurrentEntryLocked(proposalId, entry))
@@ -412,12 +414,8 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
                             null,
                             vetoDeliveryTimeout,
                             Timeout.InfiniteTimeSpan);
-                        entry.VetoStart = NewTcs<bool>();
-                        entry.VetoTask = DeliverVetoAfterStartAsync(
-                            entry.VetoStart.Task,
-                            proposalId,
-                            entry,
-                            entry.VetoDeliveryCts.Token);
+                        entry.VetoStart = NewTcs<Task>();
+                        entry.VetoTask = entry.VetoStart.Task.Unwrap();
                         deliveryTask = entry.VetoDelivery.Task;
                         vetoStart = entry.VetoStart;
                         break;
@@ -430,12 +428,37 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
                 }
             }
 
-            vetoStart?.TrySetResult(true);
-
             var remaining = entry.VetoDeadlineAt!.Value - timeProvider.GetUtcNow();
             if (remaining <= TimeSpan.Zero)
             {
                 remaining = TimeSpan.Zero;
+            }
+
+            if (vetoStart is not null)
+            {
+                lock (vetoStartGate)
+                {
+                    var startsBeforeShutdown = false;
+                    lock (gate)
+                    {
+                        startsBeforeShutdown =
+                            !isStopping &&
+                            IsCurrentEntryLocked(proposalId, entry) &&
+                            ReferenceEquals(entry.VetoStart, vetoStart);
+                    }
+
+                    if (!startsBeforeShutdown)
+                    {
+                        vetoStart.TrySetCanceled();
+                        throw new InvalidOperationException(
+                            "Veto durável não pode iniciar entrega durante encerramento (fail-closed).");
+                    }
+
+                    vetoStart.TrySetResult(DeliverVetoAsync(
+                        proposalId,
+                        entry,
+                        entry.VetoDeliveryCts!.Token));
+                }
             }
 
             var response = await deliveryTask.WaitAsync(remaining, timeProvider, cancellationToken)
@@ -455,9 +478,12 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
             return;
         }
 
-        lock (gate)
+        lock (vetoStartGate)
         {
-            isStopping = true;
+            lock (gate)
+            {
+                isStopping = true;
+            }
         }
 
         await sweepTimer.DisposeAsync().ConfigureAwait(false);
@@ -874,16 +900,6 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task DeliverVetoAfterStartAsync(
-        Task start,
-        Guid proposalId,
-        PendingProposal entry,
-        CancellationToken vetoDeliveryToken)
-    {
-        await start.ConfigureAwait(false);
-        await DeliverVetoAsync(proposalId, entry, vetoDeliveryToken).ConfigureAwait(false);
-    }
-
     /// <summary>
     /// Espera limitada pela publicação da finalização (tarefa armazenada antes
     /// do sinal). Retorna resultado pronto quando a publicação não aconteceu
@@ -1108,7 +1124,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         public CancellationTokenSource? VetoDeliveryCts { get; set; }
         public ITimer? VetoDeadlineTimer { get; set; }
         public DateTimeOffset? VetoDeadlineAt { get; set; }
-        public TaskCompletionSource<bool>? VetoStart { get; set; }
+        public TaskCompletionSource<Task>? VetoStart { get; set; }
         public Task? VetoTask { get; set; }
         public int VetoResourcesDisposed;
         public TaskCompletionSource<bool>? CleanupCompletion { get; set; }
