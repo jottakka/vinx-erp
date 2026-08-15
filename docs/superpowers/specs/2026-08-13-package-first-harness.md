@@ -79,6 +79,6 @@ dotnet test tests/public/Vinx.Erp.ArchitectureTests --no-restore --filter Catego
 dotnet format whitespace --verify-no-changes
 ```
 
-As evidências finais do PR 2, com 44 testes AI, 6 wired PostgreSQL, 31 de
+As evidências finais do PR 2, com 48 testes AI, 6 wired PostgreSQL, 32 de
 serviço, 6 de migration e 118 unitários Foundation, estão no manifesto de
 `docs/verification/issue-127-vinx-policy-test-cases.md`.

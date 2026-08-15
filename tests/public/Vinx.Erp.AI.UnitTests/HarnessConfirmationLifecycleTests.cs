@@ -18,6 +18,38 @@ public sealed class HarnessConfirmationLifecycleTests
     private static readonly JsonElement Payload = JsonDocument.Parse("""{"target":"probe"}""").RootElement.Clone();
 
     [Fact]
+    public async Task Missing_local_registration_returns_unavailable_without_durable_calls_or_execution()
+    {
+        var clock = new ManualTimeProvider();
+        var durableCalls = 0;
+        await using var coordinator = CreateCoordinator(
+            clock,
+            (_, _, _, _, _, _, _, _) =>
+            {
+                Interlocked.Increment(ref durableCalls);
+                throw new InvalidOperationException("durable confirmation must not run");
+            },
+            (_, _, _, _, _, _) =>
+            {
+                Interlocked.Increment(ref durableCalls);
+                throw new InvalidOperationException("durable veto must not run");
+            });
+        var proposalId = Guid.NewGuid();
+
+        var confirmation = await coordinator.ConfirmAsync(proposalId, Guid.NewGuid());
+        var veto = await coordinator.VetoAsync(proposalId, Guid.NewGuid());
+
+        Assert.Equal(ConfirmApprovalOutcome.ProposalUnavailable, confirmation.Outcome);
+        Assert.Equal(AuthorizationErrorCode.ProposalUnavailable, confirmation.ErrorCode);
+        Assert.Null(confirmation.Response);
+        Assert.Equal(VetoApprovalOutcome.ProposalUnavailable, veto.Outcome);
+        Assert.Equal(AuthorizationErrorCode.ProposalUnavailable, veto.ErrorCode);
+        Assert.Null(veto.Response);
+        Assert.Equal(0, durableCalls);
+        Assert.Equal(0, coordinator.ActiveProposalCount);
+    }
+
+    [Fact]
     public async Task Concurrent_same_request_confirmations_start_one_execution_and_share_completion()
     {
         var clock = new ManualTimeProvider();
@@ -611,6 +643,33 @@ public sealed class HarnessConfirmationLifecycleTests
         Assert.Equal(0, counter.Count);
     }
 
+    [Fact]
+    public async Task Veto_delivery_timeout_cancels_delivery_and_bounds_the_wait()
+    {
+        var clock = new ManualTimeProvider();
+        var counter = new HarnessProbeWriteCounter();
+        var client = new GatedChatClient();
+        var pending = await PreparePendingWriteAsync(counter, client);
+        await using var coordinator = CreateCoordinator(
+            clock,
+            vetoApproval: (_, _, approvalId, proposalId, _, _) => Task.FromResult(
+                AuthorizationResult<VetoApprovalResult>.Success(
+                    new VetoApprovalResult(approvalId, proposalId, VetoApprovalOutcome.Vetoed))),
+            vetoDeliveryTimeout: TimeSpan.FromSeconds(1));
+        var proposalId = Guid.NewGuid();
+        Register(coordinator, pending, proposalId, clock, Guid.NewGuid());
+
+        var veto = coordinator.VetoAsync(proposalId, Guid.NewGuid());
+        await client.DeliveryStarted.Task;
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var exception = await Record.ExceptionAsync(() => veto);
+        await client.DeliveryCompleted.Task;
+
+        Assert.True(exception is OperationCanceledException or TimeoutException);
+        Assert.True(client.CancellationObserved);
+        Assert.Equal(0, counter.Count);
+    }
+
     [Theory]
     [MemberData(nameof(AuthorizationCodes))]
     public async Task All_authorization_codes_map_exhaustively_for_confirm_and_veto(
@@ -693,6 +752,50 @@ public sealed class HarnessConfirmationLifecycleTests
     }
 
     [Fact]
+    public async Task Register_owns_payload_after_the_source_document_is_disposed()
+    {
+        var clock = new ManualTimeProvider();
+        var counter = new HarnessProbeWriteCounter();
+        var pending = await PreparePendingWriteAsync(counter, new ScriptedChatClient(
+            AssistantCall(VinxToolPolicy.ProbeWriteToolName, "write-call"), AssistantText("done")));
+        string? durableTarget = null;
+        await using var coordinator = CreateCoordinator(
+            clock,
+            (_, _, approvalId, proposalId, _, payload, _, _) =>
+            {
+                durableTarget = payload.GetProperty("target").GetString();
+                return Task.FromResult(AuthorizationResult<ConfirmApprovalResult>.Success(
+                    new ConfirmApprovalResult(approvalId, proposalId, ConfirmApprovalOutcome.Claimed)));
+            });
+        var proposalId = Guid.NewGuid();
+        using (var document = JsonDocument.Parse("""{"target":"owned"}"""))
+        {
+            Register(coordinator, pending, proposalId, clock, Guid.NewGuid(), payload: document.RootElement);
+        }
+
+        var result = await coordinator.ConfirmAsync(proposalId, Guid.NewGuid());
+
+        Assert.Equal(ConfirmApprovalOutcome.Claimed, result.Outcome);
+        Assert.Equal("owned", durableTarget);
+        Assert.Equal(1, counter.Count);
+    }
+
+    [Fact]
+    public async Task Register_after_shutdown_is_rejected_without_binding_or_state()
+    {
+        var clock = new ManualTimeProvider();
+        var pending = await PreparePendingWriteAsync(new HarnessProbeWriteCounter(), new ScriptedChatClient(
+            AssistantCall(VinxToolPolicy.ProbeWriteToolName, "write-call")));
+        var coordinator = CreateCoordinator(clock);
+        await coordinator.DisposeAsync();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            Register(coordinator, pending, Guid.NewGuid(), clock, Guid.NewGuid()));
+        Assert.False(pending.Bundle.RequestIdSource.IsBound);
+        Assert.Equal(0, coordinator.ActiveProposalCount);
+    }
+
+    [Fact]
     public async Task Dispose_quiesces_timer_cancels_work_completes_tcs_and_defers_shutdown_cleanup()
     {
         var clock = new ManualTimeProvider();
@@ -770,7 +873,8 @@ public sealed class HarnessConfirmationLifecycleTests
         Guid proposalId,
         TimeProvider timeProvider,
         Guid executionRequestId,
-        TimeSpan? ttl = null) =>
+        TimeSpan? ttl = null,
+        JsonElement? payload = null) =>
         coordinator.Register(
             proposalId,
             Guid.NewGuid(),
@@ -779,7 +883,7 @@ public sealed class HarnessConfirmationLifecycleTests
             pending.Bundle,
             pending.Session,
             pending.Request,
-            Payload,
+            payload ?? Payload,
             executionRequestId,
             timeProvider.GetUtcNow() + (ttl ?? TimeSpan.FromMinutes(5)));
 

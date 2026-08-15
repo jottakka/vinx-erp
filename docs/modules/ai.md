@@ -39,6 +39,11 @@ independentes:
 - execução: UUID criado pelo servidor e emparelhado ao feixe; a escrita do
   domínio pode devolver o resultado original em replay.
 
+As seis fases citadas no código são: preparação durável; claim ou veto
+durável; publicação local da tarefa terminal; entrega da decisão pelo loop do
+framework; execução idempotente do domínio quando confirmada; retenção para
+replay e remoção por TTL/sweep.
+
 O claim e o veto são transações duráveis da Foundation, usam o relógio do
 banco e repetem autorização em todo replay. Veto é soft-delete terminal com
 `approval_vetoed`; consumo e veto são mutuamente exclusivos. Uma falha de
@@ -76,6 +81,10 @@ arbitra atomicamente o início das entregas de confirmação e veto, aguarda dre
 limitado e impede entrega tardia. Não é garantida execução
 exatamente uma vez: aprovação é single-use e a escrita precisa de sua própria
 idempotência de domínio.
+
+Os delegates duráveis devem observar o token de cancelamento. O prazo do
+coordenador sinaliza cancelamento, mas não tenta abandonar nem ocultar uma
+operação de banco não cooperativa que ainda possa concluir.
 
 ## Contract version
 

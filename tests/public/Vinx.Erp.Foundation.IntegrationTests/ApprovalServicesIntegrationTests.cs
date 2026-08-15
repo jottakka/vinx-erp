@@ -4,6 +4,7 @@ using System.Diagnostics.Metrics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Vinx.Erp.Foundation.Approvals;
@@ -327,12 +328,14 @@ public sealed class ApprovalServicesIntegrationTests
         var winner = await ConfirmAsync(fixture, scenario, prepared.Value!, Guid.NewGuid(), payload);
         Assert.True(winner.IsSuccess);
 
-        var late = await ConfirmAsync(fixture, scenario, prepared.Value!, Guid.NewGuid(), payload);
+        var logs = new ApprovalLogCapture();
+        var late = await ConfirmAsync(fixture, scenario, prepared.Value!, Guid.NewGuid(), payload, logger: logs);
 
         Assert.Equal("proposal_conflict", ErrorCode(late));
         await using var administrator = fixture.CreateAdministratorDbContext();
         Assert.Single(await administrator.AuditEvents.Where(audit =>
             audit.Action == "proposal_conflict" && audit.Outcome == AuditOutcome.Denied).ToListAsync());
+        logs.AssertSingle(LogLevel.Information, "denied", "proposal_already_consumed");
     }
 
     [Fact]
@@ -381,17 +384,20 @@ public sealed class ApprovalServicesIntegrationTests
         await using var fixture = await StartFixtureAsync();
         var scenario = await SeedScenarioAsync(fixture);
 
+        var logs = new ApprovalLogCapture();
         var result = await ConfirmAsync(
             fixture,
             scenario,
             new PrepareApprovalResult(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow.AddMinutes(5)),
             Guid.NewGuid(),
-            Payload("""{"alvo":"estoque"}"""));
+            Payload("""{"alvo":"estoque"}"""),
+            logger: logs);
 
         Assert.Equal("proposal_unavailable", ErrorCode(result));
         await using var administrator = fixture.CreateAdministratorDbContext();
         Assert.Empty(await administrator.AuditEvents.Where(audit =>
             audit.Outcome == AuditOutcome.Denied).ToListAsync());
+        logs.AssertSingle(LogLevel.Information, "unavailable", "proposal_not_found");
     }
 
     [Fact]
@@ -820,13 +826,15 @@ public sealed class ApprovalServicesIntegrationTests
             new CapabilityEvaluator(database),
             NullLogger<PrepareApprovalService>.Instance);
 
-    private static ConfirmApprovalService CreateConfirmService(FoundationDbContext database) =>
+    private static ConfirmApprovalService CreateConfirmService(
+        FoundationDbContext database,
+        ILogger<ConfirmApprovalService>? logger = null) =>
         new(
             database,
             new AuditAppender(database),
             new AuthorizationTelemetry(),
             new CapabilityEvaluator(database),
-            NullLogger<ConfirmApprovalService>.Instance);
+            logger ?? NullLogger<ConfirmApprovalService>.Instance);
 
     private static async Task<AuthorizationResult<PrepareApprovalResult>> PrepareAsync(
         FoundationPostgresFixture fixture,
@@ -859,10 +867,11 @@ public sealed class ApprovalServicesIntegrationTests
         Guid? companyId = null,
         Guid? actorUserId = null,
         Guid? proposalId = null,
-        string policyVersion = PolicyVersion)
+        string policyVersion = PolicyVersion,
+        ILogger<ConfirmApprovalService>? logger = null)
     {
         await using var database = CreateRuntimeContext(fixture);
-        var service = CreateConfirmService(database);
+        var service = CreateConfirmService(database, logger);
         return await service.ConfirmAsync(
             new ActorContext(actorUserId ?? scenario.ActorUserId, Guid.NewGuid()),
             new ConfirmApprovalCommand(
@@ -933,6 +942,42 @@ public sealed class ApprovalServicesIntegrationTests
     private static JsonElement Payload(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     private static string? ErrorCode<T>(AuthorizationResult<T> result) => result.ErrorCode?.ToStableCode();
+
+    private sealed record CapturedLog(
+        LogLevel Level,
+        IReadOnlyDictionary<string, object?> Properties);
+
+    private sealed class ApprovalLogCapture : ILogger<ConfirmApprovalService>
+    {
+        private readonly List<CapturedLog> entries = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var properties = ((IEnumerable<KeyValuePair<string, object?>>)state!)
+                .Where(pair => pair.Key != "{OriginalFormat}")
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            entries.Add(new CapturedLog(logLevel, properties));
+        }
+
+        public void AssertSingle(LogLevel level, string result, string reason)
+        {
+            var entry = Assert.Single(entries);
+            Assert.Equal(level, entry.Level);
+            Assert.Equal("approval_confirmation", entry.Properties.GetValueOrDefault("Operation"));
+            Assert.Equal("foundation", entry.Properties.GetValueOrDefault("Module"));
+            Assert.Equal(result, entry.Properties.GetValueOrDefault("Result"));
+            Assert.Equal(reason, entry.Properties.GetValueOrDefault("Reason"));
+        }
+    }
 
     private sealed class FirstIdempotencyReadGate : DbCommandInterceptor
     {

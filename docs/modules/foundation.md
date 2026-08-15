@@ -60,7 +60,8 @@ A migration declara, com nomes estáveis:
   `consumed_at IS NULL AND deleted_at IS NULL`, garantindo uma proposta viva
   por ator/empresa;
 - índices `ix_approvals_actor_user_id`,
-  `ix_approvals_confirmation_request_id` (único e não nulo) e
+  `ix_approvals_confirmation_request_id` (único parcial, somente quando o
+  valor não é nulo) e
   `ix_approvals_proposal_id` (único);
 - índice de idempotência
   `ix_idempotency_records_company_id_actor_user_id_command_name_r`.

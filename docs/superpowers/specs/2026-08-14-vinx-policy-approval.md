@@ -90,7 +90,7 @@ issue #201.
 
 As cinco classes BDD, os oito bloqueios e os comandos exatos estão em
 [`docs/verification/issue-127-vinx-policy-test-cases.md`](../../verification/issue-127-vinx-policy-test-cases.md).
-As contagens finais verificadas são: AI 44/44, wired PostgreSQL 6/6,
+As contagens finais verificadas são: AI 48/48, wired PostgreSQL 6/6,
 `ApprovalServicesIntegrationTests` 32/32, migrations 6/6, Foundation unit
 118/118 e arquitetura pública 17/17. Formatação é verificada por
 `dotnet format whitespace --verify-no-changes`.
@@ -115,14 +115,14 @@ repetida sem essa medição. A medição atual (`git diff --numstat f6aaded`) é
 
 | Categoria | Caminhos | Adições | Remoções | Classificação |
 |---|---:|---:|---:|---|
-| Manual (código, testes e docs) | 39 | 7.341 | 621 | Linhas revisáveis; inclui migrations `.cs`. |
+| Manual (código, testes e docs) | 39 | 7.517 | 621 | Linhas revisáveis; inclui migrations `.cs`. |
 | Designers de migration | 2 | 3.012 | 0 | Gerado pelo EF. |
 | Snapshot EF | 1 | 150 | 0 | Gerado pelo EF. |
 | Snapshot SQL | 1 | 86 | 0 | Gerado do schema. |
 | Lockfiles | 3 | 368 | 6 | Restore gerado; sem dependência nova. |
-| **Total** | **46** | **10.957** | **627** | **11.584** linhas alteradas. |
+| **Total** | **46** | **11.133** | **627** | **11.760** linhas alteradas. |
 
-Logo, o total manual efetivo é 7.341 adições (6.720 líquidas), não a
+Logo, o total manual efetivo é 7.517 adições (6.896 líquidas), não a
 estimativa anterior de aproximadamente 5.380. A exceção de tamanho aprovada
 continua registrada; nenhuma linha toca `quality/private` e os três lockfiles
 foram necessários ao restore travado.

@@ -8,7 +8,7 @@ determinístico. `quality/private` não faz parte desta evidência.
 
 | Código | Comando exato | Resultado |
 |---|---|---|
-| AI | `dotnet test tests/public/Vinx.Erp.AI.UnitTests --no-restore --nologo -v q` | 44/44, coberto |
+| AI | `dotnet test tests/public/Vinx.Erp.AI.UnitTests --no-restore --nologo -v q` | 48/48, coberto |
 | FU | `dotnet test tests/public/Vinx.Erp.Foundation.UnitTests --no-restore --nologo -v q` | 118/118, coberto |
 | WI | `dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests --no-restore --filter FullyQualifiedName~ApprovalCoordinatorDurableLifecycleTests --blame-hang-timeout 60s --blame-hang-dump-type none -v q` | 6/6, coberto |
 | AS | `dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests --no-restore --filter FullyQualifiedName~ApprovalServicesIntegrationTests --blame-hang-timeout 60s --blame-hang-dump-type none -v q` | 32/32, coberto |
@@ -34,6 +34,7 @@ determinístico. `quality/private` não faz parte desta evidência.
 | Hash que não é SHA-256 hexadecimal minúsculo de 64 caracteres é rejeitado | `tests/public/Vinx.Erp.Foundation.UnitTests/ApprovalContractsTests.cs::ApprovalContractsTests.IsValidHash_enforces_sha256_lowercase_hexadecimal_format` | Coberto / FU |
 | Divergência de payload/policy/proposal não muta a proposta e audita a negação | `tests/public/Vinx.Erp.Foundation.IntegrationTests/ApprovalServicesIntegrationTests.cs::ApprovalServicesIntegrationTests.Confirmations_with_payload_or_policy_divergence_are_conflicts_and_audited` | Coberto / AS |
 | Permit/decisão de aprovação inválida falha antes da execução | `tests/public/Vinx.Erp.AI.UnitTests/HarnessApprovalBoundaryTests.cs::HarnessApprovalBoundaryTests.Delivery_permit_negative_matrix_fails_closed_before_agent_execution` | Coberto / AI |
+| Payload registrado continua válido após descarte do `JsonDocument` de origem | `tests/public/Vinx.Erp.AI.UnitTests/HarnessConfirmationLifecycleTests.cs::HarnessConfirmationLifecycleTests.Register_owns_payload_after_the_source_document_is_disposed` | Coberto / AI |
 
 ### Classe 3 — acesso, empresa e contexto confiável
 
@@ -54,6 +55,8 @@ determinístico. `quality/private` não faz parte desta evidência.
 | Replay de veto é idempotente; veto após consumo é conflito | `tests/public/Vinx.Erp.Foundation.IntegrationTests/ApprovalServicesIntegrationTests.cs::ApprovalServicesIntegrationTests.Replaying_a_veto_is_idempotent_and_vetoing_a_consumed_approval_is_a_conflict` | Coberto / AS |
 | Falha de auditoria desfaz claim e mantém proposta viva | `tests/public/Vinx.Erp.Foundation.IntegrationTests/ApprovalServicesIntegrationTests.cs::ApprovalServicesIntegrationTests.Confirmation_audit_failure_rolls_back_the_claim_and_leaves_the_approval_live` | Coberto / AS |
 | Shutdown impede confirmação/veto tardios e entrega ao agente | `tests/public/Vinx.Erp.AI.UnitTests/HarnessConfirmationLifecycleTests.cs::HarnessConfirmationLifecycleTests.Shutdown_started_before_timer_quiescence_rejects_late_confirm_without_delivery`, `tests/public/Vinx.Erp.AI.UnitTests/HarnessConfirmationLifecycleTests.cs::HarnessConfirmationLifecycleTests.Shutdown_started_before_timer_quiescence_rejects_late_veto_without_delivery`, `tests/public/Vinx.Erp.AI.UnitTests/HarnessConfirmationLifecycleTests.cs::HarnessConfirmationLifecycleTests.Shutdown_winning_confirmation_handoff_never_starts_agent_delivery` e `tests/public/Vinx.Erp.AI.UnitTests/HarnessConfirmationLifecycleTests.cs::HarnessConfirmationLifecycleTests.Shutdown_winning_veto_handoff_never_starts_agent_delivery` | Coberto / AI |
+| Reinício sem registro local retorna indisponibilidade sem chamada durável; registro durante shutdown é recusado | `tests/public/Vinx.Erp.AI.UnitTests/HarnessConfirmationLifecycleTests.cs::HarnessConfirmationLifecycleTests.Missing_local_registration_returns_unavailable_without_durable_calls_or_execution` e `tests/public/Vinx.Erp.AI.UnitTests/HarnessConfirmationLifecycleTests.cs::HarnessConfirmationLifecycleTests.Register_after_shutdown_is_rejected_without_binding_or_state` | Coberto / AI |
+| Prazo de entrega do veto cancela a entrega e limita a espera | `tests/public/Vinx.Erp.AI.UnitTests/HarnessConfirmationLifecycleTests.cs::HarnessConfirmationLifecycleTests.Veto_delivery_timeout_cancels_delivery_and_bounds_the_wait` | Coberto / AI |
 
 ### Classe 5 — concorrência e single-flight
 

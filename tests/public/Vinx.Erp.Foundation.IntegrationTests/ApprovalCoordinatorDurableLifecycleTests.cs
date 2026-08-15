@@ -117,7 +117,6 @@ public sealed class ApprovalCoordinatorDurableLifecycleTests
         Register(coordinator, scenario, prepared.Value!, pending, Guid.NewGuid(), Guid.NewGuid());
         var winningRequestId = Guid.NewGuid();
         var lostResult = coordinator.ConfirmAsync(prepared.Value!.ProposalId, winningRequestId, timeout.Token);
-        await committed.Task.WaitAsync(timeout.Token);
         Assert.Equal(ConfirmApprovalOutcome.Claimed, await committed.Task.WaitAsync(timeout.Token));
         clock.Advance(TimeSpan.FromSeconds(1));
         await Assert.ThrowsAsync<TimeoutException>(() => lostResult.WaitAsync(timeout.Token));

@@ -77,9 +77,7 @@ public sealed class ConfirmApprovalService(
                 else if (approval.IsConsumed)
                 {
                     await transaction.RollbackAsync(cancellationToken);
-                    if (approval.ConfirmationRequestId == command.RequestId
-                        && string.Equals(approval.PayloadHash, payloadHash, StringComparison.Ordinal)
-                        && string.Equals(approval.PolicyVersion, command.PolicyVersion, StringComparison.Ordinal))
+                    if (MatchesReplay(approval, command, payloadHash))
                     {
                         logger.LogInformation(
                             "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
@@ -164,7 +162,7 @@ public sealed class ConfirmApprovalService(
                         return ProposalUnavailable("proposal_expired_or_vetoed");
                     }
 
-                    if (current.IsConsumed && current.ConfirmationRequestId == command.RequestId)
+                    if (MatchesReplay(current, command, payloadHash))
                     {
                         return AuthorizationResult<ConfirmApprovalResult>.Success(
                             new ConfirmApprovalResult(current.Id, current.ProposalId, ConfirmApprovalOutcome.Replay));
@@ -367,11 +365,6 @@ public sealed class ConfirmApprovalService(
             return AuditUnavailableVeto(AuditUnavailablePhase.SuccessTransaction, exception);
         }
 
-        if (denial == AuthorizationErrorCode.ProposalConflict)
-        {
-            return await ReturnAuditedVetoDenialAsync(actor, command.CompanyId, denial.Value, cancellationToken);
-        }
-
         return await ReturnAuditedVetoDenialAsync(actor, command.CompanyId, denial!.Value, cancellationToken);
     }
 
@@ -407,9 +400,7 @@ public sealed class ConfirmApprovalService(
                 return ProposalUnavailable("proposal_not_found_after_conflict");
             }
 
-            if (current.IsConsumed && current.ConfirmationRequestId == command.RequestId
-                && string.Equals(current.PayloadHash, payloadHash, StringComparison.Ordinal)
-                && string.Equals(current.PolicyVersion, command.PolicyVersion, StringComparison.Ordinal))
+            if (MatchesReplay(current, command, payloadHash))
             {
                 return AuthorizationResult<ConfirmApprovalResult>.Success(
                     new ConfirmApprovalResult(current.Id, current.ProposalId, ConfirmApprovalOutcome.Replay));
@@ -439,7 +430,7 @@ public sealed class ConfirmApprovalService(
 
     private AuthorizationResult<ConfirmApprovalResult> ProposalUnavailable(string reason)
     {
-        logger.LogWarning(
+        logger.LogInformation(
             "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
             Operation,
             Module,
@@ -472,12 +463,24 @@ public sealed class ConfirmApprovalService(
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            logger.LogWarning(
-                "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
-                Operation,
-                Module,
-                "denied",
-                reason);
+            if (denial == AuthorizationErrorCode.ProposalConflict)
+            {
+                logger.LogInformation(
+                    "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
+                    Operation,
+                    Module,
+                    "denied",
+                    reason);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
+                    Operation,
+                    Module,
+                    "denied",
+                    reason);
+            }
             return AuthorizationResult<ConfirmApprovalResult>.Failure(denial);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -554,6 +557,15 @@ public sealed class ConfirmApprovalService(
         telemetry.RecordAuditUnavailable(AuthorizationOperation.ApprovalConfirmation, phase);
         return AuthorizationResult<VetoApprovalResult>.Failure(AuthorizationErrorCode.AuditUnavailable);
     }
+
+    private static bool MatchesReplay(
+        FoundationApproval approval,
+        ConfirmApprovalCommand command,
+        string payloadHash) =>
+        approval.IsConsumed
+        && approval.ConfirmationRequestId == command.RequestId
+        && string.Equals(approval.PayloadHash, payloadHash, StringComparison.Ordinal)
+        && string.Equals(approval.PolicyVersion, command.PolicyVersion, StringComparison.Ordinal);
 
     private async Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken)
     {

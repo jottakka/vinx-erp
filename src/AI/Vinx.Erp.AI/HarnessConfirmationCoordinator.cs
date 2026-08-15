@@ -15,7 +15,9 @@ namespace Vinx.Erp.AI;
 /// dados: em produção aponta para <c>ConfirmApprovalService</c>; em testes
 /// recebe um duplo determinístico. O resultado é o
 /// <see cref="AuthorizationResult{T}"/> completo — nenhum código de autorização
-/// é colapsado na fronteira.
+/// é colapsado na fronteira. A implementação deve observar o token de
+/// cancelamento: o coordenador sinaliza o prazo, mas não pode interromper à
+/// força uma operação durável não cooperativa.
 /// </summary>
 public delegate Task<AuthorizationResult<ConfirmApprovalResult>> ConfirmApprovalDelegate(
     ActorContext actor,
@@ -30,7 +32,8 @@ public delegate Task<AuthorizationResult<ConfirmApprovalResult>> ConfirmApproval
 /// <summary>
 /// Delegado que executa o veto durável na Foundation carregando o
 /// <see cref="ActorContext"/> confiável e devolvendo o
-/// <see cref="AuthorizationResult{T}"/> completo.
+/// <see cref="AuthorizationResult{T}"/> completo. A implementação deve observar
+/// o token de cancelamento pelo mesmo contrato do delegate de confirmação.
 /// </summary>
 public delegate Task<AuthorizationResult<VetoApprovalResult>> VetoApprovalDelegate(
     ActorContext actor,
@@ -222,7 +225,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
             Session = session,
             Request = pendingRequest,
             CallId = callId,
-            Payload = payload,
+            Payload = payload.Clone(),
             ExecutionRequestId = executionRequestId,
             ExpiresAt = expiresAt,
         };
