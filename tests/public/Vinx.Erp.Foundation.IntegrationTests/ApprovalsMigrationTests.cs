@@ -1,5 +1,6 @@
 using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
+using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
 
@@ -154,6 +155,105 @@ public sealed class ApprovalsMigrationTests
     }
 
     [Fact]
+    public async Task Approval_terminal_constraints_reject_partial_consumption_and_consumed_deleted_rows()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var scope = await SeedApprovalScopeAsync(fixture);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        var partialConsumption = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertApprovalAsync(
+                administrator,
+                scope.CompanyId,
+                scope.ActorId,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                consumedAt: DateTimeOffset.UtcNow,
+                confirmationRequestId: Guid.NewGuid()));
+
+        Assert.Equal(PostgresErrorCodes.CheckViolation, partialConsumption.SqlState);
+        Assert.Equal("ck_approvals_consumption_complete", partialConsumption.ConstraintName);
+
+        var consumedAndDeleted = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertApprovalAsync(
+                administrator,
+                scope.CompanyId,
+                scope.ActorId,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                consumedAt: DateTimeOffset.UtcNow,
+                confirmationRequestId: Guid.NewGuid(),
+                resultJson: "{}",
+                deletedAt: DateTimeOffset.UtcNow,
+                deletedByUserId: scope.ActorId,
+                deletedReason: FoundationApproval.VetoReason));
+
+        Assert.Equal(PostgresErrorCodes.CheckViolation, consumedAndDeleted.SqlState);
+        Assert.Equal("ck_approvals_terminal_exclusive", consumedAndDeleted.ConstraintName);
+    }
+
+    [Fact]
+    public async Task Approval_unique_indexes_reject_live_actor_and_confirmation_request_collisions()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var scope = await SeedApprovalScopeAsync(fixture);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await InsertApprovalAsync(
+            administrator,
+            scope.CompanyId,
+            scope.ActorId,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid());
+
+        var liveActorCollision = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertApprovalAsync(
+                administrator,
+                scope.CompanyId,
+                scope.ActorId,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                Guid.NewGuid()));
+
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, liveActorCollision.SqlState);
+        Assert.Equal("ix_approvals_company_id_actor_user_id", liveActorCollision.ConstraintName);
+
+        var confirmationRequestId = Guid.NewGuid();
+        await InsertApprovalAsync(
+            administrator,
+            scope.CompanyId,
+            scope.ActorId,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            consumedAt: DateTimeOffset.UtcNow,
+            confirmationRequestId: confirmationRequestId,
+            resultJson: "{}");
+
+        var confirmationRequestCollision = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertApprovalAsync(
+                administrator,
+                scope.CompanyId,
+                scope.ActorId,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                consumedAt: DateTimeOffset.UtcNow,
+                confirmationRequestId: confirmationRequestId,
+                resultJson: "{}"));
+
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, confirmationRequestCollision.SqlState);
+        Assert.Equal("ix_approvals_confirmation_request_id", confirmationRequestCollision.ConstraintName);
+    }
+
+    [Fact]
     public async Task Ai_writes_confirm_capability_is_seeded_with_its_stable_identity()
     {
         await using var fixture = new FoundationPostgresFixture();
@@ -166,5 +266,84 @@ public sealed class ApprovalsMigrationTests
         command.Parameters.AddWithValue("name", KnownCapabilities.AiWritesConfirm);
 
         Assert.Equal(KnownCapabilities.AiWritesConfirmId, await command.ExecuteScalarAsync());
+    }
+
+    private static async Task<(Guid CompanyId, Guid ActorId)> SeedApprovalScopeAsync(
+        FoundationPostgresFixture fixture)
+    {
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var group = new Group(Guid.NewGuid(), "Approval group", actorId, requestId);
+        var company = new Company(Guid.NewGuid(), group.Id, "Approval company", actorId, requestId);
+        var user = new User(actorId, "Approval actor", $"approval-{actorId:N}@example.test");
+        administrator.AddRange(group, company, user);
+        await administrator.SaveChangesAsync();
+        return (company.Id, actorId);
+    }
+
+    private static async Task InsertApprovalAsync(
+        NpgsqlConnection connection,
+        Guid companyId,
+        Guid actorId,
+        Guid approvalId,
+        Guid proposalId,
+        Guid requestId,
+        DateTimeOffset? consumedAt = null,
+        Guid? confirmationRequestId = null,
+        string? resultJson = null,
+        DateTimeOffset? deletedAt = null,
+        Guid? deletedByUserId = null,
+        string? deletedReason = null)
+    {
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(15);
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.approvals (
+                id, company_id, actor_user_id, action, payload_hash, policy_version,
+                proposal_id, confirmation_request_id, expires_at, consumed_at, result_json,
+                created_by_user_id, updated_by_user_id, request_id, created_at, updated_at,
+                deleted_at, deleted_by_user_id, deleted_reason, row_version)
+            VALUES (
+                @id, @company_id, @actor_user_id, 'ai.approvals.confirm',
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '1.0',
+                @proposal_id, @confirmation_request_id, @expires_at, @consumed_at, @result_json,
+                @actor_user_id, @actor_user_id, @request_id, @created_at, @created_at,
+                @deleted_at, @deleted_by_user_id, @deleted_reason, 1)
+            """,
+            connection);
+        command.Parameters.AddWithValue("id", approvalId);
+        command.Parameters.AddWithValue("company_id", companyId);
+        command.Parameters.AddWithValue("actor_user_id", actorId);
+        command.Parameters.AddWithValue("proposal_id", proposalId);
+        command.Parameters.AddWithValue("expires_at", expiresAt);
+        command.Parameters.AddWithValue("request_id", requestId);
+        command.Parameters.AddWithValue("created_at", createdAt);
+        command.Parameters.AddWithValue(
+            "confirmation_request_id",
+            NpgsqlTypes.NpgsqlDbType.Uuid,
+            (object?)confirmationRequestId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "consumed_at",
+            NpgsqlTypes.NpgsqlDbType.TimestampTz,
+            (object?)consumedAt ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "result_json",
+            NpgsqlTypes.NpgsqlDbType.Jsonb,
+            (object?)resultJson ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "deleted_at",
+            NpgsqlTypes.NpgsqlDbType.TimestampTz,
+            (object?)deletedAt ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "deleted_by_user_id",
+            NpgsqlTypes.NpgsqlDbType.Uuid,
+            (object?)deletedByUserId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "deleted_reason",
+            NpgsqlTypes.NpgsqlDbType.Varchar,
+            (object?)deletedReason ?? DBNull.Value);
+        await command.ExecuteNonQueryAsync();
     }
 }
