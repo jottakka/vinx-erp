@@ -382,6 +382,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
             }
 
             Task<AgentResponse> deliveryTask;
+            TaskCompletionSource<bool>? vetoStart = null;
             lock (gate)
             {
                 if (isStopping || !IsCurrentEntryLocked(proposalId, entry))
@@ -411,8 +412,14 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
                             null,
                             vetoDeliveryTimeout,
                             Timeout.InfiniteTimeSpan);
-                        entry.VetoTask = DeliverVetoAsync(proposalId, entry, entry.VetoDeliveryCts.Token);
+                        entry.VetoStart = NewTcs<bool>();
+                        entry.VetoTask = DeliverVetoAfterStartAsync(
+                            entry.VetoStart.Task,
+                            proposalId,
+                            entry,
+                            entry.VetoDeliveryCts.Token);
                         deliveryTask = entry.VetoDelivery.Task;
+                        vetoStart = entry.VetoStart;
                         break;
                     case TerminalOwner.Vetoed:
                         deliveryTask = entry.VetoDelivery!.Task;
@@ -422,6 +429,8 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
                             "Estado terminal local incompatível com veto durável (fail-closed).");
                 }
             }
+
+            vetoStart?.TrySetResult(true);
 
             var remaining = entry.VetoDeadlineAt!.Value - timeProvider.GetUtcNow();
             if (remaining <= TimeSpan.Zero)
@@ -865,6 +874,16 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         }
     }
 
+    private async Task DeliverVetoAfterStartAsync(
+        Task start,
+        Guid proposalId,
+        PendingProposal entry,
+        CancellationToken vetoDeliveryToken)
+    {
+        await start.ConfigureAwait(false);
+        await DeliverVetoAsync(proposalId, entry, vetoDeliveryToken).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Espera limitada pela publicação da finalização (tarefa armazenada antes
     /// do sinal). Retorna resultado pronto quando a publicação não aconteceu
@@ -1089,6 +1108,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         public CancellationTokenSource? VetoDeliveryCts { get; set; }
         public ITimer? VetoDeadlineTimer { get; set; }
         public DateTimeOffset? VetoDeadlineAt { get; set; }
+        public TaskCompletionSource<bool>? VetoStart { get; set; }
         public Task? VetoTask { get; set; }
         public int VetoResourcesDisposed;
         public TaskCompletionSource<bool>? CleanupCompletion { get; set; }
