@@ -4,9 +4,9 @@ import { darkPalette, lightPalette } from "./palette-primitives";
 /**
  * Primitivas do campo de tinta cobre do login. As cores chegam ao shader como
  * uniforms derivados das primitivas do tema — nenhum literal fora daqui — e o
- * fallback CSS permanece caso o WebGL2 não esteja disponível. O modo vem de
- * useColorScheme: com variáveis CSS, theme.palette.mode não acompanha a
- * troca ao vivo.
+ * fallback CSS permanece como último recurso caso nenhum renderizador esteja
+ * disponível. O modo vem de useColorScheme: com variáveis CSS,
+ * theme.palette.mode não acompanha a troca ao vivo.
  */
 
 export type InkFieldMode = "dark" | "light";
@@ -51,8 +51,8 @@ export function createInkFieldColors(mode: InkFieldMode): InkFieldColors {
 }
 
 /**
- * Camadas estáticas exibidas quando o campo animado não pode ser criado
- * (WebGL2 indisponível, movimento reduzido ou ausência de ponteiro fino).
+ * Camadas estáticas exibidas somente quando WebGL2 e Canvas2D não podem criar
+ * o campo procedural.
  */
 export function createInkFallbackLayers(mode: InkFieldMode): string {
   const palette = mode === "dark" ? darkPalette : lightPalette;

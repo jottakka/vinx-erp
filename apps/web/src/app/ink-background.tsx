@@ -1,12 +1,9 @@
 import { Box } from "@mui/material";
 import { useColorScheme } from "@mui/material/styles";
 import { useEffect, useMemo, useRef } from "react";
-import {
-  type InkFieldCalmZone,
-  InkFieldModel,
-  sceneFromModel,
-} from "./ink-field-model";
+import { InkFieldCanvasRenderer } from "./ink-field-canvas-renderer";
 import { InkFieldRenderer } from "./ink-field-renderer";
+import type { InkFieldCalmZone, InkFieldScene } from "./ink-field-scene";
 import {
   createInkFallbackLayers,
   createInkFieldColors,
@@ -14,13 +11,10 @@ import {
 } from "./theme/ink-field-style";
 
 /**
- * Campo de tinta cobre decorativo do login. WebGL2 sem dependências: o
- * ponteiro alimenta um modelo com inércia (matéria próxima rápida, corpo com
- * atraso) e resposta à velocidade; o shader transforma isso em correntes,
- * rastro e splats dissipativos. Sem re-render por frame — apenas refs,
- * listeners e uniforms. Reduzido a um quadro estático com movimento reduzido
- * ou sem ponteiro fino, oculto em forced colors e substituído pelas camadas
- * CSS quando o WebGL2 não está disponível.
+ * Campo de fumaça cobre decorativo do login. WebGL2 sem dependências, com
+ * Canvas2D procedural em navegadores incompatíveis. A animação é ambiente,
+ * sem resposta ao ponteiro e sem re-render por frame. Movimento reduzido
+ * preserva um único quadro estático; forced colors oculta toda a decoração.
  */
 
 const MAX_PIXEL_RATIO = 2;
@@ -29,7 +23,6 @@ const SLOW_FRAME_THRESHOLD_MS = 24;
 const FAST_FRAME_THRESHOLD_MS = 13;
 const SLOW_FRAME_LIMIT = 30;
 const FAST_FRAME_LIMIT = 240;
-const IDLE_ENERGY = 0.02;
 const STATIC_FRAME_TIME = 37;
 
 function prefersReducedMotion() {
@@ -39,47 +32,53 @@ function prefersReducedMotion() {
   );
 }
 
-function hasFinePointer() {
-  return (
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(pointer: fine)").matches
-  );
-}
-
 export function InkBackground() {
   const { mode } = useColorScheme();
   const inkMode: InkFieldMode = mode === "dark" ? "dark" : "light";
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const rendererRef = useRef<InkFieldRenderer | null>(null);
+  const fallbackRef = useRef<HTMLDivElement | null>(null);
+  const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvas2dRef = useRef<HTMLCanvasElement | null>(null);
+  const rendererRef = useRef<InkFieldCanvasRenderer | InkFieldRenderer | null>(
+    null,
+  );
+  const redrawStaticRef = useRef<(() => void) | null>(null);
   const colors = useMemo(() => createInkFieldColors(inkMode), [inkMode]);
   const colorsRef = useRef(colors);
   colorsRef.current = colors;
 
   useEffect(() => {
     rendererRef.current?.setColors(colors);
+    redrawStaticRef.current?.();
   }, [colors]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const webglCanvas = webglCanvasRef.current;
+    const canvas2d = canvas2dRef.current;
 
-    if (!canvas) {
+    if (!webglCanvas || !canvas2d) {
       return;
     }
 
     const reduceMotion = prefersReducedMotion();
-    const finePointer = hasFinePointer();
-    const animated = !reduceMotion && finePointer;
-    const renderer = InkFieldRenderer.create(canvas);
+    const animated = !reduceMotion;
+    const webglRenderer = InkFieldRenderer.create(webglCanvas);
+    const renderer = webglRenderer ?? InkFieldCanvasRenderer.create(canvas2d);
 
     if (!renderer) {
       return;
     }
 
+    const activeCanvas = webglRenderer ? webglCanvas : canvas2d;
+    const inactiveCanvas = webglRenderer ? canvas2d : webglCanvas;
+    activeCanvas.dataset.inkActive = "true";
+    inactiveCanvas.style.setProperty("display", "none");
     rendererRef.current = renderer;
     renderer.setColors(colorsRef.current);
+    const fallback = fallbackRef.current;
+    fallback?.style.setProperty("display", "none");
+    const listenerOptions = { passive: true } as const;
 
     const inkRenderer = renderer;
-    const model = new InkFieldModel();
     const calmQuery = window.matchMedia("(min-width: 900px)");
 
     const readCalm = (): InkFieldCalmZone =>
@@ -106,15 +105,13 @@ export function InkBackground() {
       );
     }
 
-    function viewport() {
-      return { height: window.innerHeight, width: window.innerWidth };
+    function sceneAt(time: number): InkFieldScene {
+      return { calm: readCalm(), time };
     }
 
     function drawStaticFrame() {
       applySize();
-      inkRenderer.draw(
-        sceneFromModel(model, STATIC_FRAME_TIME, viewport(), readCalm()),
-      );
+      inkRenderer.draw(sceneAt(STATIC_FRAME_TIME));
     }
 
     function frame(now: number) {
@@ -123,7 +120,6 @@ export function InkBackground() {
       lastFrame = now;
       const delta = Math.min(frameTimeMs / 1000, 0.05);
       elapsed += delta;
-      model.update(delta);
 
       frameTimeAverage = frameTimeAverage * 0.9 + frameTimeMs * 0.1;
       if (frameTimeAverage > SLOW_FRAME_THRESHOLD_MS) {
@@ -151,24 +147,12 @@ export function InkBackground() {
       }
 
       skipNextFrame = !skipNextFrame;
-      if (
-        skipNextFrame &&
-        model.currentEnergy < IDLE_ENERGY &&
-        model.currentFlow < IDLE_ENERGY
-      ) {
+      if (skipNextFrame) {
         return;
       }
 
       applySize();
-      inkRenderer.draw(sceneFromModel(model, elapsed, viewport(), readCalm()));
-    }
-
-    function onPointerMove(event: PointerEvent) {
-      model.pointer(event.clientX, event.clientY);
-    }
-
-    function onPointerDown(event: PointerEvent) {
-      model.pulse(event.clientX, event.clientY);
+      inkRenderer.draw(sceneAt(elapsed));
     }
 
     function onResize() {
@@ -198,17 +182,14 @@ export function InkBackground() {
       }
     }
 
-    const pointerOptions = { passive: true } as const;
-
     if (animated) {
       raf = window.requestAnimationFrame(frame);
-      window.addEventListener("pointermove", onPointerMove, pointerOptions);
-      window.addEventListener("pointerdown", onPointerDown, pointerOptions);
     } else {
+      redrawStaticRef.current = drawStaticFrame;
       drawStaticFrame();
     }
 
-    window.addEventListener("resize", onResize, pointerOptions);
+    window.addEventListener("resize", onResize, listenerOptions);
     calmQuery.addEventListener("change", onCalmChange);
     document.addEventListener("visibilitychange", onVisibilityChange);
 
@@ -217,37 +198,76 @@ export function InkBackground() {
         window.cancelAnimationFrame(raf);
       }
 
-      if (animated) {
-        window.removeEventListener("pointermove", onPointerMove);
-        window.removeEventListener("pointerdown", onPointerDown);
-      }
-
       window.removeEventListener("resize", onResize);
       calmQuery.removeEventListener("change", onCalmChange);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       inkRenderer.dispose();
       rendererRef.current = null;
+      if (redrawStaticRef.current === drawStaticFrame) {
+        redrawStaticRef.current = null;
+      }
+      delete activeCanvas.dataset.inkActive;
+      inactiveCanvas.style.removeProperty("display");
+      fallback?.style.removeProperty("display");
     };
   }, []);
 
   return (
-    <Box
-      aria-hidden="true"
-      component="canvas"
-      ref={canvasRef}
-      sx={{
-        backgroundImage: createInkFallbackLayers(inkMode),
-        display: "block",
-        height: "100%",
-        inset: 0,
-        pointerEvents: "none",
-        position: "fixed",
-        width: "100%",
-        zIndex: 0,
-        "@media (forced-colors: active)": {
-          display: "none",
-        },
-      }}
-    />
+    <>
+      <Box
+        aria-hidden="true"
+        data-ink-fallback=""
+        ref={fallbackRef}
+        sx={{
+          backgroundImage: createInkFallbackLayers(inkMode),
+          display: "block",
+          height: "100%",
+          inset: 0,
+          pointerEvents: "none",
+          position: "fixed",
+          width: "100%",
+          zIndex: 0,
+          "@media (forced-colors: active)": {
+            display: "none",
+          },
+        }}
+      />
+      <Box
+        aria-hidden="true"
+        component="canvas"
+        data-ink-webgl=""
+        ref={webglCanvasRef}
+        sx={{
+          display: "block",
+          height: "100%",
+          inset: 0,
+          pointerEvents: "none",
+          position: "fixed",
+          width: "100%",
+          zIndex: 0,
+          "@media (forced-colors: active)": {
+            display: "none",
+          },
+        }}
+      />
+      <Box
+        aria-hidden="true"
+        component="canvas"
+        data-ink-canvas2d=""
+        ref={canvas2dRef}
+        sx={{
+          display: "block",
+          height: "100%",
+          inset: 0,
+          pointerEvents: "none",
+          position: "fixed",
+          width: "100%",
+          zIndex: 0,
+          "@media (forced-colors: active)": {
+            display: "none",
+          },
+        }}
+      />
+    </>
   );
 }

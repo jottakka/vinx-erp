@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { InkFieldModel, sceneFromModel } from "./ink-field-model";
 import { InkFieldRenderer } from "./ink-field-renderer";
+import type { InkFieldScene } from "./ink-field-scene";
 import { createInkFieldColors } from "./theme/ink-field-style";
 
 function createStubGl(overrides: Record<string, () => unknown> = {}) {
+  const vertexShader = { kind: "vertex" };
+  const fragmentShader = { kind: "fragment" };
+  const program = { kind: "program" };
+  const loseContext = vi.fn();
+
   return {
     VERTEX_SHADER: 35633,
     FRAGMENT_SHADER: 35632,
@@ -11,18 +16,24 @@ function createStubGl(overrides: Record<string, () => unknown> = {}) {
     LINK_STATUS: 35714,
     TRIANGLES: 4,
     canvas: null as HTMLCanvasElement | null,
-    createShader: vi.fn(() => ({})),
+    vertexShader,
+    fragmentShader,
+    program,
+    loseContext,
+    createShader: vi.fn((type: number) =>
+      type === 35633 ? vertexShader : fragmentShader,
+    ),
     shaderSource: vi.fn(),
     compileShader: vi.fn(),
     getShaderParameter: vi.fn(() => true),
-    createProgram: vi.fn(() => ({})),
+    createProgram: vi.fn(() => program),
     attachShader: vi.fn(),
     linkProgram: vi.fn(),
     deleteShader: vi.fn(),
     getProgramParameter: vi.fn(() => true),
     deleteProgram: vi.fn(),
-    getUniformLocation: vi.fn(() => ({})),
-    getExtension: vi.fn(() => ({ loseContext: vi.fn() })),
+    getUniformLocation: vi.fn((_program: unknown, name: string) => ({ name })),
+    getExtension: vi.fn(() => ({ loseContext })),
     useProgram: vi.fn(),
     viewport: vi.fn(),
     uniform2f: vi.fn(),
@@ -44,16 +55,11 @@ function createStubCanvas(gl: ReturnType<typeof createStubGl>) {
   return canvas;
 }
 
-function restScene() {
-  return sceneFromModel(
-    new InkFieldModel(),
-    37,
-    {
-      height: 800,
-      width: 1280,
-    },
-    { strength: 0.72, x: 0.735, y: 0.5 },
-  );
+function restScene(): InkFieldScene {
+  return {
+    time: 37,
+    calm: { strength: 0.72, x: 0.735, y: 0.5 },
+  };
 }
 
 afterEach(() => {
@@ -73,6 +79,9 @@ describe("InkFieldRenderer.create", () => {
     const canvas = createStubCanvas(gl);
 
     expect(InkFieldRenderer.create(canvas)).toBeNull();
+    expect(gl.deleteShader).toHaveBeenCalledWith(gl.vertexShader);
+    expect(gl.getExtension).toHaveBeenCalledWith("WEBGL_lose_context");
+    expect(gl.loseContext).toHaveBeenCalledTimes(1);
   });
 
   it("returns null when the program fails to link", () => {
@@ -80,6 +89,11 @@ describe("InkFieldRenderer.create", () => {
     const canvas = createStubCanvas(gl);
 
     expect(InkFieldRenderer.create(canvas)).toBeNull();
+    expect(gl.deleteShader).toHaveBeenCalledWith(gl.vertexShader);
+    expect(gl.deleteShader).toHaveBeenCalledWith(gl.fragmentShader);
+    expect(gl.deleteProgram).toHaveBeenCalledWith(gl.program);
+    expect(gl.getExtension).toHaveBeenCalledWith("WEBGL_lose_context");
+    expect(gl.loseContext).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -109,11 +123,8 @@ describe("InkFieldRenderer", () => {
 
     expect(gl.useProgram).toHaveBeenCalled();
     expect(gl.viewport).toHaveBeenCalledWith(0, 0, 640, 400);
-    expect(gl.uniform4fv).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.any(Float32Array),
-    );
-    expect(gl.uniform1i).toHaveBeenCalled();
+    expect(gl.uniform4fv).not.toHaveBeenCalled();
+    expect(gl.uniform1i).not.toHaveBeenCalled();
     expect(gl.drawArrays).toHaveBeenCalledWith(gl.TRIANGLES, 0, 3);
   });
 
@@ -144,6 +155,19 @@ describe("InkFieldRenderer", () => {
 
     expect(mainTone).toBeDefined();
     expect(toneCalls.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("uploads the stronger light smoke visibility profile", () => {
+    const gl = createStubGl();
+    const renderer = InkFieldRenderer.create(createStubCanvas(gl));
+
+    renderer?.resize(1000, 800, 1, 0.5);
+    renderer?.setColors(createInkFieldColors("light"));
+    renderer?.draw(restScene());
+
+    expect(gl.uniform1f).toHaveBeenCalledWith({ name: "uCoverage" }, 0.42);
+    expect(gl.uniform1f).toHaveBeenCalledWith({ name: "uAlphaCeiling" }, 0.5);
+    expect(gl.uniform1f).toHaveBeenCalledWith({ name: "uPaperMix" }, 0.72);
   });
 
   it("recolors the field with the dark palette", () => {
