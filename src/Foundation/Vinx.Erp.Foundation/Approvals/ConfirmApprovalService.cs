@@ -11,8 +11,8 @@ using Vinx.Erp.Foundation.Persistence;
 namespace Vinx.Erp.Foundation.Approvals;
 
 /// <summary>
-/// Confirmação e veto de aprovações duráveis do módulo AI (fases 2/3 do fluxo
-/// de seis fases). O claim é single-use: um único UPDATE condicional decide o
+/// Confirmação ou veto durável de aprovações do módulo AI (fase 2 do fluxo de
+/// seis fases). O claim é single-use: um único UPDATE condicional decide o
 /// vencedor usando o relógio do banco (<c>now()</c>); replays do mesmo
 /// <c>RequestId</c> (escopo CONFIRMATION) reutilizam o resultado original e
 /// qualquer outra confirmação recebe conflito ou indisponibilidade com erro
@@ -463,7 +463,7 @@ public sealed class ConfirmApprovalService(
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            if (denial == AuthorizationErrorCode.ProposalConflict)
+            if (denial == AuthorizationErrorCode.ProposalConflict && IsExpectedSingleUseConflict(reason))
             {
                 logger.LogInformation(
                     "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
@@ -566,6 +566,9 @@ public sealed class ConfirmApprovalService(
         && approval.ConfirmationRequestId == command.RequestId
         && string.Equals(approval.PayloadHash, payloadHash, StringComparison.Ordinal)
         && string.Equals(approval.PolicyVersion, command.PolicyVersion, StringComparison.Ordinal);
+
+    private static bool IsExpectedSingleUseConflict(string reason) =>
+        reason is "proposal_already_consumed" or "proposal_claim_lost";
 
     private async Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken)
     {

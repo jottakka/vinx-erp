@@ -781,18 +781,29 @@ public sealed class HarnessConfirmationLifecycleTests
     }
 
     [Fact]
-    public async Task Register_after_shutdown_is_rejected_without_binding_or_state()
+    public async Task Register_while_shutdown_is_in_progress_is_rejected_without_binding_or_state()
     {
         var clock = new ManualTimeProvider();
+        var timerGate = NewTcs<bool>();
+        clock.GateNextTimerDispose(timerGate);
         var pending = await PreparePendingWriteAsync(new HarnessProbeWriteCounter(), new ScriptedChatClient(
             AssistantCall(VinxToolPolicy.ProbeWriteToolName, "write-call")));
         var coordinator = CreateCoordinator(clock);
-        await coordinator.DisposeAsync();
+        var dispose = coordinator.DisposeAsync().AsTask();
 
-        Assert.Throws<InvalidOperationException>(() =>
-            Register(coordinator, pending, Guid.NewGuid(), clock, Guid.NewGuid()));
-        Assert.False(pending.Bundle.RequestIdSource.IsBound);
-        Assert.Equal(0, coordinator.ActiveProposalCount);
+        try
+        {
+            Assert.False(dispose.IsCompleted);
+            Assert.Throws<InvalidOperationException>(() =>
+                Register(coordinator, pending, Guid.NewGuid(), clock, Guid.NewGuid()));
+            Assert.False(pending.Bundle.RequestIdSource.IsBound);
+            Assert.Equal(0, coordinator.ActiveProposalCount);
+        }
+        finally
+        {
+            timerGate.TrySetResult(true);
+            await dispose;
+        }
     }
 
     [Fact]

@@ -115,14 +115,14 @@ repetida sem essa medição. A medição atual (`git diff --numstat f6aaded`) é
 
 | Categoria | Caminhos | Adições | Remoções | Classificação |
 |---|---:|---:|---:|---|
-| Manual (código, testes e docs) | 39 | 7.517 | 621 | Linhas revisáveis; inclui migrations `.cs`. |
+| Manual (código, testes e docs) | 39 | 7.545 | 621 | Linhas revisáveis; inclui migrations `.cs`. |
 | Designers de migration | 2 | 3.012 | 0 | Gerado pelo EF. |
 | Snapshot EF | 1 | 150 | 0 | Gerado pelo EF. |
 | Snapshot SQL | 1 | 86 | 0 | Gerado do schema. |
 | Lockfiles | 3 | 368 | 6 | Restore gerado; sem dependência nova. |
-| **Total** | **46** | **11.133** | **627** | **11.760** linhas alteradas. |
+| **Total** | **46** | **11.161** | **627** | **11.788** linhas alteradas. |
 
-Logo, o total manual efetivo é 7.517 adições (6.896 líquidas), não a
+Logo, o total manual efetivo é 7.545 adições (6.924 líquidas), não a
 estimativa anterior de aproximadamente 5.380. A exceção de tamanho aprovada
 continua registrada; nenhuma linha toca `quality/private` e os três lockfiles
 foram necessários ao restore travado.

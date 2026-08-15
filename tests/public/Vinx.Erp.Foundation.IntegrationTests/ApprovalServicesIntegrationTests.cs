@@ -346,11 +346,18 @@ public sealed class ApprovalServicesIntegrationTests
         var payload = Payload("""{"alvo":"estoque"}""");
         var prepared = await PrepareAsync(fixture, scenario, Guid.NewGuid(), payload);
         Assert.True(prepared.IsSuccess);
+        var logs = new ApprovalLogCapture();
 
         var payloadDivergence = await ConfirmAsync(
-            fixture, scenario, prepared.Value!, Guid.NewGuid(), Payload("""{"alvo":"outro"}"""));
+            fixture, scenario, prepared.Value!, Guid.NewGuid(), Payload("""{"alvo":"outro"}"""), logger: logs);
         var policyDivergence = await ConfirmAsync(
-            fixture, scenario, prepared.Value!, Guid.NewGuid(), payload, policyVersion: "1999-01-01.9");
+            fixture,
+            scenario,
+            prepared.Value!,
+            Guid.NewGuid(),
+            payload,
+            policyVersion: "1999-01-01.9",
+            logger: logs);
 
         Assert.Equal("proposal_conflict", ErrorCode(payloadDivergence));
         Assert.Equal("proposal_conflict", ErrorCode(policyDivergence));
@@ -359,6 +366,7 @@ public sealed class ApprovalServicesIntegrationTests
         Assert.Null(approval.ConsumedAt);
         Assert.Equal(2, await administrator.AuditEvents.CountAsync(audit =>
             audit.Action == "proposal_conflict" && audit.Outcome == AuditOutcome.Denied));
+        logs.AssertAll(2, LogLevel.Warning, "denied", "proposal_divergence");
     }
 
     [Fact]
@@ -969,13 +977,19 @@ public sealed class ApprovalServicesIntegrationTests
         }
 
         public void AssertSingle(LogLevel level, string result, string reason)
+            => AssertAll(1, level, result, reason);
+
+        public void AssertAll(int count, LogLevel level, string result, string reason)
         {
-            var entry = Assert.Single(entries);
-            Assert.Equal(level, entry.Level);
-            Assert.Equal("approval_confirmation", entry.Properties.GetValueOrDefault("Operation"));
-            Assert.Equal("foundation", entry.Properties.GetValueOrDefault("Module"));
-            Assert.Equal(result, entry.Properties.GetValueOrDefault("Result"));
-            Assert.Equal(reason, entry.Properties.GetValueOrDefault("Reason"));
+            Assert.Equal(count, entries.Count);
+            Assert.All(entries, entry =>
+            {
+                Assert.Equal(level, entry.Level);
+                Assert.Equal("approval_confirmation", entry.Properties.GetValueOrDefault("Operation"));
+                Assert.Equal("foundation", entry.Properties.GetValueOrDefault("Module"));
+                Assert.Equal(result, entry.Properties.GetValueOrDefault("Result"));
+                Assert.Equal(reason, entry.Properties.GetValueOrDefault("Reason"));
+            });
         }
     }
 
