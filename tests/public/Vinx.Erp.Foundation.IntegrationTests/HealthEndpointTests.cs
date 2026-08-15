@@ -13,5 +13,6 @@ public sealed class HealthEndpointTests
 
         response.EnsureSuccessStatusCode();
         Assert.Equal("Healthy", await response.Content.ReadAsStringAsync());
+        Assert.True(response.Headers.CacheControl?.NoStore);
     }
 }

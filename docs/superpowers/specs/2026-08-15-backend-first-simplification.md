@@ -1,4 +1,4 @@
-# Simplificação backend-first do runtime AI
+# Simplificação backend-first e remoção do runtime AI
 
 ## Contexto
 
@@ -13,37 +13,31 @@ A prioridade atual é estabilizar APIs do backend para o frontend. Manter um
 runtime de execução de escrita do agente sem host ou caso de uso real aumenta
 o acoplamento e o custo de mudança sem entregar funcionalidade ao usuário.
 
+Mesmo depois de retirar o coordenador, o projeto AI restante continuaria sendo
+referenciado somente pelos próprios testes. A integração package-first sem host
+também não entrega produto e fixa decisões antes de #135 e #138 terem provider
+e API reais.
+
 ## Decisão
 
 1. Manter as aprovações duráveis da Foundation e suas garantias de banco. Não
    haverá rollback de migração nem remoção de dados nesta fatia.
-2. Remover o coordenador em memória, o permit de entrega, o vínculo local de
-   `RequestId` e os testes exclusivos desse runtime não registrado.
-3. Manter o Microsoft Agent Framework como fronteira package-first, com
-   aprovação automática desabilitada. A sonda de escrita continua produzindo
-   uma pendência e não pode ser executada pela superfície pública.
-4. Manter um feixe público opaco, limitado a criar sessão e executar turno
-   textual. O agente bruto e a entrada de respostas de aprovação não serão
-   expostos.
-5. Reduzir `HarnessApprovalGate` à classificação fail-closed de propostas com
-   contexto confiável do servidor. A retomada de sessão só volta quando houver
-   endpoint e caso de uso reais.
-6. Remover a dependência AI -> Foundation criada apenas pela coordenação. A
-   autorização de capability continua pertencendo ao backend; a camada AI
-   conserva apenas nome e risco das ferramentas de demonstração.
-7. Usar primeiro a plataforma ASP.NET Core. Dependências externas entram
+2. Remover todo o projeto `Vinx.Erp.AI`, as sondas, os testes sem consumidor e
+   suas dependências diretas. Não manter módulo demonstrativo como promessa de
+   arquitetura futura.
+3. Reavaliar Microsoft Agent Framework, `IChatClient` e SDK oficial do provider
+   na mesma fatia vertical de #135/#138 que registrar e usar o runtime.
+4. Usar primeiro a plataforma ASP.NET Core. Dependências externas entram
    somente quando substituírem código atual ou atenderem um caso de uso já
    escolhido.
 
 ## Garantias preservadas
 
-- `DisableToolAutoApproval` permanece ativo e coberto por teste.
-- Escrita sem decisão do servidor permanece pendente e sem efeito colateral.
-- Ator e empresa usados pelo gate vêm de `VinxExecutionContext`, nunca do
-  modelo.
-- `CallId` vazio, ferramenta desconhecida e múltiplas solicitações são negados.
 - As aprovações duráveis continuam isoladas por empresa, autorizadas e
-  auditadas na Foundation, mas não são anunciadas como fluxo hospedado.
+  auditadas na Foundation, mas não são anunciadas como fluxo AI hospedado.
+- Nenhum pacote, sonda ou API de agente permanece sem consumidor de produção.
+- `vinx_ping` prova somente o transporte MCP e não importa runtime AI, provider
+  ou acesso de domínio.
 
 ## Extensão aprovada na PR 207
 
@@ -66,24 +60,30 @@ de uso multiempresa.
 - `OptionsBuilder<T>`, `Validate` e `ValidateOnStart` passam a validar conexão
   Foundation, Supabase Auth e Supabase Storage. Chaves de configuração deixam
   de ser lidas e validadas manualmente no início do `Program.cs`.
+- Endpoints de provider exigem HTTPS. HTTP é aceito somente em loopback durante
+  `Development`, preservando Supabase local sem permitir credencial em texto
+  claro fora da máquina.
 - A autenticação Supabase JWT é registrada uma vez na Foundation e reutilizada
   por `ApiHost` e `McpHost`. Issuer e audience continuam obrigatórios; claims
   não são remapeadas.
 - O container privado de Storage deixa de ser configuração: permanece uma
-  constante do servidor. `SupabaseFileStorage` recebe opções já validadas e não
-  repete a mesma validação em cada chamada.
+  constante do servidor. O typed `HttpClient` recebe base URI e autenticação
+  uma vez; `SupabaseFileStorage` recebe somente esse cliente e não repete
+  opções, headers ou validação em cada chamada. Redirect automático fica
+  desabilitado para impedir que o header privilegiado `apikey` atravesse para
+  outra origem.
 - `AddHealthChecks` e `MapHealthChecks` substituem o endpoint `/health` escrito
   à mão nos três hosts.
 - `AddProblemDetails` e `UseExceptionHandler` cobrem somente exceções HTTP não
   tratadas da API. Erros de negócio preservam o corpo estável `{ "code": ... }`
   e 401/403 existentes não recebem corpo novo. No .NET 10, diagnósticos de
   exceções tratadas continuam habilitados explicitamente.
-- `Microsoft.AspNetCore.OpenApi` publica `/openapi/v1.json` somente em
-  `Development`.
-- O rate limiter nativo protege endpoints autenticados com uma única partição
-  limitada por host. Isso evita cardinalidade controlada pelo cliente antes de
-  #132 materializar o usuário interno. Health e OpenAPI ficam fora da política;
-  isolamento por usuário só entra depois do contexto confiável.
+- O rate limiter nativo usa exatamente duas partições limitadas por host:
+  `anonymous` e `authenticated`. A autenticação executa antes do limiter, então
+  tráfego anônimo continua limitado sem esgotar o bucket autenticado. Nenhum
+  subject, IP ou header controlado pelo cliente vira chave antes de #132
+  materializar o usuário interno. Health fica fora da política; isolamento por
+  usuário só entra depois do contexto confiável.
 
 ### Baseline MCP
 
@@ -113,6 +113,7 @@ de uso multiempresa.
 - Exceção inesperada da API produz Problem Details 500 sem mensagem interna e
   continua emitindo diagnóstico estruturado.
 - Contratos atuais de erro e auditoria da Foundation não mudam.
+- O cliente Storage não segue redirect com a credencial de service role.
 
 ## Fora do escopo
 
@@ -127,6 +128,8 @@ de uso multiempresa.
   contrato e o corpo `{ "code": ... }`;
 - adicionar retry/resilience ao cliente Storage: POST e DELETE não podem ser
   repetidos por política genérica;
+- publicar OpenAPI antes de #110 tipar statuses, schemas e bearer auth; um
+  documento incompleto seria contrato falso para o frontend;
 - impor timeout global: os SLAs das APIs ainda não foram definidos e Streamable
   HTTP pode manter a resposta aberta durante a chamada;
 - implementar OAuth MCP completo, contexto multiempresa, `whoAmI`, catálogo de
@@ -147,6 +150,12 @@ Scenario: Invalid backend configuration fails before serving traffic
   When the affected host starts
   Then options validation prevents startup with no secret in the error
 
+@security @backend
+Scenario: Storage service credentials stay on the configured origin
+  Given the Storage client carries a server-only service credential
+  When the provider responds with a redirect
+  Then the client does not follow that redirect
+
 @access @mcp
 Scenario: Unauthenticated callers cannot use the MCP transport
   Given no valid Supabase bearer token
@@ -162,8 +171,8 @@ Scenario: Authenticated ping calls carry no session state
 
 @concurrency @security
 Scenario: Excess protected requests are bounded without unbounded partitions
-  Given authenticated requests reach the protected host rapidly
-  When the single host partition reaches its limit
+  Given requests reach a protected endpoint rapidly
+  When the anonymous or authenticated host partition reaches its limit
   Then excess requests receive 429
   And health remains available outside the policy
 ```
@@ -177,13 +186,13 @@ verticais depois; frontend pode avançar em paralelo quando esses contratos
 estiverem estáveis; MCP e provedores reutilizam os mesmos casos de uso por
 último.
 
-## Estimativa e limite do PR
+## Tamanho final e limite do PR
 
-A remoção original altera 25 caminhos, adiciona menos de 700 linhas manuais e
-remove mais de 3.000. A extensão deve alterar de 20 a 28 caminhos adicionais e
-adicionar de 450 a 750 linhas manuais; lockfiles gerados serão reportados à
-parte. O conjunto completo excede os limites usuais de arquivos e linhas e une
-baseline HTTP com transporte MCP. A exceção é explícita: o responsável pediu a
-extensão na mesma PR 207. O vínculo é concreto porque ambos os hosts reutilizam
-a mesma autenticação e validação de opções, e a ferramenta MCP não acessa outro
-subsistema.
+O diff final contra `main` altera 61 caminhos: 50 de código/documentação e 11
+lockfiles gerados. Sem lockfiles, são 1.708 adições e 4.786 remoções; os
+lockfiles somam 1.096 adições e 822 remoções. O volume excede os limites usuais
+de arquivos e linhas porque consolida a remoção do runtime AI não hospedado, a
+baseline HTTP e a prova de transporte MCP. A exceção é explícita: o responsável
+pediu a extensão na mesma PR 207. O saldo reduz código e dependências; ApiHost e
+McpHost reutilizam a mesma autenticação e validação de opções, e `vinx_ping` não
+acessa outro subsistema.

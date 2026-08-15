@@ -3,12 +3,10 @@
 ## Escopo e comandos
 
 A Foundation mantém preparação, confirmação e veto duráveis com PostgreSQL
-real. O módulo AI mantém somente o gate de classificação; não existe
-coordenador, endpoint ou entrega de aprovação ao agente.
+real. Não existe runtime AI, endpoint ou entrega de aprovação ao agente.
 
 | Código | Comando exato |
 |---|---|
-| AI | `dotnet test tests/public/Vinx.Erp.AI.UnitTests --no-restore --nologo -v q` |
 | FU | `dotnet test tests/public/Vinx.Erp.Foundation.UnitTests --no-restore --nologo -v q` |
 | AS | `dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests --no-restore --filter FullyQualifiedName~ApprovalServicesIntegrationTests --blame-hang-timeout 60s --blame-hang-dump-type none -v q` |
 | AM | `dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests --no-restore --filter FullyQualifiedName~ApprovalsMigrationTests --blame-hang-timeout 60s --blame-hang-dump-type none -v q` |
@@ -26,11 +24,10 @@ coordenador, endpoint ou entrega de aprovação ao agente.
 | acesso | Empresa ou ator cruzado permanecem ocultos por RLS | `ApprovalServicesIntegrationTests.A_cross_company_confirmation_is_hidden_as_unavailable`; `ApprovalServicesIntegrationTests.A_cross_actor_confirmation_within_the_same_company_is_hidden_as_unavailable` |
 | estado/exceções | Expiração, veto idempotente e rollback de auditoria preservam o estado válido | `ApprovalServicesIntegrationTests.An_expired_proposal_cannot_be_confirmed`; `ApprovalServicesIntegrationTests.Replaying_a_veto_is_idempotent_and_vetoing_a_consumed_approval_is_a_conflict`; `ApprovalServicesIntegrationTests.Confirmation_audit_failure_rolls_back_the_claim_and_leaves_the_approval_live` |
 | concorrência | Preparações e confirmações concorrentes produzem um vencedor e replays/conflitos coerentes | `ApprovalServicesIntegrationTests.Concurrent_preparation_replays_when_the_first_idempotency_read_precedes_the_winner_commit`; `ApprovalServicesIntegrationTests.Concurrent_confirmations_with_the_same_request_produce_one_claim_and_replays`; `ApprovalServicesIntegrationTests.Concurrent_confirmations_with_distinct_requests_produce_one_claim_and_audited_conflicts` |
-| fronteira AI | Escrita fica pendente e não há superfície pública de entrega | `HarnessApprovalBoundaryTests.Write_without_server_delivery_remains_pending_and_unexecuted`; `HarnessApprovalBoundaryTests.Public_surface_is_text_only_and_has_no_approval_delivery` |
 
 ## Limite explícito
 
 Esses testes não provam um fluxo ponta a ponta de aprovação do agente. A
-Foundation oferece a primitiva durável, mas nenhum host a conecta ao Agent
-Framework. Autenticação de host, endpoint e estratégia de retomada pertencem à
-issue #138 e devem ser desenhados após a baseline de backend.
+Foundation oferece a primitiva durável, mas nenhum host a conecta a um runtime
+AI. Provider, autenticação de host, endpoint e estratégia de retomada pertencem
+às issues #135–#138 e devem nascer com o primeiro fluxo hospedado.

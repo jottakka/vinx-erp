@@ -1,9 +1,24 @@
-# OpenAPI contract policy
+# Política de contratos OpenAPI
 
-HTTP contracts are published from `ApiHost` and documented per module. The OpenAPI document describes externally observable API behavior; it does not replace authorization or database protections.
+Contratos HTTP são publicados pelo `ApiHost` e documentados por módulo. O
+documento OpenAPI descreve comportamento observável, mas não substitui
+autorização nem proteções do banco. A publicação começa em #110 junto do
+primeiro contrato tipado consumido pelo frontend.
 
-Every command accepts an explicit company context and is authorized server side using membership, named capability and scope. Responses must not reveal data from a company the actor cannot access. The frontend may use effective capabilities to hide inaccessible UI, but a forged request receives denial and an auditable outcome.
+Todo comando recebe contexto explícito de empresa e é autorizado no servidor
+por membership, capability nomeada e escopo. A resposta não revela dados de
+empresa inacessível. O frontend pode ocultar UI pelas capabilities efetivas,
+mas requisição forjada continua negada e, quando a política exigir, auditada.
 
-Version a contract when a consumer-visible breaking change is necessary. For the internal pilot, prefer additive fields and migration windows over parallel API generations. Document the capability, audit action, idempotency behavior and redaction rules beside high-risk operations.
+Versione o contrato quando houver quebra visível ao consumidor. No piloto
+interno, prefira campos aditivos e janela de migração a gerações paralelas da
+API. Documente capability, ação de auditoria, idempotência e redaction junto a
+operações de alto risco.
 
-Binary file bytes do not travel through the normal API request path. The API authorizes a private, short-lived signed upload or download URL and records file metadata and audit evidence.
+Não publique documento que omita bearer auth ou anuncie apenas `200` para
+operações com `204`, `4xx` ou `503`. Endpoints devem declarar resultados,
+schemas e requisitos de segurança verificáveis antes de entrar no contrato.
+
+Bytes de arquivo não trafegam pela rota comum da API. O servidor autoriza URL
+privada e curta de upload ou download e registra metadados e evidência de
+auditoria.

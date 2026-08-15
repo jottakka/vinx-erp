@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Buffers;
 using System.Text.Json;
@@ -7,20 +6,20 @@ using System.Security.Cryptography;
 
 namespace Vinx.Erp.Foundation.Files;
 
-public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOptions options) : FileStorage
+public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
 {
     private const int ObjectListPageSize = 1000;
     private static readonly TimeSpan MaximumDownloadUrlLifetime = TimeSpan.FromMinutes(2);
 
     public async Task EnsurePrivateContainerAsync(CancellationToken cancellationToken)
     {
-        options.Validate();
-
         using var createRequest = new HttpRequestMessage(HttpMethod.Post, "storage/v1/bucket")
         {
-            Content = JsonContent.Create(new CreateBucketRequest(options.ContainerId, options.ContainerId, false))
+            Content = JsonContent.Create(new CreateBucketRequest(
+                SupabaseStorageOptions.PrivateContainerId,
+                SupabaseStorageOptions.PrivateContainerId,
+                false))
         };
-        AddAuthenticationHeaders(createRequest);
 
         using var createResponse = await httpClient.SendAsync(createRequest, cancellationToken);
         if (createResponse.IsSuccessStatusCode)
@@ -28,8 +27,9 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
             return;
         }
 
-        using var lookupRequest = new HttpRequestMessage(HttpMethod.Get, $"storage/v1/bucket/{options.ContainerId}");
-        AddAuthenticationHeaders(lookupRequest);
+        using var lookupRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"storage/v1/bucket/{SupabaseStorageOptions.PrivateContainerId}");
         using var lookupResponse = await httpClient.SendAsync(lookupRequest, cancellationToken);
         if (lookupResponse.IsSuccessStatusCode)
         {
@@ -41,7 +41,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         }
 
         throw new InvalidOperationException(
-            $"Supabase Storage container provisioning failed with create status {(int)createResponse.StatusCode}, lookup status {(int)lookupResponse.StatusCode}, container {options.ContainerId}.");
+            $"Supabase Storage container provisioning failed with create status {(int)createResponse.StatusCode}, lookup status {(int)lookupResponse.StatusCode}, container {SupabaseStorageOptions.PrivateContainerId}.");
     }
 
     public async Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(
@@ -49,7 +49,6 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         CancellationToken cancellationToken)
     {
         ValidateObjectKey(providerKey);
-        options.Validate();
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -57,7 +56,6 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         {
             Content = JsonContent.Create(new { upsert = false })
         };
-        AddAuthenticationHeaders(request);
         using var response = await httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         var url = await ReadUrlAsync(response.Content, cancellationToken);
@@ -73,9 +71,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
     public async Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken)
     {
         ValidateObjectKey(providerKey);
-        options.Validate();
         using var request = new HttpRequestMessage(HttpMethod.Get, ObjectPath(string.Empty, providerKey));
-        AddAuthenticationHeaders(request);
         using var response = await httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
@@ -127,13 +123,11 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
     {
         ValidateObjectKey(providerKey);
         ValidateDownloadLifetime(lifetime);
-        options.Validate();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, ObjectPath("sign", providerKey))
         {
             Content = JsonContent.Create(new { expiresIn = (int)lifetime.TotalSeconds })
         };
-        AddAuthenticationHeaders(request);
         using var response = await httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         var url = await ReadUrlAsync(response.Content, cancellationToken);
@@ -145,18 +139,18 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         CancellationToken cancellationToken)
     {
         ValidateObjectKey(prefix, allowEmpty: true);
-        options.Validate();
         var offset = 0;
         var summaries = new List<StorageObjectSummary>();
         while (true)
         {
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
-                new Uri(options.BaseUri, $"storage/v1/object/list/{Uri.EscapeDataString(options.ContainerId)}"))
+                new Uri(
+                    httpClient.BaseAddress!,
+                    $"storage/v1/object/list/{Uri.EscapeDataString(SupabaseStorageOptions.PrivateContainerId)}"))
             {
                 Content = JsonContent.Create(new { prefix, limit = ObjectListPageSize, offset })
             };
-            AddAuthenticationHeaders(request);
             using var response = await httpClient.SendAsync(request, cancellationToken);
             response.EnsureSuccessStatusCode();
             var objects = await response.Content.ReadFromJsonAsync<JsonElement[]>(cancellationToken: cancellationToken)
@@ -174,9 +168,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
     public async Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken)
     {
         ValidateObjectKey(providerKey);
-        options.Validate();
         using var request = new HttpRequestMessage(HttpMethod.Delete, ObjectPath(string.Empty, providerKey));
-        AddAuthenticationHeaders(request);
         using var response = await httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
@@ -203,19 +195,13 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
         }
     }
 
-    private void AddAuthenticationHeaders(HttpRequestMessage request)
-    {
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ServiceRoleKey);
-        request.Headers.Add("apikey", options.ServiceRoleKey);
-    }
-
     private Uri ObjectPath(string operation, string providerKey)
     {
         var encodedKey = string.Join('/', providerKey.Split('/').Select(Uri.EscapeDataString));
         var suffix = string.IsNullOrEmpty(operation) ? string.Empty : $"/{operation}";
         return new Uri(
-            options.BaseUri,
-            $"storage/v1/object{suffix}/{Uri.EscapeDataString(options.ContainerId)}/{encodedKey}");
+            httpClient.BaseAddress!,
+            $"storage/v1/object{suffix}/{Uri.EscapeDataString(SupabaseStorageOptions.PrivateContainerId)}/{encodedKey}");
     }
 
     private async Task<Uri> ReadUrlAsync(HttpContent content, CancellationToken cancellationToken)
@@ -225,7 +211,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient, SupabaseStorageOp
             ? ReadFirstString(payload, "signedUrl", "signedURL", "url")
             : null;
         if (string.IsNullOrWhiteSpace(value)
-            || !Uri.TryCreate(new Uri(options.BaseUri, "/"), value, out var uri)
+            || !Uri.TryCreate(new Uri(httpClient.BaseAddress!, "/"), value, out var uri)
             || !uri.IsAbsoluteUri)
         {
             throw new InvalidOperationException("Supabase Storage signed URL response was invalid.");

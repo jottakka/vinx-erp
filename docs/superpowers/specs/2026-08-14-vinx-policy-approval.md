@@ -8,8 +8,8 @@
 ## Status
 
 Foundation persiste e consome aprovações de uso único com autorização, RLS,
-auditoria e idempotência. O módulo AI não coordena esse ciclo e nenhum host o
-expõe. A primitiva permanece disponível para a futura API supervisionada #138.
+auditoria e idempotência. Não existe runtime AI e nenhum host expõe esse ciclo.
+A primitiva permanece disponível para a futura API supervisionada #138.
 
 ## Decisões duráveis preservadas
 
@@ -53,7 +53,7 @@ retida para replay e auditoria; purga física continua na issue #201.
 ## Runtime removido
 
 Não há registro local, timer, sweep em memória, single-flight de sessão,
-permit, entrega de decisão ou recuperação pós-crash no módulo AI. Esses
+permit, entrega de decisão ou recuperação pós-crash em runtime AI. Esses
 comportamentos não são alegados pelos testes atuais.
 
 ## Manifesto

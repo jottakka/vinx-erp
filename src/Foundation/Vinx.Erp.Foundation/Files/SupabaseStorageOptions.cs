@@ -1,24 +1,16 @@
+using Microsoft.Extensions.Configuration;
+
 namespace Vinx.Erp.Foundation.Files;
 
-public sealed record SupabaseStorageOptions(Uri BaseUri, string ServiceRoleKey, string ContainerId)
+public sealed class SupabaseStorageOptions
 {
+    public const string BaseUriConfigurationKey = "SUPABASE_STORAGE_URL";
+    public const string ServiceRoleKeyConfigurationKey = "SUPABASE_STORAGE_SERVICE_ROLE_KEY";
     public const string PrivateContainerId = "vinx-foundation-private";
 
-    public void Validate()
-    {
-        if (!BaseUri.IsAbsoluteUri)
-        {
-            throw new InvalidOperationException("Supabase Storage URL must be absolute.");
-        }
+    [ConfigurationKeyName(BaseUriConfigurationKey)]
+    public Uri? BaseUri { get; set; }
 
-        if (string.IsNullOrWhiteSpace(ServiceRoleKey))
-        {
-            throw new InvalidOperationException("Supabase Storage service role key must be configured.");
-        }
-
-        if (!string.Equals(ContainerId, PrivateContainerId, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException($"Supabase Storage container must be {PrivateContainerId}.");
-        }
-    }
+    [ConfigurationKeyName(ServiceRoleKeyConfigurationKey)]
+    public string ServiceRoleKey { get; set; } = string.Empty;
 }

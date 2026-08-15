@@ -66,11 +66,12 @@ endereços e credenciais geradas apenas para uso local.
 |---|---|---|
 | `FOUNDATION_RUNTIME_CONNECTION` | API C# | Conexão de runtime com privilégios mínimos. |
 | `FOUNDATION_MIGRATOR_CONNECTION` | Ferramentas EF | Conexão de migração, separada do runtime. |
-| `SUPABASE_AUTH_ISSUER` | API C# | Emissor JWT do Supabase Auth. |
-| `SUPABASE_AUTH_AUDIENCE` | API C# | Audiência JWT aceita. |
+| `SUPABASE_AUTH_ISSUER` | API e MCP C# | Emissor JWT do Supabase Auth. |
+| `SUPABASE_AUTH_AUDIENCE` | API e MCP C# | Audiência JWT aceita. |
 | `SUPABASE_STORAGE_URL` | API C# | URL do adapter de Storage. |
 | `SUPABASE_STORAGE_SERVICE_ROLE_KEY` | API C# | Credencial de serviço exclusiva do servidor. |
-| `ASPNETCORE_URLS` | API C# | Porta HTTP local; use `http://127.0.0.1:5080` neste guia. |
+| `AllowedHosts` | MCP C# | Hostnames aceitos; a configuração versionada permite somente loopback e o deployment deve sobrescrever pelo hostname exato. |
+| `ASPNETCORE_URLS` | API ou MCP C# | Binding HTTP local; use `http://127.0.0.1:5080` para API e `http://127.0.0.1:5081` para MCP. |
 
 O frontend V1 não define variável de provider. Quando #16 introduzir uma base
 URL da API, ela será documentada junto do cliente tipado; nenhum `VITE_*` deve
@@ -85,6 +86,7 @@ Com as cinco variáveis de runtime da API já configuradas no processo pelo
 fluxo seguro do time, inicie a API de domínio em outro terminal:
 
 ```bash
+ASPNETCORE_ENVIRONMENT=Development \
 ASPNETCORE_URLS=http://127.0.0.1:5080 \
   dotnet run --project src/Hosts/Vinx.Erp.ApiHost
 ```
@@ -92,6 +94,23 @@ ASPNETCORE_URLS=http://127.0.0.1:5080 \
 A saúde da API fica em `http://127.0.0.1:5080/health`. A porta `54321` é o
 gateway local do Supabase, não a API C#. Até #16, o web não chama essa API; a
 base URL será configurada somente no cliente HTTP tipado dessa fatia.
+
+## Executar o MCP C#
+
+Com `SUPABASE_AUTH_ISSUER` e `SUPABASE_AUTH_AUDIENCE` configuradas, inicie a
+sonda MCP local em outro terminal:
+
+```bash
+ASPNETCORE_ENVIRONMENT=Development \
+ASPNETCORE_URLS=http://127.0.0.1:5081 \
+  dotnet run --project src/Hosts/Vinx.Erp.McpHost
+```
+
+A saúde fica em `http://127.0.0.1:5081/health`; o transporte stateless fica em
+`/mcp` e exige bearer token Supabase pré-obtido. Esta baseline não oferece
+discovery OAuth MCP nem cliente browser: todo header `Origin` é rejeitado.
+HTTP para o issuer/storage local só é aceito em loopback com o ambiente
+`Development`; qualquer outro ambiente exige HTTPS.
 
 ## Executar e testar o web
 

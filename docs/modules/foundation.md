@@ -219,3 +219,12 @@ templates constantes, operação, módulo, resultado e motivo seguro; nunca
 registram tokens, credenciais, PII, prompts ou payload bruto. O host autentica
 antes de criar contexto confiável, mas endpoints de aprovação do AI ainda não
 fazem parte desta fatia.
+
+Configuração obrigatória de banco, Supabase Auth e Storage usa Options com
+`ValidateOnStart`; erro impede o host de servir tráfego sem incluir credencial
+na mensagem. HTTP de provider só é aceito em loopback durante desenvolvimento;
+demais ambientes exigem HTTPS. Os três hosts usam Health Checks nativo. O
+`ApiHost` usa Problem Details somente para exceções não tratadas, preservando
+os contratos `{ code }` e `401` vazio. O `McpHost`
+reutiliza a validação JWT, mas a sonda `vinx_ping` não materializa ator nem
+empresa; ferramentas de domínio continuam bloqueadas até o contexto confiável.
