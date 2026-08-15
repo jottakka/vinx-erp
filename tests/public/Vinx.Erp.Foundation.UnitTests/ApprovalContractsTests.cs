@@ -49,6 +49,17 @@ public sealed class ApprovalContractsTests
     public void IsValidHash_enforces_sha256_lowercase_hexadecimal_format(string? hash, bool expected) =>
         Assert.Equal(expected, CanonicalPayloadHasher.IsValidHash(hash));
 
+    [Theory]
+    [InlineData("ix_approvals_company_id_actor_user_id", UniqueViolationKind.LiveProposal)]
+    [InlineData("ix_idempotency_records_company_id_actor_user_id_command_name_r", UniqueViolationKind.Idempotency)]
+    [InlineData(null, UniqueViolationKind.Other)]
+    [InlineData("", UniqueViolationKind.Other)]
+    [InlineData("ix_unrelated", UniqueViolationKind.Other)]
+    public void Unique_violation_classifier_routes_only_pinned_constraint_names(
+        string? constraintName,
+        UniqueViolationKind expected) =>
+        Assert.Equal(expected, ApprovalUniqueViolationClassifier.Classify(constraintName));
+
     [Fact]
     public void Prepare_command_validates_identifiers_payload_and_policy_version()
     {

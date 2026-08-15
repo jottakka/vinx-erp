@@ -107,6 +107,53 @@ public sealed class ApprovalsMigrationTests
     }
 
     [Fact]
+    public async Task Approvals_declare_terminal_constraints_and_the_filtered_live_actor_index()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conrelid = 'foundation.approvals'::regclass
+                      AND conname = 'ck_approvals_consumption_complete'),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conrelid = 'foundation.approvals'::regclass
+                      AND conname = 'ck_approvals_terminal_exclusive'),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conrelid = 'foundation.approvals'::regclass
+                      AND conname = 'ck_approvals_veto_complete'
+                      AND pg_get_constraintdef(oid) LIKE '%approval_expired%'),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_indexes
+                    WHERE schemaname = 'foundation'
+                      AND tablename = 'approvals'
+                      AND indexname = 'ix_approvals_company_id_actor_user_id'
+                      AND regexp_replace(lower(indexdef), '\s+', ' ', 'g')
+                          LIKE '%create unique index ix_approvals_company_id_actor_user_id%'
+                      AND regexp_replace(lower(indexdef), '\s+', ' ', 'g')
+                          LIKE '%where ((consumed_at is null) and (deleted_at is null))%')
+            """, administrator);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        for (var ordinal = 0; ordinal < 4; ordinal++)
+        {
+            Assert.True(reader.GetBoolean(ordinal));
+        }
+    }
+
+    [Fact]
     public async Task Ai_writes_confirm_capability_is_seeded_with_its_stable_identity()
     {
         await using var fixture = new FoundationPostgresFixture();

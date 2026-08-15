@@ -1,6 +1,9 @@
+using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using Vinx.Erp.Foundation.Approvals;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
@@ -46,6 +49,81 @@ public sealed class ApprovalServicesIntegrationTests
         Assert.Equal(AuditSource.Ai, audit.Source);
         Assert.Equal(AuditOutcome.Success, audit.Outcome);
         Assert.Equal(approval.Id, audit.ResourceId);
+    }
+
+    [Fact]
+    public async Task Preparing_after_database_expiry_sweeps_the_old_proposal_and_recovers()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+        var expired = await PrepareAsync(fixture, scenario, Guid.NewGuid());
+        Assert.True(expired.IsSuccess);
+
+        await ExpireApprovalAsync(fixture, expired.Value!.ApprovalId);
+
+        var replacement = await PrepareAsync(fixture, scenario, Guid.NewGuid());
+
+        Assert.True(replacement.IsSuccess);
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var expiredApproval = await administrator.Approvals
+            .IgnoreQueryFilters()
+            .SingleAsync(approval => approval.Id == expired.Value.ApprovalId);
+        Assert.True(expiredApproval.IsExpired);
+        Assert.Equal(FoundationApproval.ExpiredReason, expiredApproval.DeletedReason);
+
+        var liveApprovals = await administrator.Approvals
+            .IgnoreQueryFilters()
+            .Where(approval => approval.ConsumedAt == null && approval.DeletedAt == null)
+            .ToListAsync();
+        var liveApproval = Assert.Single(liveApprovals);
+        Assert.Equal(replacement.Value!.ApprovalId, liveApproval.Id);
+        Assert.Equal(1, await administrator.AuditEvents.CountAsync(audit =>
+            audit.Action == "ai.approvals.expire"
+            && audit.Outcome == AuditOutcome.Success
+            && audit.ResourceId == expired.Value.ApprovalId));
+    }
+
+    [Fact]
+    public async Task Preparation_with_the_minimum_ttl_has_an_expiration_after_creation()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+
+        var result = await PrepareAsync(
+            fixture, scenario, Guid.NewGuid(), timeToLive: TimeSpan.FromSeconds(1));
+
+        Assert.True(result.IsSuccess);
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var approval = await administrator.Approvals.SingleAsync();
+        Assert.True(approval.ExpiresAt > approval.CreatedAt);
+        Assert.True(result.Value!.ExpiresAt > approval.CreatedAt);
+    }
+
+    [Fact]
+    public async Task Preparation_audit_failure_rolls_back_the_approval_and_idempotency_record()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+        await RevokeAuditAppendAsync(fixture);
+        using var telemetry = new AuthorizationTelemetryCollector();
+        AuthorizationResult<PrepareApprovalResult>? result = null;
+
+        try
+        {
+            result = await PrepareAsync(fixture, scenario, Guid.NewGuid());
+        }
+        finally
+        {
+            await GrantAuditAppendAsync(fixture);
+        }
+
+        Assert.Equal("audit_unavailable", ErrorCode(result!));
+        telemetry.AssertRecorded("approval_preparation", "success_transaction");
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.Approvals.IgnoreQueryFilters().ToListAsync());
+        Assert.Empty(await administrator.IdempotencyRecords
+            .Where(record => record.CommandName == "ai.approvals.prepare")
+            .ToListAsync());
     }
 
     [Fact]
@@ -278,7 +356,7 @@ public sealed class ApprovalServicesIntegrationTests
         var prepared = await PrepareAsync(
             fixture, scenario, Guid.NewGuid(), payload, timeToLive: TimeSpan.FromSeconds(1));
         Assert.True(prepared.IsSuccess);
-        await Task.Delay(TimeSpan.FromMilliseconds(1500));
+        await ExpireApprovalAsync(fixture, prepared.Value!.ApprovalId);
 
         var result = await ConfirmAsync(fixture, scenario, prepared.Value!, Guid.NewGuid(), payload);
 
@@ -394,6 +472,69 @@ public sealed class ApprovalServicesIntegrationTests
     }
 
     [Fact]
+    public async Task Confirmation_audit_failure_rolls_back_the_claim_and_leaves_the_approval_live()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+        var payload = Payload("""{"alvo":"estoque"}""");
+        var prepared = await PrepareAsync(fixture, scenario, Guid.NewGuid(), payload);
+        Assert.True(prepared.IsSuccess);
+        await RevokeAuditAppendAsync(fixture);
+        using var telemetry = new AuthorizationTelemetryCollector();
+        AuthorizationResult<ConfirmApprovalResult>? result = null;
+
+        try
+        {
+            result = await ConfirmAsync(fixture, scenario, prepared.Value!, Guid.NewGuid(), payload);
+        }
+        finally
+        {
+            await GrantAuditAppendAsync(fixture);
+        }
+
+        Assert.Equal("audit_unavailable", ErrorCode(result!));
+        telemetry.AssertRecorded("approval_confirmation", "success_transaction");
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var approval = await administrator.Approvals.IgnoreQueryFilters().SingleAsync();
+        Assert.Null(approval.ConsumedAt);
+        Assert.Null(approval.ConfirmationRequestId);
+        Assert.Null(approval.ResultJson);
+        Assert.Empty(await administrator.AuditEvents.Where(audit =>
+            audit.Action == "ai.approvals.confirm" && audit.Outcome == AuditOutcome.Success).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Veto_audit_failure_rolls_back_the_veto_and_leaves_the_approval_live()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+        var prepared = await PrepareAsync(fixture, scenario, Guid.NewGuid());
+        Assert.True(prepared.IsSuccess);
+        await RevokeAuditAppendAsync(fixture);
+        using var telemetry = new AuthorizationTelemetryCollector();
+        AuthorizationResult<VetoApprovalResult>? result = null;
+
+        try
+        {
+            result = await VetoAsync(fixture, scenario, prepared.Value!, Guid.NewGuid());
+        }
+        finally
+        {
+            await GrantAuditAppendAsync(fixture);
+        }
+
+        Assert.Equal("audit_unavailable", ErrorCode(result!));
+        telemetry.AssertRecorded("approval_confirmation", "success_transaction");
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var approval = await administrator.Approvals.IgnoreQueryFilters().SingleAsync();
+        Assert.Null(approval.DeletedAt);
+        Assert.Null(approval.DeletedReason);
+        Assert.Null(approval.ConsumedAt);
+        Assert.Empty(await administrator.AuditEvents.Where(audit =>
+            audit.Action == "ai.approvals.veto" && audit.Outcome == AuditOutcome.Success).ToListAsync());
+    }
+
+    [Fact]
     public async Task Vetoing_a_live_proposal_soft_deletes_it_with_a_terminal_reason_and_audits()
     {
         await using var fixture = await StartFixtureAsync();
@@ -405,7 +546,7 @@ public sealed class ApprovalServicesIntegrationTests
         var veto = await VetoAsync(fixture, scenario, prepared.Value!, Guid.NewGuid());
 
         Assert.True(veto.IsSuccess);
-        Assert.True(veto.Value!.WasVetoed);
+        Assert.Equal(VetoApprovalOutcome.Vetoed, veto.Value!.Outcome);
         await using var administrator = fixture.CreateAdministratorDbContext();
         var approval = await administrator.Approvals.IgnoreQueryFilters().SingleAsync();
         Assert.NotNull(approval.DeletedAt);
@@ -434,7 +575,7 @@ public sealed class ApprovalServicesIntegrationTests
         var replay = await VetoAsync(fixture, scenario, vetoable.Value!, Guid.NewGuid());
 
         Assert.True(replay.IsSuccess);
-        Assert.False(replay.Value!.WasVetoed);
+        Assert.Equal(VetoApprovalOutcome.AlreadyVetoed, replay.Value!.Outcome);
 
         var consumedProposal = await PrepareAsync(fixture, scenario, Guid.NewGuid(), payload);
         Assert.True(consumedProposal.IsSuccess);
@@ -444,6 +585,166 @@ public sealed class ApprovalServicesIntegrationTests
         var vetoAfterConsumption = await VetoAsync(fixture, scenario, consumedProposal.Value!, Guid.NewGuid());
 
         Assert.Equal("proposal_conflict", ErrorCode(vetoAfterConsumption));
+    }
+
+    [Fact]
+    public async Task Vetoing_with_a_wrong_proposal_identifier_returns_conflict_without_deleting_the_row()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+        var prepared = await PrepareAsync(fixture, scenario, Guid.NewGuid());
+        Assert.True(prepared.IsSuccess);
+
+        var result = await VetoAsync(
+            fixture, scenario, prepared.Value!, Guid.NewGuid(), proposalId: Guid.NewGuid());
+
+        Assert.Equal("proposal_conflict", ErrorCode(result));
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var approval = await administrator.Approvals.IgnoreQueryFilters().SingleAsync();
+        Assert.Null(approval.DeletedAt);
+        Assert.Equal(1, await administrator.AuditEvents.CountAsync(audit =>
+            audit.Action == "proposal_conflict" && audit.Outcome == AuditOutcome.Denied));
+    }
+
+    [Fact]
+    public async Task Vetoing_an_expired_terminal_proposal_returns_unavailable()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+        var expired = await PrepareAsync(fixture, scenario, Guid.NewGuid());
+        Assert.True(expired.IsSuccess);
+        await ExpireApprovalAsync(fixture, expired.Value!.ApprovalId);
+
+        var replacement = await PrepareAsync(fixture, scenario, Guid.NewGuid());
+        Assert.True(replacement.IsSuccess);
+        var result = await VetoAsync(fixture, scenario, expired.Value!, Guid.NewGuid());
+
+        Assert.Equal("proposal_unavailable", ErrorCode(result));
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var approval = await administrator.Approvals.IgnoreQueryFilters()
+            .SingleAsync(candidate => candidate.Id == expired.Value.ApprovalId);
+        Assert.True(approval.IsExpired);
+        Assert.Empty(await administrator.AuditEvents.Where(audit =>
+            audit.Action == "ai.approvals.veto" && audit.Outcome == AuditOutcome.Success).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Replaying_a_claim_after_membership_revocation_returns_membership_required()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+        var payload = Payload("""{"alvo":"estoque"}""");
+        var prepared = await PrepareAsync(fixture, scenario, Guid.NewGuid(), payload);
+        Assert.True(prepared.IsSuccess);
+        var confirmationRequestId = Guid.NewGuid();
+        var claim = await ConfirmAsync(
+            fixture, scenario, prepared.Value!, confirmationRequestId, payload);
+        Assert.True(claim.IsSuccess);
+
+        await using (var administrator = fixture.CreateAdministratorDbContext())
+        {
+            var membership = await administrator.Memberships.SingleAsync(candidate =>
+                candidate.CompanyId == scenario.CompanyId && candidate.UserId == scenario.ActorUserId);
+            membership.Revoke("test_revocation", scenario.ActorUserId, Guid.NewGuid());
+            await administrator.SaveChangesAsync();
+        }
+
+        var replay = await ConfirmAsync(
+            fixture, scenario, prepared.Value!, confirmationRequestId, payload);
+
+        Assert.Equal("membership_required", ErrorCode(replay));
+        Assert.Null(replay.Value);
+        await using var auditReader = fixture.CreateAdministratorDbContext();
+        Assert.Equal(1, await auditReader.AuditEvents.CountAsync(audit =>
+            audit.Action == "membership_required" && audit.Outcome == AuditOutcome.Denied));
+    }
+
+    [Fact]
+    public async Task The_expiry_sweep_cutoff_is_the_transaction_start_clock()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var scenario = await SeedScenarioAsync(fixture);
+        var prepared = await PrepareAsync(fixture, scenario, Guid.NewGuid());
+        Assert.True(prepared.IsSuccess);
+
+        var runtimeConnectionString = new NpgsqlConnectionStringBuilder(fixture.RuntimeConnectionString)
+        {
+            Pooling = false,
+        }.ConnectionString;
+        await using var runtimeConnection = new NpgsqlConnection(runtimeConnectionString);
+        await runtimeConnection.OpenAsync();
+        await using var transaction = await runtimeConnection.BeginTransactionAsync();
+
+        await using (var contextCommand = new NpgsqlCommand(
+            "SELECT set_config('app.user_id', @user_id::text, true), set_config('app.company_id', @company_id::text, true);",
+            runtimeConnection,
+            transaction))
+        {
+            contextCommand.Parameters.AddWithValue("user_id", scenario.ActorUserId);
+            contextCommand.Parameters.AddWithValue("company_id", scenario.CompanyId);
+            await contextCommand.ExecuteNonQueryAsync();
+        }
+
+        DateTimeOffset cutoff;
+        await using (var cutoffCommand = new NpgsqlCommand("SELECT now();", runtimeConnection, transaction))
+        {
+            var databaseNow = (DateTime)(await cutoffCommand.ExecuteScalarAsync())!;
+            cutoff = new DateTimeOffset(DateTime.SpecifyKind(databaseNow, DateTimeKind.Utc));
+        }
+
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var expireCommand = new NpgsqlCommand(
+            "UPDATE foundation.approvals SET expires_at = @expires_at WHERE id = @approval_id;",
+            administrator))
+        {
+            expireCommand.Parameters.AddWithValue("expires_at", cutoff.AddMilliseconds(250));
+            expireCommand.Parameters.AddWithValue("approval_id", prepared.Value!.ApprovalId);
+            Assert.Equal(1, await expireCommand.ExecuteNonQueryAsync());
+        }
+
+        await using (var sleepCommand = new NpgsqlCommand(
+            "SELECT pg_sleep(0.5), clock_timestamp() > @expires_at;",
+            runtimeConnection,
+            transaction))
+        {
+            sleepCommand.CommandTimeout = 5;
+            sleepCommand.Parameters.AddWithValue("expires_at", cutoff.AddMilliseconds(250));
+            await using var reader = await sleepCommand.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.True(reader.GetBoolean(1));
+        }
+
+        // O relógio da transação permanece no corte: a varredura exata do
+        // serviço não enxerga a linha vencida no relógio de parede.
+        await using (var sweepCommand = new NpgsqlCommand(
+            """
+            SELECT id
+            FROM foundation.approvals
+            WHERE company_id = @company_id
+              AND actor_user_id = @user_id
+              AND consumed_at IS NULL
+              AND deleted_at IS NULL
+              AND expires_at <= now()
+            FOR UPDATE;
+            """,
+            runtimeConnection,
+            transaction))
+        {
+            sweepCommand.Parameters.AddWithValue("company_id", scenario.CompanyId);
+            sweepCommand.Parameters.AddWithValue("user_id", scenario.ActorUserId);
+            await using var sweepReader = await sweepCommand.ExecuteReaderAsync();
+            Assert.False(await sweepReader.ReadAsync());
+        }
+
+        await transaction.RollbackAsync();
+
+        // Uma transação nova (relógio de corte posterior) varre a linha.
+        var replacement = await PrepareAsync(fixture, scenario, Guid.NewGuid());
+        Assert.True(replacement.IsSuccess);
+        await using var administratorReader = fixture.CreateAdministratorDbContext();
+        var swept = await administratorReader.Approvals.IgnoreQueryFilters()
+            .SingleAsync(approval => approval.Id == prepared.Value!.ApprovalId);
+        Assert.True(swept.IsExpired);
     }
 
     private static async Task<FoundationPostgresFixture> StartFixtureAsync()
@@ -528,14 +829,55 @@ public sealed class ApprovalServicesIntegrationTests
         FoundationPostgresFixture fixture,
         ApprovalScenario scenario,
         PrepareApprovalResult proposal,
-        Guid requestId)
+        Guid requestId,
+        Guid? proposalId = null)
     {
         await using var database = CreateRuntimeContext(fixture);
         var service = CreateConfirmService(database);
         return await service.VetoAsync(
             new ActorContext(scenario.ActorUserId, Guid.NewGuid()),
-            new VetoApprovalCommand(scenario.CompanyId, proposal.ApprovalId, proposal.ProposalId, requestId),
+            new VetoApprovalCommand(
+                scenario.CompanyId,
+                proposal.ApprovalId,
+                proposalId ?? proposal.ProposalId,
+                requestId),
             CancellationToken.None);
+    }
+
+    private static async Task ExpireApprovalAsync(
+        FoundationPostgresFixture fixture,
+        Guid approvalId)
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE foundation.approvals
+            SET created_at = now() - interval '2 minutes',
+                updated_at = now() - interval '2 minutes',
+                expires_at = now() - interval '1 minute'
+            WHERE id = @approval_id;
+            """,
+            administrator);
+        command.Parameters.AddWithValue("approval_id", approvalId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private static async Task RevokeAuditAppendAsync(FoundationPostgresFixture fixture)
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "REVOKE EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) FROM vinx_runtime;",
+            administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task GrantAuditAppendAsync(FoundationPostgresFixture fixture)
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "GRANT EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) TO vinx_runtime;",
+            administrator);
+        await command.ExecuteNonQueryAsync();
     }
 
     private static JsonElement Payload(string json) => JsonDocument.Parse(json).RootElement.Clone();
@@ -596,4 +938,40 @@ public sealed class ApprovalServicesIntegrationTests
         Guid OtherCompanyId,
         Guid ActorUserId,
         Guid OtherUserId);
+
+    private sealed class AuthorizationTelemetryCollector : IDisposable
+    {
+        private readonly ConcurrentQueue<IReadOnlyDictionary<string, string>> measurements = new();
+        private readonly MeterListener listener = new();
+
+        public AuthorizationTelemetryCollector()
+        {
+            listener.InstrumentPublished = (instrument, publishedListener) =>
+            {
+                if (instrument.Meter.Name == AuthorizationTelemetry.MeterName
+                    && instrument.Name == AuthorizationTelemetry.AuditUnavailableCounterName)
+                {
+                    publishedListener.EnableMeasurementEvents(instrument);
+                }
+            };
+            listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            {
+                measurements.Enqueue(tags.ToArray().ToDictionary(
+                    tag => tag.Key,
+                    tag => tag.Value?.ToString() ?? string.Empty,
+                    StringComparer.Ordinal));
+            });
+            listener.Start();
+        }
+
+        public void AssertRecorded(string operation, string phase)
+        {
+            Assert.Contains(measurements, measurement =>
+                measurement.Count == 2
+                && measurement.GetValueOrDefault("operation") == operation
+                && measurement.GetValueOrDefault("phase") == phase);
+        }
+
+        public void Dispose() => listener.Dispose();
+    }
 }
