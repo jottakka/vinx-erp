@@ -1,219 +1,109 @@
-# Foundation module contract
+# Módulo Foundation
 
-Foundation owns the cross-cutting contracts that every ERP module consumes. It does not own Paguai, Service Desk, Kanban, HR, Notifications or AI business rules.
+Foundation fornece os contratos transversais do ERP: identidade, empresas,
+membership, capabilities, RLS, auditoria, idempotência e as aprovações
+duráveis consumidas pelos módulos. Não contém regras de negócio de Paguai,
+Service Desk, Kanban, HR, Notificações ou AI.
 
 ## Ownership
 
-- Groups, companies, units, teams, users, employees and active memberships.
-- Roles, named capabilities and scope grants: `self`, `team`, `unit`, `company` and `group`.
-- Configurable approval policies and alçadas. A sole owner approver is data configuration, never a hard-coded module rule.
-- Durable single-use approvals (`foundation.approvals`) that authorize confirmed module writes, consumed exactly once.
-- Identity and file-storage provider boundaries: `IdentityProvider` and `FileStorage`.
-- Durable audit, correlation context, redaction, OpenTelemetry conventions, health checks, idempotency keys and outbox technical contracts.
+- grupos, empresas, unidades, times, usuários e memberships ativas;
+- roles, capabilities nomeadas e escopos `self`, `team`, `unit`, `company` e
+  `group`;
+- `foundation.approvals`, seus serviços de preparação, confirmação e veto;
+- identidade, auditoria, correlação, redaction, telemetria, health checks,
+  idempotência e contratos técnicos de outbox.
 
 ## Company scope
 
-All commands carry one company. A person can hold different memberships, roles
-and scopes in more than one company. The active context is one company or a
-read-only all-authorized view. Every command, including an MCP command,
-provides one explicit `empresa_id`; the server validates membership, capability
-and scope regardless of frontend visibility.
-
-The frontend receives effective capabilities only to shape menus, routes,
-buttons, columns and data. It is never the authorization authority. API, MCP
-and database protections deny forged or cross-company requests.
-
-## Catálogo de capabilities
-
-`foundation.capabilities` é catálogo técnico administrado exclusivamente por
-migrations. Os nomes canônicos são identidade estável; o runtime apenas lê o
-catálogo e não recebe `INSERT`, `UPDATE` ou `DELETE`. A migration preserva uma
-linha legada que já use o mesmo nome, falha se o UUID canônico estiver ocupado
-por outro nome e não permite downgrade que remova uma capability referenciada
-por um grant. Para comandos atuais, somente grant de escopo `company` satisfaz
-o requisito; os demais escopos falham fechados até existir regra específica.
-
-## Identidade autenticada
-
-A API valida o JWT do Supabase Auth e resolve o ator interno exclusivamente
-pelo par imutável `issuer` + `subject` em `foundation.external_identities`.
-E-mail não participa da resolução e uma identidade externa desconhecida recebe
-`401`; a API não cria `User` nem `ExternalIdentity` durante uma requisição.
-O runtime possui somente `SELECT` nessa tabela para essa consulta.
-Antes dessa resolução, `session_id` deve ser UUID e `amr` deve conter
-autenticação não `token_refresh`; ausência ou malformação falha fechada com
-`401`. A prova não persiste token nem dado pessoal.
-
-`InternalSessionAdmissionService` é usado pelo gate HTTP: bloqueia o usuário
-por função SQL, grava uma sessão EF só quando a autenticação é estritamente
-posterior à barreira e registra auditoria global na mesma transação. Repetição
-ativa não cria auditoria; barreira, revogação e colisão produzem negação
-auditada sem identificador externo. O gate cria o `ActorContext` e decide
-entre `401` e `503` antes do endpoint protegido.
-
-`GET /foundation/memberships` usa somente esse `ActorContext`. Em uma única
-transação de leitura, descobre as memberships ativas do ator e projeta as
-capabilities efetivas por empresa, em ordem de nome da empresa. Cada empresa
-recebe contexto RLS próprio antes da leitura de grants; uma membership válida
-sem grant retorna `capabilities: []`. A resposta não expõe papéis, identidade
-externa ou dados de autenticação. Falha de descoberta retorna `503` seguro.
-`GET /foundation/capabilities?companyId=` continua sendo o contrato de uma
-única empresa e preserva suas negações auditáveis.
-
-`RevokeMembershipService` é um serviço interno de aplicação, registrado no
-host sem rota HTTP, MCP ou interface. O comando traz empresa, membership e
-`request_id`; exige membership ativa do ator e a capability
-`foundation.memberships.revoke` exatamente em escopo `company`. A autorização
-é sempre avaliada antes da idempotência. Depois dela, um replay com o mesmo
-payload vence a busca da membership já excluída e devolve o sucesso original;
-payload diferente retorna `idempotency_conflict` e novo `request_id` para a
-membership revogada retorna `resource_not_found`. O alvo de outra empresa não
-é revelado. A transição faz soft-delete, idempotência e auditoria
-`foundation.memberships.revoke` na mesma transação; falha de auditoria desfaz
-tudo. A operação registra a métrica segura `membership_revocation` quando a
-auditoria ou a transação ficam indisponíveis. Ela não revoga sessão nem altera
-as memberships de outras empresas.
-
-`POST /foundation/identity/sessions/revoke-all` não recebe corpo, usuário,
-empresa nem alvo. Ele usa somente o `ActorContext` estabelecido pelo gate e
-revoga todas as sessões da própria pessoa pela função transacional existente.
-`Revoked` e `NoChange` retornam `204`; indisponibilidade retorna
-`503 application/json` com objeto de uma única propriedade `code` e valor
-`identity_gate_unavailable`. A operação mantém o mesmo estado final em
-repetições concorrentes: `204/204` é permitido quando ambas as requisições
-passam pelo gate antes da barreira, e `204/401` quando uma observa a barreira
-antes do endpoint. O teste determinístico após o primeiro `204` espera `401`.
-Listagem e revogação individual (#79), interfaces de sessão (#80), administração de sessão (#81), MFA/AAL (#18),
-recuperação (#19) e logout/banimento no provedor (#20) continuam adiados.
-Configure a API com `SUPABASE_AUTH_ISSUER` e `SUPABASE_AUTH_AUDIENCE`;
-`FOUNDATION_RUNTIME_CONNECTION`, `SUPABASE_STORAGE_URL` e
-`SUPABASE_STORAGE_SERVICE_ROLE_KEY` continuam obrigatórias para a infraestrutura.
+Todo comando recebe uma `empresa_id` explícita e o servidor resolve o ator por
+contexto autenticado. A UI apenas molda menus; API, MCP e PostgreSQL negam
+contexto forjado ou cruzado. Em aprovações, RLS é forçado e combina empresa e
+ator; contexto ausente falha fechado.
 
 ## Aprovações duráveis
 
-`foundation.approvals` registra propostas de escrita que exigem confirmação
-explícita. O ciclo é `prepare → confirm` ou `prepare → veto`, sempre com a
-empresa e o ator autenticado resolvidos no servidor; nenhuma etapa aceita
-empresa ou permissão vindas do modelo ou do cliente.
+`PrepareApprovalService` exige membership ativa e
+`ai.writes.confirm` exatamente em escopo `company`. Depois do parsing
+estrutural, grava proposta, idempotência e auditoria na mesma transação. Replay
+do mesmo `RequestId` e payload devolve a proposta sem auditoria duplicada;
+payload diferente retorna `idempotency_conflict`; uma segunda proposta viva do
+mesmo ator/empresa retorna `proposal_conflict` auditado.
 
-`PrepareApprovalService` (`ai.approvals.prepare`) exige membership ativa do
-ator e a capability `ai.writes.confirm` exatamente em escopo `company`,
-somente depois do parsing estrutural do comando; validação semântica de
-recursos acontece no módulo de origem, depois da autorização. Um replay do
-mesmo `RequestId` de preparação devolve a mesma aprovação sem nova auditoria;
-payload diferente retorna `idempotency_conflict`. Uma segunda preparação do
-mesmo ator na mesma empresa enquanto existe proposta viva é negada
-(`proposal_conflict`) com negação auditada, nunca substitui silenciosamente a
-proposta anterior.
+`ConfirmApprovalService` rederiva o hash canônico (chaves ordenadas
+recursivamente, números pela representação JSON, SHA-256 hexadecimal minúsculo
+de 64 caracteres) e exige a mesma policy version. O claim é um `UPDATE`
+condicional único com `now()` do PostgreSQL, `consumed_at IS NULL`,
+`deleted_at IS NULL` e `expires_at > now()`. O resultado é `Claimed`; o mesmo
+`RequestId` recebe `Replay`; divergência, perda de claim ou novo pedido após
+consumo recebem `Conflict`; linha invisível, expirada ou vetada recebe
+`ProposalUnavailable` conforme a reconciliação.
 
-`ConfirmApprovalService` (`ai.approvals.confirm`) re-deriva o hash canônico do
-payload (ordenação recursiva de chaves, invariante de cultura, SHA-256 em hex
-minúsculo de 64 caracteres) e o compara com o hash gravado junto da versão de
-política. A reivindicação é um único `UPDATE` condicional que usa o relógio do
-banco (`now()`) para consumo e expiração e vence uma única vez: o vencedor
-recebe `Claimed`, repetições com o mesmo `RequestId` de confirmação recebem
-`Replay`, confirmações concorrentes ou divergentes recebem `Conflict` e
-propostas desconhecidas, expiradas ou vetadas recebem `ProposalUnavailable`.
-O resultado carrega o `ProposalId` opaco de volta ao chamador. O veto
-(`ai.approvals.veto`) é soft-delete idempotente com o motivo fixo
-`approval_vetoed` e impede qualquer consumo posterior; uma proposta consumida
-é estado terminal e não pode ser vetada.
+Cada confirmação, inclusive replay, reavalia membership/capability e RLS.
+Veto também reavalia autorização em cada chamada e faz soft-delete terminal
+com `deleted_reason = 'approval_vetoed'`, `request_id` do veto e auditoria.
+Replay de veto é `AlreadyVetoed`; veto após consumo é conflito. Falha de
+auditoria faz rollback; a mutação de negócio e sua evidência não se separam.
 
-Os três escopos de `RequestId` são distintos: o de preparação controla a
-idempotência da criação, o de confirmação controla reivindicação/replay e o de
-execução é estável entre reinicializações para que o domínio devolva o
-resultado original da escrita confirmada. Falha de auditoria desfaz a
-mutação; indisponibilidade de auditoria ou transação registra a métrica segura
-`approval_confirmation`.
+Os `RequestId` de preparação, confirmação e execução são distintos. O último é
+fornecido pelo servidor ao harness e permite que o serviço de domínio preserve
+seu resultado em replay; Foundation não promete exatamente-uma-vez.
 
-A tabela ativa RLS com isolamento de empresa **e** de ator
-(`approvals_company_isolation`, fail-closed quando os contextos estão
-ausentes) e `FORCE ROW LEVEL SECURITY`. O runtime recebe `SELECT` e `INSERT`
-em nível de tabela e `UPDATE` apenas nas colunas de ciclo de vida
-(confirmação, consumo, resultado, auditoria de alteração, `row_version` e
-soft-delete); `DELETE` permanece negado. Invariantes: `expires_at` sempre
-posterior a `created_at`, `proposal_id` único, índice único parcial para o
-`RequestId` de confirmação e hash de payload validado por formato. A retenção
-e limpeza de aprovações expiradas está adiada para a issue #201.
+## Invariantes persistentes
+
+A migration declara, com nomes estáveis:
+
+- constraints `ck_approvals_expires_after_creation`,
+  `ck_approvals_payload_hash_format`, `ck_approvals_veto_complete`,
+  `ck_approvals_consumption_complete` e `ck_approvals_terminal_exclusive`;
+- índice único parcial `ix_approvals_company_id_actor_user_id`, filtrado por
+  `consumed_at IS NULL AND deleted_at IS NULL`, garantindo uma proposta viva
+  por ator/empresa;
+- índices `ix_approvals_actor_user_id`,
+  `ix_approvals_confirmation_request_id` (único e não nulo) e
+  `ix_approvals_proposal_id` (único);
+- índice de idempotência
+  `ix_idempotency_records_company_id_actor_user_id_command_name_r`.
+
+`ApprovalUniqueViolationClassifier` só classifica os dois nomes pinados
+(`ix_approvals_company_id_actor_user_id` como `LiveProposal` e
+`ix_idempotency_records_company_id_actor_user_id_command_name_r` como
+`Idempotency`); qualquer outro constraint é `Other` e não vira um conflito
+inventado.
+
+A preparação lê o relógio da transação, expira propostas vencidas antes de
+testar conflito vivo e registra `approval_expired`; a janela de sweep usa o
+instante inicial da transação. Expiração, veto e consumo são terminais e
+mutuamente exclusivos. A Foundation mantém a linha terminal para replay e
+auditoria; a purga física continua fora desta fatia, na issue #201.
 
 ## Contract version
 
 `1.1`
 
-## Modelo de entidades
-
-Entidades mutáveis compartilham identidade, auditoria, exclusão lógica e versão de concorrência por classes-base do domínio, sem dependência do EF. O mapeamento permanece em `Persistence`, e somente entidades que pertencem a uma empresa implementam `ICompanyScoped`.
-
-## Data and audit rules
-
-Business and configuration data use soft delete with `deleted_at`, `deleted_by_user_id` and `deleted_reason`; a restore is authorized and audited. Audit events are append-only and use retention rather than soft delete. Module data remains explicitly company-scoped; an authorized group-wide view is a union, never a tenant-less record.
-
-Cada evento de auditoria possui `scope`: `company` exige uma
-`requested_company_id`, enquanto `global` exige que ela seja nula. O runtime
-insere eventos somente por `audit.append_event`; não recebe permissões diretas
-de alteração na tabela. O append de sucesso participa da mesma transação da
-mutação de negócio: se ele falhar, a mutação também é revertida. A migração não
-permite downgrade enquanto houver eventos globais, para não reescrever ou
-apagar auditoria histórica.
-
-Idempotent writes replay a matching request and payload. Reusing a request with a
-different payload returns `idempotency_conflict`; a separate write that loses a
-business-database integrity race returns the redacted `integrity_conflict` and
-records a denied audit event. Neither response exposes database diagnostics.
-
-## Observabilidade e logging
-
-Todos os hosts configuram `AddVinxLogging`, que preserva `ILogger<T>` nativo e
-emite somente console JSON com timestamp UTC ISO 8601. O filtro reduz os logs
-rotineiros de `Microsoft.AspNetCore` para `Warning`, enquanto `TraceId` e
-`SpanId` acompanham o escopo quando houver uma `Activity`; tags e baggage não
-entram no logging.
-
-Hosts HTTP usam `UseVinxRequestCorrelation` antes dos endpoints. O middleware
-gera um `CorrelationId` UUID no servidor, registra-o no contexto da requisição,
-marca a `Activity` atual e o propaga por scope. Ele não aceita correlação do
-cliente, não registra a requisição e sempre descarta o scope, inclusive em
-exceções. Logs, métricas e auditoria nunca incluem JWT, refresh token,
-credencial, segredo, PII, conteúdo de arquivo, prompt ou payload bruto.
-
 ## Deletion strategy
 
-See Data and audit rules above; this section introduces no second deletion policy.
+Dados de negócio usam soft-delete auditável. Em `foundation.approvals`, veto e
+expiração marcam o motivo terminal e consumo grava resultado; nenhum caminho de
+runtime recebe `DELETE`. Retenção/limpeza lógica do estado terminal é distinta
+da purga física futura da issue #201.
 
 ## Migration notes
 
-The first migration is `InitialFoundationBaseline`.
+`AddFoundationApprovals` cria `foundation.approvals`, RLS forçado, policy de
+isolamento por empresa/ator, grants mínimos e as constraints/índices acima.
+`AddAiWritesConfirmCapability` semeia `ai.writes.confirm` com identidade
+estável e impede downgrade enquanto houver grants.
 
-A fronteira atual de ownership usa `vinx_migrator LOGIN NOINHERIT
-NOBYPASSRLS`, `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`,
-`vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`,
-`vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
-`vinx_authorization_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O owner de
-identidade possui somente `USAGE` em `foundation`, `SELECT` em
-`foundation.users` e `UPDATE` apenas na coluna `sessions_valid_after`,
-necessário para o `FOR UPDATE` da função de admissão de sessão. O owner de
-autorização recebe leitura somente de `memberships` e `companies` para
-`current_actor_memberships()`, e suas policies RLS exclusivas não se aplicam
-ao runtime. O runtime não recebe `UPDATE` amplo nem leitura global dessas
-tabelas. Essas roles são distintas das roles legadas do Supabase: `anon`,
-`authenticated` e `service_role`.
+O runtime possui `SELECT` e `INSERT` em nível de tabela e `UPDATE` somente nas
+colunas de ciclo de vida, auditoria de alteração, `row_version` e soft-delete;
+`DELETE` e alteração de chaves permanecem negados. O contrato de schema é
+verificado em PostgreSQL real pelos testes de migração e de grants.
 
-A revogação de membership marca somente o soft-delete e a auditoria técnica da
-própria membership. Ela não revoga sessões nem altera `sessions_valid_after`.
-O runtime recebe `UPDATE` apenas nas
-colunas de ciclo de vida da revogação, auditoria de alteração e `row_version`;
-`INSERT`, `DELETE` e chaves da membership continuam negados, sob a policy RLS
-de empresa já existente.
+## Observabilidade e segurança
 
-`AddFoundationApprovals` cria `foundation.approvals` com RLS forçada,
-policy de isolamento por empresa e ator, grants restritos do runtime e as
-restrições de verificação do ciclo (expiração posterior à criação e veto
-completo). O downgrade falha fechado enquanto existirem linhas. A migração de
-baixo acoplamento `AddAiWritesConfirmCapability` insere a capability
-`ai.writes.confirm` com UUID estável (UUIDv5), preserva linha legada de mesmo
-nome, falha se o UUID estiver ocupado por outro nome e bloqueia downgrade
-enquanto a capability tiver grants.
-
-## Module responsibilities
-
-Each module defines its own use cases, state transitions and resource-level rules. It asks Foundation to evaluate the relevant named capability and scope, resolve configured alçadas, record an audit event, propagate correlation and use provider boundaries. It must not add a broad shared abstraction merely for future reuse.
+Auditoria é append-only, transacional com a mutação e redigida. Logs usam
+`ILogger` com operação, módulo, resultado e motivo seguro; nunca registram
+tokens, credenciais, PII, prompts ou payload bruto. O host autentica antes de
+criar contexto confiável, mas endpoints de aprovação do AI ainda não fazem
+parte desta fatia.

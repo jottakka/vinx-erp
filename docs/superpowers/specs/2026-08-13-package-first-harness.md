@@ -1,134 +1,84 @@
-# Harness package-first do Agent Harness (issue #127, PR 1)
+# Harness package-first do Agent Framework (issue #127, PR 1)
 
 ## Status
 
-Aprovada em 13 de agosto de 2026. Esta decisão substitui o adiamento do
-Microsoft Agent Framework definido em
-`2026-08-11-agent-framework-boundaries-design.md` e entrega a primeira fatia
-de produção: prova do harness com pacotes Microsoft reais.
-
-## Conciliação
-
-A instrução corretiva do responsável determina que o Microsoft Agent
-Framework seja usado agora, em código de produção, e não adiado para depois
-de V1. Ela sobrepõe o adiamento registrado na decisão de 11/08. As garantias
-de segurança daquela decisão (ordem de política, confirmação pertencente ao
-servidor, modelo sem poder de escolher empresa ou permissões) permanecem
-válidas e são preservadas por esta fatia.
+Aprovada em 13 de agosto de 2026 e complementada pela política durável de
+14/08. O harness real é usado em produção desde a primeira fatia; o PR 2
+adiciona Foundation, single-flight e veto.
 
 ## Decisão package-first
 
-O harness do VINX usa pacotes Microsoft estáveis em código de produção desde
-a primeira fatia. É proibido recriar o loop modelo/ferramenta manualmente
-(sem `AgentHarnessRunner` próprio, sem substituto de `IChatClient`, sem
-referência de pacote sem uso em produção).
+O loop modelo/ferramenta é o Microsoft Agent Framework real. Não há loop manual,
+substituto de `IChatClient`, agente sintético de produção ou pacote citado sem
+uso. Os pacotes centrais permanecem:
 
-Pacotes fixados em `Directory.Packages.props` (verificados em nuget.org em
-13/08/2026 e revalidados no restore):
+| Pacote | Versão | Uso verificado |
+|---|---:|---|
+| `Microsoft.Extensions.AI` | 10.9.0 | APIs de AI fornecidas ao harness. |
+| `Microsoft.Extensions.AI.Abstractions` | 10.9.0 | Funções, aprovação de ferramenta, conteúdo de chat e `IChatClient`. |
+| `Microsoft.Agents.AI` | 1.17.0 | Sessão e resposta usadas pelo feixe interno. |
+| `Microsoft.Agents.AI.Harness` | 1.17.0 | Harness Microsoft construído pela fábrica. |
+| `Microsoft.Extensions.Logging.Abstractions` | 10.0.11 | Logging do gate. |
 
-| Pacote | Versão | Uso |
-|---|---|---|
-| `Microsoft.Extensions.AI` | 10.9.0 | Fixado centralmente; chega como dependência do harness. |
-| `Microsoft.Extensions.AI.Abstractions` | 10.9.0 | Referência direta de `Vinx.Erp.AI`: `AIFunctionFactory`, `ApprovalRequiredAIFunction`, `ToolApprovalRequestContent`, `FunctionCallContent`, `IChatClient`, `ChatOptions`. |
-| `Microsoft.Agents.AI` | 1.17.0 | Referência direta de `Vinx.Erp.AI`: `AIAgent`, `AgentSession`, `AgentResponse` (via `Microsoft.Agents.AI.Abstractions`, dependência direta deste pacote). |
-| `Microsoft.Agents.AI.Harness` | 1.17.0 | Referência direta de `Vinx.Erp.AI`: `HarnessAgent`, `HarnessAgentOptions`, extensão `AsHarnessAgent`. |
+As versões estão fixadas em `Directory.Packages.props` e os restores travados
+revalidam os lockfiles commitados.
 
-`Microsoft.Extensions.Logging.Abstractions` (10.0.11) também foi fixado, pois
-o gate de aprovação registra decisões com `ILogger`.
+## Padrões desligados
 
-## Padrões do harness desligados
+`VinxHarnessFactory` desliga web search, autoaprovação de ferramenta, file
+memory, skills, todo, agent mode e OpenTelemetry; limita a cinco iterações.
+`AllowMultipleToolCalls = false` mantém uma única solicitação de aprovação por
+resposta. A aprovação automática fica fail-closed.
 
-`VinxHarnessFactory` constrói o `HarnessAgent` a partir de um `IChatClient`
-injetado (agnóstico de provedor) com:
+## Fronteira pública
 
-- `DisableWebSearch = true`;
-- `DisableToolAutoApproval = true` (aprovação fail-closed);
-- `DisableFileMemory = true`;
-- `DisableAgentSkillsProvider = true`;
-- `DisableTodoProvider = true`;
-- `DisableAgentModeProvider = true`;
-- `DisableOpenTelemetry = true`;
-- `MaximumIterationsPerRequest = 5`.
+O consumidor recebe apenas `HarnessAgentBundle` e seus dois métodos públicos:
 
-No `ChatOptions` do harness, `AllowMultipleToolCalls = false`: o gate processa
-uma aprovação por resposta, e o framework documenta que uma chamada protegida
-em um lote exigiria aprovação de todas as chamadas da resposta.
+```csharp
+var session = await bundle.CreateSessionAsync(cancellationToken);
+var response = await bundle.RunUserTurnAsync(session, userText, cancellationToken);
+```
 
-O binding de resposta de aprovação permanece habilitado
-(`DisableApprovalResponseBinding` não é definido).
+O segundo método aceita texto de usuário; conteúdo de resposta de aprovação
+injetado como turno falha fechado. Agente cru, permit, fonte de `RequestId` e
+entrega de aprovação não são APIs do consumidor. O `RequestId` de execução é
+criado pelo servidor e emparelhado ao feixe antes do turno.
 
-## Ferramentas de sonda (PR 1)
+## Ferramentas e aprovação
 
-Duas ferramentas inertes, sem dados do ERP e não registradas em nenhum host:
+Sondas são registradas por `AIFunctionFactory`; escrita usa
+`ApprovalRequiredAIFunction` e leitura passa pelo framework sem aprovação. A
+allowlist e o risco vêm de `VinxToolPolicy`, o ator/empresa vêm de
+`VinxExecutionContext`, e o gate rejeita contexto ausente, lote ambíguo ou
+ferramenta fora da allowlist.
 
-- `GetHarnessProbeStatus`: leitura estática, criada via `AIFunctionFactory` e
-  executada diretamente pelo framework;
-- `RecordHarnessProbeWrite`: escrita com efeito apenas em um contador em
-  memória, envolvida em `ApprovalRequiredAIFunction`; nunca executa sem
-  confirmação do servidor.
+Depois do claim durável, o coordenador entrega a decisão pelo gate e o loop do
+framework continua na mesma sessão. O coordenador não chama a ferramenta
+manualmente. O permit interno é vinculado a proposta e `CallId`, de uso único;
+o gate revalida a decisão antes da entrega. Veto usa a mesma fronteira e
+`VetoStart` publica o trabalho fora do lock somente depois de publicar o estado.
 
-O registro dirige o envolvimento: cada ferramenta passa pela classificação de
-`VinxToolPolicy.TryClassify`; ferramentas de escrita são envolvidas em
-`ApprovalRequiredAIFunction`, leituras executam diretamente e nomes fora da
-allowlist falham no registro. Assim classificação e envolvimento não divergem.
+## Limites
 
-## Fronteira de aprovação do servidor
+Não há host HTTP, endpoints de aprovação, adaptadores de provedor ou MCP nesta
+fatia. A autenticação do host é N/A aqui e permanece vinculada à issue #138;
+`GET /ai/whoami` segue na issue #125. A remoção física de linhas expiradas é a
+issue #201.
 
-`HarnessApprovalGate` consome `ToolApprovalRequestContent` exposto na resposta
-do agente e decide somente com entrada do servidor:
+Hardening não bloqueante deferido pelo dono: matriz de gatilhos forçados e
+advisory locks; contagens exatas de descarte e instrumentação privada; reflexão
+ampla; agente sintético grande; combinações exaustivas; stress/soak e
+repetição em grande escala. O ajuste pequeno de `VetoStart` não foi deferido.
 
-1. contexto confiável (`VinxExecutionContext` com ator e empresa) é fornecido
-   por código do servidor; valores equivalentes nos argumentos do modelo são
-   ignorados;
-2. allowlist por nome de ferramenta (`VinxToolPolicy`);
-3. classificação de risco: somente escrita classificada como `Write` pode ser
-   aprovada; solicitação de aprovação para leitura é tratada como erro de
-   configuração e negada;
-4. aprovação: `ApproveAsync` recebe a decisão do gate e revalida o próprio
-   gate antes de executar (`PendingConfirmation`, solicitação presente,
-   contexto válido e ferramenta `Write` na allowlist); qualquer outra
-   combinação lança erro e nada executa. Só então emite
-   `requestContent.CreateResponse(true)` e retoma com
-   `agent.RunAsync(mensagem, sessão)` na mesma `AgentSession`;
-5. veto: `CreateResponse(false)` devolvido na mesma sessão;
-6. falta de contexto ou ferramenta fora da allowlist nega (fail-closed);
-   resposta com mais de uma solicitação de aprovação pendente também é negada,
-   sem expor solicitação para aprovação (nenhuma pendência é resolvida em
-   silêncio; o turno não deve ser retomado).
+## Validação
 
-A aprovação deve ser a interação imediatamente seguinte com a sessão: uma
-resposta de aprovação sem correspondência com a solicitação pendente era
-consumida como entrada comum e descartava a pendência (fail-closed, nunca
-executa); o PR 2 cumpriu a promessa: esses no-ops silenciosos viraram erros
-explícitos via `HarnessApprovalGate.ThrowIfUnmatchedApprovalResponse`
-(spec `2026-08-14-vinx-policy-approval.md`).
+```text
+dotnet restore tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj --use-lock-file
+dotnet test tests/public/Vinx.Erp.AI.UnitTests --no-restore --nologo -v q
+dotnet test tests/public/Vinx.Erp.ArchitectureTests --no-restore --filter Category!=SupabaseStorage -v q
+dotnet format whitespace --verify-no-changes
+```
 
-Decisões são registradas com `ILogger`, template constante e propriedades
-nomeadas; negações usam nível `Warning`. Sem payload, argumentos ou PII.
-
-Contrato explícito: aprovações duráveis de uso único, auditoria e
-idempotência pertenciam ao PR 2 — **cumpridas** na spec
-`2026-08-14-vinx-policy-approval.md` (tabela `foundation.approvals`, serviços
-de preparação/confirmação/veto, coordenador single-flight e escrita de sonda
-idempotente por `RequestId` de execução). Nada nesta fatia prometia execução
-exatamente-uma-vez, e o PR 2 mantém essa posição: aprovação single-use +
-idempotência própria da execução.
-
-## Limites do PR 1
-
-- Somente ferramentas de sonda; nenhuma ferramenta de domínio.
-- Ator/empresa reais, auditoria e idempotência chegam no PR 2 — **entregues**
-  pelo PR 2 (spec `2026-08-14-vinx-policy-approval.md`); `VinxExecutionContext`
-  passou a `Guid` com `Guid.Empty` inválido.
-- Adaptadores de provedor (OpenAI-compatible, Anthropic) chegam no PR 3.
-- Integração MCP chega no PR 4.
-- O contrato de módulo `docs/modules/ai.md` ficava adiado até o PR 2 —
-  **criado** no PR 2, quando o módulo passou a possuir contexto confiável e
-  fronteira auditável.
-
-## Validação local exigida
-
-- `dotnet build` da solução;
-- `dotnet test tests/public/Vinx.Erp.AI.UnitTests`;
-- `dotnet format whitespace --verify-no-changes`;
-- `dotnet restore --locked-mode` (lockfiles commitados).
+As evidências finais do PR 2, com 41 testes AI, 6 wired PostgreSQL, 31 de
+serviço, 4 de migration e 118 unitários Foundation, estão no manifesto de
+`docs/verification/issue-127-vinx-policy-test-cases.md`.
