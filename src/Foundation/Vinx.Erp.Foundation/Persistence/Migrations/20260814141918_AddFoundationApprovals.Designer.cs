@@ -561,6 +561,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasDatabaseName("ix_approvals_proposal_id");
 
                     b.HasIndex("CompanyId", "ActorUserId")
+                        .IsUnique()
                         .HasDatabaseName("ix_approvals_company_id_actor_user_id")
                         .HasFilter("consumed_at IS NULL AND deleted_at IS NULL");
 
@@ -570,7 +571,11 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                             t.HasCheckConstraint("ck_approvals_payload_hash_format", "payload_hash ~ '^[0-9a-f]{64}$'");
 
-                            t.HasCheckConstraint("ck_approvals_veto_complete", "(deleted_at IS NULL AND deleted_by_user_id IS NULL AND deleted_reason IS NULL) OR (deleted_at IS NOT NULL AND deleted_by_user_id IS NOT NULL AND deleted_reason = 'approval_vetoed')");
+                            t.HasCheckConstraint("ck_approvals_veto_complete", "(deleted_at IS NULL AND deleted_by_user_id IS NULL AND deleted_reason IS NULL) OR (deleted_at IS NOT NULL AND deleted_by_user_id IS NOT NULL AND deleted_reason IN ('approval_vetoed', 'approval_expired'))");
+
+                            t.HasCheckConstraint("ck_approvals_consumption_complete", "(consumed_at IS NULL AND confirmation_request_id IS NULL AND result_json IS NULL) OR (consumed_at IS NOT NULL AND confirmation_request_id IS NOT NULL AND result_json IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_approvals_terminal_exclusive", "NOT (consumed_at IS NOT NULL AND deleted_at IS NOT NULL)");
                         });
                 });
 

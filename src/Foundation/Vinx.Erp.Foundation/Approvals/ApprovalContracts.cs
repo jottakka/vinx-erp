@@ -231,8 +231,7 @@ public enum ConfirmApprovalOutcome
     ProposalUnavailable,
 }
 
-/// <summary>
-/// Resultado da confirmação. Carrega o <see cref="ProposalId"/> opaco de volta
+/// <summary>Resultado da confirmação. Carrega o <see cref="ProposalId"/> opaco de volta
 /// (ERIC-4) para a fase de execução validar a proposta viva.
 /// </summary>
 public sealed record ConfirmApprovalResult(
@@ -240,5 +239,61 @@ public sealed record ConfirmApprovalResult(
     Guid ProposalId,
     ConfirmApprovalOutcome Outcome);
 
-/// <summary>Resultado do veto.</summary>
-public sealed record VetoApprovalResult(Guid ApprovalId, Guid ProposalId, bool WasVetoed);
+/// <summary>Desfechos distintos do veto durável.</summary>
+public enum VetoApprovalOutcome
+{
+    /// <summary>Este pedido vetou a proposta viva (soft-delete terminal auditado).</summary>
+    Vetoed,
+
+    /// <summary>A proposta já estava vetada; nenhum novo efeito ou auditoria.</summary>
+    AlreadyVetoed,
+
+    /// <summary>Aprovação consumida ou proposta divergente.</summary>
+    Conflict,
+
+    /// <summary>Proposta indisponível: desconhecida, expirada ou invisível via RLS.</summary>
+    ProposalUnavailable,
+}
+
+/// <summary>Resultado do veto durável.</summary>
+public sealed record VetoApprovalResult(
+    Guid ApprovalId,
+    Guid ProposalId,
+    VetoApprovalOutcome Outcome);
+
+/// <summary>
+/// Leitura única do relógio do banco para a preparação: criação e expiração
+/// derivam do mesmo <c>now()</c> estável da transação, garantindo
+/// <c>expires_at &gt; created_at</c> por construção para qualquer TTL positivo.
+/// </summary>
+public sealed record ApprovalClock(DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt);
+
+/// <summary>
+/// Classificação de violação de unicidade (SQLSTATE 23505) na preparação. Os
+/// nomes refletem os identificadores reais do PostgreSQL (limite de 63
+/// caracteres); somente as contenções conhecidas de preparação entram no
+/// roteamento de replay/conflito.
+/// </summary>
+public enum UniqueViolationKind
+{
+    LiveProposal,
+    Idempotency,
+    Other,
+}
+
+public static class ApprovalUniqueViolationClassifier
+{
+    public const string LiveProposalUniqueIndexName =
+        "ix_approvals_company_id_actor_user_id";
+
+    public const string IdempotencyUniqueIndexName =
+        "ix_idempotency_records_company_id_actor_user_id_command_name_r";
+
+    public static UniqueViolationKind Classify(string? constraintName) =>
+        constraintName switch
+        {
+            LiveProposalUniqueIndexName => UniqueViolationKind.LiveProposal,
+            IdempotencyUniqueIndexName => UniqueViolationKind.Idempotency,
+            _ => UniqueViolationKind.Other,
+        };
+}

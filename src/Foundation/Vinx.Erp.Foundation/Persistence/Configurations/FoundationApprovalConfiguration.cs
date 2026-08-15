@@ -19,7 +19,14 @@ public sealed class FoundationApprovalConfiguration : IEntityTypeConfiguration<F
             table.HasCheckConstraint(
                 "ck_approvals_veto_complete",
                 "(deleted_at IS NULL AND deleted_by_user_id IS NULL AND deleted_reason IS NULL) OR " +
-                "(deleted_at IS NOT NULL AND deleted_by_user_id IS NOT NULL AND deleted_reason = 'approval_vetoed')");
+                "(deleted_at IS NOT NULL AND deleted_by_user_id IS NOT NULL AND deleted_reason IN ('approval_vetoed', 'approval_expired'))");
+            table.HasCheckConstraint(
+                "ck_approvals_consumption_complete",
+                "(consumed_at IS NULL AND confirmation_request_id IS NULL AND result_json IS NULL) OR " +
+                "(consumed_at IS NOT NULL AND confirmation_request_id IS NOT NULL AND result_json IS NOT NULL)");
+            table.HasCheckConstraint(
+                "ck_approvals_terminal_exclusive",
+                "NOT (consumed_at IS NOT NULL AND deleted_at IS NOT NULL)");
         });
         builder.HasKey(entity => entity.Id);
         builder.HasAlternateKey(entity => new { entity.CompanyId, entity.Id });
@@ -31,7 +38,11 @@ public sealed class FoundationApprovalConfiguration : IEntityTypeConfiguration<F
         builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasDefaultValue(1L);
         builder.Property(entity => entity.DeletedReason).HasMaxLength(500);
         builder.HasQueryFilter(entity => entity.DeletedAt == null);
+        // Índice único parcial: no máximo uma proposta viva por ator/empresa.
+        // A preparação varre expiradas com o relógio do banco antes do INSERT;
+        // a violação concorrente vira ProposalConflict auditado (fail-closed).
         builder.HasIndex(entity => new { entity.CompanyId, entity.ActorUserId })
+            .IsUnique()
             .HasFilter("consumed_at IS NULL AND deleted_at IS NULL");
         builder.HasIndex(entity => entity.ProposalId)
             .IsUnique();

@@ -118,6 +118,7 @@ public sealed class ConfirmApprovalService(
                              row_version = row_version + 1
                          WHERE id = {command.ApprovalId}
                            AND company_id = {command.CompanyId}
+                           AND proposal_id = {command.ProposalId}
                            AND payload_hash = {payloadHash}
                            AND policy_version = {command.PolicyVersion}
                            AND consumed_at IS NULL
@@ -239,41 +240,38 @@ public sealed class ConfirmApprovalService(
                 denial = AuthorizationErrorCode.MembershipRequired;
             }
             else if (!await capabilityEvaluator.HasGrantAsync(
-                         command.CompanyId,
-                         actorMembership.Id,
-                         RequiredCapability,
-                         cancellationToken))
+                          command.CompanyId,
+                          actorMembership.Id,
+                          RequiredCapability,
+                          cancellationToken))
             {
                 denial = AuthorizationErrorCode.CapabilityDenied;
             }
             else
             {
-                // IgnoreQueryFilters: um veto repetido precisa enxergar a
-                // aprovação já vetada (RLS continua aplicada pelo banco).
-                var approval = await database.Approvals.IgnoreQueryFilters().SingleOrDefaultAsync(candidate =>
-                    candidate.CompanyId == command.CompanyId && candidate.Id == command.ApprovalId,
+                // Claim condicional único pelo relógio do banco: vetar é
+                // soft-delete terminal com motivo fixo, vínculo de proposta e
+                // RequestId do veto, na mesma transação da auditoria.
+                var vetoedRows = await database.Database.ExecuteSqlInterpolatedAsync(
+                    $"""
+                     UPDATE foundation.approvals
+                     SET deleted_at = now(),
+                         deleted_by_user_id = {actor.UserId},
+                         deleted_reason = 'approval_vetoed',
+                         updated_by_user_id = {actor.UserId},
+                         updated_at = now(),
+                         request_id = {command.RequestId},
+                         row_version = row_version + 1
+                     WHERE id = {command.ApprovalId}
+                       AND company_id = {command.CompanyId}
+                       AND proposal_id = {command.ProposalId}
+                       AND consumed_at IS NULL
+                       AND deleted_at IS NULL
+                       AND expires_at > now()
+                     """,
                     cancellationToken);
-                if (approval is null)
+                if (vetoedRows == 1)
                 {
-                    denial = AuthorizationErrorCode.ProposalUnavailable;
-                }
-                else if (approval.ProposalId != command.ProposalId)
-                {
-                    denial = AuthorizationErrorCode.ProposalConflict;
-                }
-                else if (approval.IsConsumed)
-                {
-                    denial = AuthorizationErrorCode.ProposalConflict;
-                }
-                else if (approval.IsVetoed)
-                {
-                    await transaction.RollbackAsync(cancellationToken);
-                    return AuthorizationResult<VetoApprovalResult>.Success(
-                        new VetoApprovalResult(approval.Id, approval.ProposalId, false));
-                }
-                else
-                {
-                    approval.Veto(actor.UserId, command.RequestId);
                     await auditAppender.AppendAsync(new AuditEventData(
                         actor.UserId,
                         AuditScope.Company,
@@ -281,12 +279,11 @@ public sealed class ConfirmApprovalService(
                         AuditSource.Ai,
                         VetoCommandName,
                         "approval",
-                        approval.Id,
+                        command.ApprovalId,
                         AuditOutcome.Success,
                         new CorrelationContext(actor.CorrelationId).CorrelationId,
                         null,
                         "{}"), cancellationToken);
-                    await database.SaveChangesAsync(cancellationToken);
                     await transaction.CommitAsync(cancellationToken);
                     logger.LogInformation(
                         "Veto de aprovação {Operation} {Module} {Result} {Reason}",
@@ -295,37 +292,72 @@ public sealed class ConfirmApprovalService(
                         "vetoed",
                         "approval_vetoed");
                     return AuthorizationResult<VetoApprovalResult>.Success(
-                        new VetoApprovalResult(approval.Id, approval.ProposalId, true));
+                        new VetoApprovalResult(command.ApprovalId, command.ProposalId, VetoApprovalOutcome.Vetoed));
+                }
+
+                // Zero linhas: reconciliação dentro da mesma transação (RLS
+                // continua aplicada pelo banco; filtros de consulta EF são
+                // contornados para enxergar estados terminais).
+                var current = await database.Approvals.AsNoTracking().IgnoreQueryFilters()
+                    .SingleOrDefaultAsync(candidate =>
+                        candidate.CompanyId == command.CompanyId && candidate.Id == command.ApprovalId,
+                        cancellationToken);
+                if (current is null)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return AuthorizationResult<VetoApprovalResult>.Failure(
+                        AuthorizationErrorCode.ProposalUnavailable);
+                }
+
+                if (current.ProposalId != command.ProposalId)
+                {
+                    denial = AuthorizationErrorCode.ProposalConflict;
+                }
+                else if (current.IsConsumed)
+                {
+                    denial = AuthorizationErrorCode.ProposalConflict;
+                }
+                else if (current.IsVetoed)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return AuthorizationResult<VetoApprovalResult>.Success(
+                        new VetoApprovalResult(
+                            command.ApprovalId, command.ProposalId, VetoApprovalOutcome.AlreadyVetoed));
+                }
+                else if (current.IsExpired)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return AuthorizationResult<VetoApprovalResult>.Failure(
+                        AuthorizationErrorCode.ProposalUnavailable);
+                }
+                else
+                {
+                    // Viva, correspondente e não terminal: o UPDATE só retorna
+                    // zero por expiração no relógio do banco; qualquer outra
+                    // hipótese é violação de invariante (a trava de linha da
+                    // mesma transação impede mutação concorrente).
+                    var databaseNow = await database.Database
+                        .SqlQuery<DateTimeOffset>($"SELECT now() AS \"Value\"")
+                        .SingleAsync(cancellationToken);
+                    await transaction.RollbackAsync(cancellationToken);
+                    if (current.ExpiresAt <= databaseNow)
+                    {
+                        return AuthorizationResult<VetoApprovalResult>.Failure(
+                            AuthorizationErrorCode.ProposalUnavailable);
+                    }
+
+                    throw new InvalidOperationException(
+                        "Invariant breach: live matching approval was not vetoed by the conditional update.");
                 }
             }
 
             await transaction.RollbackAsync(cancellationToken);
         }
-        catch (DbUpdateException exception)
-        {
-            logger.LogWarning(
-                exception,
-                "Veto de aprovação {Operation} {Module} {Result} {Reason}",
-                Operation,
-                Module,
-                "retrying",
-                "concurrent_write");
-            database.ChangeTracker.Clear();
-            var current = await ReloadApprovalAsync(actor, command.CompanyId, command.ApprovalId, cancellationToken);
-            if (current is null)
-            {
-                return AuthorizationResult<VetoApprovalResult>.Failure(AuthorizationErrorCode.ProposalUnavailable);
-            }
-
-            if (current.IsConsumed)
-            {
-                return await ReturnAuditedVetoDenialAsync(actor, command.CompanyId, AuthorizationErrorCode.ProposalConflict, cancellationToken);
-            }
-
-            return AuthorizationResult<VetoApprovalResult>.Success(
-                new VetoApprovalResult(current.Id, current.ProposalId, false));
-        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (InvalidOperationException)
         {
             throw;
         }
@@ -338,11 +370,6 @@ public sealed class ConfirmApprovalService(
         if (denial == AuthorizationErrorCode.ProposalConflict)
         {
             return await ReturnAuditedVetoDenialAsync(actor, command.CompanyId, denial.Value, cancellationToken);
-        }
-
-        if (denial == AuthorizationErrorCode.ProposalUnavailable)
-        {
-            return AuthorizationResult<VetoApprovalResult>.Failure(denial.Value);
         }
 
         return await ReturnAuditedVetoDenialAsync(actor, command.CompanyId, denial!.Value, cancellationToken);

@@ -43,7 +43,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     table.UniqueConstraint("ak_approvals_company_id_id", x => new { x.company_id, x.id });
                     table.CheckConstraint("ck_approvals_expires_after_creation", "expires_at > created_at");
                     table.CheckConstraint("ck_approvals_payload_hash_format", "payload_hash ~ '^[0-9a-f]{64}$'");
-                    table.CheckConstraint("ck_approvals_veto_complete", "(deleted_at IS NULL AND deleted_by_user_id IS NULL AND deleted_reason IS NULL) OR (deleted_at IS NOT NULL AND deleted_by_user_id IS NOT NULL AND deleted_reason = 'approval_vetoed')");
+                    table.CheckConstraint("ck_approvals_veto_complete", "(deleted_at IS NULL AND deleted_by_user_id IS NULL AND deleted_reason IS NULL) OR (deleted_at IS NOT NULL AND deleted_by_user_id IS NOT NULL AND deleted_reason IN ('approval_vetoed', 'approval_expired'))");
+                    table.CheckConstraint("ck_approvals_consumption_complete", "(consumed_at IS NULL AND confirmation_request_id IS NULL AND result_json IS NULL) OR (consumed_at IS NOT NULL AND confirmation_request_id IS NOT NULL AND result_json IS NOT NULL)");
+                    table.CheckConstraint("ck_approvals_terminal_exclusive", "NOT (consumed_at IS NOT NULL AND deleted_at IS NOT NULL)");
                     table.ForeignKey(
                         name: "fk_approvals_companies_company_id",
                         column: x => x.company_id,
@@ -71,6 +73,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 schema: "foundation",
                 table: "approvals",
                 columns: new[] { "company_id", "actor_user_id" },
+                unique: true,
                 filter: "consumed_at IS NULL AND deleted_at IS NULL");
 
             migrationBuilder.CreateIndex(

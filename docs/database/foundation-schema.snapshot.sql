@@ -196,9 +196,11 @@ CREATE TABLE foundation.approvals (
     deleted_by_user_id uuid,
     deleted_reason character varying(500),
     row_version bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT ck_approvals_consumption_complete CHECK ((((consumed_at IS NULL) AND (confirmation_request_id IS NULL) AND (result_json IS NULL)) OR ((consumed_at IS NOT NULL) AND (confirmation_request_id IS NOT NULL) AND (result_json IS NOT NULL)))),
     CONSTRAINT ck_approvals_expires_after_creation CHECK ((expires_at > created_at)),
     CONSTRAINT ck_approvals_payload_hash_format CHECK (((payload_hash)::text ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT ck_approvals_veto_complete CHECK ((((deleted_at IS NULL) AND (deleted_by_user_id IS NULL) AND (deleted_reason IS NULL)) OR ((deleted_at IS NOT NULL) AND (deleted_by_user_id IS NOT NULL) AND ((deleted_reason)::text = 'approval_vetoed'::text))))
+    CONSTRAINT ck_approvals_terminal_exclusive CHECK ((NOT ((consumed_at IS NOT NULL) AND (deleted_at IS NOT NULL)))),
+    CONSTRAINT ck_approvals_veto_complete CHECK ((((deleted_at IS NULL) AND (deleted_by_user_id IS NULL) AND (deleted_reason IS NULL)) OR ((deleted_at IS NOT NULL) AND (deleted_by_user_id IS NOT NULL) AND ((deleted_reason)::text = ANY ((ARRAY['approval_vetoed'::character varying, 'approval_expired'::character varying])::text[])))))
 );
 
 ALTER TABLE ONLY foundation.approvals FORCE ROW LEVEL SECURITY;
@@ -667,7 +669,7 @@ CREATE INDEX ix_approvals_actor_user_id ON foundation.approvals USING btree (act
 
 -- Name: ix_approvals_company_id_actor_user_id; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE INDEX ix_approvals_company_id_actor_user_id ON foundation.approvals USING btree (company_id, actor_user_id) WHERE ((consumed_at IS NULL) AND (deleted_at IS NULL));
+CREATE UNIQUE INDEX ix_approvals_company_id_actor_user_id ON foundation.approvals USING btree (company_id, actor_user_id) WHERE ((consumed_at IS NULL) AND (deleted_at IS NULL));
 
 
 -- Name: ix_approvals_confirmation_request_id; Type: INDEX; Schema: foundation; Owner: -

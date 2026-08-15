@@ -9,6 +9,7 @@ namespace Vinx.Erp.Foundation.Domain;
 public sealed class FoundationApproval : SoftDeletableEntity, ICompanyScoped
 {
     public const string VetoReason = "approval_vetoed";
+    public const string ExpiredReason = "approval_expired";
 
     private FoundationApproval()
     {
@@ -25,14 +26,7 @@ public sealed class FoundationApproval : SoftDeletableEntity, ICompanyScoped
         DateTimeOffset expiresAt,
         Guid requestId)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(action);
-        ArgumentException.ThrowIfNullOrWhiteSpace(payloadHash);
-        ArgumentException.ThrowIfNullOrWhiteSpace(policyVersion);
-        if (id == Guid.Empty || companyId == Guid.Empty || actorUserId == Guid.Empty ||
-            proposalId == Guid.Empty || requestId == Guid.Empty)
-        {
-            throw new ArgumentException("Approval identifiers must not be empty.", nameof(id));
-        }
+        ValidateCore(id, companyId, actorUserId, action, payloadHash, policyVersion, proposalId, requestId);
 
         CompanyId = companyId;
         ActorUserId = actorUserId;
@@ -45,6 +39,54 @@ public sealed class FoundationApproval : SoftDeletableEntity, ICompanyScoped
         if (ExpiresAt <= CreatedAt)
         {
             throw new ArgumentException("The approval expiration must be after its creation.", nameof(expiresAt));
+        }
+    }
+
+    public FoundationApproval(
+        Guid id,
+        Guid companyId,
+        Guid actorUserId,
+        string action,
+        string payloadHash,
+        string policyVersion,
+        Guid proposalId,
+        DateTimeOffset createdAt,
+        DateTimeOffset expiresAt,
+        Guid requestId)
+    {
+        ValidateCore(id, companyId, actorUserId, action, payloadHash, policyVersion, proposalId, requestId);
+
+        CompanyId = companyId;
+        ActorUserId = actorUserId;
+        Action = action;
+        PayloadHash = payloadHash;
+        PolicyVersion = policyVersion;
+        ProposalId = proposalId;
+        ExpiresAt = expiresAt;
+        InitializeLifecycle(id, actorUserId, requestId, createdAt);
+        if (ExpiresAt <= CreatedAt)
+        {
+            throw new ArgumentException("The approval expiration must be after its creation.", nameof(expiresAt));
+        }
+    }
+
+    private static void ValidateCore(
+        Guid id,
+        Guid companyId,
+        Guid actorUserId,
+        string action,
+        string payloadHash,
+        string policyVersion,
+        Guid proposalId,
+        Guid requestId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(action);
+        ArgumentException.ThrowIfNullOrWhiteSpace(payloadHash);
+        ArgumentException.ThrowIfNullOrWhiteSpace(policyVersion);
+        if (id == Guid.Empty || companyId == Guid.Empty || actorUserId == Guid.Empty ||
+            proposalId == Guid.Empty || requestId == Guid.Empty)
+        {
+            throw new ArgumentException("Approval identifiers must not be empty.", nameof(id));
         }
     }
 
@@ -70,7 +112,8 @@ public sealed class FoundationApproval : SoftDeletableEntity, ICompanyScoped
     public User ActorUser { get; private set; } = null!;
 
     public bool IsConsumed => ConsumedAt is not null;
-    public bool IsVetoed => DeletedAt is not null;
+    public bool IsVetoed => DeletedAt is not null && DeletedReason == VetoReason;
+    public bool IsExpired => DeletedAt is not null && DeletedReason == ExpiredReason;
 
     /// <summary>
     /// Marca o consumo single-use com o <c>request_id</c> da confirmação
