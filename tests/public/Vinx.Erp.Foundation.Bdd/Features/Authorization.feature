@@ -5,7 +5,7 @@ Scenario: Current actor membership map contains only company-scoped grants
   Given Ana has memberships in Alfa, Beta and Gama
   When she requests her membership capability map
   Then the membership map lists Alfa, Beta and Gama in that order
-  And Alfa has only "payment.approve" and Beta has only "foundation.files.upload"
+  And Alfa has only "payment.approve" and Beta has only "payment.approve"
   And the membership map effective grants use Company scope
   And Gama has no effective capabilities
 
@@ -23,8 +23,14 @@ Scenario: Role assignment across companies is denied and audited
   Then the command is denied with code "resource_not_found"
   And the authorization denial contains the requested company and correlation identifier
 
-Scenario: Membership revocation keeps the same session isolated to Beta
-  Given Ana may revoke her membership in Alfa
+Scenario: Membership revocation keeps the same session isolated to Alfa
+  Given Ana may revoke her membership in Beta
   And her authenticated session lists Alfa and Beta before revocation
-  When she revokes her Alfa membership through the internal service
-  Then the command succeeds and her same session lists only Beta memberships
+  When she revokes her Beta membership through the internal service
+  Then the command succeeds and her same session lists only Alfa memberships
+
+Scenario: Authorized company set ignores forged Gama input and preserves snapshot state
+  Given Ana has memberships in Alfa, Beta and Gama
+  When the server resolves her payment read set with a forged Gama input
+  Then the authorized company set contains Alfa and Beta
+  And the unfiltered snapshot retains Gama with no effective capabilities

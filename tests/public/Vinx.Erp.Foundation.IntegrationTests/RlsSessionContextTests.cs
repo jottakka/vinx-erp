@@ -24,4 +24,28 @@ public sealed class RlsSessionContextTests
         await using var runtime = factory.Fixture.CreateRuntimeDbContext();
         Assert.Empty(await runtime.Companies.AsNoTracking().ToListAsync());
     }
+
+    [Fact]
+    public async Task Authorized_read_context_is_transaction_local_and_does_not_cross_pooled_requests()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seeded = await MembershipMapEndpointTests.SeedMembershipMapAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var result = await resolver.ExecuteReadAsync(
+            new ActorContext(factory.ActorUserId, factory.CorrelationId),
+            new CapabilityRequirement("payment.approve", Domain.CapabilityScope.Company),
+            (database, _, cancellationToken) => database.Companies
+                .AsNoTracking()
+                .Select(company => company.Id)
+                .ToListAsync(cancellationToken),
+            CancellationToken.None);
+
+        Assert.Null(result.ErrorCode);
+        Assert.Equal(
+            new[] { seeded.AlfaCompanyId, seeded.BetaCompanyId }.OrderBy(companyId => companyId),
+            result.Value!.OrderBy(companyId => companyId));
+        await using var runtime = factory.Fixture.CreateRuntimeDbContext();
+        Assert.Empty(await runtime.Companies.AsNoTracking().ToListAsync());
+    }
 }

@@ -22,6 +22,8 @@ public sealed class AuthorizationStepDefinitions
     private Guid _roleId;
     private Guid _targetMembershipId;
     private IReadOnlyList<MembershipResponse>? _membershipMap;
+    private IReadOnlyList<Guid>? _authorizedCompanyIds;
+    private IReadOnlyList<MembershipCapabilitySummary>? _authorizationSnapshot;
 
     [Given("Ana has memberships in Alfa, Beta and Gama")]
     public async Task GivenAnaHasMembershipsInAlfaBetaAndGama()
@@ -69,10 +71,6 @@ public sealed class AuthorizationStepDefinitions
             requestId
         );
         var paymentApprove = new Capability(Guid.NewGuid(), "payment.approve");
-        var filesUpload = await administrator.Capabilities.SingleAsync(capability =>
-            capability.Name == KnownCapabilities.FilesUpload
-        );
-
         administrator.AddRange(
             paymentApprove,
             group,
@@ -113,7 +111,7 @@ public sealed class AuthorizationStepDefinitions
                 Guid.NewGuid(),
                 beta.Id,
                 betaRole.Id,
-                filesUpload.Id,
+                paymentApprove.Id,
                 CapabilityScope.Company,
                 Factory.ActorUserId,
                 requestId
@@ -161,6 +159,42 @@ public sealed class AuthorizationStepDefinitions
     public Task ThenGamaHasNoEffectiveCapabilities()
     {
         Assert.Empty(MembershipMap[2].Capabilities);
+        return Task.CompletedTask;
+    }
+
+    [When("the server resolves her payment read set with a forged Gama input")]
+    public async Task WhenTheServerResolvesHerPaymentReadSetWithAForgedGamaInput()
+    {
+        await using var scope = Factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var actor = new ActorContext(Factory.ActorUserId, Factory.CorrelationId);
+        var snapshot = await resolver.ResolveSnapshotAsync(actor, CancellationToken.None);
+        var result = await resolver.ResolveAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            CancellationToken.None);
+        _authorizationSnapshot = snapshot.Value?.Companies;
+        _authorizedCompanyIds = result.Value?.CompanyIds.ToArray();
+    }
+
+    [Then("the authorized company set contains Alfa and Beta")]
+    public Task ThenTheAuthorizedCompanySetContainsAlfaAndBeta()
+    {
+        Assert.Equal(
+            new[]
+            {
+                _authorizationSnapshot!.Single(company => company.CompanyName == "Alfa").CompanyId,
+                _authorizationSnapshot!.Single(company => company.CompanyName == "Beta").CompanyId,
+            }.OrderBy(companyId => companyId),
+            _authorizedCompanyIds!.OrderBy(companyId => companyId));
+        return Task.CompletedTask;
+    }
+
+    [Then("the unfiltered snapshot retains Gama with no effective capabilities")]
+    public Task ThenTheUnfilteredSnapshotRetainsGamaWithNoEffectiveCapabilities()
+    {
+        var gama = _authorizationSnapshot!.Single(company => company.CompanyName == "Gama");
+        Assert.Empty(gama.Capabilities);
         return Task.CompletedTask;
     }
 
@@ -288,8 +322,8 @@ public sealed class AuthorizationStepDefinitions
         _targetMembershipId = targetMembership.Id;
     }
 
-    [Given("Ana may revoke her membership in Alfa")]
-    public async Task GivenAnaMayRevokeHerMembershipInAlfa()
+    [Given("Ana may revoke her membership in Beta")]
+    public async Task GivenAnaMayRevokeHerMembershipInBeta()
     {
         _factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await using var administrator = Factory.Fixture.CreateAdministratorDbContext();
@@ -302,7 +336,7 @@ public sealed class AuthorizationStepDefinitions
         var betaMembership = new Membership(
             Guid.NewGuid(), beta.Id, Factory.ActorUserId, Factory.ActorUserId, requestId);
         var administratorRole = new Role(
-            Guid.NewGuid(), alfa.Id, "Foundation administrator", Factory.ActorUserId, requestId);
+            Guid.NewGuid(), beta.Id, "Foundation administrator", Factory.ActorUserId, requestId);
         var capability = await administrator.Capabilities.SingleAsync(candidate =>
             candidate.Name == KnownCapabilities.MembershipsRevoke);
 
@@ -314,13 +348,13 @@ public sealed class AuthorizationStepDefinitions
             betaMembership,
             administratorRole,
             new RoleCapability(
-                Guid.NewGuid(), alfa.Id, administratorRole.Id, capability.Id, CapabilityScope.Company,
+                Guid.NewGuid(), beta.Id, administratorRole.Id, capability.Id, CapabilityScope.Company,
                 Factory.ActorUserId, requestId),
             new RoleAssignment(
-                Guid.NewGuid(), alfa.Id, administratorRole.Id, alfaMembership.Id, Factory.ActorUserId, requestId));
+                Guid.NewGuid(), beta.Id, administratorRole.Id, betaMembership.Id, Factory.ActorUserId, requestId));
         await administrator.SaveChangesAsync();
-        _companyId = alfa.Id;
-        _targetMembershipId = alfaMembership.Id;
+        _companyId = beta.Id;
+        _targetMembershipId = betaMembership.Id;
     }
 
     [Given("her authenticated session lists Alfa and Beta before revocation")]
@@ -367,8 +401,8 @@ public sealed class AuthorizationStepDefinitions
         );
     }
 
-    [When("she revokes her Alfa membership through the internal service")]
-    public async Task WhenSheRevokesHerAlfaMembershipThroughTheInternalService()
+    [When("she revokes her Beta membership through the internal service")]
+    public async Task WhenSheRevokesHerBetaMembershipThroughTheInternalService()
     {
         await using var scope = Factory.Services.CreateAsyncScope();
         var service = scope.ServiceProvider.GetRequiredService<RevokeMembershipService>();
@@ -388,14 +422,14 @@ public sealed class AuthorizationStepDefinitions
         return Task.CompletedTask;
     }
 
-    [Then("the command succeeds and her same session lists only Beta memberships")]
-    public async Task ThenTheCommandSucceedsAndHerSameSessionListsOnlyBetaMemberships()
+    [Then("the command succeeds and her same session lists only Alfa memberships")]
+    public async Task ThenTheCommandSucceedsAndHerSameSessionListsOnlyAlfaMemberships()
     {
         Assert.True(_revocationResult?.IsSuccess);
         _response = await Client.GetAsync("/foundation/memberships");
         _response.EnsureSuccessStatusCode();
         var memberships = await _response.Content.ReadFromJsonAsync<List<MembershipResponse>>();
-        Assert.Equal(["Beta"], memberships!.Select(membership => membership.CompanyName));
+        Assert.Equal(["Alfa"], memberships!.Select(membership => membership.CompanyName));
     }
 
     [Then("the authorization denial contains the requested company and correlation identifier")]
