@@ -85,6 +85,19 @@ CREATE FUNCTION foundation.current_actor_memberships() RETURNS TABLE(membership_
 $$;
 
 
+-- Name: current_authorized_company_ids(); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.current_authorized_company_ids() RETURNS SETOF uuid
+    LANGUAGE sql STABLE
+    SET search_path TO 'foundation', 'pg_catalog'
+    AS $$
+    SELECT value::uuid
+    FROM regexp_split_to_table(
+        NULLIF(current_setting('app.authorized_company_ids', true), ''), ',') AS value
+    WHERE value <> '';
+$$;
+
+
 -- Name: lock_user_for_session_admission(uuid); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.lock_user_for_session_admission(p_user_id uuid) RETURNS TABLE(sessions_valid_after timestamp with time zone)
@@ -866,6 +879,11 @@ ALTER TABLE foundation.companies ENABLE ROW LEVEL SECURITY;
 CREATE POLICY companies_authorization_owner_read ON foundation.companies FOR SELECT TO vinx_authorization_owner USING (true);
 
 
+-- Name: companies companies_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY companies_authorized_company_read ON foundation.companies FOR SELECT USING (((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
+
 -- Name: companies companies_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY companies_company_isolation ON foundation.companies USING ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
@@ -874,6 +892,11 @@ CREATE POLICY companies_company_isolation ON foundation.companies USING ((id = (
 -- Name: employees; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.employees ENABLE ROW LEVEL SECURITY;
+
+-- Name: employees employees_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY employees_authorized_company_read ON foundation.employees FOR SELECT USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company_id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
 
 -- Name: employees employees_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
@@ -884,6 +907,11 @@ CREATE POLICY employees_company_isolation ON foundation.employees USING ((compan
 
 ALTER TABLE foundation.files ENABLE ROW LEVEL SECURITY;
 
+-- Name: files files_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY files_authorized_company_read ON foundation.files FOR SELECT USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company_id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
+
 -- Name: files files_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY files_company_isolation ON foundation.files USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
@@ -892,6 +920,13 @@ CREATE POLICY files_company_isolation ON foundation.files USING ((company_id = (
 -- Name: groups; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.groups ENABLE ROW LEVEL SECURITY;
+
+-- Name: groups groups_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY groups_authorized_company_read ON foundation.groups FOR SELECT USING ((id IN ( SELECT company.group_id
+   FROM foundation.companies company
+  WHERE ((company.id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company.id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))))));
+
 
 -- Name: groups groups_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
@@ -905,6 +940,11 @@ CREATE POLICY groups_company_isolation ON foundation.groups USING ((id = ( SELEC
 -- Name: idempotency_records; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.idempotency_records ENABLE ROW LEVEL SECURITY;
+
+-- Name: idempotency_records idempotency_records_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY idempotency_records_authorized_company_read ON foundation.idempotency_records FOR SELECT USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company_id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
 
 -- Name: idempotency_records idempotency_records_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
@@ -920,6 +960,11 @@ ALTER TABLE foundation.memberships ENABLE ROW LEVEL SECURITY;
 CREATE POLICY memberships_authorization_owner_read ON foundation.memberships FOR SELECT TO vinx_authorization_owner USING (true);
 
 
+-- Name: memberships memberships_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_authorized_company_read ON foundation.memberships FOR SELECT USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company_id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
+
 -- Name: memberships memberships_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY memberships_company_isolation ON foundation.memberships USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
@@ -928,6 +973,11 @@ CREATE POLICY memberships_company_isolation ON foundation.memberships USING ((co
 -- Name: role_assignments; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.role_assignments ENABLE ROW LEVEL SECURITY;
+
+-- Name: role_assignments role_assignments_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_assignments_authorized_company_read ON foundation.role_assignments FOR SELECT USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company_id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
 
 -- Name: role_assignments role_assignments_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
@@ -938,6 +988,11 @@ CREATE POLICY role_assignments_company_isolation ON foundation.role_assignments 
 
 ALTER TABLE foundation.role_capabilities ENABLE ROW LEVEL SECURITY;
 
+-- Name: role_capabilities role_capabilities_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_authorized_company_read ON foundation.role_capabilities FOR SELECT USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company_id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
+
 -- Name: role_capabilities role_capabilities_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_capabilities_company_isolation ON foundation.role_capabilities USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
@@ -946,6 +1001,11 @@ CREATE POLICY role_capabilities_company_isolation ON foundation.role_capabilitie
 -- Name: roles; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.roles ENABLE ROW LEVEL SECURITY;
+
+-- Name: roles roles_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY roles_authorized_company_read ON foundation.roles FOR SELECT USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company_id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
 
 -- Name: roles roles_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
@@ -956,6 +1016,11 @@ CREATE POLICY roles_company_isolation ON foundation.roles USING ((company_id = (
 
 ALTER TABLE foundation.teams ENABLE ROW LEVEL SECURITY;
 
+-- Name: teams teams_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY teams_authorized_company_read ON foundation.teams FOR SELECT USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company_id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
+
 -- Name: teams teams_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY teams_company_isolation ON foundation.teams USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
@@ -964,6 +1029,11 @@ CREATE POLICY teams_company_isolation ON foundation.teams USING ((company_id = (
 -- Name: units; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.units ENABLE ROW LEVEL SECURITY;
+
+-- Name: units units_authorized_company_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY units_authorized_company_read ON foundation.units FOR SELECT USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) OR (company_id IN ( SELECT foundation.current_authorized_company_ids() AS current_authorized_company_ids))));
+
 
 -- Name: units units_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 

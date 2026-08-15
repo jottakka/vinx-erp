@@ -49,6 +49,7 @@ builder.Services.AddDbContext<FoundationDbContext>(options => options
     .AddInterceptors(new RowVersionInterceptor()));
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
+builder.Services.AddScoped<AuthorizedCompanySetResolver>();
 builder.Services.AddScoped<ActorMembershipMapService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();

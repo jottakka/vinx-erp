@@ -3,6 +3,7 @@ using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
@@ -15,6 +16,170 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 
 public sealed class MembershipMapEndpointTests
 {
+    [Fact]
+    public async Task Authorized_company_set_filters_exact_company_capability_without_losing_unfiltered_snapshot()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seeded = await SeedMembershipMapAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var actor = new Vinx.Erp.Foundation.Identity.ActorContext(
+            factory.ActorUserId,
+            factory.CorrelationId);
+
+        var snapshot = await resolver.ResolveSnapshotAsync(actor, CancellationToken.None);
+        var authorized = await resolver.ResolveAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            CancellationToken.None);
+
+        Assert.Null(snapshot.ErrorCode);
+        Assert.Equal(["Alfa", "Beta", "Gama"], snapshot.Value!.Companies.Select(company => company.CompanyName));
+        Assert.Empty(snapshot.Value.Companies.Single(company => company.CompanyId == seeded.GamaCompanyId).Capabilities);
+        Assert.Null(authorized.ErrorCode);
+        Assert.Equal(
+            new[] { seeded.AlfaCompanyId, seeded.BetaCompanyId }.OrderBy(companyId => companyId),
+            authorized.Value!.CompanyIds.OrderBy(companyId => companyId));
+    }
+
+    [Fact]
+    public async Task Revoked_membership_is_absent_from_the_next_authorized_company_snapshot()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seeded = await SeedMembershipMapAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var actor = new Vinx.Erp.Foundation.Identity.ActorContext(factory.ActorUserId, factory.CorrelationId);
+        var requirement = new CapabilityRequirement("payment.approve", CapabilityScope.Company);
+
+        var before = await resolver.ResolveAsync(actor, requirement, CancellationToken.None);
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var membership = await administrator.Memberships.SingleAsync(candidate =>
+            candidate.Id == seeded.BetaMembershipId);
+            membership.Revoke("membership_revoked", factory.ActorUserId, Guid.NewGuid());
+            await administrator.SaveChangesAsync();
+        }
+
+        var after = await resolver.ResolveAsync(actor, requirement, CancellationToken.None);
+
+        Assert.Equal(
+            new[] { seeded.AlfaCompanyId, seeded.BetaCompanyId }.OrderBy(companyId => companyId),
+            before.Value!.CompanyIds.OrderBy(companyId => companyId));
+        Assert.Equal([seeded.AlfaCompanyId], after.Value!.CompanyIds);
+    }
+
+    [Fact]
+    public async Task In_flight_read_keeps_the_materialized_membership_visible_after_concurrent_revoke()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seeded = await SeedMembershipMapAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var actor = new Vinx.Erp.Foundation.Identity.ActorContext(factory.ActorUserId, factory.CorrelationId);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = resolver.ExecuteReadAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            async (database, _) =>
+            {
+                started.SetResult();
+                await release.Task;
+                return await database.Memberships
+                    .AsNoTracking()
+                    .Where(membership =>
+                        membership.Id == seeded.BetaMembershipId
+                        && membership.DeletedAt == null)
+                    .Select(membership => membership.Id)
+                    .ToListAsync();
+            },
+            CancellationToken.None);
+
+        await started.Task;
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var membership = await administrator.Memberships.SingleAsync(candidate =>
+                candidate.Id == seeded.BetaMembershipId);
+            membership.Revoke("membership_revoked", factory.ActorUserId, Guid.NewGuid());
+            await administrator.SaveChangesAsync();
+        }
+
+        release.SetResult();
+        var inFlightResult = await inFlight;
+        var next = await resolver.ResolveAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            CancellationToken.None);
+
+        Assert.Equal([seeded.BetaMembershipId], inFlightResult.Value);
+        Assert.Equal([seeded.AlfaCompanyId], next.Value!.CompanyIds);
+    }
+
+    [Fact]
+    public async Task Concurrent_revoke_does_not_change_an_in_flight_set_but_changes_the_next_read()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seeded = await SeedMembershipMapAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var actor = new Vinx.Erp.Foundation.Identity.ActorContext(factory.ActorUserId, factory.CorrelationId);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = resolver.ExecuteReadAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            async (database, _) =>
+            {
+                started.SetResult();
+                await release.Task;
+                return await database.Companies.AsNoTracking().Select(company => company.Id).ToListAsync();
+            },
+            CancellationToken.None);
+
+        await started.Task;
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var membership = await administrator.Memberships.SingleAsync(candidate =>
+                candidate.Id == seeded.BetaMembershipId);
+            membership.Revoke("membership_revoked", factory.ActorUserId, Guid.NewGuid());
+            await administrator.SaveChangesAsync();
+        }
+
+        release.SetResult();
+        var inFlightResult = await inFlight;
+        var next = await resolver.ResolveAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            CancellationToken.None);
+
+        Assert.Equal(
+            new[] { seeded.AlfaCompanyId, seeded.BetaCompanyId }.OrderBy(companyId => companyId),
+            inFlightResult.Value!.OrderBy(companyId => companyId));
+        Assert.Equal([seeded.AlfaCompanyId], next.Value!.CompanyIds);
+    }
+
+    [Fact]
+    public async Task Non_company_or_empty_requirement_fails_closed_without_an_authorized_set()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var scope = factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var actor = new Vinx.Erp.Foundation.Identity.ActorContext(factory.ActorUserId, factory.CorrelationId);
+
+        var nonCompany = await resolver.ResolveAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Group),
+            CancellationToken.None);
+        var empty = await resolver.ResolveAsync(
+            actor,
+            new CapabilityRequirement(string.Empty, CapabilityScope.Company),
+            CancellationToken.None);
+
+        Assert.Equal("capability_denied", nonCompany.ErrorCode?.ToStableCode());
+        Assert.Equal("capability_denied", empty.ErrorCode?.ToStableCode());
+    }
+
     [Fact]
     public async Task Membership_map_returns_only_the_current_actor_memberships_with_company_scoped_grants()
     {
@@ -40,7 +205,7 @@ public sealed class MembershipMapEndpointTests
         Assert.Equal(seeded.GamaCompanyId, memberships[2].CompanyId);
         Assert.Equal("payment.approve", Assert.Single(memberships[0].Capabilities).Name);
         Assert.Equal(["Company"], Assert.Single(memberships[0].Capabilities).Scopes);
-        Assert.Equal("foundation.files.upload", Assert.Single(memberships[1].Capabilities).Name);
+        Assert.Equal("payment.approve", Assert.Single(memberships[1].Capabilities).Name);
         Assert.Equal(["Company"], Assert.Single(memberships[1].Capabilities).Scopes);
         Assert.Empty(memberships[2].Capabilities);
 
@@ -95,10 +260,12 @@ public sealed class MembershipMapEndpointTests
         using var logProvider = new MembershipMapLogProvider();
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(logProvider));
         await using var runtime = factory.Fixture.CreateRuntimeDbContext();
-        var service = new ActorMembershipMapService(
+        var resolver = new AuthorizedCompanySetResolver(
             runtime,
-            new AuthorizationTelemetry(),
-            loggerFactory.CreateLogger<ActorMembershipMapService>()
+            loggerFactory.CreateLogger<AuthorizedCompanySetResolver>());
+        var service = new ActorMembershipMapService(
+            resolver,
+            new AuthorizationTelemetry()
         );
 
         var result = await service.GetCurrentActorAsync(
@@ -116,16 +283,16 @@ public sealed class MembershipMapEndpointTests
         Assert.Equal(
             new Dictionary<string, object?>
             {
-                ["Operation"] = "membership_map",
-                ["Module"] = "authorization",
+                ["Operation"] = "authorized_company_set",
+                ["Module"] = "foundation",
                 ["Result"] = "unavailable",
-                ["Reason"] = "discovery_or_projection_failed",
+                ["Reason"] = "snapshot_or_rls_context_failed",
             },
             log.Properties
         );
     }
 
-    private static async Task<MembershipMapSeed> SeedMembershipMapAsync(
+    internal static async Task<MembershipMapSeed> SeedMembershipMapAsync(
         FoundationApiFactory factory
     )
     {
@@ -186,10 +353,6 @@ public sealed class MembershipMapEndpointTests
             requestId
         );
         var paymentApprove = new Capability(Guid.NewGuid(), "payment.approve");
-        var filesUpload = await administrator.Capabilities.SingleAsync(capability =>
-            capability.Name == KnownCapabilities.FilesUpload
-        );
-
         administrator.AddRange(
             otherUser,
             paymentApprove,
@@ -233,7 +396,7 @@ public sealed class MembershipMapEndpointTests
                 Guid.NewGuid(),
                 beta.Id,
                 betaRole.Id,
-                filesUpload.Id,
+                paymentApprove.Id,
                 CapabilityScope.Company,
                 factory.ActorUserId,
                 requestId
@@ -345,7 +508,7 @@ public sealed class MembershipMapEndpointTests
         }
     }
 
-    private sealed record MembershipMapSeed(
+    internal sealed record MembershipMapSeed(
         Guid AlfaMembershipId,
         Guid BetaMembershipId,
         Guid GamaMembershipId,
