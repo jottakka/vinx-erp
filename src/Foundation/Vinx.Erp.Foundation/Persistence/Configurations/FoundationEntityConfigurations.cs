@@ -357,6 +357,9 @@ public sealed class FileRecordConfiguration : IEntityTypeConfiguration<FileRecor
 
 public sealed class IdempotencyRecordConfiguration : IEntityTypeConfiguration<IdempotencyRecord>
 {
+    public const string KeyIndexDatabaseName =
+        "ix_idempotency_records_company_id_actor_user_id_command_name_r";
+
     public void Configure(EntityTypeBuilder<IdempotencyRecord> builder)
     {
         builder.ToTable("idempotency_records");
@@ -366,7 +369,9 @@ public sealed class IdempotencyRecordConfiguration : IEntityTypeConfiguration<Id
         builder.Property(entity => entity.CommandName).HasMaxLength(200).IsRequired();
         builder.Property(entity => entity.PayloadHash).HasMaxLength(128).IsRequired();
         builder.Property(entity => entity.ResultJson).HasColumnType("jsonb").IsRequired();
-        builder.HasIndex(entity => new { entity.CompanyId, entity.ActorUserId, entity.CommandName, entity.RequestId }).IsUnique();
+        builder.HasIndex(entity => new { entity.CompanyId, entity.ActorUserId, entity.CommandName, entity.RequestId })
+            .IsUnique()
+            .HasDatabaseName(KeyIndexDatabaseName);
         builder.HasOne(entity => entity.Company)
             .WithMany()
             .HasForeignKey(entity => entity.CompanyId)

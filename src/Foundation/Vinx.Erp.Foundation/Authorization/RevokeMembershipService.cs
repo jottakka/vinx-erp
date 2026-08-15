@@ -9,6 +9,7 @@ using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Foundation.Persistence.Configurations;
 
 namespace Vinx.Erp.Foundation.Authorization;
 
@@ -23,8 +24,6 @@ public sealed class RevokeMembershipService(
     private const string Operation = "membership_revocation";
     private const string Module = "foundation";
     private const string RevocationReason = "membership_revoked";
-    private const string IdempotencyRecordKeyIndexName =
-        "ix_idempotency_records_company_id_actor_user_id_command_name_r";
     private static readonly CapabilityRequirement RequiredCapability =
         new(KnownCapabilities.MembershipsRevoke, CapabilityScope.Company);
 
@@ -274,7 +273,7 @@ public sealed class RevokeMembershipService(
                 && postgresException.SqlState == PostgresErrorCodes.UniqueViolation
                 && string.Equals(
                     postgresException.ConstraintName,
-                    IdempotencyRecordKeyIndexName,
+                    IdempotencyRecordConfiguration.KeyIndexDatabaseName,
                     StringComparison.Ordinal))
             {
                 return true;
