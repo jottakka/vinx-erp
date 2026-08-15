@@ -3,7 +3,7 @@ import { alpha } from "@mui/material/styles";
 import type { ReactNode } from "react";
 import { AppLogo } from "../shared/ui/app-logo";
 import { AppearanceMenu } from "../shared/ui/appearance-menu";
-import { SpotlightBackground } from "./spotlight-background";
+import { InkBackground } from "./ink-background";
 
 const heroHighlights = [
   "Protótipos navegáveis sem backend",
@@ -28,7 +28,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
         },
       })}
     >
-      <SpotlightBackground />
+      <InkBackground />
       <Box
         sx={(theme) => ({
           alignItems: "center",
