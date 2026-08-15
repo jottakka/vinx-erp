@@ -40,22 +40,8 @@ public sealed class RevokeMembershipService(
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
             await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
-            var actorMembership = await database.Memberships.SingleOrDefaultAsync(membership =>
-                membership.CompanyId == command.CompanyId && membership.UserId == actor.UserId,
-                cancellationToken);
-            if (actorMembership is null)
-            {
-                denial = AuthorizationErrorCode.MembershipRequired;
-            }
-            else if (!await capabilityEvaluator.HasGrantAsync(
-                         command.CompanyId,
-                         actorMembership.Id,
-                         RequiredCapability,
-                         cancellationToken))
-            {
-                denial = AuthorizationErrorCode.CapabilityDenied;
-            }
-            else
+            denial = await EvaluateAuthorizationAsync(actor, command.CompanyId, cancellationToken);
+            if (denial is null)
             {
                 var existing = await database.IdempotencyRecords.SingleOrDefaultAsync(record =>
                     record.CompanyId == command.CompanyId
@@ -138,11 +124,6 @@ public sealed class RevokeMembershipService(
             database.ChangeTracker.Clear();
             return await ReturnConcurrentReplayAsync(actor, command, payloadHash, cancellationToken);
         }
-        catch (DbUpdateException exception)
-        {
-            database.ChangeTracker.Clear();
-            return AuditUnavailable(AuditUnavailablePhase.SuccessTransaction, exception);
-        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
@@ -204,22 +185,8 @@ public sealed class RevokeMembershipService(
             await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))
             {
                 await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
-                var actorMembership = await database.Memberships.SingleOrDefaultAsync(membership =>
-                    membership.CompanyId == command.CompanyId && membership.UserId == actor.UserId,
-                    cancellationToken);
-                if (actorMembership is null)
-                {
-                    denial = AuthorizationErrorCode.MembershipRequired;
-                }
-                else if (!await capabilityEvaluator.HasGrantAsync(
-                             command.CompanyId,
-                             actorMembership.Id,
-                             RequiredCapability,
-                             cancellationToken))
-                {
-                    denial = AuthorizationErrorCode.CapabilityDenied;
-                }
-                else
+                denial = await EvaluateAuthorizationAsync(actor, command.CompanyId, cancellationToken);
+                if (denial is null)
                 {
                     record = await database.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(candidate =>
                         candidate.CompanyId == command.CompanyId
@@ -272,6 +239,31 @@ public sealed class RevokeMembershipService(
         {
             return AuditUnavailable(AuditUnavailablePhase.ConcurrentReplay, exception);
         }
+    }
+
+    private async Task<AuthorizationErrorCode?> EvaluateAuthorizationAsync(
+        ActorContext actor,
+        Guid companyId,
+        CancellationToken cancellationToken)
+    {
+        var actorMembership = await database.Memberships.SingleOrDefaultAsync(membership =>
+            membership.CompanyId == companyId && membership.UserId == actor.UserId,
+            cancellationToken);
+        if (actorMembership is null)
+        {
+            return AuthorizationErrorCode.MembershipRequired;
+        }
+
+        if (await capabilityEvaluator.HasGrantAsync(
+                companyId,
+                actorMembership.Id,
+                RequiredCapability,
+                cancellationToken))
+        {
+            return null;
+        }
+
+        return AuthorizationErrorCode.CapabilityDenied;
     }
 
     private static bool IsIdempotencyKeyConflict(DbUpdateException exception)
