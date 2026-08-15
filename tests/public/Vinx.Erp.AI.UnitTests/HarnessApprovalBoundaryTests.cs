@@ -31,47 +31,42 @@ public sealed class HarnessApprovalBoundaryTests
     }
 
     [Fact]
-    public async Task Public_bundle_is_text_only_and_exposes_no_raw_agent_surface()
+    public async Task Public_surface_is_text_only_and_has_no_approval_delivery()
     {
-        var bundleType = typeof(HarnessAgentBundle);
-        var publicMethods = bundleType.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
-        Assert.Equal(2, publicMethods.Length);
+        var bundleMethods = typeof(HarnessAgentBundle)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+
+        Assert.Equal(2, bundleMethods.Length);
         AssertMethod(
-            Assert.Single(publicMethods, method => method.Name == nameof(HarnessAgentBundle.CreateSessionAsync)),
+            Assert.Single(bundleMethods, method => method.Name == nameof(HarnessAgentBundle.CreateSessionAsync)),
             typeof(Task<AgentSession>),
             typeof(CancellationToken));
         AssertMethod(
-            Assert.Single(publicMethods, method => method.Name == nameof(HarnessAgentBundle.RunUserTurnAsync)),
+            Assert.Single(bundleMethods, method => method.Name == nameof(HarnessAgentBundle.RunUserTurnAsync)),
             typeof(Task<AgentResponse>),
             typeof(AgentSession),
             typeof(string),
             typeof(CancellationToken));
+        Assert.Empty(typeof(HarnessAgentBundle)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
 
-        var requestIdSourceType = typeof(HarnessExecutionRequestIdSource);
-        Assert.True(requestIdSourceType.IsNotPublic);
-        Assert.DoesNotContain(requestIdSourceType.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly), method =>
-            method.Name is nameof(HarnessExecutionRequestIdSource.Bind) or nameof(HarnessExecutionRequestIdSource.Resolve));
+        var gateMethods = typeof(HarnessApprovalGate)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+        Assert.Collection(gateMethods, method => Assert.Equal(nameof(HarnessApprovalGate.Evaluate), method.Name));
+        var factoryMethod = Assert.Single(
+            typeof(VinxHarnessFactory)
+                .GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly),
+            method => method.Name == nameof(VinxHarnessFactory.Create));
+        AssertMethod(
+            factoryMethod,
+            typeof(HarnessAgentBundle),
+            typeof(IChatClient),
+            typeof(Microsoft.Extensions.Logging.ILoggerFactory));
+        Assert.False(typeof(HarnessProbeWriteCounter).IsPublic);
 
-        var bundle = VinxHarnessFactory.Create(new ScriptedChatClient(AssistantText("ok")), new HarnessProbeWriteCounter());
+        var bundle = VinxHarnessFactory.Create(new ScriptedChatClient(AssistantText("ok")));
         var session = await bundle.CreateSessionAsync();
         await Assert.ThrowsAsync<ArgumentException>(() => bundle.RunUserTurnAsync(session, " "));
-    }
-
-    [Fact]
-    public void Public_approval_delivery_methods_require_proposal_and_unforgeable_permit()
-    {
-        var publicMethods = typeof(HarnessApprovalGate).GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Where(method => method.Name == nameof(HarnessApprovalGate.ApproveAsync))
-            .ToArray();
-
-        Assert.NotEmpty(publicMethods);
-        Assert.All(publicMethods, method =>
-        {
-            Assert.Contains(method.GetParameters(), parameter => parameter.ParameterType == typeof(Guid));
-            Assert.Contains(method.GetParameters(), parameter => parameter.ParameterType == typeof(HarnessApprovalDeliveryPermit));
-            Assert.DoesNotContain(method.GetParameters(), parameter => parameter.ParameterType == typeof(ToolApprovalResponseContent));
-        });
-        Assert.Empty(typeof(HarnessApprovalDeliveryPermit).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
     }
 
     [Fact]
@@ -84,156 +79,97 @@ public sealed class HarnessApprovalBoundaryTests
 
         var response = await bundle.RunUserTurnAsync(session, "write probe");
 
-        Assert.Contains(response.Messages.SelectMany(message => message.Contents), content => content is ToolApprovalRequestContent);
+        Assert.Contains(
+            response.Messages.SelectMany(message => message.Contents),
+            content => content is ToolApprovalRequestContent);
         Assert.Equal(0, counter.Count);
     }
 
     [Fact]
-    public async Task Permit_consumes_once_and_records_only_bound_execution_request_id()
+    public async Task Outgoing_tool_list_contains_only_registered_vinx_tools()
     {
-        var executionRequestId = Guid.NewGuid();
-        var proposalId = Guid.NewGuid();
-        var counter = new HarnessProbeWriteCounter();
-        var client = new ScriptedChatClient(
-            AssistantCall(VinxToolPolicy.ProbeWriteToolName, "write-call"),
-            AssistantText("approved"));
-        var bundle = VinxHarnessFactory.Create(client, counter);
+        var client = new ScriptedChatClient(AssistantText("ok"));
+        var bundle = VinxHarnessFactory.Create(client, new HarnessProbeWriteCounter());
         var session = await bundle.CreateSessionAsync();
-        var pending = await bundle.RunUserTurnAsync(session, "write probe");
-        var request = FindApprovalRequest(pending)!;
-        bundle.RequestIdSource.Bind(executionRequestId);
-        var gate = CreateGate();
-        var permit = new HarnessApprovalDeliveryPermit(proposalId, "write-call");
 
-        var response = await gate.ApproveAsync(
-            bundle.Agent, session, request, proposalId, permit, ServerContext);
+        await bundle.RunUserTurnAsync(session, "hello");
 
-        Assert.Equal("approved", response.Text);
-        Assert.Equal(1, counter.Count);
-        Assert.Equal([executionRequestId], counter.RecordedRequestIds);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => gate.ApproveAsync(
-            bundle.Agent, session, request, proposalId, permit, ServerContext));
-        Assert.Equal(1, counter.Count);
+        var request = Assert.Single(client.Requests);
+        Assert.Equal(
+            [VinxToolPolicy.ProbeStatusToolName, VinxToolPolicy.ProbeWriteToolName],
+            request.ToolNames.OrderBy(name => name, StringComparer.Ordinal));
     }
 
-    [Theory]
-    [InlineData("mismatched-call")]
-    [InlineData("different-proposal")]
-    [InlineData("extra-content")]
-    [InlineData("missing-contents")]
-    [InlineData("read-tool")]
-    [InlineData("unknown-tool")]
-    [InlineData("invalid-context")]
-    [InlineData("wrong-decision")]
-    public async Task Delivery_permit_negative_matrix_fails_closed_before_agent_execution(string caseName)
+    [Fact]
+    public async Task Iteration_bound_is_respected()
     {
-        var counter = new HarnessProbeWriteCounter();
-        var client = new ScriptedChatClient(AssistantText("must not run"));
-        var bundle = VinxHarnessFactory.Create(client, counter);
+        var calls = Enumerable.Range(1, 12)
+            .Select(index => AssistantCall(VinxToolPolicy.ProbeStatusToolName, $"call-{index}"))
+            .ToArray();
+        var client = new ScriptedChatClient(calls);
+        var bundle = VinxHarnessFactory.Create(client, new HarnessProbeWriteCounter());
         var session = await bundle.CreateSessionAsync();
-        var proposalId = Guid.NewGuid();
-        var request = new ToolApprovalRequestContent(
-            "request", new FunctionCallContent("write-call", VinxToolPolicy.ProbeWriteToolName));
-        var message = new ChatMessage(ChatRole.User, [request.CreateResponse(true)]);
-        var pending = request;
-        var expectedApproved = true;
-        var permit = new HarnessApprovalDeliveryPermit(proposalId, "write-call");
-        var context = ServerContext;
 
-        switch (caseName)
-        {
-            case "mismatched-call":
-                message = new ChatMessage(ChatRole.User,
-                [new ToolApprovalResponseContent(
-                    "other-call", true, new FunctionCallContent("other-call", VinxToolPolicy.ProbeWriteToolName))]);
-                break;
-            case "different-proposal":
-                proposalId = Guid.NewGuid();
-                break;
-            case "extra-content":
-                message = new ChatMessage(ChatRole.User, [request.CreateResponse(true), new TextContent("extra")]);
-                break;
-            case "missing-contents":
-                message = new ChatMessage(ChatRole.User, []);
-                break;
-            case "read-tool":
-                pending = new ToolApprovalRequestContent(
-                    "request", new FunctionCallContent("read-call", VinxToolPolicy.ProbeStatusToolName));
-                message = new ChatMessage(ChatRole.User, [pending.CreateResponse(true)]);
-                permit = new HarnessApprovalDeliveryPermit(proposalId, "read-call");
-                break;
-            case "unknown-tool":
-                pending = new ToolApprovalRequestContent(
-                    "request", new FunctionCallContent("unknown-call", "UnknownTool"));
-                message = new ChatMessage(ChatRole.User, [pending.CreateResponse(true)]);
-                permit = new HarnessApprovalDeliveryPermit(proposalId, "unknown-call");
-                break;
-            case "invalid-context":
-                context = new VinxExecutionContext(Guid.Empty, CompanyId);
-                break;
-            case "wrong-decision":
-                expectedApproved = false;
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(caseName));
-        }
+        await bundle.RunUserTurnAsync(session, "repeat read probe");
 
-        var requestCountBefore = client.Requests.Count;
-        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateGate().DeliverApprovalResponseAsync(
-            bundle.Agent, session, message, pending, expectedApproved, proposalId, permit, context, CancellationToken.None));
-
-        Assert.Equal(requestCountBefore, client.Requests.Count);
-        Assert.Equal(0, counter.Count);
+        Assert.True(
+            client.Requests.Count <= VinxHarnessFactory.MaximumIterationsPerRequest + 1,
+            $"Expected at most {VinxHarnessFactory.MaximumIterationsPerRequest + 1} calls; got {client.Requests.Count}.");
     }
 
     [Fact]
-    public async Task Approval_message_with_mismatched_call_id_fails_closed()
-    {
-        var counter = new HarnessProbeWriteCounter();
-        var firstBundle = VinxHarnessFactory.Create(
-            new ScriptedChatClient(AssistantCall(VinxToolPolicy.ProbeWriteToolName, "write-call")), counter);
-        var firstSession = await firstBundle.CreateSessionAsync();
-        var pending = await firstBundle.RunUserTurnAsync(firstSession, "write probe");
-        var request = FindApprovalRequest(pending)!;
-        var secondClient = new ScriptedChatClient(AssistantText("must not run"));
-        var secondBundle = VinxHarnessFactory.Create(secondClient, counter);
-        var secondSession = await secondBundle.CreateSessionAsync();
-        var proposalId = Guid.NewGuid();
-        var permit = new HarnessApprovalDeliveryPermit(proposalId, "write-call");
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateGate().DeliverApprovalResponseAsync(
-            secondBundle.Agent,
-            secondSession,
-            new ChatMessage(ChatRole.User, [request.CreateResponse(true)]),
-            new ToolApprovalRequestContent("request", new FunctionCallContent("different-call", VinxToolPolicy.ProbeWriteToolName)),
-            true,
-            proposalId,
-            permit,
-            ServerContext,
-            CancellationToken.None));
-
-        Assert.Empty(secondClient.Requests);
-        Assert.Equal(0, counter.Count);
-    }
-
-    [Fact]
-    public void Evaluate_uses_only_trusted_context_and_rejects_multiple_requests()
+    public void Evaluate_uses_only_trusted_server_context()
     {
         var gate = CreateGate();
-        var response = new AgentResponse(new ChatMessage(ChatRole.Assistant,
-        [
-            new ToolApprovalRequestContent("one", new FunctionCallContent("call-one", VinxToolPolicy.ProbeWriteToolName)),
-            new ToolApprovalRequestContent("two", new FunctionCallContent("call-two", VinxToolPolicy.ProbeWriteToolName)),
-        ]));
+        var response = ResponseWithApprovalRequests(
+            new ToolApprovalRequestContent(
+                "write",
+                new FunctionCallContent("write-call", VinxToolPolicy.ProbeWriteToolName)));
 
-        var denied = gate.Evaluate(response, ServerContext);
-        Assert.Equal(VinxApprovalOutcome.Denied, denied.Outcome);
-        Assert.Null(denied.Request);
+        Assert.Equal(VinxApprovalOutcome.Denied, gate.Evaluate(response, null).Outcome);
+        Assert.Equal(
+            VinxApprovalOutcome.Denied,
+            gate.Evaluate(response, new VinxExecutionContext(Guid.Empty, CompanyId)).Outcome);
+        Assert.Equal(VinxApprovalOutcome.PendingConfirmation, gate.Evaluate(response, ServerContext).Outcome);
+    }
 
-        var one = new AgentResponse(new ChatMessage(ChatRole.Assistant,
-        [new ToolApprovalRequestContent("one", new FunctionCallContent("call-one", VinxToolPolicy.ProbeWriteToolName))]));
-        Assert.Equal(VinxApprovalOutcome.Denied, gate.Evaluate(one, null).Outcome);
-        Assert.Equal(VinxApprovalOutcome.PendingConfirmation, gate.Evaluate(one, ServerContext).Outcome);
+    [Fact]
+    public void Evaluate_rejects_unknown_read_and_multiple_requests()
+    {
+        var gate = CreateGate();
+
+        var unknown = gate.Evaluate(
+            ResponseWithApprovalRequests(
+                new ToolApprovalRequestContent("unknown", new FunctionCallContent("call", "UnknownTool"))),
+            ServerContext);
+        var read = gate.Evaluate(
+            ResponseWithApprovalRequests(
+                new ToolApprovalRequestContent(
+                    "read",
+                    new FunctionCallContent("read-call", VinxToolPolicy.ProbeStatusToolName))),
+            ServerContext);
+        var missingCallId = gate.Evaluate(
+            ResponseWithApprovalRequests(
+                new ToolApprovalRequestContent(
+                    "missing call id",
+                    new FunctionCallContent(string.Empty, VinxToolPolicy.ProbeWriteToolName))),
+            ServerContext);
+        var multiple = gate.Evaluate(
+            ResponseWithApprovalRequests(
+                new ToolApprovalRequestContent(
+                    "one",
+                    new FunctionCallContent("call-one", VinxToolPolicy.ProbeWriteToolName)),
+                new ToolApprovalRequestContent(
+                    "two",
+                    new FunctionCallContent("call-two", VinxToolPolicy.ProbeWriteToolName))),
+            ServerContext);
+
+        Assert.Equal(VinxApprovalOutcome.Denied, unknown.Outcome);
+        Assert.Null(unknown.ToolName);
+        Assert.Equal(VinxApprovalOutcome.Denied, read.Outcome);
+        Assert.Equal(VinxApprovalOutcome.Denied, missingCallId.Outcome);
+        Assert.Equal(VinxApprovalOutcome.Denied, multiple.Outcome);
+        Assert.Null(multiple.Request);
     }
 
     private static HarnessApprovalGate CreateGate() =>
@@ -245,8 +181,8 @@ public sealed class HarnessApprovalBoundaryTests
         Assert.Equal(parameterTypes, method.GetParameters().Select(parameter => parameter.ParameterType));
     }
 
-    private static ToolApprovalRequestContent? FindApprovalRequest(AgentResponse response) =>
-        response.Messages.SelectMany(message => message.Contents).OfType<ToolApprovalRequestContent>().SingleOrDefault();
+    private static AgentResponse ResponseWithApprovalRequests(params ToolApprovalRequestContent[] requests) =>
+        new(new ChatMessage(ChatRole.Assistant, [.. requests]));
 
     private static ChatMessage AssistantText(string text) => new(ChatRole.Assistant, text);
 

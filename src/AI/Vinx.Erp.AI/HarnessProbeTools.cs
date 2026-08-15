@@ -3,59 +3,26 @@ using Microsoft.Extensions.AI;
 namespace Vinx.Erp.AI;
 
 /// <summary>
-/// Contador de efeito colateral da sonda de escrita. Serve apenas para provar
-/// em testes que a ferramenta de escrita só executa após confirmação do
-/// servidor; não acessa nenhum dado do ERP. A escrita é idempotente por
-/// <c>RequestId</c> de execução: um replay com o mesmo <c>RequestId</c> devolve
-/// o resultado original sem repetir a mutação.
+/// Contador da sonda inerte usado para provar que uma ferramenta protegida não
+/// executa sem confirmação. Nenhum host registra essa sonda.
 /// </summary>
-public sealed class HarnessProbeWriteCounter
+internal sealed class HarnessProbeWriteCounter
 {
-    private readonly object gate = new();
-    private readonly Dictionary<Guid, string> resultsByRequestId = new();
     private int count;
 
     public int Count => Volatile.Read(ref count);
 
-    /// <summary>Snapshot thread-safe dos <c>RequestIds</c> de execução já registrados.</summary>
-    public IReadOnlyList<Guid> RecordedRequestIds
+    internal string RecordWrite()
     {
-        get
-        {
-            lock (gate)
-            {
-                return resultsByRequestId.Keys.ToList();
-            }
-        }
-    }
-
-    public string RecordWrite(Guid requestId)
-    {
-        lock (gate)
-        {
-            if (resultsByRequestId.TryGetValue(requestId, out var existing))
-            {
-                return existing;
-            }
-
-            count++;
-            var result = $"sonda de escrita registrada para {requestId}";
-            resultsByRequestId[requestId] = result;
-            return result;
-        }
+        Interlocked.Increment(ref count);
+        return "sonda de escrita registrada";
     }
 }
 
-/// <summary>
-/// Duas ferramentas de sonda inertes (sem dados do ERP, sem efeitos reais e
-/// não registradas em nenhum host): uma leitura executada diretamente pelo
-/// framework e uma escrita que só executa com confirmação do servidor. A
-/// ferramenta de escrita recebe o <c>RequestId</c> de execução do coordenador,
-/// nunca do modelo, e é idempotente por esse identificador.
-/// </summary>
-public static class HarnessProbeTools
+/// <summary>Sondas sem dados do ERP usadas para verificar o harness real.</summary>
+internal static class HarnessProbeTools
 {
-    public static AIFunction CreateStatusTool() => ApplyPolicy(AIFunctionFactory.Create(
+    internal static AIFunction CreateStatusTool() => ApplyPolicy(AIFunctionFactory.Create(
         GetHarnessProbeStatus,
         new AIFunctionFactoryOptions
         {
@@ -63,27 +30,23 @@ public static class HarnessProbeTools
             Description = "Sonda somente leitura do harness VINX; retorna estado estático do servidor.",
         }));
 
-    internal static AIFunction CreateWriteTool(HarnessProbeWriteCounter counter, HarnessExecutionRequestIdSource requestIdSource) =>
-        ApplyPolicy(AIFunctionFactory.Create(
-            () => counter.RecordWrite(requestIdSource.Resolve()),
+    internal static AIFunction CreateWriteTool(HarnessProbeWriteCounter counter)
+    {
+        ArgumentNullException.ThrowIfNull(counter);
+        return ApplyPolicy(AIFunctionFactory.Create(
+            counter.RecordWrite,
             new AIFunctionFactoryOptions
             {
                 Name = VinxToolPolicy.ProbeWriteToolName,
                 Description = "Sonda de escrita do harness VINX; exige confirmação explícita do servidor.",
             }));
+    }
 
-    /// <summary>
-    /// O registro dirige o envolvimento pela classificação da allowlist:
-    /// ferramentas de escrita são envolvidas em <see cref="ApprovalRequiredAIFunction"/>,
-    /// leituras executam diretamente e nomes fora da allowlist lançam erro.
-    /// Assim classificação e envolvimento não divergem.
-    /// </summary>
     private static AIFunction ApplyPolicy(AIFunction function)
     {
         if (!VinxToolPolicy.TryClassify(function.Name, out var risk))
         {
-            throw new InvalidOperationException(
-                $"Ferramenta '{function.Name}' não está na allowlist do VINX.");
+            throw new InvalidOperationException($"Ferramenta '{function.Name}' não está na allowlist do VINX.");
         }
 
         return risk == VinxToolRisk.Write ? new ApprovalRequiredAIFunction(function) : function;

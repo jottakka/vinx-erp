@@ -15,6 +15,9 @@
 
 - Leia o desenho de arquitetura e a documentação do módulo antes de alterar comportamento.
 - Não leia, liste nem execute `quality/private`; um verificador separado é responsável por esse escopo.
+- Antes de implementar infraestrutura própria, avalie primeiro recursos nativos da plataforma, SDK oficial e biblioteca madura e mantida. Isso vale especialmente para identidade, validação, erros HTTP, rate limit, resiliência, workflows, mensageria/outbox, MCP, provedores de IA, telemetria, agendamento e serialização.
+- Prefira substituir código próprio por solução consolidada quando ela reduzir materialmente código, risco ou manutenção e atender o caso de uso atual. Compatibilidade com uma abstração interna sem consumidor não é motivo para conservar complexidade.
+- Código próprio no lugar de uma opção consolidada exige justificativa curta no issue ou PR: opções avaliadas, requisito não atendido e custo operacional aceito. Dependência sem uso atual continua proibida.
 - Não adicione abstração, adaptador, skill ou dependência sem uso atual e motivo documentado.
 - Autorização, contexto explícito de empresa, auditoria, observabilidade e documentação fazem parte da definição de pronto.
 - Nunca inclua segredos, tokens, conteúdo médico, prompts ou conteúdo de arquivos em logs, fixtures ou Markdown.

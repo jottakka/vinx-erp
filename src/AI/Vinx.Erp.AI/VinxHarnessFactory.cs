@@ -9,8 +9,7 @@ namespace Vinx.Erp.AI;
 /// um <see cref="IChatClient"/> injetado (agnóstico de provedor), com todos os
 /// padrões não usados do harness desligados e aprovação de ferramentas
 /// desativada por padrão (fail-closed). Retorna um <see cref="HarnessAgentBundle"/>
-/// opaco: o agente cru e a fonte de <c>RequestId</c> de execução permanecem
-/// internos; apenas o coordenador e o gate (mesmo assembly) os alcançam.
+/// opaco; o agente cru e respostas de aprovação não são expostos.
 /// </summary>
 public static class VinxHarnessFactory
 {
@@ -18,10 +17,15 @@ public static class VinxHarnessFactory
 
     public static HarnessAgentBundle Create(
         IChatClient chatClient,
+        ILoggerFactory? loggerFactory = null) =>
+        Create(chatClient, new HarnessProbeWriteCounter(), loggerFactory);
+
+    /// <summary>Permite que testes observem a sonda sem expô-la ao consumidor.</summary>
+    internal static HarnessAgentBundle Create(
+        IChatClient chatClient,
         HarnessProbeWriteCounter writeCounter,
         ILoggerFactory? loggerFactory = null)
     {
-        var requestIdSource = new HarnessExecutionRequestIdSource();
         var options = new HarnessAgentOptions
         {
             Name = "vinx-erp-harness",
@@ -31,7 +35,7 @@ public static class VinxHarnessFactory
                 Tools =
                 [
                     HarnessProbeTools.CreateStatusTool(),
-                    HarnessProbeTools.CreateWriteTool(writeCounter, requestIdSource),
+                    HarnessProbeTools.CreateWriteTool(writeCounter),
                 ],
 
                 // O gate processa uma aprovação por resposta; lotes com várias
@@ -48,6 +52,6 @@ public static class VinxHarnessFactory
             MaximumIterationsPerRequest = MaximumIterationsPerRequest,
         };
 
-        return new HarnessAgentBundle(chatClient.AsHarnessAgent(options, loggerFactory), requestIdSource);
+        return new HarnessAgentBundle(chatClient.AsHarnessAgent(options, loggerFactory));
     }
 }
