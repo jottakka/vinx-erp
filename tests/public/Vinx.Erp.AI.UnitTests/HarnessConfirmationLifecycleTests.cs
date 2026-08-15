@@ -452,6 +452,74 @@ public sealed class HarnessConfirmationLifecycleTests
     }
 
     [Fact]
+    public async Task Shutdown_winning_confirmation_handoff_never_starts_agent_delivery()
+    {
+        var clock = new ManualTimeProvider();
+        var timerGate = NewTcs<bool>();
+        clock.GateNextTimerDispose(timerGate);
+        var counter = new HarnessProbeWriteCounter();
+        var client = new GatedChatClient();
+        var pending = await PreparePendingWriteAsync(counter, client);
+        var coordinator = CreateCoordinator(clock);
+        var proposalId = Guid.NewGuid();
+        Register(coordinator, pending, proposalId, clock, Guid.NewGuid());
+        var handoffReached = NewTcs<bool>();
+        var releaseHandoff = NewTcs<bool>();
+        clock.GateUtcNowAfterNextRead(handoffReached, releaseHandoff);
+
+        var confirmation = Task.Run(() => coordinator.ConfirmAsync(proposalId, Guid.NewGuid()));
+        await handoffReached.Task;
+        var dispose = coordinator.DisposeAsync().AsTask();
+
+        try
+        {
+            Assert.False(dispose.IsCompleted);
+            releaseHandoff.TrySetResult(true);
+
+            var next = await Task.WhenAny(confirmation, client.DeliveryStarted.Task);
+            Assert.Same(confirmation, next);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => confirmation);
+            Assert.False(client.DeliveryStarted.Task.IsCompleted);
+            Assert.Equal(1, client.RequestCount);
+            Assert.Equal(0, counter.Count);
+        }
+        finally
+        {
+            releaseHandoff.TrySetResult(true);
+            timerGate.TrySetResult(true);
+            await dispose;
+        }
+    }
+
+    [Fact]
+    public async Task Execution_deadline_before_start_completes_shared_terminal_state()
+    {
+        var clock = new ManualTimeProvider();
+        var counter = new HarnessProbeWriteCounter();
+        var client = new GatedChatClient();
+        var pending = await PreparePendingWriteAsync(counter, client);
+        await using var coordinator = CreateCoordinator(clock, executionTimeout: TimeSpan.FromSeconds(1));
+        var proposalId = Guid.NewGuid();
+        Register(coordinator, pending, proposalId, clock, Guid.NewGuid());
+        var handoffReached = NewTcs<bool>();
+        var releaseHandoff = NewTcs<bool>();
+        clock.GateUtcNowAfterNextRead(handoffReached, releaseHandoff);
+
+        var confirmation = Task.Run(() => coordinator.ConfirmAsync(proposalId, Guid.NewGuid()));
+        await handoffReached.Task;
+        clock.Advance(TimeSpan.FromSeconds(1));
+        releaseHandoff.TrySetResult(true);
+
+        await Assert.ThrowsAsync<TimeoutException>(() => confirmation);
+        Assert.False(client.DeliveryStarted.Task.IsCompleted);
+        Assert.Equal(1, client.RequestCount);
+        Assert.Equal(0, counter.Count);
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        Assert.Equal(0, coordinator.ActiveProposalCount);
+    }
+
+    [Fact]
     public async Task Sweep_publishes_cleanup_before_removal_so_dispose_observes_gated_resource_cleanup()
     {
         var clock = new ManualTimeProvider();

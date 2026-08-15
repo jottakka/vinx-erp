@@ -76,8 +76,8 @@ public sealed record HarnessVetoResult(
 public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
 {
     private readonly object gate = new();
-    // Lock order is vetoStartGate -> gate whenever both are needed.
-    private readonly object vetoStartGate = new();
+    // Lock order is deliveryStartGate -> gate whenever both are needed.
+    private readonly object deliveryStartGate = new();
     private readonly Dictionary<Guid, PendingProposal> proposals = new();
     private readonly HashSet<Task> ownedCleanupTasks = [];
     private readonly ConfirmApprovalDelegate confirmApproval;
@@ -311,6 +311,11 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
                     ? ConfirmApprovalOutcome.Replay
                     : ConfirmApprovalOutcome.Claimed
                 : joinedOutcome!.Value;
+            if (owner)
+            {
+                StartExecutionAfterPublication(proposalId, entry);
+            }
+
             var published = await AwaitPublicationAsync(entry, outcome, cancellationToken).ConfigureAwait(false);
             if (published is not null)
             {
@@ -436,7 +441,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
 
             if (vetoStart is not null)
             {
-                lock (vetoStartGate)
+                lock (deliveryStartGate)
                 {
                     var startsBeforeShutdown = false;
                     lock (gate)
@@ -478,7 +483,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
             return;
         }
 
-        lock (vetoStartGate)
+        lock (deliveryStartGate)
         {
             lock (gate)
             {
@@ -764,7 +769,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
                             entry.Terminal = TerminalOwner.Claimed;
                             entry.WinningConfirmationRequestId = confirmationRequestId;
                             entry.Resumed = true;
-                            StartExecutionLocked(proposalId, entry);
+                            PublishExecutionLocked(proposalId, entry);
                             return (true, null);
                         case TerminalOwner.Claimed when entry.WinningConfirmationRequestId == confirmationRequestId:
                             return (false, ConfirmApprovalOutcome.Claimed);
@@ -783,7 +788,7 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
                             entry.Terminal = TerminalOwner.Claimed;
                             entry.WinningConfirmationRequestId = confirmationRequestId;
                             entry.Resumed = true;
-                            StartExecutionLocked(proposalId, entry);
+                            PublishExecutionLocked(proposalId, entry);
                             return (true, null);
                         case TerminalOwner.Claimed when entry.WinningConfirmationRequestId == confirmationRequestId:
                             return (false, ConfirmApprovalOutcome.Replay);
@@ -799,16 +804,17 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         }
     }
 
-    private void StartExecutionLocked(Guid proposalId, PendingProposal entry)
+    private void PublishExecutionLocked(Guid proposalId, PendingProposal entry)
     {
-        entry.ExecutionCts = CancellationTokenSource.CreateLinkedTokenSource(shutdownCts.Token);
+        var executionCts = CancellationTokenSource.CreateLinkedTokenSource(shutdownCts.Token);
+        entry.ExecutionCts = executionCts;
         entry.ExecutionDeadlineAt = timeProvider.GetUtcNow() + executionTimeout;
         entry.ExecutionDeadlineTimer = timeProvider.CreateTimer(
             _ =>
             {
                 try
                 {
-                    entry.ExecutionCts.Cancel();
+                    executionCts.Cancel();
                 }
                 catch (ObjectDisposedException)
                 {
@@ -817,27 +823,53 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
             null,
             executionTimeout,
             Timeout.InfiniteTimeSpan);
-        var permit = new HarnessApprovalDeliveryPermit(proposalId, entry.CallId);
-        entry.ExecutionStart = NewTcs<bool>();
-        entry.ExecutionTask = ExecuteAfterStartAsync(
-            entry.ExecutionStart.Task,
-            proposalId,
-            entry,
-            permit,
-            entry.ExecutionCts.Token);
+        entry.ExecutionPermit = new HarnessApprovalDeliveryPermit(proposalId, entry.CallId);
+        entry.ExecutionStart = NewTcs<Task>();
+        entry.ExecutionTask = entry.ExecutionStart.Task.Unwrap();
         entry.ResumeSignal.TrySetResult(true);
-        entry.ExecutionStart.TrySetResult(true);
     }
 
-    private async Task ExecuteAfterStartAsync(
-        Task start,
-        Guid proposalId,
-        PendingProposal entry,
-        HarnessApprovalDeliveryPermit permit,
-        CancellationToken executionToken)
+    private void StartExecutionAfterPublication(Guid proposalId, PendingProposal entry)
     {
-        await start.ConfigureAwait(false);
-        await ExecuteAsync(proposalId, entry, permit, executionToken).ConfigureAwait(false);
+        var startAt = timeProvider.GetUtcNow();
+        lock (deliveryStartGate)
+        {
+            TaskCompletionSource<Task>? executionStart;
+            HarnessApprovalDeliveryPermit? permit;
+            CancellationTokenSource? executionCts;
+            DateTimeOffset? deadlineAt;
+            CancellationToken executionToken;
+            lock (gate)
+            {
+                executionStart = entry.ExecutionStart;
+                permit = entry.ExecutionPermit;
+                executionCts = entry.ExecutionCts;
+                deadlineAt = entry.ExecutionDeadlineAt;
+                if (isStopping ||
+                    !IsCurrentEntryLocked(proposalId, entry) ||
+                    executionStart is null ||
+                    permit is null ||
+                    executionCts is null ||
+                    deadlineAt is null)
+                {
+                    executionStart?.TrySetCanceled();
+                    throw new InvalidOperationException(
+                        "Confirmação durável não pode iniciar execução durante encerramento (fail-closed).");
+                }
+
+                if (executionCts.IsCancellationRequested || deadlineAt <= startAt)
+                {
+                    executionCts.Cancel();
+                    entry.Completion.TrySetCanceled(executionCts.Token);
+                    executionStart.TrySetCanceled(executionCts.Token);
+                    throw new TimeoutException("O prazo de execução do coordenador expirou antes da entrega.");
+                }
+
+                executionToken = executionCts.Token;
+            }
+
+            executionStart.TrySetResult(ExecuteAsync(proposalId, entry, permit, executionToken));
+        }
     }
 
     private async Task ExecuteAsync(
@@ -1117,7 +1149,8 @@ public sealed class HarnessConfirmationCoordinator : IAsyncDisposable
         public CancellationTokenSource? ExecutionCts { get; set; }
         public ITimer? ExecutionDeadlineTimer { get; set; }
         public DateTimeOffset? ExecutionDeadlineAt { get; set; }
-        public TaskCompletionSource<bool>? ExecutionStart { get; set; }
+        public HarnessApprovalDeliveryPermit? ExecutionPermit { get; set; }
+        public TaskCompletionSource<Task>? ExecutionStart { get; set; }
         public Task? ExecutionTask { get; set; }
         public int ExecutionResourcesDisposed;
 
