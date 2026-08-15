@@ -1,9 +1,25 @@
-# MCP contract policy
+# Política de contratos MCP
 
-MCP is a first-class transport. A module's MCP tool calls the same application service and enforces the same company, authorization, business, audit and observability contracts as the HTTP API.
+MCP é um transporte de primeira classe. Uma ferramenta de módulo chama o
+mesmo serviço de aplicação usado pela API HTTP e preserva os mesmos contratos
+de empresa, autorização, negócio, auditoria e observabilidade.
 
-Each tool manifest documents: useful job intent; module owner; input/output JSON Schema; explicit `empresa_id`; required capability and scope; risk; correlation and audit behavior; idempotency behavior for writes; and the prepare/confirm flow when applicable. Tool discovery is a convenience only; invocation always checks the authenticated actor.
+Cada manifesto documenta intenção útil, módulo responsável, JSON Schema de
+entrada e saída, `empresa_id` explícita, capability e escopo, risco,
+correlação, auditoria, idempotência de escrita e prepare/confirm quando
+aplicável. Discovery é conveniência; a invocação sempre reautoriza ator e
+empresa.
 
-No MCP tool may be a generic CRUD or SQL interface, infer company context for a command, expose provider credentials, or bypass a module's use case. Read, summarize and draft are the initial AI-facing outcomes. Financial, external and irreversible actions require a human confirmation bound to actor, company, action and payload hash.
+Nenhuma ferramenta pode oferecer CRUD ou SQL genérico, inferir empresa para um
+comando, expor credencial de provider ou contornar o caso de uso do módulo.
+Leitura, resumo e rascunho são os primeiros resultados voltados ao agente.
+Ações financeiras, externas ou irreversíveis exigem confirmação humana ligada
+a ator, empresa, ação e hash do payload.
 
-The canonical review checklist is [MCP tool checklist](../../modules/mcp-tool-checklist.md).
+A baseline da #207 expõe somente `/mcp` stateless pelo SDK oficial e a sonda
+constante `vinx_ping`. Ela exige JWT Supabase pré-obtido, limita requisições,
+restringe `Host` e rejeita todo `Origin`; não anuncia OAuth MCP, não cria
+`ActorContext` e não autoriza ferramenta de domínio. #133, #132 e #125 devem
+fechar essas fronteiras antes de qualquer acesso a dados.
+
+O checklist canônico está em [MCP tool checklist](../../modules/mcp-tool-checklist.md).

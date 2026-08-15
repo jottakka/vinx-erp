@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Vinx.Erp.Foundation.Files;
@@ -21,12 +22,7 @@ public sealed class SupabaseFileStorageTests
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json")
             });
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
-        var storage = new SupabaseFileStorage(
-            client,
-            new SupabaseStorageOptions(
-                client.BaseAddress,
-                "not-a-credential",
-                SupabaseStorageOptions.PrivateContainerId));
+        var storage = CreateStorage(client);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => storage.EnsurePrivateContainerAsync(CancellationToken.None));
@@ -80,12 +76,7 @@ public sealed class SupabaseFileStorageTests
                 return new HttpResponseMessage(HttpStatusCode.NoContent);
             });
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
-        var storage = new SupabaseFileStorage(
-            client,
-            new SupabaseStorageOptions(
-                client.BaseAddress,
-                "not-a-credential",
-                SupabaseStorageOptions.PrivateContainerId));
+        var storage = CreateStorage(client);
 
         var upload = await storage.CreateSignedUploadUrlAsync("quarantine/company/document", CancellationToken.None);
         var download = await storage.CreateSignedDownloadUrlAsync(
@@ -134,12 +125,7 @@ public sealed class SupabaseFileStorageTests
             };
         });
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
-        var storage = new SupabaseFileStorage(
-            client,
-            new SupabaseStorageOptions(
-                client.BaseAddress,
-                "not-a-credential",
-                SupabaseStorageOptions.PrivateContainerId));
+        var storage = CreateStorage(client);
 
         var inspection = await storage.InspectObjectAsync("quarantine/company/document", CancellationToken.None);
 
@@ -159,9 +145,7 @@ public sealed class SupabaseFileStorageTests
             }
         });
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
-        var storage = new SupabaseFileStorage(
-            client,
-            new SupabaseStorageOptions(client.BaseAddress, "not-a-credential", SupabaseStorageOptions.PrivateContainerId));
+        var storage = CreateStorage(client);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => storage.InspectObjectAsync("quarantine/company/document", CancellationToken.None));
@@ -171,6 +155,13 @@ public sealed class SupabaseFileStorageTests
     {
         Content = new StringContent(json, Encoding.UTF8, "application/json")
     };
+
+    private static SupabaseFileStorage CreateStorage(HttpClient client)
+    {
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "not-a-credential");
+        client.DefaultRequestHeaders.Add("apikey", "not-a-credential");
+        return new SupabaseFileStorage(client);
+    }
 
     private static string ObjectPage(int start, int count) => JsonSerializer.Serialize(
         Enumerable.Range(start, count)

@@ -1,5 +1,10 @@
 # Decisão de frameworks do Agent Harness
 
+> **Atualização de 15/08/2026:** a prova não hospedada foi removida pela PR
+> #207 por não possuir consumidor de produção. Este arquivo preserva o estudo
+> histórico; a decisão vigente está em
+> `2026-08-15-backend-first-simplification.md`.
+
 ## Status
 
 Aprovada para planejamento em 11 de agosto de 2026. Esta decisão não adiciona

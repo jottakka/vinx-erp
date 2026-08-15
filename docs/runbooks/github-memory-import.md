@@ -26,7 +26,7 @@ segredos, credenciais, PII, conteúdo médico ou material de quality/private.
 | Fonte | Estado no check | Tratamento local |
 | --- | --- | --- |
 | [Issue #108 — Product V1 + Agentic track](https://github.com/jottakka/vinx-erp/issues/108) | Open | Nota de rastreamento: coordena as trilhas V1 e agentic; ordem e detalhes continuam na issue viva. |
-| [Issue #127 — Agent Harness](https://github.com/jottakka/vinx-erp/issues/127) | Open | Decisão operacional: harness interna primeiro; contexto confiável separado de input externo; policy resolve ferramenta antes dos argumentos. |
+| [Issue #127 — Agent Harness](https://github.com/jottakka/vinx-erp/issues/127) | Open | A prova sem host foi removida na #207; runtime volta somente com consumidor de produção, contexto confiável separado de input externo e SDK oficial. |
 | [Issue #21 — sessões V1 e revogação global](https://github.com/jottakka/vinx-erp/issues/21) | Open | Nota: a base EF/admissão existe, mas o gate HTTP e revoke-all ainda são pendências. |
 | [Issue #40 — plataforma MCP](https://github.com/jottakka/vinx-erp/issues/40) | Open | Nota: autenticação, catálogo e auditoria MCP são uma capacidade separada e não substituem o núcleo da harness. |
 | [Issue #110 — bootstrap autenticado e feature flags](https://github.com/jottakka/vinx-erp/issues/110) | Open | Issue operacional local: não implementar isoladamente; validar dependências de autorização, flags e OpenAPI antes. |

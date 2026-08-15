@@ -1,4 +1,4 @@
-using Vinx.Erp.Foundation;
+using Vinx.Erp.Foundation.Persistence;
 using Xunit;
 
 namespace Vinx.Erp.ArchitectureTests;
@@ -15,7 +15,7 @@ public sealed class FoundationDependencyTests
             "Vinx.Erp.WorkerHost"
         };
 
-        var dependencies = typeof(FoundationHealthEndpoints).Assembly
+        var dependencies = typeof(FoundationDbContext).Assembly
             .GetReferencedAssemblies()
             .Select(assembly => assembly.Name)
             .ToHashSet(StringComparer.Ordinal);

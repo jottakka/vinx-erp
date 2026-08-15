@@ -16,8 +16,12 @@ public sealed class SupabaseStorageFixture : IAsyncDisposable
     {
         Options = options;
         var services = new ServiceCollection();
-        services.AddSingleton(options);
-        services.AddHttpClient<SupabaseFileStorage>(client => client.BaseAddress = options.BaseUri);
+        services.AddHttpClient<SupabaseFileStorage>(client =>
+        {
+            client.BaseAddress = options.BaseUri;
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", options.ServiceRoleKey);
+            client.DefaultRequestHeaders.Add("apikey", options.ServiceRoleKey);
+        });
         services.AddHttpClient("SupabaseStorageAdmin", client =>
         {
             client.BaseAddress = options.BaseUri;
@@ -41,7 +45,11 @@ public sealed class SupabaseStorageFixture : IAsyncDisposable
             throw new InvalidOperationException("Supabase Storage test environment is not configured.");
         }
 
-        return new SupabaseStorageFixture(new SupabaseStorageOptions(parsedBaseUri, serviceRoleKey, ContainerId));
+        return new SupabaseStorageFixture(new SupabaseStorageOptions
+        {
+            BaseUri = parsedBaseUri,
+            ServiceRoleKey = serviceRoleKey
+        });
     }
 
     public SupabaseFileStorage CreateStorage() => _serviceProvider.GetRequiredService<SupabaseFileStorage>();

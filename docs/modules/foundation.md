@@ -119,9 +119,9 @@ com `deleted_reason = 'approval_vetoed'`, `request_id` do veto e auditoria.
 Replay de veto é `AlreadyVetoed`; veto após consumo é conflito. Falha de
 auditoria faz rollback; a mutação de negócio e sua evidência não se separam.
 
-Os `RequestId` de preparação, confirmação e execução são distintos. O último é
-fornecido pelo servidor ao harness e permite que o serviço de domínio preserve
-seu resultado em replay; Foundation não promete exatamente-uma-vez.
+Os `RequestId` de preparação e confirmação são distintos. Um futuro serviço de
+execução deverá ter idempotência própria, mas ainda não existe costura com o
+harness. Foundation não promete execução exatamente-uma-vez.
 
 ## Invariantes persistentes
 
@@ -219,3 +219,12 @@ templates constantes, operação, módulo, resultado e motivo seguro; nunca
 registram tokens, credenciais, PII, prompts ou payload bruto. O host autentica
 antes de criar contexto confiável, mas endpoints de aprovação do AI ainda não
 fazem parte desta fatia.
+
+Configuração obrigatória de banco, Supabase Auth e Storage usa Options com
+`ValidateOnStart`; erro impede o host de servir tráfego sem incluir credencial
+na mensagem. HTTP de provider só é aceito em loopback durante desenvolvimento;
+demais ambientes exigem HTTPS. Os três hosts usam Health Checks nativo. O
+`ApiHost` usa Problem Details somente para exceções não tratadas, preservando
+os contratos `{ code }` e `401` vazio. O `McpHost`
+reutiliza a validação JWT, mas a sonda `vinx_ping` não materializa ator nem
+empresa; ferramentas de domínio continuam bloqueadas até o contexto confiável.
