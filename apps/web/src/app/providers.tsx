@@ -3,6 +3,7 @@ import { type ReactNode, useState } from "react";
 import { createMockSessionGateway } from "../features/auth/mock-session-gateway";
 import type { MockSessionGateway } from "../features/auth/session-contract";
 import { SessionProvider } from "../features/auth/session-provider";
+import { FeedbackProvider } from "../shared/ui/feedback-provider";
 import { createQueryClient } from "./query-client";
 import { VinxThemeProvider } from "./theme/vinx-theme-provider";
 
@@ -19,7 +20,9 @@ export function AppProviders({ children, sessionGateway }: AppProvidersProps) {
   return (
     <VinxThemeProvider>
       <QueryClientProvider client={createQueryClient()}>
-        <SessionProvider gateway={gateway}>{children}</SessionProvider>
+        <SessionProvider gateway={gateway}>
+          <FeedbackProvider>{children}</FeedbackProvider>
+        </SessionProvider>
       </QueryClientProvider>
     </VinxThemeProvider>
   );

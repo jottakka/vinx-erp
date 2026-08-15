@@ -3,11 +3,13 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Foundation.Persistence.Configurations;
 
 namespace Vinx.Erp.Foundation.Authorization;
 
@@ -37,22 +39,8 @@ public sealed class RevokeMembershipService(
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
             await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
-            var actorMembership = await database.Memberships.SingleOrDefaultAsync(membership =>
-                membership.CompanyId == command.CompanyId && membership.UserId == actor.UserId,
-                cancellationToken);
-            if (actorMembership is null)
-            {
-                denial = AuthorizationErrorCode.MembershipRequired;
-            }
-            else if (!await capabilityEvaluator.HasGrantAsync(
-                         command.CompanyId,
-                         actorMembership.Id,
-                         RequiredCapability,
-                         cancellationToken))
-            {
-                denial = AuthorizationErrorCode.CapabilityDenied;
-            }
-            else
+            denial = await EvaluateAuthorizationAsync(actor, command.CompanyId, cancellationToken);
+            if (denial is null)
             {
                 var existing = await database.IdempotencyRecords.SingleOrDefaultAsync(record =>
                     record.CompanyId == command.CompanyId
@@ -123,7 +111,7 @@ public sealed class RevokeMembershipService(
 
             await transaction.RollbackAsync(cancellationToken);
         }
-        catch (DbUpdateException exception)
+        catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
             logger.LogWarning(
                 exception,
@@ -191,15 +179,34 @@ public sealed class RevokeMembershipService(
     {
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-            await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
-            var record = await database.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(candidate =>
-                candidate.CompanyId == command.CompanyId
-                && candidate.ActorUserId == actor.UserId
-                && candidate.CommandName == CommandName
-                && candidate.RequestId == command.RequestId,
-                cancellationToken);
-            await transaction.RollbackAsync(cancellationToken);
+            IdempotencyRecord? record = null;
+            AuthorizationErrorCode? denial = null;
+            await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))
+            {
+                await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+                denial = await EvaluateAuthorizationAsync(actor, command.CompanyId, cancellationToken);
+                if (denial is null)
+                {
+                    record = await database.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(candidate =>
+                        candidate.CompanyId == command.CompanyId
+                        && candidate.ActorUserId == actor.UserId
+                        && candidate.CommandName == CommandName
+                        && candidate.RequestId == command.RequestId,
+                        cancellationToken);
+                }
+
+                await transaction.RollbackAsync(cancellationToken);
+            }
+
+            if (denial is not null)
+            {
+                return await ReturnAuditedDenialAsync(
+                    actor,
+                    command.CompanyId,
+                    denial.Value,
+                    cancellationToken);
+            }
+
             if (record is null)
             {
                 return await ReturnAuditedDenialAsync(
@@ -231,6 +238,49 @@ public sealed class RevokeMembershipService(
         {
             return AuditUnavailable(AuditUnavailablePhase.ConcurrentReplay, exception);
         }
+    }
+
+    private async Task<AuthorizationErrorCode?> EvaluateAuthorizationAsync(
+        ActorContext actor,
+        Guid companyId,
+        CancellationToken cancellationToken)
+    {
+        var actorMembership = await database.Memberships.SingleOrDefaultAsync(membership =>
+            membership.CompanyId == companyId && membership.UserId == actor.UserId,
+            cancellationToken);
+        if (actorMembership is null)
+        {
+            return AuthorizationErrorCode.MembershipRequired;
+        }
+
+        if (await capabilityEvaluator.HasGrantAsync(
+                companyId,
+                actorMembership.Id,
+                RequiredCapability,
+                cancellationToken))
+        {
+            return null;
+        }
+
+        return AuthorizationErrorCode.CapabilityDenied;
+    }
+
+    private static bool IsIdempotencyKeyConflict(DbUpdateException exception)
+    {
+        for (Exception? inner = exception.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            if (inner is PostgresException postgresException
+                && postgresException.SqlState == PostgresErrorCodes.UniqueViolation
+                && string.Equals(
+                    postgresException.ConstraintName,
+                    IdempotencyRecordConfiguration.KeyIndexDatabaseName,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private AuthorizationResult<RevokeMembershipResult> AuditUnavailable(

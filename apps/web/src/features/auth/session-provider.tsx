@@ -9,13 +9,28 @@ import {
 import { createMockSessionGateway } from "./mock-session-gateway";
 import type { BootstrapSnapshot, MockSessionGateway } from "./session-contract";
 
+const genericBootstrapErrorMessage =
+  "Não foi possível carregar a sessão. Recarregue a página ou entre novamente.";
+
+/**
+ * O gateway mock produz apenas mensagens first-party, então elas podem ser
+ * exibidas; qualquer rejeição não-Error recebe um texto genérico para não
+ * expor detalhes internos ao usuário.
+ */
+function safeErrorMessage(reason: unknown): string {
+  return reason instanceof Error
+    ? reason.message
+    : genericBootstrapErrorMessage;
+}
+
 export type SessionStatus = "anonymous" | "authenticated" | "pending";
 
 type SessionContextValue = {
   bootstrap: BootstrapSnapshot | null;
   error: string | null;
+  isSigningOut: boolean;
   signIn: (profileId: string) => Promise<boolean>;
-  signOut: () => Promise<void>;
+  signOut: () => Promise<boolean>;
   status: SessionStatus;
 };
 
@@ -26,18 +41,13 @@ type SessionProviderProps = {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error
-    ? error.message
-    : "Não foi possível entrar no protótipo";
-}
-
 export function SessionProvider({ children, gateway }: SessionProviderProps) {
   const [sessionGateway] = useState(
     () => gateway ?? createMockSessionGateway(),
   );
   const [bootstrap, setBootstrap] = useState<BootstrapSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isSigningOut, setIsSigningOut] = useState(false);
   const [status, setStatus] = useState<SessionStatus>("pending");
   const actionPending = useRef(false);
 
@@ -59,7 +69,7 @@ export function SessionProvider({ children, gateway }: SessionProviderProps) {
         }
 
         setBootstrap(null);
-        setError(errorMessage(reason));
+        setError(safeErrorMessage(reason));
         setStatus("anonymous");
       },
     );
@@ -85,7 +95,7 @@ export function SessionProvider({ children, gateway }: SessionProviderProps) {
       return true;
     } catch (reason) {
       setBootstrap(null);
-      setError(errorMessage(reason));
+      setError(safeErrorMessage(reason));
       setStatus("anonymous");
       return false;
     } finally {
@@ -93,30 +103,33 @@ export function SessionProvider({ children, gateway }: SessionProviderProps) {
     }
   }
 
-  async function signOut(): Promise<void> {
+  async function signOut(): Promise<boolean> {
     if (actionPending.current) {
-      return;
+      return false;
     }
 
     actionPending.current = true;
     setError(null);
-    setStatus("pending");
+    setIsSigningOut(true);
 
     try {
       await sessionGateway.logout();
       setBootstrap(null);
       setStatus("anonymous");
-    } catch (reason) {
-      setError(errorMessage(reason));
+      return true;
+    } catch {
+      setError("Não foi possível sair do aplicativo. Tente novamente.");
       setStatus(bootstrap ? "authenticated" : "anonymous");
+      return false;
     } finally {
       actionPending.current = false;
+      setIsSigningOut(false);
     }
   }
 
   return (
     <SessionContext.Provider
-      value={{ bootstrap, error, signIn, signOut, status }}
+      value={{ bootstrap, error, isSigningOut, signIn, signOut, status }}
     >
       {children}
     </SessionContext.Provider>

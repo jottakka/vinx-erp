@@ -96,6 +96,82 @@ public sealed class RlsPolicyTests
             .SingleOrDefaultAsync(file => file.Id == fileB.Id));
     }
 
+    [Fact]
+    public async Task Runtime_authorized_company_context_reads_only_the_server_resolved_set()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var (companyA, companyB) = await SeedTwoCompaniesAsync(fixture);
+
+        await using var runtime = fixture.CreateRuntimeDbContext();
+        await using var transaction = await runtime.Database.BeginTransactionAsync();
+        await runtime.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT set_config('app.authorized_company_ids', {companyA.Id.ToString()}, true)");
+
+        var visibleCompanies = await runtime.Companies.AsNoTracking().ToListAsync();
+
+        Assert.Equal([companyA.Id], visibleCompanies.Select(company => company.Id));
+        Assert.DoesNotContain(visibleCompanies, company => company.Id == companyB.Id);
+    }
+
+    [Fact]
+    public async Task Authorized_company_context_does_not_authorize_writes_without_exact_company_context()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var (companyA, _) = await SeedTwoCompaniesAsync(fixture);
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        await using (var administrator = fixture.CreateAdministratorDbContext())
+        {
+            var user = new User(actorId, "Read actor", "read-actor@example.test");
+            administrator.Add(user);
+            administrator.Add(new Membership(Guid.NewGuid(), companyA.Id, actorId, actorId, requestId));
+            await administrator.SaveChangesAsync();
+        }
+
+        await using var runtime = fixture.CreateRuntimeDbContext();
+        await using var transaction = await runtime.Database.BeginTransactionAsync();
+        await runtime.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT set_config('app.authorized_company_ids', {companyA.Id.ToString()}, true)");
+        var visibleCompanies = await runtime.Companies.AsNoTracking().ToListAsync();
+        Assert.Single(visibleCompanies);
+
+        var affected = await runtime.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE foundation.memberships SET deleted_at = clock_timestamp() WHERE company_id = {companyA.Id}");
+
+        Assert.Equal(0, affected);
+    }
+
+    [Fact]
+    public async Task Concurrent_authorized_company_contexts_keep_Maria_and_Bruno_isolated()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var (companyA, companyB) = await SeedTwoCompaniesAsync(fixture);
+
+        var maria = ReadAuthorizedCompaniesAsync(fixture, companyA.Id);
+        var bruno = ReadAuthorizedCompaniesAsync(fixture, companyB.Id);
+        var results = await Task.WhenAll(maria, bruno);
+
+        Assert.Equal([companyA.Id], results[0]);
+        Assert.Equal([companyB.Id], results[1]);
+    }
+
+    private static async Task<IReadOnlyList<Guid>> ReadAuthorizedCompaniesAsync(
+        FoundationPostgresFixture fixture,
+        Guid companyId)
+    {
+        await using var runtime = fixture.CreateRuntimeDbContext();
+        await using var transaction = await runtime.Database.BeginTransactionAsync();
+        await runtime.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT set_config('app.authorized_company_ids', {companyId.ToString()}, true)");
+        return await runtime.Companies.AsNoTracking().Select(company => company.Id).ToListAsync();
+    }
+
     private static async Task<Company> SeedCompanyAsync(FoundationPostgresFixture fixture)
     {
         var (company, _) = await SeedTwoCompaniesAsync(fixture);

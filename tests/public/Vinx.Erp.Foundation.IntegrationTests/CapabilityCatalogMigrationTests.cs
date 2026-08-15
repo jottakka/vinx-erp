@@ -12,10 +12,10 @@ public sealed class CapabilityCatalogMigrationTests
 
     private static readonly (Guid Id, string Name)[] ExpectedCapabilities =
     [
-        (Guid.Parse("00341b57-025e-5a71-a205-f0a6854a991f"), KnownCapabilities.RolesAssign),
-        (Guid.Parse("e09997ad-8dda-58f6-8e9f-568bf84c9ab3"), KnownCapabilities.FilesUpload),
-        (Guid.Parse("4687cfe7-2318-58ca-8ac9-fff0dad042b0"), KnownCapabilities.FilesConfirm),
-        (Guid.Parse("46285f1b-bda6-5fba-b0e9-74515120b076"), KnownCapabilities.MembershipsRevoke)
+        (KnownCapabilities.RolesAssignId, KnownCapabilities.RolesAssign),
+        (KnownCapabilities.FilesUploadId, KnownCapabilities.FilesUpload),
+        (KnownCapabilities.FilesConfirmId, KnownCapabilities.FilesConfirm),
+        (KnownCapabilities.MembershipsRevokeId, KnownCapabilities.MembershipsRevoke)
     ];
 
     [Fact]
@@ -140,7 +140,7 @@ public sealed class CapabilityCatalogMigrationTests
         var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
             await migrator.Database.MigrateAsync(BeforeCapabilityCatalog));
 
-        Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
     }
 
     private static async Task AssertCatalogAsync(FoundationPostgresFixture fixture)

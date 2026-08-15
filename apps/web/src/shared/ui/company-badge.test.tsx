@@ -27,16 +27,35 @@ describe("CompanyBadge", () => {
     });
   });
 
-  it("keeps an unknown company readable with neutral appearance", () => {
-    renderBadge("unexpected", "Nova Empresa");
+  it("assigns a valid future company a deterministic non-neutral appearance", () => {
+    renderBadge("nova-empresa", "Nova Empresa");
 
     expect(screen.getByText("Nova Empresa")).toBeVisible();
     expect(
       screen.getByRole("group", { name: "Empresa Nova Empresa" }),
     ).toBeVisible();
-    expect(resolveCompanyAppearance("unexpected", "Nova Empresa")).toEqual({
+    expect(resolveCompanyAppearance("nova-empresa", "Nova Empresa")).toEqual(
+      resolveCompanyAppearance("nova-empresa", "Nova Empresa"),
+    );
+    expect(
+      resolveCompanyAppearance("nova-empresa", "Nova Empresa"),
+    ).toMatchObject({
       monogram: "NE",
-      slot: "neutral",
     });
+    expect(
+      resolveCompanyAppearance("nova-empresa", "Nova Empresa").slot,
+    ).not.toBe("neutral");
+  });
+
+  it("reserves neutral appearance for an absent or invalid company identifier", () => {
+    expect(resolveCompanyAppearance("", "Sem identificador").slot).toBe(
+      "neutral",
+    );
+    expect(resolveCompanyAppearance("   ", "Sem identificador").slot).toBe(
+      "neutral",
+    );
+    expect(
+      resolveCompanyAppearance("!invalido", "Sem identificador").slot,
+    ).toBe("neutral");
   });
 });
