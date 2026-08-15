@@ -35,7 +35,10 @@ public sealed class RlsSessionContextTests
         var result = await resolver.ExecuteReadAsync(
             new ActorContext(factory.ActorUserId, factory.CorrelationId),
             new CapabilityRequirement("payment.approve", Domain.CapabilityScope.Company),
-            (database, _) => database.Companies.AsNoTracking().Select(company => company.Id).ToListAsync(),
+            (database, _, cancellationToken) => database.Companies
+                .AsNoTracking()
+                .Select(company => company.Id)
+                .ToListAsync(cancellationToken),
             CancellationToken.None);
 
         Assert.Null(result.ErrorCode);

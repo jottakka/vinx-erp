@@ -65,7 +65,7 @@ public sealed class AuthorizedCompanySetResolver(
         ExecuteReadAsync(
             actor,
             requirement,
-            (_, companyIds) => Task.FromResult(new AuthorizedCompanySet(companyIds)),
+            (_, companyIds, _) => Task.FromResult(new AuthorizedCompanySet(companyIds)),
             cancellationToken);
 
     /// <summary>
@@ -74,7 +74,7 @@ public sealed class AuthorizedCompanySetResolver(
     public async Task<AuthorizationResult<T>> ExecuteReadAsync<T>(
         ActorContext actor,
         CapabilityRequirement requirement,
-        Func<FoundationDbContext, IReadOnlySet<Guid>, Task<T>> read,
+        Func<FoundationDbContext, IReadOnlySet<Guid>, CancellationToken, Task<T>> read,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(requirement.Name)
@@ -101,7 +101,7 @@ public sealed class AuthorizedCompanySetResolver(
                 database.Database,
                 companyIds,
                 cancellationToken);
-            var value = await read(database, companyIds);
+            var value = await read(database, companyIds, cancellationToken);
             // Leitura concluída: descarta contexto RLS transacional sem confirmar escrita.
             await transaction.RollbackAsync(cancellationToken);
             return AuthorizationResult<T>.Success(value);

@@ -82,17 +82,17 @@ public sealed class MembershipMapEndpointTests
         var inFlight = resolver.ExecuteReadAsync(
             actor,
             new CapabilityRequirement("payment.approve", CapabilityScope.Company),
-            async (database, _) =>
+            async (database, _, cancellationToken) =>
             {
                 started.SetResult();
-                await release.Task;
+                await release.Task.WaitAsync(cancellationToken);
                 return await database.Memberships
                     .AsNoTracking()
                     .Where(membership =>
                         membership.Id == seeded.BetaMembershipId
                         && membership.DeletedAt == null)
                     .Select(membership => membership.Id)
-                    .ToListAsync();
+                    .ToListAsync(cancellationToken);
             },
             CancellationToken.None);
 
@@ -129,11 +129,14 @@ public sealed class MembershipMapEndpointTests
         var inFlight = resolver.ExecuteReadAsync(
             actor,
             new CapabilityRequirement("payment.approve", CapabilityScope.Company),
-            async (database, _) =>
+            async (database, _, cancellationToken) =>
             {
                 started.SetResult();
-                await release.Task;
-                return await database.Companies.AsNoTracking().Select(company => company.Id).ToListAsync();
+                await release.Task.WaitAsync(cancellationToken);
+                return await database.Companies
+                    .AsNoTracking()
+                    .Select(company => company.Id)
+                    .ToListAsync(cancellationToken);
             },
             CancellationToken.None);
 
@@ -157,6 +160,42 @@ public sealed class MembershipMapEndpointTests
             new[] { seeded.AlfaCompanyId, seeded.BetaCompanyId }.OrderBy(companyId => companyId),
             inFlightResult.Value!.OrderBy(companyId => companyId));
         Assert.Equal([seeded.AlfaCompanyId], next.Value!.CompanyIds);
+    }
+
+    [Fact]
+    public async Task Delegated_read_receives_request_cancellation()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedMembershipMapAsync(factory);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<AuthorizedCompanySetResolver>();
+        var actor = new Vinx.Erp.Foundation.Identity.ActorContext(factory.ActorUserId, factory.CorrelationId);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+        var inFlight = resolver.ExecuteReadAsync(
+            actor,
+            new CapabilityRequirement("payment.approve", CapabilityScope.Company),
+            async (_, _, cancellationToken) =>
+            {
+                started.SetResult();
+                await release.Task.WaitAsync(cancellationToken);
+                return true;
+            },
+            cancellation.Token);
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        await cancellation.CancelAsync();
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => inFlight.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
     }
 
     [Fact]
