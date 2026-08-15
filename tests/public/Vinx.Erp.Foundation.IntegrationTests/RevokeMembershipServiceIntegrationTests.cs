@@ -160,6 +160,76 @@ public sealed class RevokeMembershipServiceIntegrationTests
     }
 
     [Fact]
+    public async Task A_concurrent_retry_re_evaluates_authorization_before_returning_the_replay()
+    {
+        await using var factory = await FoundationApiFactory.CreateAsync();
+        var logCapture = new RevocationLogCapture(typeof(RevokeMembershipService).FullName!);
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logCapture);
+        var scenario = await SeedScenarioAsync(factory);
+        var requestId = Guid.NewGuid();
+        await InstallMembershipRevocationRaceBarrierAsync(factory);
+        await using var coordinator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await AcquireRaceCoordinatorLockAsync(coordinator);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        Task<AuthorizationResult<RevokeMembershipResult>[]>? allAttempts = null;
+        try
+        {
+            var attempts = new[]
+            {
+                RevokeAsync(factory, scenario.CompanyId, scenario.TargetMembershipId, requestId, cancellation.Token),
+                RevokeAsync(factory, scenario.CompanyId, scenario.TargetMembershipId, requestId, cancellation.Token)
+            };
+            allAttempts = Task.WhenAll(attempts);
+            await WaitForRaceArrivalsAsync(coordinator, expectedArrivals: 2, cancellation.Token);
+
+            await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+            {
+                var assignment = await administrator.RoleAssignments.SingleAsync(candidate =>
+                    candidate.MembershipId == scenario.ActorMembershipId);
+                administrator.RoleAssignments.Remove(assignment);
+                await administrator.SaveChangesAsync();
+            }
+
+            await ReleaseRaceCoordinatorLockAsync(coordinator);
+            var results = await allAttempts;
+
+            Assert.Single(results, result => result.IsSuccess);
+            Assert.Single(results, result => ErrorCode(result) == "capability_denied");
+            await using var auditReader = factory.Fixture.CreateAdministratorDbContext();
+            Assert.NotNull(await DeletedAtAsync(auditReader, scenario.TargetMembershipId));
+            Assert.Single(await auditReader.IdempotencyRecords.Where(record =>
+                record.CommandName == "foundation.memberships.revoke").ToListAsync());
+            Assert.Single(await auditReader.AuditEvents.Where(audit =>
+                audit.Action == "foundation.memberships.revoke" && audit.Outcome == AuditOutcome.Success).ToListAsync());
+            Assert.Single(await auditReader.AuditEvents.Where(audit =>
+                audit.Action == "capability_denied" && audit.Outcome == AuditOutcome.Denied).ToListAsync());
+        }
+        finally
+        {
+            await ReleaseRaceCoordinatorLockAsync(coordinator);
+            Exception? attemptsFailure = null;
+            if (allAttempts is not null)
+            {
+                try
+                {
+                    await allAttempts;
+                }
+                catch (Exception exception)
+                {
+                    attemptsFailure = exception;
+                }
+            }
+
+            await RemoveMembershipRevocationRaceBarrierAsync(factory);
+            if (attemptsFailure is not null)
+            {
+                ExceptionDispatchInfo.Capture(attemptsFailure).Throw();
+            }
+        }
+    }
+
+    [Fact]
     public async Task A_cross_company_target_membership_is_hidden_as_not_found_and_audited()
     {
         await using var factory = await FoundationApiFactory.CreateAsync();
