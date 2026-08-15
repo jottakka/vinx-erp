@@ -11,6 +11,8 @@ public sealed class FoundationSchemaTests
 {
     private static readonly (string Schema, string Table, string Privilege)[] ExpectedRuntimeTableGrants =
     [
+        ("foundation", "approvals", "INSERT"),
+        ("foundation", "approvals", "SELECT"),
         ("foundation", "capabilities", "SELECT"),
         ("foundation", "companies", "SELECT"),
         ("foundation", "external_identities", "SELECT"),
@@ -34,6 +36,7 @@ public sealed class FoundationSchemaTests
     private static readonly string[] ExpectedTables =
     [
         "audit.audit_events",
+        "foundation.approvals",
         "foundation.capabilities",
         "foundation.companies",
         "foundation.employees",
@@ -53,6 +56,7 @@ public sealed class FoundationSchemaTests
 
     private static readonly string[] ExpectedRlsTables =
     [
+        "approvals",
         "companies",
         "employees",
         "files",

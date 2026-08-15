@@ -4,5 +4,6 @@ public enum AuditSource
 {
     Web,
     Mcp,
-    Worker
+    Worker,
+    Ai
 }

@@ -40,6 +40,16 @@ public abstract class AuditableEntity : EntityBase
         RequestId = requestId;
     }
 
+    protected void InitializeAudit(Guid id, Guid actorUserId, Guid requestId, DateTimeOffset createdAt)
+    {
+        Id = id;
+        CreatedByUserId = actorUserId;
+        UpdatedByUserId = actorUserId;
+        CreatedAt = createdAt;
+        UpdatedAt = createdAt;
+        RequestId = requestId;
+    }
+
     protected void RecordUpdate(Guid actorUserId, Guid requestId)
     {
         UpdatedByUserId = actorUserId;
@@ -58,6 +68,12 @@ public abstract class SoftDeletableEntity : AuditableEntity, ISoftDeletable, ICo
     protected void InitializeLifecycle(Guid id, Guid actorUserId, Guid requestId)
     {
         InitializeAudit(id, actorUserId, requestId);
+        RowVersion = 1;
+    }
+
+    protected void InitializeLifecycle(Guid id, Guid actorUserId, Guid requestId, DateTimeOffset createdAt)
+    {
+        InitializeAudit(id, actorUserId, requestId, createdAt);
         RowVersion = 1;
     }
 }

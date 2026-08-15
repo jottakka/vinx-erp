@@ -186,6 +186,39 @@ CREATE TABLE audit.audit_events (
 );
 
 
+-- Name: approvals; Type: TABLE; Schema: foundation; Owner: -
+
+CREATE TABLE foundation.approvals (
+    id uuid NOT NULL,
+    company_id uuid NOT NULL,
+    actor_user_id uuid NOT NULL,
+    action character varying(200) NOT NULL,
+    payload_hash character varying(64) NOT NULL,
+    policy_version character varying(50) NOT NULL,
+    proposal_id uuid NOT NULL,
+    confirmation_request_id uuid,
+    expires_at timestamp with time zone NOT NULL,
+    consumed_at timestamp with time zone,
+    result_json jsonb,
+    created_by_user_id uuid NOT NULL,
+    updated_by_user_id uuid NOT NULL,
+    request_id uuid NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    deleted_at timestamp with time zone,
+    deleted_by_user_id uuid,
+    deleted_reason character varying(500),
+    row_version bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT ck_approvals_consumption_complete CHECK ((((consumed_at IS NULL) AND (confirmation_request_id IS NULL) AND (result_json IS NULL)) OR ((consumed_at IS NOT NULL) AND (confirmation_request_id IS NOT NULL) AND (result_json IS NOT NULL)))),
+    CONSTRAINT ck_approvals_expires_after_creation CHECK ((expires_at > created_at)),
+    CONSTRAINT ck_approvals_payload_hash_format CHECK (((payload_hash)::text ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_approvals_terminal_exclusive CHECK ((NOT ((consumed_at IS NOT NULL) AND (deleted_at IS NOT NULL)))),
+    CONSTRAINT ck_approvals_veto_complete CHECK ((((deleted_at IS NULL) AND (deleted_by_user_id IS NULL) AND (deleted_reason IS NULL)) OR ((deleted_at IS NOT NULL) AND (deleted_by_user_id IS NOT NULL) AND ((deleted_reason)::text = ANY ((ARRAY['approval_vetoed'::character varying, 'approval_expired'::character varying])::text[])))))
+);
+
+ALTER TABLE ONLY foundation.approvals FORCE ROW LEVEL SECURITY;
+
+
 -- Name: capabilities; Type: TABLE; Schema: foundation; Owner: -
 
 CREATE TABLE foundation.capabilities (
@@ -476,6 +509,12 @@ ALTER TABLE ONLY audit.audit_events
     ADD CONSTRAINT pk_audit_events PRIMARY KEY (id);
 
 
+-- Name: approvals ak_approvals_company_id_id; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.approvals
+    ADD CONSTRAINT ak_approvals_company_id_id UNIQUE (company_id, id);
+
+
 -- Name: employees ak_employees_company_id_id; Type: CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.employees
@@ -528,6 +567,12 @@ ALTER TABLE ONLY foundation.teams
 
 ALTER TABLE ONLY foundation.units
     ADD CONSTRAINT ak_units_company_id_id UNIQUE (company_id, id);
+
+
+-- Name: approvals pk_approvals; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.approvals
+    ADD CONSTRAINT pk_approvals PRIMARY KEY (id);
 
 
 -- Name: capabilities pk_capabilities; Type: CONSTRAINT; Schema: foundation; Owner: -
@@ -628,6 +673,26 @@ CREATE INDEX ix_audit_events_actor_user_id_occurred_at ON audit.audit_events USI
 -- Name: ix_audit_events_requested_company_id_occurred_at; Type: INDEX; Schema: audit; Owner: -
 
 CREATE INDEX ix_audit_events_requested_company_id_occurred_at ON audit.audit_events USING btree (requested_company_id, occurred_at);
+
+
+-- Name: ix_approvals_actor_user_id; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE INDEX ix_approvals_actor_user_id ON foundation.approvals USING btree (actor_user_id);
+
+
+-- Name: ix_approvals_company_id_actor_user_id; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE UNIQUE INDEX ix_approvals_company_id_actor_user_id ON foundation.approvals USING btree (company_id, actor_user_id) WHERE ((consumed_at IS NULL) AND (deleted_at IS NULL));
+
+
+-- Name: ix_approvals_confirmation_request_id; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE UNIQUE INDEX ix_approvals_confirmation_request_id ON foundation.approvals USING btree (confirmation_request_id) WHERE (confirmation_request_id IS NOT NULL);
+
+
+-- Name: ix_approvals_proposal_id; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE UNIQUE INDEX ix_approvals_proposal_id ON foundation.approvals USING btree (proposal_id);
 
 
 -- Name: ix_capabilities_name; Type: INDEX; Schema: foundation; Owner: -
@@ -750,6 +815,18 @@ CREATE UNIQUE INDEX ix_users_email ON foundation.users USING btree (email);
 CREATE TRIGGER audit_events_reject_mutation BEFORE DELETE OR UPDATE ON audit.audit_events FOR EACH ROW EXECUTE FUNCTION audit.reject_audit_event_mutation();
 
 
+-- Name: approvals fk_approvals_companies_company_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.approvals
+    ADD CONSTRAINT fk_approvals_companies_company_id FOREIGN KEY (company_id) REFERENCES foundation.companies(id) ON DELETE RESTRICT;
+
+
+-- Name: approvals fk_approvals_users_actor_user_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.approvals
+    ADD CONSTRAINT fk_approvals_users_actor_user_id FOREIGN KEY (actor_user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
+
+
 -- Name: companies fk_companies_groups_group_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.companies
@@ -868,6 +945,15 @@ ALTER TABLE ONLY foundation.user_sessions
 
 ALTER TABLE ONLY foundation.user_sessions
     ADD CONSTRAINT fk_user_sessions_users_user_id FOREIGN KEY (user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
+
+
+-- Name: approvals; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.approvals ENABLE ROW LEVEL SECURITY;
+
+-- Name: approvals approvals_company_isolation; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY approvals_company_isolation ON foundation.approvals USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid))) WITH CHECK (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)));
 
 
 -- Name: companies; Type: ROW SECURITY; Schema: foundation; Owner: -

@@ -36,6 +36,7 @@ public sealed class AuditAppender(FoundationDbContext database)
         AuditSource.Web => "web",
         AuditSource.Mcp => "mcp",
         AuditSource.Worker => "worker",
+        AuditSource.Ai => "ai",
         _ => throw new ArgumentOutOfRangeException(nameof(source), source, "Unsupported audit source.")
     };
 

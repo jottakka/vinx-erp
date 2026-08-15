@@ -398,9 +398,11 @@ public sealed class AuditEventConfiguration : IEntityTypeConfiguration<AuditEven
         builder.Property(entity => entity.Source)
             .HasConversion(
                 source => source == AuditSource.Web ? "web" :
-                    source == AuditSource.Mcp ? "mcp" : "worker",
+                    source == AuditSource.Mcp ? "mcp" :
+                    source == AuditSource.Ai ? "ai" : "worker",
                 value => value == "web" ? AuditSource.Web :
-                    value == "mcp" ? AuditSource.Mcp : AuditSource.Worker)
+                    value == "mcp" ? AuditSource.Mcp :
+                    value == "ai" ? AuditSource.Ai : AuditSource.Worker)
             .HasMaxLength(20);
         builder.Property(entity => entity.Outcome)
             .HasConversion(

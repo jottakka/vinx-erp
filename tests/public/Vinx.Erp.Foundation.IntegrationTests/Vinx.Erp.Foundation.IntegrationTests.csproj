@@ -14,6 +14,9 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="../../../src/AI/Vinx.Erp.AI/Vinx.Erp.AI.csproj">
+      <PrivateAssets>all</PrivateAssets>
+    </ProjectReference>
     <ProjectReference Include="../../../src/Hosts/Vinx.Erp.ApiHost/Vinx.Erp.ApiHost.csproj" />
   </ItemGroup>
 </Project>

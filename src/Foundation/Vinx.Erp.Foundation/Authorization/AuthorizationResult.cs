@@ -34,6 +34,8 @@ public static class AuthorizationErrorCodeExtensions
         AuthorizationErrorCode.IdempotencyConflict => "idempotency_conflict",
         AuthorizationErrorCode.IntegrityConflict => "integrity_conflict",
         AuthorizationErrorCode.AuditUnavailable => "audit_unavailable",
+        AuthorizationErrorCode.ProposalUnavailable => "proposal_unavailable",
+        AuthorizationErrorCode.ProposalConflict => "proposal_conflict",
         _ => throw new ArgumentOutOfRangeException(nameof(errorCode), errorCode, "Unsupported authorization error code.")
     };
 
@@ -46,6 +48,8 @@ public static class AuthorizationErrorCodeExtensions
         AuthorizationErrorCode.IdempotencyConflict => StatusCodes.Status409Conflict,
         AuthorizationErrorCode.IntegrityConflict => StatusCodes.Status409Conflict,
         AuthorizationErrorCode.AuditUnavailable => StatusCodes.Status503ServiceUnavailable,
+        AuthorizationErrorCode.ProposalUnavailable => StatusCodes.Status404NotFound,
+        AuthorizationErrorCode.ProposalConflict => StatusCodes.Status409Conflict,
         _ => throw new ArgumentOutOfRangeException(nameof(errorCode), errorCode, "Unsupported authorization error code.")
     };
 }

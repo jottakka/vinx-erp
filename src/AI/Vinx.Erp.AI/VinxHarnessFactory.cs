@@ -8,17 +8,20 @@ namespace Vinx.Erp.AI;
 /// Monta o <see cref="HarnessAgent"/> do Microsoft Agent Framework a partir de
 /// um <see cref="IChatClient"/> injetado (agnóstico de provedor), com todos os
 /// padrões não usados do harness desligados e aprovação de ferramentas
-/// desativada por padrão (fail-closed).
+/// desativada por padrão (fail-closed). Retorna um <see cref="HarnessAgentBundle"/>
+/// opaco: o agente cru e a fonte de <c>RequestId</c> de execução permanecem
+/// internos; apenas o coordenador e o gate (mesmo assembly) os alcançam.
 /// </summary>
 public static class VinxHarnessFactory
 {
     public const int MaximumIterationsPerRequest = 5;
 
-    public static HarnessAgent Create(
+    public static HarnessAgentBundle Create(
         IChatClient chatClient,
         HarnessProbeWriteCounter writeCounter,
         ILoggerFactory? loggerFactory = null)
     {
+        var requestIdSource = new HarnessExecutionRequestIdSource();
         var options = new HarnessAgentOptions
         {
             Name = "vinx-erp-harness",
@@ -28,7 +31,7 @@ public static class VinxHarnessFactory
                 Tools =
                 [
                     HarnessProbeTools.CreateStatusTool(),
-                    HarnessProbeTools.CreateWriteTool(writeCounter),
+                    HarnessProbeTools.CreateWriteTool(writeCounter, requestIdSource),
                 ],
 
                 // O gate processa uma aprovação por resposta; lotes com várias
@@ -45,6 +48,6 @@ public static class VinxHarnessFactory
             MaximumIterationsPerRequest = MaximumIterationsPerRequest,
         };
 
-        return chatClient.AsHarnessAgent(options, loggerFactory);
+        return new HarnessAgentBundle(chatClient.AsHarnessAgent(options, loggerFactory), requestIdSource);
     }
 }

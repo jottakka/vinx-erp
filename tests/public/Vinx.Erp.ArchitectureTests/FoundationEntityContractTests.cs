@@ -16,7 +16,8 @@ public sealed class FoundationEntityContractTests
         typeof(Role),
         typeof(RoleCapability),
         typeof(RoleAssignment),
-        typeof(FileRecord)
+        typeof(FileRecord),
+        typeof(FoundationApproval)
     ];
 
     private static readonly Type[] CompanyScopedEntityTypes =
@@ -29,7 +30,8 @@ public sealed class FoundationEntityContractTests
         typeof(RoleCapability),
         typeof(RoleAssignment),
         typeof(FileRecord),
-        typeof(IdempotencyRecord)
+        typeof(IdempotencyRecord),
+        typeof(FoundationApproval)
     ];
 
     [Fact]

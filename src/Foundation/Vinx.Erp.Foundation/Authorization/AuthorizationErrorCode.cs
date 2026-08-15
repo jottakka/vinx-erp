@@ -8,5 +8,7 @@ public enum AuthorizationErrorCode
     ResourceNotFound,
     IdempotencyConflict,
     IntegrityConflict,
-    AuditUnavailable
+    AuditUnavailable,
+    ProposalUnavailable,
+    ProposalConflict
 }
