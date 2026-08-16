@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 
 namespace Vinx.Erp.Foundation.Identity;
@@ -85,6 +86,6 @@ public sealed class InternalSessionGateMiddleware(
     private static async Task WriteUnavailableAsync(HttpContext context)
     {
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        await context.Response.WriteAsJsonAsync(new { code = "identity_gate_unavailable" });
+        await context.Response.WriteAsJsonAsync(new AuthorizationErrorResponse("identity_gate_unavailable"));
     }
 }

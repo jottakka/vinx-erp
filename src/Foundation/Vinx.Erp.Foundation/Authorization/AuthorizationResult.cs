@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Http;
 
 namespace Vinx.Erp.Foundation.Authorization;
 
+public sealed record AuthorizationErrorResponse(string Code);
+
 public sealed record AuthorizationResult<T>(T? Value, AuthorizationErrorCode? ErrorCode)
 {
     public bool IsSuccess => ErrorCode is null;
@@ -20,7 +22,6 @@ public sealed record AuthorizationResult<T>(T? Value, AuthorizationErrorCode? Er
         return Results.Json(new AuthorizationErrorResponse(ErrorCode!.Value.ToStableCode()), statusCode: ErrorCode.Value.ToHttpStatusCode());
     }
 
-    private sealed record AuthorizationErrorResponse(string Code);
 }
 
 public static class AuthorizationErrorCodeExtensions

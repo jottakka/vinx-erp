@@ -1,13 +1,17 @@
 using System.Net.Http.Headers;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.OpenApi;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Microsoft.OpenApi;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
+using Vinx.Erp.Foundation.Bootstrap;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
@@ -41,6 +45,7 @@ builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
 builder.Services.AddScoped<AuthorizedCompanySetResolver>();
 builder.Services.AddScoped<ActorMembershipMapService>();
+builder.Services.AddScoped<FoundationBootstrapService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
@@ -84,6 +89,42 @@ builder.Services.AddRateLimiter(options =>
 });
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.AddOptions<FoundationBootstrapFeatureFlagsOptions>()
+    .Bind(builder.Configuration.GetSection(FoundationBootstrapFeatureFlagsOptions.ConfigurationSectionName))
+    .Validate(
+        options => options.IsValid(out _),
+        "Foundation bootstrap feature flags configuration is invalid.")
+    .ValidateOnStart();
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, _, _) =>
+    {
+        document.Components ??= new OpenApiComponents();
+        document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "JWT"
+        };
+        return Task.CompletedTask;
+    });
+    options.AddOperationTransformer((operation, context, _) =>
+    {
+        var metadata = context.Description.ActionDescriptor.EndpointMetadata;
+        if (metadata?.OfType<IAllowAnonymous>().Any() != true
+            && metadata?.OfType<IAuthorizeData>().Any() == true)
+        {
+            operation.Security ??= [];
+            operation.Security.Add(new OpenApiSecurityRequirement
+            {
+                [new OpenApiSecuritySchemeReference("Bearer", context.Document, null)] = []
+            });
+        }
+
+        return Task.CompletedTask;
+    });
+});
 
 var app = builder.Build();
 
@@ -99,9 +140,28 @@ app.UseRateLimiter();
 app.UseMiddleware<InternalSessionGateMiddleware>();
 app.UseAuthorization();
 app.MapHealthChecks("/health");
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+}
 var foundation = app.MapGroup("/foundation")
     .RequireAuthorization()
     .RequireRateLimiting(ProtectedRateLimitPolicy);
+foundation.MapGet("/bootstrap", async (
+    HttpContext httpContext,
+    FoundationBootstrapService service,
+    CancellationToken cancellationToken) =>
+{
+    var result = await service.GetCurrentActorAsync(
+        httpContext.GetRequiredActorContext(),
+        cancellationToken);
+    return result.ToMinimalApiResult();
+})
+    .WithName("FoundationBootstrap")
+    .Produces<FoundationBootstrapResponse>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status401Unauthorized)
+    .Produces(StatusCodes.Status429TooManyRequests)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable);
 foundation.MapGet("/capabilities", async (
     Guid? companyId,
     HttpContext httpContext,

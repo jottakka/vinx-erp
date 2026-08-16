@@ -85,6 +85,18 @@ CREATE FUNCTION foundation.current_actor_memberships() RETURNS TABLE(membership_
 $$;
 
 
+-- Name: current_actor_profile(); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.current_actor_profile() RETURNS TABLE(user_id uuid, display_name text)
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'foundation', 'pg_catalog'
+    AS $$
+    SELECT user_record.id, user_record.display_name
+    FROM foundation.users AS user_record
+    WHERE user_record.id = NULLIF(current_setting('app.user_id', true), '')::uuid;
+$$;
+
+
 -- Name: current_authorized_company_ids(); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.current_authorized_company_ids() RETURNS SETOF uuid

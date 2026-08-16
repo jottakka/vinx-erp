@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -9,6 +10,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Vinx.Erp.Foundation.Bootstrap;
 using Vinx.Erp.Foundation.Files;
 using Xunit;
 
@@ -143,6 +145,188 @@ public sealed class ApiHostPlatformTests
 
         using var health = await client.GetAsync("/health");
         Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+    }
+
+    [Fact]
+    public async Task Bootstrap_openapi_declares_bearer_authentication_and_all_public_outcomes()
+    {
+        using var factory = new ApiHostPlatformFactory();
+        using var response = await factory.CreateClient().GetAsync("/openapi/v1.json");
+
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var get = document.RootElement
+            .GetProperty("paths")
+            .GetProperty("/foundation/bootstrap")
+            .GetProperty("get");
+        var responses = get.GetProperty("responses");
+        Assert.True(responses.TryGetProperty("200", out _));
+        Assert.True(responses.TryGetProperty("401", out _));
+        Assert.True(responses.TryGetProperty("429", out _));
+        Assert.True(responses.TryGetProperty("503", out _));
+        Assert.False(responses.GetProperty("401").TryGetProperty("content", out _));
+        var unavailableSchema = ResolveResponseSchema(document.RootElement, responses.GetProperty("503"));
+        var unavailableProperties = unavailableSchema.GetProperty("properties");
+        Assert.Single(unavailableProperties.EnumerateObject());
+        Assert.Equal("string", unavailableProperties.GetProperty("code").GetProperty("type").GetString());
+        Assert.True(get.TryGetProperty("security", out var security));
+        Assert.Contains(security.EnumerateArray(), requirement =>
+        {
+            var schemes = requirement.EnumerateObject().ToArray();
+            return schemes.Length == 1
+                && schemes[0].Name == "Bearer"
+                && schemes[0].Value.ValueKind == JsonValueKind.Array
+                && !schemes[0].Value.EnumerateArray().Any();
+        });
+        var bearer = document.RootElement
+            .GetProperty("components")
+            .GetProperty("securitySchemes")
+            .GetProperty("Bearer");
+        Assert.Equal("http", bearer.GetProperty("type").GetString());
+        Assert.Equal("bearer", bearer.GetProperty("scheme").GetString());
+    }
+
+    [Fact]
+    public async Task Bootstrap_openapi_is_not_mapped_in_production()
+    {
+        using var factory = new ApiHostPlatformFactory(environment: "Production");
+
+        using var response = await factory.CreateClient().GetAsync("/openapi/v1.json");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public void Invalid_bootstrap_flag_configuration_fails_host_startup()
+    {
+        using var factory = new ApiHostPlatformFactory(new Dictionary<string, string>
+        {
+            ["Foundation:Bootstrap:Flags:bad key:Enabled"] = "true",
+            ["Foundation:Bootstrap:Flags:bad key:Scope"] = "release",
+            ["Foundation:Bootstrap:Flags:bad key:Owner"] = "foundation",
+            ["Foundation:Bootstrap:Flags:bad key:Reason"] = "test",
+            ["Foundation:Bootstrap:Flags:bad key:RemoveAfter"] = "2026-12-31"
+        });
+
+        var failure = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.NotNull(FindException<OptionsValidationException>(failure));
+    }
+
+    [Fact]
+    public void Bootstrap_flag_configuration_with_missing_metadata_fails_host_startup()
+    {
+        using var factory = new ApiHostPlatformFactory(new Dictionary<string, string>
+        {
+            ["Foundation:Bootstrap:Flags:release.dashboard:Enabled"] = "true",
+            ["Foundation:Bootstrap:Flags:release.dashboard:Owner"] = "foundation",
+            ["Foundation:Bootstrap:Flags:release.dashboard:Reason"] = "test",
+            ["Foundation:Bootstrap:Flags:release.dashboard:RemoveAfter"] = "2026-12-31"
+        });
+
+        var failure = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.NotNull(FindException<OptionsValidationException>(failure));
+    }
+
+    [Fact]
+    public void Bootstrap_flag_configuration_with_missing_enabled_fails_host_startup()
+    {
+        using var factory = new ApiHostPlatformFactory(new Dictionary<string, string>
+        {
+            ["Foundation:Bootstrap:Flags:release.dashboard:Scope"] = "release",
+            ["Foundation:Bootstrap:Flags:release.dashboard:Owner"] = "foundation",
+            ["Foundation:Bootstrap:Flags:release.dashboard:Reason"] = "test",
+            ["Foundation:Bootstrap:Flags:release.dashboard:RemoveAfter"] = "2026-12-31"
+        });
+
+        var failure = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.NotNull(FindException<OptionsValidationException>(failure));
+    }
+
+    [Theory]
+    [InlineData("Owner")]
+    [InlineData("Reason")]
+    [InlineData("RemoveAfter")]
+    public void Bootstrap_flag_configuration_with_each_required_metadata_field_missing_fails_host_startup(
+        string missingField)
+    {
+        var settings = ValidFlagConfiguration();
+        settings.Remove($"Foundation:Bootstrap:Flags:release.dashboard:{missingField}");
+        using var factory = new ApiHostPlatformFactory(settings);
+
+        var failure = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.NotNull(FindException<OptionsValidationException>(failure));
+    }
+
+    [Fact]
+    public void Bootstrap_feature_flags_reject_casing_only_duplicate_keys()
+    {
+        var options = new FoundationBootstrapFeatureFlagsOptions
+        {
+            Flags = new Dictionary<string, FoundationBootstrapFeatureFlagDefinitionOptions>(StringComparer.Ordinal)
+            {
+                ["release.dashboard"] = ValidFlag(enabled: true),
+                ["RELEASE.dashboard"] = ValidFlag(enabled: false)
+            }
+        };
+
+        Assert.False(options.IsValid(out var failure));
+        Assert.Equal("Foundation bootstrap feature flag keys must be unique without casing differences.", failure);
+    }
+
+    [Fact]
+    public void Bootstrap_feature_flags_reject_a_unique_noncanonical_key()
+    {
+        var options = new FoundationBootstrapFeatureFlagsOptions
+        {
+            Flags = new Dictionary<string, FoundationBootstrapFeatureFlagDefinitionOptions>(StringComparer.Ordinal)
+            {
+                ["RELEASE.dashboard"] = ValidFlag(enabled: true)
+            }
+        };
+
+        Assert.False(options.IsValid(out var failure));
+        Assert.Equal("Foundation bootstrap feature flag key is invalid.", failure);
+    }
+
+    private static FoundationBootstrapFeatureFlagDefinitionOptions ValidFlag(bool enabled) => new()
+    {
+        Enabled = enabled,
+        Scope = "release",
+        Owner = "foundation",
+        Reason = "test",
+        RemoveAfter = new DateOnly(2026, 12, 31)
+    };
+
+    private static Dictionary<string, string> ValidFlagConfiguration() => new()
+    {
+        ["Foundation:Bootstrap:Flags:release.dashboard:Enabled"] = "true",
+        ["Foundation:Bootstrap:Flags:release.dashboard:Scope"] = "release",
+        ["Foundation:Bootstrap:Flags:release.dashboard:Owner"] = "foundation",
+        ["Foundation:Bootstrap:Flags:release.dashboard:Reason"] = "test",
+        ["Foundation:Bootstrap:Flags:release.dashboard:RemoveAfter"] = "2026-12-31"
+    };
+
+    private static JsonElement ResolveResponseSchema(JsonElement document, JsonElement response)
+    {
+        var schema = response
+            .GetProperty("content")
+            .GetProperty("application/json")
+            .GetProperty("schema");
+        if (!schema.TryGetProperty("$ref", out var reference))
+        {
+            return schema;
+        }
+
+        var schemaName = reference.GetString()?.Split('/').Last()
+            ?? throw new InvalidOperationException("The 503 response schema reference was empty.");
+        return document
+            .GetProperty("components")
+            .GetProperty("schemas")
+            .GetProperty(schemaName);
     }
 
     private static TException? FindException<TException>(Exception failure)

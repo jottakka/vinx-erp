@@ -62,6 +62,21 @@ externa ou dados de autenticação. Falha de descoberta retorna `503` seguro.
 `GET /foundation/capabilities?companyId=` continua sendo o contrato de uma
 única empresa e preserva suas negações auditáveis.
 
+`GET /foundation/bootstrap` também usa somente o `ActorContext` criado pelo
+gate. Entrega o perfil mínimo da própria pessoa (`id` e `displayName`), suas
+memberships ativas ordenadas com capabilities efetivas e `flags` como mapa
+`string -> bool`. Não recebe corpo, usuário, empresa, capability ou flag do
+cliente; não expõe papel, e-mail, issuer, subject, token, sessão ou empresa
+não autorizada. Pessoa admitida sem membership recebe `companies: []`.
+
+`401` vazio é decidido pelo authentication/session gate antes do handler.
+Indisponibilidade do gate retorna somente
+`503 {"code":"identity_gate_unavailable"}`; indisponibilidade na leitura de
+perfil ou memberships retorna somente `503 {"code":"audit_unavailable"}`.
+Não há resposta parcial e cancelamento propaga. As flags são validadas no
+startup e materializadas para o processo: mudança de configuração exige novo
+deploy ou restart.
+
 O resolver interno de contexto parte somente do `ActorContext` e materializa
 um snapshot sem filtro de memberships ativas, nome legível e capabilities por
 empresa. Um `CapabilityRequirement` de escopo `company` deriva desse snapshot

@@ -2,8 +2,10 @@
 
 Contratos HTTP são publicados pelo `ApiHost` e documentados por módulo. O
 documento OpenAPI descreve comportamento observável, mas não substitui
-autorização nem proteções do banco. A publicação começa em #110 junto do
-primeiro contrato tipado consumido pelo frontend.
+autorização nem proteções do banco. Em Development, `GET /foundation/bootstrap`
+está publicado em `/openapi/v1.json`: declara bearer HTTP na operação e as
+respostas `200`, `401`, `429` e `503`. O `401` não tem corpo e o `503` declara
+somente `{ code: string }`. O documento não é publicado em Production.
 
 Todo comando recebe contexto explícito de empresa e é autorizado no servidor
 por membership, capability nomeada e escopo. A resposta não revela dados de
