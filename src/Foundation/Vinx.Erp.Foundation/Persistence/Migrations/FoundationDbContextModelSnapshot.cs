@@ -194,10 +194,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_companies");
 
-                    b.HasIndex("GroupId", "Name")
-                        .IsUnique()
-                        .HasDatabaseName("ix_companies_group_id_name")
-                        .HasFilter("deleted_at IS NULL");
+                    b.HasIndex("GroupId")
+                        .HasDatabaseName("ix_companies_group_id");
 
                     b.ToTable("companies", "foundation");
                 });
@@ -630,11 +628,6 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_groups");
-
-                    b.HasIndex("Name")
-                        .IsUnique()
-                        .HasDatabaseName("ix_groups_name")
-                        .HasFilter("deleted_at IS NULL");
 
                     b.ToTable("groups", "foundation");
                 });
@@ -1173,10 +1166,6 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_users");
-
-                    b.HasIndex("Email")
-                        .IsUnique()
-                        .HasDatabaseName("ix_users_email");
 
                     b.ToTable("users", "foundation");
                 });

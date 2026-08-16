@@ -97,6 +97,33 @@ falha fechada com `503` e code
 `isPlatformOperator: true`; ele não lê dados de empresa. A projeção orienta a
 interface, mas toda mutação futura continua reavaliando o operador no banco.
 
+`POST /foundation/platform/organizations` é a única criação inicial de
+organização nesta fatia. Exige primeiro o operador global exato e, somente
+depois, a assurance normalizada `aal2`; quem não é operador recebe
+`platform_operator_required` sem conhecer seu estado de MFA. Um operador
+confirmado com `aal1` recebe `mfa_assurance_required` e a negação é auditada
+globalmente. A assurance é derivada do claim pelo gate, mantida como enum no
+`ActorContext` e aplicada como `app.mfa_assurance`; o claim bruto não é
+persistido nem registrado.
+
+O corpo HTTP contém `requestId`, `groupName`, `companyName`,
+`ownerDisplayName` e `ownerEmail`. O servidor normaliza os campos, calcula o
+hash SHA-256 canônico da representação UTF-8 do array JSON ordenado desses
+cinco valores e passa somente esse hash à função SQL. O recibo de
+idempotência armazena IDs opacos e o hash, nunca dados pessoais. Repetição do
+mesmo ator, request e hash devolve os mesmos IDs; payload diferente devolve
+`idempotency_conflict`. Nomes ativos de grupo e empresa, e e-mail de usuário,
+são únicos globalmente por `lower(btrim(...))`.
+
+A função `SECURITY DEFINER` pertence a `vinx_provisioning_owner`, role
+`NOLOGIN` sem Bypass RLS. Ela serializa o par ator/request, cria grupo,
+empresa, usuário local, membership, role fixa `owner`, quatro grants
+necessários, assignment e convite técnico `pending_delivery`; então grava
+recibo e auditoria global `platform.organization.provision` na mesma
+transação. O operador não recebe membership nem acesso ao tenant criado. Não
+há envio ou aceite no provedor, employee, interface ou fluxo de convite nesta
+fatia.
+
 O único bootstrap inicial é o comando de deployment
 `Vinx.Erp.PlatformBootstrap`, sem argumentos. Ele usa a conexão migradora e
 configuração de deployment para consultar `GET /auth/v1/admin/users/{id}` no
@@ -254,6 +281,11 @@ identidade ligada ao mesmo `User` também recebe conflito. As funções de
 segurança usam relações qualificadas e `pg_temp` explícito ao fim do
 `search_path`; o appender de auditoria recebe a mesma proteção para que a
 evidência transacional não possa ser desviada por uma tabela temporária.
+
+`vinx_provisioning_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui somente as
+permissões transitórias e relações necessárias para a função de provisionamento
+de organização. O runtime não recebe leitura nem DML nas tabelas de convite e
+recibo, e executa apenas a função estreita; `PUBLIC` e migrador não a executam.
 
 A revogação de membership marca somente soft-delete e auditoria técnica da
 membership própria. O runtime recebe `UPDATE` apenas nas colunas de ciclo de

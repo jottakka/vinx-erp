@@ -86,7 +86,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     public static async Task<FoundationApiFactory> CreateAsync(
         Guid? actorUserId = null,
         Guid? correlationId = null,
-        FileStorage? fileStorage = null)
+        FileStorage? fileStorage = null,
+        string? aal = null)
     {
         var resolvedActorUserId = actorUserId ?? Guid.NewGuid();
         var resolvedCorrelationId = correlationId ?? Guid.NewGuid();
@@ -97,7 +98,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 "https://project.supabase.co/auth/v1",
                 "external-subject",
                 "same-address@example.test",
-                resolvedCorrelationId.ToString()),
+                resolvedCorrelationId.ToString(),
+                aal),
             testFileStorage: fileStorage);
         return await PrepareAsync(factory);
     }
@@ -105,9 +107,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     public static async Task<FoundationApiFactory> CreateWithAuthenticatedIdentityAsync(
         Guid? actorUserId = null,
         Guid? correlationId = null,
-        FileStorage? fileStorage = null)
+        FileStorage? fileStorage = null,
+        string? aal = null)
     {
-        var factory = await CreateAsync(actorUserId, correlationId, fileStorage);
+        var factory = await CreateAsync(actorUserId, correlationId, fileStorage, aal);
         return await SeedAuthenticatedActorAndReturnAsync(factory);
     }
 
@@ -130,12 +133,13 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         string? issuer,
         string? subject,
         string? email = "same-address@example.test",
-        string? correlationIdClaim = null)
+        string? correlationIdClaim = null,
+        string? aal = null)
     {
         var factory = new FoundationApiFactory(
             Guid.NewGuid(),
             Guid.NewGuid(),
-            CreateTestPrincipalClaims(issuer, subject, email, correlationIdClaim));
+            CreateTestPrincipalClaims(issuer, subject, email, correlationIdClaim, aal));
         return await PrepareAsync(factory);
     }
 
@@ -328,7 +332,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         string? issuer,
         string? subject,
         string? email,
-        string? correlationId)
+        string? correlationId,
+        string? aal = null)
     {
         var issuedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         return new TestPrincipalClaims(
@@ -343,7 +348,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 new AmrEntry("password", issuedAt - 10),
                 new AmrEntry("email", issuedAt - 20),
                 new AmrEntry("token_refresh", issuedAt - 5)
-            ]);
+            ],
+            aal);
     }
 }
 
@@ -513,7 +519,8 @@ public sealed record TestPrincipalClaims(
     string SessionId,
     long IssuedAt,
     long ExpiresAt,
-    IReadOnlyList<AmrEntry> Amr);
+    IReadOnlyList<AmrEntry> Amr,
+    string? Aal = null);
 
 public sealed record AmrEntry(string Method, long Timestamp);
 
@@ -549,6 +556,10 @@ public sealed class TestAuthenticationHandler(
         identityClaims.Add(new Claim("session_id", claims.SessionId));
         identityClaims.Add(new Claim("iat", claims.IssuedAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
         identityClaims.Add(new Claim("exp", claims.ExpiresAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
+        if (claims.Aal is not null)
+        {
+            identityClaims.Add(new Claim("aal", claims.Aal));
+        }
         identityClaims.AddRange(claims.Amr.Select(entry =>
             new Claim("amr", JsonSerializer.Serialize(new
             {

@@ -12,6 +12,7 @@ namespace Vinx.Erp.Foundation.Platform;
 public enum PlatformOperatorAccessState
 {
     Allowed,
+    MfaAssuranceRequired,
     Denied,
     Unavailable,
 }
@@ -47,6 +48,71 @@ public sealed class PlatformOperatorAccessService(
         ActorContext actor,
         CancellationToken cancellationToken
     ) => EvaluateAsync(actor, auditDenial: true, cancellationToken);
+
+    /// <summary>
+    /// Exige AAL2 somente após a confirmação de operador e audita a negação segura.
+    /// </summary>
+    public async Task<PlatformOperatorAccessResult> RequireMfaAssuranceAsync(
+        ActorContext actor,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await FoundationRlsContext.ApplyActorAsync(database.Database, actor, cancellationToken);
+            var isOperator = await database.Database.SqlQuery<bool>(
+                $"SELECT foundation.current_actor_is_platform_operator() AS \"Value\"")
+                .SingleAsync(cancellationToken);
+            if (!isOperator)
+            {
+                await auditAppender.AppendAsync(
+                    new AuditEventData(actor.UserId, AuditScope.Global, null, AuditSource.Web,
+                        "platform.operator.required", "platform_operator", null, AuditOutcome.Denied,
+                        new CorrelationContext(actor.CorrelationId).CorrelationId,
+                        "platform_operator_required", "{}"), cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new PlatformOperatorAccessResult(PlatformOperatorAccessState.Denied);
+            }
+
+            if (actor.AssuranceLevel is AuthenticatorAssuranceLevel.Aal2)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new PlatformOperatorAccessResult(PlatformOperatorAccessState.Allowed);
+            }
+
+            await auditAppender.AppendAsync(
+                new AuditEventData(
+                    actor.UserId,
+                    AuditScope.Global,
+                    null,
+                    AuditSource.Web,
+                    "platform.operator.mfa_assurance.required",
+                    "platform_operator",
+                    null,
+                    AuditOutcome.Denied,
+                    new CorrelationContext(actor.CorrelationId).CorrelationId,
+                    "mfa_assurance_required",
+                    "{}"),
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new PlatformOperatorAccessResult(PlatformOperatorAccessState.MfaAssuranceRequired);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                EventTemplate,
+                Operation,
+                Module,
+                "unavailable",
+                "mfa_assurance_audit_failed");
+            return new PlatformOperatorAccessResult(PlatformOperatorAccessState.Unavailable);
+        }
+    }
 
     private async Task<PlatformOperatorAccessResult> EvaluateAsync(
         ActorContext actor,

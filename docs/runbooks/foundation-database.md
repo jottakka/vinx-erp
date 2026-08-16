@@ -44,6 +44,7 @@ The fixed current Foundation database roles are:
 - `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`
 - `vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`
 - `vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_provisioning_owner NOLOGIN NOINHERIT NOBYPASSRLS`
 
 `vinx_identity_owner` possui somente `USAGE` em `foundation`, `SELECT` em
 `foundation.users` e `UPDATE` somente em `sessions_valid_after`, enquanto
@@ -51,6 +52,20 @@ existir a função de admissão de sessão. O último é o privilégio mínimo p
 `FOR UPDATE` da função `SECURITY DEFINER`; `vinx_runtime` não o recebe e não
 tem leitura direta de `users`. `vinx_migrator` pode assumir o owner apenas
 durante DDL.
+
+## Provisionamento inicial de organização
+
+A migration de provisionamento cria as tabelas técnicas
+`foundation.pending_owner_invitations` e
+`foundation.organization_provisioning_receipts` com RLS forçado. Elas são
+propriedade de `vinx_provisioning_owner`; o runtime não recebe privilégio de
+tabela. A execução disponível ao runtime é somente
+`foundation.provision_platform_organization(...)`, `SECURITY DEFINER`, com
+`search_path` fixo e `pg_temp` por último. Antes de gerar o snapshot, confirme
+que o teste de função cobre criação, replay, conflito, operador ausente e AAL1
+sem mutação. O `Down` só remove as tabelas quando não há estado observável e
+restaura as policies de tabelas existentes como migrador, após sair da role
+dedicada.
 
 These current-repository roles are distinct from the legacy Supabase roles
 `anon`, `authenticated` and `service_role`, which are reference evidence only.

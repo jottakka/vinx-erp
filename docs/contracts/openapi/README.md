@@ -12,6 +12,18 @@ declara `200`, `401`, `403`, `429` e `503`. A resposta de sucesso contém apenas
 `isPlatformOperator`; `403` e `503` expõem somente códigos estáveis de policy,
 sem revelar dados de tenant ou de identidade.
 
+`POST /foundation/platform/organizations` publica bearer e declara `201`,
+`200`, `400`, `401`, `403`, `409`, `429` e `503`. O corpo possui apenas
+`requestId`, `groupName`, `companyName`, `ownerDisplayName` e `ownerEmail`;
+campo desconhecido, duplicado ou JSON malformado devolve
+`400 {"code":"invalid_request"}`. A autorização confirma primeiro o operador
+de plataforma e depois `aal2`: os códigos `platform_operator_required` e
+`mfa_assurance_required` não expõem tenant, identidade externa ou o claim
+bruto. Criação retorna IDs opacos de grupo, empresa, usuário, membership e
+convite com `invitationStatus: "pending_delivery"`; replay retorna o mesmo
+corpo com `200`. Conflitos são exclusivamente
+`idempotency_conflict` ou `organization_conflict`.
+
 Todo comando recebe contexto explícito de empresa e é autorizado no servidor
 por membership, capability nomeada e escopo. A resposta não revela dados de
 empresa inacessível. O frontend pode ocultar UI pelas capabilities efetivas,

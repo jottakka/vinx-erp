@@ -9,6 +9,7 @@ namespace Vinx.Erp.Foundation.Platform;
 public static class PlatformOperatorAuthorization
 {
     public const string PolicyName = "platform.operator";
+    public const string MfaAssurancePolicyName = "platform.operator.mfa_assurance";
 
     private static readonly object AccessStateKey = new();
 
@@ -22,7 +23,11 @@ public static class PlatformOperatorAuthorization
             : null;
 }
 
-public sealed class PlatformOperatorRequirement : IAuthorizationRequirement { }
+public sealed class PlatformOperatorRequirement(bool requiresMfaAssurance = false)
+    : IAuthorizationRequirement
+{
+    public bool RequiresMfaAssurance { get; } = requiresMfaAssurance;
+}
 
 public sealed record PlatformOperatorBootstrapResponse(bool IsPlatformOperator);
 
@@ -75,6 +80,11 @@ public sealed class PlatformOperatorAuthorizationHandler(
         }
 
         var access = await accessService.RequireAsync(actor, httpContext.RequestAborted);
+        if (access.State is PlatformOperatorAccessState.Allowed && requirement.RequiresMfaAssurance)
+        {
+            access = await accessService.RequireMfaAssuranceAsync(actor, httpContext.RequestAborted);
+        }
+
         PlatformOperatorAuthorization.SetAccessState(httpContext, access.State);
         if (access.State is PlatformOperatorAccessState.Allowed)
         {
@@ -100,11 +110,12 @@ public sealed class PlatformOperatorAuthorizationResultHandler
             && policy.Requirements.OfType<PlatformOperatorRequirement>().Any()
         )
         {
-            var code =
-                PlatformOperatorAuthorization.GetAccessState(context)
-                is PlatformOperatorAccessState.Unavailable
-                    ? "platform_operator_unavailable"
-                    : "platform_operator_required";
+            var code = PlatformOperatorAuthorization.GetAccessState(context) switch
+            {
+                PlatformOperatorAccessState.MfaAssuranceRequired => "mfa_assurance_required",
+                PlatformOperatorAccessState.Unavailable => "platform_operator_unavailable",
+                _ => "platform_operator_required",
+            };
             var statusCode = code is "platform_operator_unavailable"
                 ? StatusCodes.Status503ServiceUnavailable
                 : StatusCodes.Status403Forbidden;

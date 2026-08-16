@@ -6,7 +6,11 @@ namespace Vinx.Erp.Foundation.Identity;
 /// <summary>
 /// Contexto de ator resolvido pelo servidor; políticas globais usam a identidade externa exata quando disponível.
 /// </summary>
-public sealed record ActorContext(Guid UserId, Guid CorrelationId, Guid? ExternalIdentityId = null);
+public sealed record ActorContext(
+    Guid UserId,
+    Guid CorrelationId,
+    Guid? ExternalIdentityId = null,
+    AuthenticatorAssuranceLevel AssuranceLevel = AuthenticatorAssuranceLevel.Aal1);
 
 public static class ServerCorrelationContext
 {

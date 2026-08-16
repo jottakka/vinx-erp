@@ -45,6 +45,58 @@ public sealed class SupabaseIdentityProviderTests
     }
 
     [Fact]
+    public void Try_get_external_identity_proof_defaults_to_aal1_when_aal_claim_is_absent()
+    {
+        Assert.True(Provider().TryGetExternalIdentityProof(Principal(ValidClaims()), out var proof));
+
+        Assert.Equal("Aal1", AuthenticationLevel(proof));
+    }
+
+    [Fact]
+    public void Try_get_external_identity_proof_preserves_signed_aal2_claim()
+    {
+        var claims = ValidClaims();
+        claims.Add(new Claim("aal", "aal2"));
+
+        Assert.True(Provider().TryGetExternalIdentityProof(Principal(claims), out var proof));
+
+        Assert.Equal("Aal2", AuthenticationLevel(proof));
+    }
+
+    [Theory]
+    [InlineData("aal0")]
+    [InlineData("aal3")]
+    [InlineData("AAL2")]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void Try_get_external_identity_proof_rejects_unknown_or_malformed_aal_claim(string aal)
+    {
+        var claims = ValidClaims();
+        claims.Add(new Claim("aal", aal));
+
+        Assert.False(Provider().TryGetExternalIdentityProof(Principal(claims), out _));
+    }
+
+    [Fact]
+    public void Try_get_external_identity_proof_rejects_duplicate_aal_claims()
+    {
+        var claims = ValidClaims();
+        claims.Add(new Claim("aal", "aal2"));
+        claims.Add(new Claim("aal", "aal1"));
+
+        Assert.False(Provider().TryGetExternalIdentityProof(Principal(claims), out _));
+    }
+
+    [Fact]
+    public void Try_get_external_identity_proof_rejects_json_typed_aal_claim()
+    {
+        var claims = ValidClaims();
+        claims.Add(new Claim("aal", "\"aal2\"", "JSON"));
+
+        Assert.False(Provider().TryGetExternalIdentityProof(Principal(claims), out _));
+    }
+
+    [Fact]
     public void Try_get_external_identity_proof_accepts_an_unknown_non_refresh_authentication_method()
     {
         var result = Provider().TryGetExternalIdentityProof(
@@ -199,6 +251,11 @@ public sealed class SupabaseIdentityProviderTests
         JsonAmr($"{{\"method\":\"{method}\",\"timestamp\":{timestamp.ToString(CultureInfo.InvariantCulture)}}}");
 
     private static Claim JsonAmr(string value) => new("amr", value, "JSON");
+
+    private static string AuthenticationLevel(ExternalIdentityProof proof) =>
+        proof.GetType().GetProperty("AssuranceLevel")?.GetValue(proof)?.ToString()
+        ?? throw new Xunit.Sdk.XunitException(
+            "ExternalIdentityProof must expose the normalized AssuranceLevel.");
 
     private static ClaimsPrincipal Principal(IEnumerable<Claim> claims) =>
         new(new ClaimsIdentity(claims, "test"));

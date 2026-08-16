@@ -85,7 +85,8 @@ public sealed class InternalSessionGateMiddleware(
                 new ActorContext(
                     identity.UserId,
                     ServerCorrelationContext.Get(context).CorrelationId,
-                    identity.ExternalIdentityId
+                    identity.ExternalIdentityId,
+                    proof.AssuranceLevel
                 )
             );
             await next(context);

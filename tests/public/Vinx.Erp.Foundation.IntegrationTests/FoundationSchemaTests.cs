@@ -45,6 +45,8 @@ public sealed class FoundationSchemaTests
         "foundation.groups",
         "foundation.idempotency_records",
         "foundation.memberships",
+        "foundation.organization_provisioning_receipts",
+        "foundation.pending_owner_invitations",
         "foundation.platform_operators",
         "foundation.role_assignments",
         "foundation.role_capabilities",
@@ -88,6 +90,126 @@ public sealed class FoundationSchemaTests
 
         Assert.True((bool)(await command.ExecuteScalarAsync()
             ?? throw new Xunit.Sdk.XunitException("The schema existence query returned no value.")));
+    }
+
+    [Fact]
+    public async Task Normalized_name_indexes_are_migration_owned_while_company_group_index_remains_in_the_ef_model()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var context = fixture.CreateAdministratorDbContext();
+        Assert.DoesNotContain(
+            context.Model.FindEntityType(typeof(Group))!.GetIndexes(),
+            index => index.GetDatabaseName() == "ix_groups_name");
+        Assert.DoesNotContain(
+            context.Model.FindEntityType(typeof(Company))!.GetIndexes(),
+            index => index.GetDatabaseName() == "ix_companies_normalized_name");
+        Assert.DoesNotContain(
+            context.Model.FindEntityType(typeof(User))!.GetIndexes(),
+            index => index.GetDatabaseName() == "ix_users_email");
+        Assert.Contains(
+            context.Model.FindEntityType(typeof(Company))!.GetIndexes(),
+            index => index.GetDatabaseName() == "ix_companies_group_id"
+                && index.Properties.Select(property => property.Name).SequenceEqual([nameof(Company.GroupId)]));
+
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT indexname, indexdef
+            FROM pg_indexes
+            WHERE schemaname = 'foundation'
+              AND indexname IN ('ix_groups_name', 'ix_companies_normalized_name', 'ix_users_email')
+            ORDER BY indexname
+            """,
+            connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        var indexes = new List<(string Name, string Definition)>();
+        while (await reader.ReadAsync())
+        {
+            indexes.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        Assert.Equal(
+            ["ix_companies_normalized_name", "ix_groups_name", "ix_users_email"],
+            indexes.Select(index => index.Name));
+        Assert.All(indexes, index => Assert.Contains("lower", index.Definition, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Capabilities_catalog_uses_rls_to_limit_provisioning_owner_but_preserves_runtime_catalog_reads()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using (var rlsCommand = new NpgsqlCommand(
+            "SELECT relrowsecurity FROM pg_class WHERE oid = 'foundation.capabilities'::regclass",
+            administrator))
+        {
+            Assert.True((bool)(await rlsCommand.ExecuteScalarAsync()
+                ?? throw new Xunit.Sdk.XunitException("Capabilities RLS query returned no value.")));
+        }
+
+        var expectedCatalog = await ReadCapabilityNamesAsync(administrator);
+        Assert.NotEmpty(expectedCatalog);
+
+        await using var provisioning = await fixture.OpenAdministratorConnectionAsync();
+        await using (var setRole = new NpgsqlCommand("SET ROLE vinx_provisioning_owner", provisioning))
+        {
+            await setRole.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            var provisioningCatalog = await ReadCapabilityNamesAsync(provisioning);
+            Assert.Equal(
+                [
+                    "foundation.files.confirm",
+                    "foundation.files.upload",
+                    "foundation.memberships.revoke",
+                    "foundation.roles.assign"
+                ],
+                provisioningCatalog);
+        }
+        finally
+        {
+            await using var resetRole = new NpgsqlCommand("RESET ROLE", provisioning);
+            await resetRole.ExecuteNonQueryAsync();
+        }
+
+        await using var runtime = await fixture.OpenAdministratorConnectionAsync();
+        await using (var setRole = new NpgsqlCommand("SET ROLE vinx_runtime", runtime))
+        {
+            await setRole.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            Assert.Equal(expectedCatalog, await ReadCapabilityNamesAsync(runtime));
+        }
+        finally
+        {
+            await using var resetRole = new NpgsqlCommand("RESET ROLE", runtime);
+            await resetRole.ExecuteNonQueryAsync();
+        }
+    }
+
+    private static async Task<string[]> ReadCapabilityNamesAsync(NpgsqlConnection connection)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT name FROM foundation.capabilities ORDER BY name",
+            connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        var names = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            names.Add(reader.GetString(0));
+        }
+
+        return names.ToArray();
     }
 
     [Fact]

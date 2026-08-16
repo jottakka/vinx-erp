@@ -202,6 +202,10 @@ internal static class FoundationRlsContext
             cancellationToken
         );
         await database.ExecuteSqlInterpolatedAsync(
+            $"SELECT set_config('app.mfa_assurance', {(actor.AssuranceLevel == AuthenticatorAssuranceLevel.Aal2 ? "aal2" : "aal1")}, true)",
+            cancellationToken
+        );
+        await database.ExecuteSqlInterpolatedAsync(
             $"SELECT set_config('app.company_id', {string.Empty}, true)",
             cancellationToken
         );

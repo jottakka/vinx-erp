@@ -80,9 +80,11 @@ public sealed class PlatformOperatorMigrationTests
                         current_function.proacl,
                         acldefault('f', current_function.proowner))) AS privilege
                     WHERE privilege.privilege_type = 'EXECUTE'
+                      AND privilege.grantee <> current_function.proowner
                       AND privilege.grantee NOT IN (
-                          current_function.proowner,
-                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_runtime')))
+                          SELECT oid
+                          FROM pg_roles
+                          WHERE rolname IN ('vinx_runtime', 'vinx_provisioning_owner')))
             FROM pg_proc AS current_function
             WHERE current_function.oid =
                 'foundation.current_actor_is_platform_operator()'::regprocedure;

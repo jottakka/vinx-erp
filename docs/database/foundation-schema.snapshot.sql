@@ -281,6 +281,81 @@ END;
 $$;
 
 
+-- Name: provision_platform_organization(uuid, text, text, text, text, text); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.provision_platform_organization(p_request_id uuid, p_group_name text, p_company_name text, p_owner_display_name text, p_owner_email text, p_payload_hash text) RETURNS TABLE(status text, group_id uuid, company_id uuid, owner_user_id uuid, owner_membership_id uuid, owner_invitation_id uuid)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $_$
+DECLARE
+    v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+    v_correlation_id uuid := COALESCE(NULLIF(current_setting('app.correlation_id', true), '')::uuid, gen_random_uuid());
+    v_group_id uuid := gen_random_uuid();
+    v_company_id uuid := gen_random_uuid();
+    v_owner_user_id uuid := gen_random_uuid();
+    v_membership_id uuid := gen_random_uuid();
+    v_role_id uuid := gen_random_uuid();
+    v_invitation_id uuid := gen_random_uuid();
+    v_existing foundation.organization_provisioning_receipts%ROWTYPE;
+    v_capability_count integer;
+    v_now timestamp with time zone := clock_timestamp();
+BEGIN
+    IF v_actor_user_id IS NULL OR NOT foundation.current_actor_is_platform_operator() THEN
+        RAISE EXCEPTION 'platform operator is required' USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('app.mfa_assurance', true) IS DISTINCT FROM 'aal2' THEN
+        RAISE EXCEPTION 'mfa assurance is required' USING ERRCODE = '42501';
+    END IF;
+    IF p_request_id IS NULL OR p_payload_hash !~ '^[0-9a-f]{64}$'
+        OR p_group_name IS NULL OR btrim(p_group_name) = '' OR char_length(btrim(p_group_name)) > 200
+        OR p_company_name IS NULL OR btrim(p_company_name) = '' OR char_length(btrim(p_company_name)) > 200
+        OR p_owner_display_name IS NULL OR btrim(p_owner_display_name) = '' OR char_length(btrim(p_owner_display_name)) > 200
+        OR p_owner_email IS NULL OR btrim(p_owner_email) = '' OR char_length(btrim(p_owner_email)) > 320 THEN
+        RAISE EXCEPTION 'organization provisioning parameters are invalid' USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_actor_user_id::text || '|' || p_request_id::text, 0));
+    SELECT * INTO v_existing FROM foundation.organization_provisioning_receipts
+    WHERE actor_user_id = v_actor_user_id AND request_id = p_request_id;
+    IF FOUND THEN
+        IF v_existing.payload_hash = p_payload_hash THEN
+            RETURN QUERY SELECT 'replay'::text, v_existing.group_id, v_existing.company_id, v_existing.owner_user_id, v_existing.owner_membership_id, v_existing.owner_invitation_id;
+        ELSE
+            RETURN QUERY SELECT 'idempotency_conflict'::text, v_existing.group_id, v_existing.company_id, v_existing.owner_user_id, v_existing.owner_membership_id, v_existing.owner_invitation_id;
+        END IF;
+        RETURN;
+    END IF;
+
+    INSERT INTO foundation.groups (id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (v_group_id, btrim(p_group_name), v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (v_company_id, v_group_id, btrim(p_company_name), v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.users (id, display_name, email, created_at)
+    VALUES (v_owner_user_id, btrim(p_owner_display_name), lower(btrim(p_owner_email)), v_now);
+    INSERT INTO foundation.memberships (id, company_id, user_id, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (v_membership_id, v_company_id, v_owner_user_id, v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.roles (id, company_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (v_role_id, v_company_id, 'owner', v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.role_capabilities (id, company_id, role_id, capability_id, scope, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    SELECT gen_random_uuid(), v_company_id, v_role_id, capability.id, 'company', v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now
+    FROM foundation.capabilities AS capability
+    WHERE capability.name IN ('foundation.roles.assign', 'foundation.memberships.revoke', 'foundation.files.upload', 'foundation.files.confirm');
+    GET DIAGNOSTICS v_capability_count = ROW_COUNT;
+    IF v_capability_count <> 4 THEN
+        RAISE EXCEPTION 'owner capability catalog is incomplete' USING ERRCODE = '23514';
+    END IF;
+    INSERT INTO foundation.role_assignments (id, company_id, role_id, membership_id, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (gen_random_uuid(), v_company_id, v_role_id, v_membership_id, v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.pending_owner_invitations (id, user_id, company_id, status)
+    VALUES (v_invitation_id, v_owner_user_id, v_company_id, 'pending_delivery');
+    INSERT INTO foundation.organization_provisioning_receipts (id, actor_user_id, request_id, payload_hash, group_id, company_id, owner_user_id, owner_membership_id, owner_invitation_id)
+    VALUES (gen_random_uuid(), v_actor_user_id, p_request_id, p_payload_hash, v_group_id, v_company_id, v_owner_user_id, v_membership_id, v_invitation_id);
+    PERFORM audit.append_event(v_actor_user_id, 'global', NULL, 'web', 'platform.organization.provision', 'organization', v_company_id, 'success', v_correlation_id, NULL, '{}'::jsonb);
+    RETURN QUERY SELECT 'created'::text, v_group_id, v_company_id, v_owner_user_id, v_membership_id, v_invitation_id;
+END;
+$_$;
+
+
 -- Name: revoke_all_user_sessions(uuid); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.revoke_all_user_sessions(p_user_id uuid) RETURNS integer
@@ -534,6 +609,39 @@ CREATE TABLE foundation.memberships (
 ALTER TABLE ONLY foundation.memberships FORCE ROW LEVEL SECURITY;
 
 
+-- Name: organization_provisioning_receipts; Type: TABLE; Schema: foundation; Owner: -
+
+CREATE TABLE foundation.organization_provisioning_receipts (
+    id uuid NOT NULL,
+    actor_user_id uuid NOT NULL,
+    request_id uuid NOT NULL,
+    payload_hash character varying(64) NOT NULL,
+    group_id uuid NOT NULL,
+    company_id uuid NOT NULL,
+    owner_user_id uuid NOT NULL,
+    owner_membership_id uuid NOT NULL,
+    owner_invitation_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT organization_provisioning_receipts_payload_hash_check CHECK (((payload_hash)::text ~ '^[0-9a-f]{64}$'::text))
+);
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts FORCE ROW LEVEL SECURITY;
+
+
+-- Name: pending_owner_invitations; Type: TABLE; Schema: foundation; Owner: -
+
+CREATE TABLE foundation.pending_owner_invitations (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    company_id uuid NOT NULL,
+    status character varying(30) NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT pending_owner_invitations_status_check CHECK (((status)::text = 'pending_delivery'::text))
+);
+
+ALTER TABLE ONLY foundation.pending_owner_invitations FORCE ROW LEVEL SECURITY;
+
+
 -- Name: platform_operators; Type: TABLE; Schema: foundation; Owner: -
 
 CREATE TABLE foundation.platform_operators (
@@ -748,6 +856,18 @@ ALTER TABLE ONLY foundation.units
     ADD CONSTRAINT ak_units_company_id_id UNIQUE (company_id, id);
 
 
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_pkey; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_pkey PRIMARY KEY (id);
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_pkey; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.pending_owner_invitations
+    ADD CONSTRAINT pending_owner_invitations_pkey PRIMARY KEY (id);
+
+
 -- Name: approvals pk_approvals; Type: CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.approvals
@@ -850,6 +970,18 @@ ALTER TABLE ONLY foundation.users
     ADD CONSTRAINT pk_users PRIMARY KEY (id);
 
 
+-- Name: organization_provisioning_receipts uq_organization_provisioning_receipts_actor_request; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT uq_organization_provisioning_receipts_actor_request UNIQUE (actor_user_id, request_id);
+
+
+-- Name: pending_owner_invitations uq_pending_owner_invitations_user_id; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.pending_owner_invitations
+    ADD CONSTRAINT uq_pending_owner_invitations_user_id UNIQUE (user_id);
+
+
 -- Name: platform_operators uq_platform_operators_external_identity_id; Type: CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.platform_operators
@@ -891,9 +1023,14 @@ CREATE UNIQUE INDEX ix_approvals_proposal_id ON foundation.approvals USING btree
 CREATE UNIQUE INDEX ix_capabilities_name ON foundation.capabilities USING btree (name);
 
 
--- Name: ix_companies_group_id_name; Type: INDEX; Schema: foundation; Owner: -
+-- Name: ix_companies_group_id; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE UNIQUE INDEX ix_companies_group_id_name ON foundation.companies USING btree (group_id, name) WHERE (deleted_at IS NULL);
+CREATE INDEX ix_companies_group_id ON foundation.companies USING btree (group_id);
+
+
+-- Name: ix_companies_normalized_name; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE UNIQUE INDEX ix_companies_normalized_name ON foundation.companies USING btree (lower(btrim((name)::text))) WHERE (deleted_at IS NULL);
 
 
 -- Name: ix_employees_company_id_membership_id; Type: INDEX; Schema: foundation; Owner: -
@@ -923,7 +1060,7 @@ CREATE INDEX ix_files_company_id_uploader_membership_id ON foundation.files USIN
 
 -- Name: ix_groups_name; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE UNIQUE INDEX ix_groups_name ON foundation.groups USING btree (name) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX ix_groups_name ON foundation.groups USING btree (lower(btrim((name)::text))) WHERE (deleted_at IS NULL);
 
 
 -- Name: ix_idempotency_records_company_id_actor_user_id_command_name_r; Type: INDEX; Schema: foundation; Owner: -
@@ -998,7 +1135,7 @@ CREATE INDEX ix_user_sessions_user_id_revoked_at ON foundation.user_sessions USI
 
 -- Name: ix_users_email; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE UNIQUE INDEX ix_users_email ON foundation.users USING btree (email);
+CREATE UNIQUE INDEX ix_users_email ON foundation.users USING btree (lower(btrim((email)::text)));
 
 
 -- Name: audit_events audit_events_reject_mutation; Type: TRIGGER; Schema: audit; Owner: -
@@ -1144,6 +1281,54 @@ ALTER TABLE ONLY foundation.user_sessions
     ADD CONSTRAINT fk_user_sessions_users_user_id FOREIGN KEY (user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
 
 
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_company_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_company_id_fkey FOREIGN KEY (company_id) REFERENCES foundation.companies(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_group_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_group_id_fkey FOREIGN KEY (group_id) REFERENCES foundation.groups(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_owner_invitation_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_owner_invitation_id_fkey FOREIGN KEY (owner_invitation_id) REFERENCES foundation.pending_owner_invitations(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_owner_membership_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_owner_membership_id_fkey FOREIGN KEY (owner_membership_id) REFERENCES foundation.memberships(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_company_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.pending_owner_invitations
+    ADD CONSTRAINT pending_owner_invitations_company_id_fkey FOREIGN KEY (company_id) REFERENCES foundation.companies(id) ON DELETE RESTRICT;
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_user_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.pending_owner_invitations
+    ADD CONSTRAINT pending_owner_invitations_user_id_fkey FOREIGN KEY (user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
+
+
 -- Name: approvals; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.approvals ENABLE ROW LEVEL SECURITY;
@@ -1151,6 +1336,20 @@ ALTER TABLE foundation.approvals ENABLE ROW LEVEL SECURITY;
 -- Name: approvals approvals_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY approvals_company_isolation ON foundation.approvals USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid))) WITH CHECK (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)));
+
+
+-- Name: capabilities; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.capabilities ENABLE ROW LEVEL SECURITY;
+
+-- Name: capabilities capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_provisioning_owner ON foundation.capabilities FOR SELECT TO vinx_provisioning_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.memberships.revoke'::character varying, 'foundation.files.upload'::character varying, 'foundation.files.confirm'::character varying])::text[])));
+
+
+-- Name: capabilities capabilities_runtime_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_runtime_read ON foundation.capabilities FOR SELECT TO vinx_runtime USING (true);
 
 
 -- Name: companies; Type: ROW SECURITY; Schema: foundation; Owner: -
@@ -1170,6 +1369,11 @@ CREATE POLICY companies_authorized_company_read ON foundation.companies FOR SELE
 -- Name: companies companies_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY companies_company_isolation ON foundation.companies USING ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: companies companies_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY companies_provisioning_owner ON foundation.companies FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
 
 
 -- Name: employees; Type: ROW SECURITY; Schema: foundation; Owner: -
@@ -1220,6 +1424,11 @@ CREATE POLICY groups_company_isolation ON foundation.groups USING ((id = ( SELEC
   WHERE (company.id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid))));
 
 
+-- Name: groups groups_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY groups_provisioning_owner ON foundation.groups FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
 -- Name: idempotency_records; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.idempotency_records ENABLE ROW LEVEL SECURITY;
@@ -1253,6 +1462,34 @@ CREATE POLICY memberships_authorized_company_read ON foundation.memberships FOR 
 CREATE POLICY memberships_company_isolation ON foundation.memberships USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: memberships memberships_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_provisioning_owner ON foundation.memberships FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
+-- Name: organization_provisioning_receipts; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.organization_provisioning_receipts ENABLE ROW LEVEL SECURITY;
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_provisioning_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY organization_provisioning_receipts_provisioning_owner_insert ON foundation.organization_provisioning_receipts FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_provisioning_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY organization_provisioning_receipts_provisioning_owner_select ON foundation.organization_provisioning_receipts FOR SELECT TO vinx_provisioning_owner USING (true);
+
+
+-- Name: pending_owner_invitations; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.pending_owner_invitations ENABLE ROW LEVEL SECURITY;
+
+-- Name: pending_owner_invitations pending_owner_invitations_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY pending_owner_invitations_provisioning_owner ON foundation.pending_owner_invitations FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
 -- Name: platform_operators; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.platform_operators ENABLE ROW LEVEL SECURITY;
@@ -1276,6 +1513,11 @@ CREATE POLICY role_assignments_authorized_company_read ON foundation.role_assign
 CREATE POLICY role_assignments_company_isolation ON foundation.role_assignments USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: role_assignments role_assignments_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_assignments_provisioning_owner ON foundation.role_assignments FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
 -- Name: role_capabilities; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.role_capabilities ENABLE ROW LEVEL SECURITY;
@@ -1290,6 +1532,11 @@ CREATE POLICY role_capabilities_authorized_company_read ON foundation.role_capab
 CREATE POLICY role_capabilities_company_isolation ON foundation.role_capabilities USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: role_capabilities role_capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_provisioning_owner ON foundation.role_capabilities FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
 -- Name: roles; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.roles ENABLE ROW LEVEL SECURITY;
@@ -1302,6 +1549,11 @@ CREATE POLICY roles_authorized_company_read ON foundation.roles FOR SELECT USING
 -- Name: roles roles_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY roles_company_isolation ON foundation.roles USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: roles roles_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY roles_provisioning_owner ON foundation.roles FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
 
 
 -- Name: teams; Type: ROW SECURITY; Schema: foundation; Owner: -

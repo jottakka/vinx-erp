@@ -70,18 +70,25 @@ builder.Services.AddScoped<AuthorizedCompanySetResolver>();
 builder.Services.AddScoped<ActorMembershipMapService>();
 builder.Services.AddScoped<FoundationBootstrapService>();
 builder.Services.AddScoped<PlatformOperatorAccessService>();
+builder.Services.AddScoped<PlatformOrganizationProvisioningService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddSupabaseJwtAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddAuthorization(options =>
+{
     options.AddPolicy(
         PlatformOperatorAuthorization.PolicyName,
         policy =>
             policy.RequireAuthenticatedUser().AddRequirements(new PlatformOperatorRequirement())
-    )
-);
+    );
+    options.AddPolicy(
+        PlatformOperatorAuthorization.MfaAssurancePolicyName,
+        policy => policy.RequireAuthenticatedUser()
+            .AddRequirements(new PlatformOperatorRequirement(requiresMfaAssurance: true))
+    );
+});
 builder.Services.AddScoped<IAuthorizationHandler, PlatformOperatorAuthorizationHandler>();
 builder.Services.AddSingleton<
     IAuthorizationMiddlewareResultHandler,
@@ -248,6 +255,71 @@ foundation
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
     .Produces(StatusCodes.Status429TooManyRequests);
+foundation.MapPost(
+    "/platform/organizations",
+    async (
+        HttpRequest request,
+        HttpContext httpContext,
+        PlatformOrganizationProvisioningService service,
+        CancellationToken cancellationToken
+    ) =>
+    {
+        System.Text.Json.JsonDocument document;
+        try
+        {
+            document = await System.Text.Json.JsonDocument.ParseAsync(
+                request.Body,
+                cancellationToken: cancellationToken);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
+        }
+        catch (IOException)
+        {
+            return Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        using (document)
+        {
+            if (!PlatformOrganizationHttpContract.TryParse(document.RootElement, out var command))
+            {
+                return Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            var result = await service.ProvisionAsync(
+                httpContext.GetRequiredActorContext(),
+                command,
+                cancellationToken);
+            return result.State switch
+            {
+                PlatformOrganizationProvisioningState.Created => Results.Json(
+                    new { result.GroupId, result.CompanyId, result.OwnerUserId, result.OwnerMembershipId, result.OwnerInvitationId, invitationStatus = "pending_delivery" },
+                    statusCode: StatusCodes.Status201Created),
+                PlatformOrganizationProvisioningState.Replay => Results.Ok(
+                    new { result.GroupId, result.CompanyId, result.OwnerUserId, result.OwnerMembershipId, result.OwnerInvitationId, invitationStatus = "pending_delivery" }),
+                PlatformOrganizationProvisioningState.IdempotencyConflict =>
+                    Results.Json(new { code = "idempotency_conflict" }, statusCode: StatusCodes.Status409Conflict),
+                PlatformOrganizationProvisioningState.Conflict =>
+                    Results.Json(new { code = "organization_conflict" }, statusCode: StatusCodes.Status409Conflict),
+                PlatformOrganizationProvisioningState.Invalid =>
+                    Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest),
+                PlatformOrganizationProvisioningState.Forbidden =>
+                    Results.Json(new { code = "platform_operator_required" }, statusCode: StatusCodes.Status403Forbidden),
+                _ => Results.Json(new { code = "platform_organization_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable),
+            };
+        }
+    }
+)
+    .WithName("PlatformOrganizationProvisioning")
+    .RequireAuthorization(PlatformOperatorAuthorization.MfaAssurancePolicyName)
+    .Produces(StatusCodes.Status201Created)
+    .Produces(StatusCodes.Status400BadRequest)
+    .Produces(StatusCodes.Status401Unauthorized)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
+    .Produces(StatusCodes.Status409Conflict)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
+    .Produces(StatusCodes.Status429TooManyRequests);
 foundation.MapGet(
     "/capabilities",
     async (
@@ -350,3 +422,47 @@ internal sealed class FoundationDatabaseOptions
 }
 
 public partial class Program;
+
+internal static class PlatformOrganizationHttpContract
+{
+    private static readonly HashSet<string> Fields =
+    ["requestId", "groupName", "companyName", "ownerDisplayName", "ownerEmail"];
+
+    public static bool TryParse(
+        System.Text.Json.JsonElement body,
+        out PlatformOrganizationProvisioningCommand command)
+    {
+        command = null!;
+        if (body.ValueKind is not System.Text.Json.JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var values = new Dictionary<string, System.Text.Json.JsonElement>(StringComparer.Ordinal);
+        foreach (var property in body.EnumerateObject())
+        {
+            if (!Fields.Contains(property.Name) || !values.TryAdd(property.Name, property.Value))
+            {
+                return false;
+            }
+        }
+
+        if (values.Count != Fields.Count
+            || !values["requestId"].TryGetGuid(out var requestId)
+            || values["groupName"].ValueKind is not System.Text.Json.JsonValueKind.String
+            || values["companyName"].ValueKind is not System.Text.Json.JsonValueKind.String
+            || values["ownerDisplayName"].ValueKind is not System.Text.Json.JsonValueKind.String
+            || values["ownerEmail"].ValueKind is not System.Text.Json.JsonValueKind.String)
+        {
+            return false;
+        }
+
+        command = new PlatformOrganizationProvisioningCommand(
+            requestId,
+            values["groupName"].GetString()!,
+            values["companyName"].GetString()!,
+            values["ownerDisplayName"].GetString()!,
+            values["ownerEmail"].GetString()!);
+        return true;
+    }
+}
