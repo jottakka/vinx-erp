@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RouterProvider } from "react-router-dom";
@@ -13,14 +14,19 @@ import { VinxThemeProvider } from "./theme/vinx-theme-provider";
 function renderRoute(path: string, gateway: MockSessionGateway) {
   window.history.pushState({}, "", path);
   const router = createAppRouter();
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+  });
 
   render(
     <VinxThemeProvider>
-      <SessionProvider gateway={gateway}>
-        <FeedbackProvider>
-          <RouterProvider router={router} />
-        </FeedbackProvider>
-      </SessionProvider>
+      <QueryClientProvider client={queryClient}>
+        <SessionProvider gateway={gateway}>
+          <FeedbackProvider>
+            <RouterProvider router={router} />
+          </FeedbackProvider>
+        </SessionProvider>
+      </QueryClientProvider>
     </VinxThemeProvider>,
   );
 
