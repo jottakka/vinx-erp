@@ -189,9 +189,48 @@ describe("createEmployeeDirectoryClient", () => {
       ok: false,
     });
     await expect(client.create(validCommand())).resolves.toEqual({
-      error: { kind: "protocol", status: 200 },
+      error: { kind: "protocol", mayHaveCommitted: true, status: 200 },
       ok: false,
     });
+  });
+
+  it("marks malformed published create success as potentially committed", async () => {
+    server.use(
+      http.get(handlerUrl(antiforgeryPath), () =>
+        HttpResponse.json({ requestToken: "fresh-token" }),
+      ),
+      http.post(handlerUrl(employeesPath), () =>
+        HttpResponse.json({ employeeId }, { status: 201 }),
+      ),
+    );
+
+    await expect(
+      createEmployeeDirectoryClient(createFetchSpy()).create(validCommand()),
+    ).resolves.toEqual({
+      error: { kind: "protocol", mayHaveCommitted: true, status: 201 },
+      ok: false,
+    });
+  });
+
+  it("marks unexpected create server failures as potentially committed", async () => {
+    server.use(
+      http.get(handlerUrl(antiforgeryPath), () =>
+        HttpResponse.json({ requestToken: "fresh-token" }),
+      ),
+      http.post(handlerUrl(employeesPath), () =>
+        HttpResponse.json({ detail: "never expose" }, { status: 500 }),
+      ),
+    );
+
+    const result = await createEmployeeDirectoryClient(createFetchSpy()).create(
+      validCommand(),
+    );
+
+    expect(result).toEqual({
+      error: { kind: "unavailable", mayHaveCommitted: true, status: 500 },
+      ok: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("never expose");
   });
 
   it.each([

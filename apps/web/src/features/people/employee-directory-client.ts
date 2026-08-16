@@ -57,6 +57,7 @@ export type EmployeeDirectoryFailure = {
     | "aborted";
   status?: number;
   correlationId?: string;
+  mayHaveCommitted?: true;
 };
 
 type EmployeeDirectoryFailureResult = {
@@ -235,6 +236,7 @@ export function createEmployeeDirectoryClient(
       if (!parsed.success) {
         return failure("protocol", {
           correlationId,
+          mayHaveCommitted: true,
           status: result.response.status,
         });
       }
@@ -244,10 +246,16 @@ export function createEmployeeDirectoryClient(
         ? { ok: true, state, correlationId }
         : { ok: true, state };
     } catch (reason) {
-      return failure(isAbort(reason, signal) ? "aborted" : "protocol", {
-        correlationId,
-        status: result.response.status,
-      });
+      return isAbort(reason, signal)
+        ? failure("aborted", {
+            correlationId,
+            status: result.response.status,
+          })
+        : failure("protocol", {
+            correlationId,
+            mayHaveCommitted: true,
+            status: result.response.status,
+          });
     }
   }
 
@@ -280,8 +288,16 @@ async function normalizeFailure(
     case 429:
       return failure("rate_limited", options);
     case 503:
-      return failure("unavailable", options);
+      return failure(
+        "unavailable",
+        operation === "create"
+          ? { ...options, mayHaveCommitted: true }
+          : options,
+      );
     default:
+      if (operation === "create" && response.status >= 500) {
+        return failure("unavailable", { ...options, mayHaveCommitted: true });
+      }
       return failure("protocol", options);
   }
 }
@@ -298,6 +314,7 @@ function failure(
       ...(options.correlationId === undefined
         ? {}
         : { correlationId: options.correlationId }),
+      ...(options.mayHaveCommitted ? { mayHaveCommitted: true as const } : {}),
     },
   };
 }

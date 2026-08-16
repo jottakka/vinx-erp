@@ -416,6 +416,81 @@ describe("PeoplePage", () => {
     expect(command.mock.calls[0][0]).toEqual(command.mock.calls[1][0]);
   });
 
+  it("blocks normal submit after ambiguity and clears both fields on company change", async () => {
+    const user = userEvent.setup();
+    const createRequestId = vi
+      .fn()
+      .mockReturnValueOnce("77777777-7777-4777-8777-777777777777")
+      .mockReturnValueOnce("88888888-8888-4888-8888-888888888888");
+    const gateway = createGateway({
+      create: vi.fn().mockResolvedValue({
+        error: { kind: "network" },
+        ok: false,
+      }),
+    });
+    renderPage({ createRequestId, gateway });
+
+    await selectCompany(user);
+    await fillValidForm(user);
+    await user.click(
+      screen.getByRole("button", { name: "Reservar funcionário" }),
+    );
+    await screen.findByRole("button", { name: "Tentar novamente" });
+
+    expect(
+      screen.getByRole("button", { name: "Reservar funcionário" }),
+    ).toBeDisabled();
+    const form = screen.getByLabelText("Nome").closest("form");
+    if (!form) throw new Error("Expected reservation form");
+    fireEvent.submit(form);
+    expect(gateway.create).toHaveBeenCalledTimes(1);
+    expect(createRequestId).toHaveBeenCalledTimes(1);
+
+    await selectSecondCompany(user);
+    expect(screen.getByLabelText("Nome")).toHaveValue("");
+    expect(screen.getByLabelText("E-mail")).toHaveValue("");
+    expect(
+      screen.queryByRole("button", { name: "Tentar novamente" }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { kind: "protocol", mayHaveCommitted: true, status: 201 },
+    { kind: "unavailable", mayHaveCommitted: true, status: 500 },
+  ] as const)(
+    "preserves the exact command for explicit retry after a potentially committed $status result",
+    async (error) => {
+      const user = userEvent.setup();
+      const commands =
+        vi.fn<(command: EmployeeDirectoryCreateCommand) => void>();
+      const gateway = createGateway({
+        create: vi
+          .fn()
+          .mockImplementationOnce(async (command) => {
+            commands(command);
+            return { error, ok: false };
+          })
+          .mockImplementationOnce(async (command) => {
+            commands(command);
+            return { ok: true, state: "replay" };
+          }),
+      });
+      renderPage({ gateway });
+
+      await selectCompany(user);
+      await fillValidForm(user);
+      await user.click(
+        screen.getByRole("button", { name: "Reservar funcionário" }),
+      );
+      await user.click(
+        await screen.findByRole("button", { name: "Tentar novamente" }),
+      );
+
+      await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(2));
+      expect(commands.mock.calls[0][0]).toEqual(commands.mock.calls[1][0]);
+    },
+  );
+
   it("disables duplicate reservation while the mutation is pending", async () => {
     const user = userEvent.setup();
     let resolveCreate:
@@ -621,7 +696,7 @@ describe("PeoplePage", () => {
     ).not.toHaveTextContent("Alfa");
   });
 
-  it.each(["employee_conflict", "unauthorized", "forbidden"] as const)(
+  it.each(["employee_conflict"] as const)(
     "uses generic non-enumerating feedback for %s",
     async (kind) => {
       const user = userEvent.setup();
@@ -644,16 +719,17 @@ describe("PeoplePage", () => {
   );
 
   it.each(["unauthorized", "forbidden"] as const)(
-    "clears the selected directory and revalidates bootstrap after %s",
+    "neutralizes a delayed create %s before reconciling a capability change",
     async (kind) => {
       const user = userEvent.setup();
+      const refresh = deferred<ReturnType<typeof snapshot>>();
       const gateway = createGateway({
         create: vi.fn().mockResolvedValue({ error: { kind }, ok: false }),
       });
       const getBootstrap = vi
         .fn()
         .mockResolvedValueOnce(snapshot())
-        .mockResolvedValueOnce(snapshot());
+        .mockReturnValueOnce(refresh.promise);
       renderPage({
         gateway,
         sessionGateway: createSessionGateway(getBootstrap),
@@ -666,11 +742,50 @@ describe("PeoplePage", () => {
         screen.getByRole("button", { name: "Reservar funcionário" }),
       );
 
-      await waitFor(() => expect(getBootstrap).toHaveBeenCalledTimes(2));
-      await waitFor(() => expect(gateway.list).toHaveBeenCalledTimes(2));
+      expect(await screen.findByLabelText("Atualizando pessoas")).toBeVisible();
+      expect(screen.queryByLabelText("Nome")).toBeNull();
+      expect(gateway.create).toHaveBeenCalledTimes(1);
+      refresh.resolve(snapshotForCompanies([secondCompanyId]));
+
+      await screen.findByLabelText("Empresa");
+      expect(screen.getByLabelText("Nome")).toHaveValue("");
+      expect(screen.getByLabelText("E-mail")).toHaveValue("");
+      expect(gateway.list).toHaveBeenCalledTimes(1);
       expect(
-        await screen.findByText("Não foi possível concluir esta reserva."),
-      ).toBeVisible();
+        screen.queryByText("Não foi possível concluir esta reserva."),
+      ).toBeNull();
+    },
+  );
+
+  it.each(["unauthorized", "forbidden"] as const)(
+    "neutralizes a delayed list %s before reconciling a user change",
+    async (kind) => {
+      const user = userEvent.setup();
+      const refresh = deferred<ReturnType<typeof snapshot>>();
+      const gateway = createGateway({
+        list: vi.fn().mockResolvedValue({ error: { kind }, ok: false }),
+      });
+      const getBootstrap = vi
+        .fn()
+        .mockResolvedValueOnce(snapshot())
+        .mockReturnValueOnce(refresh.promise);
+      renderPage({
+        gateway,
+        sessionGateway: createSessionGateway(getBootstrap),
+      });
+
+      await selectCompany(user);
+
+      expect(await screen.findByLabelText("Atualizando pessoas")).toBeVisible();
+      expect(screen.queryByLabelText("Nome")).toBeNull();
+      expect(gateway.list).toHaveBeenCalledTimes(1);
+      refresh.resolve(snapshot(true, "user-2"));
+
+      await screen.findByLabelText("Empresa");
+      expect(screen.getByLabelText("Nome")).toHaveValue("");
+      expect(screen.getByLabelText("E-mail")).toHaveValue("");
+      expect(gateway.list).toHaveBeenCalledTimes(1);
+      expect(gateway.create).not.toHaveBeenCalled();
     },
   );
 });

@@ -12,7 +12,7 @@ import {
 } from "@mui/material";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MutableRefObject, ReactElement } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { PageHeader } from "../../shared/ui/page-header";
@@ -53,7 +53,7 @@ type ConfirmedOperation = Omit<DirectoryOperation, "command">;
 type RefreshReconciliation = {
   operation: ConfirmedOperation;
   phase: "accepted" | "pending" | "rejected";
-  purpose: "creation" | "recovery";
+  purpose: "authorization" | "creation" | "recovery";
 };
 
 export function PeoplePage({
@@ -77,6 +77,8 @@ export function PeoplePage({
   const operationGeneration = useRef(0);
   const inFlight = useRef(false);
   const refreshGate = useRef(false);
+  const authorizationRefreshInFlight = useRef(false);
+  const attemptRef = useRef<DirectoryOperation | null>(null);
   const selectedCompanyIdRef = useRef("");
   const currentUserIdRef = useRef<string | null>(null);
   const form = useForm<EmployeeForm>({
@@ -125,6 +127,28 @@ export function PeoplePage({
     retry: false,
   });
 
+  const beginAuthorizationReconciliation = useCallback(
+    async (operation: ConfirmedOperation) => {
+      if (authorizationRefreshInFlight.current) return;
+
+      authorizationRefreshInFlight.current = true;
+      refreshGate.current = true;
+      queryClient.removeQueries({ queryKey: operation.queryKey });
+      setPendingRefresh({
+        operation,
+        phase: "pending",
+        purpose: "authorization",
+      });
+      const refreshAccepted = await refreshBootstrap();
+      setPendingRefresh({
+        operation,
+        phase: refreshAccepted ? "accepted" : "rejected",
+        purpose: "authorization",
+      });
+    },
+    [queryClient, refreshBootstrap],
+  );
+
   useEffect(() => {
     if (!directory.data || directory.data.ok) return;
     const failureKey = `${selectedCompanyId}:${directory.data.error.kind}`;
@@ -132,15 +156,21 @@ export function PeoplePage({
     processedDirectoryFailure.current = failureKey;
 
     if (isAuthorizationFailure(directory.data.error)) {
-      queryClient.removeQueries({ queryKey });
-      void refreshBootstrap();
+      if (!selectedCompany || !userId) return;
+      void beginAuthorizationReconciliation({
+        companyId: selectedCompany.companyId,
+        generation: operationGeneration.current,
+        queryKey,
+        userId,
+      });
     }
   }, [
+    beginAuthorizationReconciliation,
     directory.data,
-    queryClient,
     queryKey,
-    refreshBootstrap,
+    selectedCompany,
     selectedCompanyId,
+    userId,
   ]);
 
   const hasDefinitiveBootstrap = Boolean(bootstrap) || status !== "pending";
@@ -164,31 +194,59 @@ export function PeoplePage({
       knownCreatedOperation ||
       pendingRefresh,
   );
+  const directoryAuthorizationFailure = Boolean(
+    directory.data &&
+      !directory.data.ok &&
+      isAuthorizationFailure(directory.data.error),
+  );
+  const authorizationReconciliation =
+    directoryAuthorizationFailure ||
+    pendingRefresh?.purpose === "authorization";
   const mustNeutralizeOwnedView =
-    hasDefinitiveBootstrap &&
-    hasOwnedView &&
-    !preservesKnownCreation &&
-    (!bootstrap || selectedCompanyInvalid || viewOwnerUserId !== userId);
+    authorizationReconciliation ||
+    (hasDefinitiveBootstrap &&
+      hasOwnedView &&
+      !preservesKnownCreation &&
+      (!bootstrap || selectedCompanyInvalid || viewOwnerUserId !== userId));
 
   useEffect(() => {
-    if (!mustNeutralizeOwnedView) return;
+    if (!mustNeutralizeOwnedView || authorizationReconciliation) return;
 
     operationGeneration.current += 1;
+    processedDirectoryFailure.current = null;
     setSelectedCompanyId("");
     setSelectedCompanyUserId("");
     setViewOwnerUserId("");
     setAttempt(null);
+    attemptRef.current = null;
     setFeedback(null);
     setKnownCreatedOperation(null);
     setPendingRefresh(null);
     refreshGate.current = false;
     form.reset();
-  }, [form, mustNeutralizeOwnedView]);
+  }, [authorizationReconciliation, form, mustNeutralizeOwnedView]);
 
   useEffect(() => {
     if (!pendingRefresh) return;
 
     if (pendingRefresh.phase === "pending") return;
+
+    if (pendingRefresh.purpose === "authorization") {
+      operationGeneration.current += 1;
+      processedDirectoryFailure.current = null;
+      setSelectedCompanyId("");
+      setSelectedCompanyUserId("");
+      setViewOwnerUserId("");
+      setAttempt(null);
+      attemptRef.current = null;
+      setFeedback(null);
+      setKnownCreatedOperation(null);
+      authorizationRefreshInFlight.current = false;
+      refreshGate.current = false;
+      form.reset();
+      setPendingRefresh(null);
+      return;
+    }
 
     if (pendingRefresh.phase === "rejected") {
       if (
@@ -247,18 +305,25 @@ export function PeoplePage({
       if (!result.ok) {
         if (isAmbiguous(result.error)) {
           setAttempt(operation);
+          attemptRef.current = operation;
           return;
         }
         if (isAuthorizationFailure(result.error)) {
-          queryClient.removeQueries({ queryKey: operation.queryKey });
-          void refreshBootstrap();
+          setAttempt(null);
+          attemptRef.current = null;
+          await beginAuthorizationReconciliation(
+            toConfirmedOperation(operation),
+          );
+          return;
         }
         setAttempt(null);
+        attemptRef.current = null;
         setFeedback("error");
         return;
       }
 
       setAttempt(null);
+      attemptRef.current = null;
       const confirmedOperation = toConfirmedOperation(operation);
       refreshGate.current = true;
       setPendingRefresh({
@@ -278,6 +343,7 @@ export function PeoplePage({
   const abandonAttempt = () => {
     operationGeneration.current += 1;
     setAttempt(null);
+    attemptRef.current = null;
     setFeedback(null);
   };
   const updateForm = () => {
@@ -286,6 +352,7 @@ export function PeoplePage({
   };
   const selectCompany = (companyId: string) => {
     processedDirectoryFailure.current = null;
+    if (selectedCompanyId && companyId !== selectedCompanyId) form.reset();
     setSelectedCompanyId(companyId);
     setSelectedCompanyUserId(userId ?? "");
     setViewOwnerUserId(userId ?? "");
@@ -296,6 +363,8 @@ export function PeoplePage({
       !selectedCompany ||
       !userId ||
       knownCreatedOperation ||
+      attemptRef.current ||
+      pendingRefresh?.purpose === "authorization" ||
       mutation.isPending ||
       inFlight.current
     ) {
@@ -319,10 +388,10 @@ export function PeoplePage({
   };
   const retry = () => {
     if (
-      !attempt ||
+      !attemptRef.current ||
       inFlight.current ||
       !isCurrentOperation(
-        attempt,
+        attemptRef.current,
         operationGeneration,
         selectedCompanyIdRef,
         currentUserIdRef,
@@ -332,7 +401,7 @@ export function PeoplePage({
     }
     inFlight.current = true;
     setFeedback(null);
-    mutation.mutate(attempt);
+    mutation.mutate(attemptRef.current);
   };
   const refreshKnownCreation = async () => {
     if (isRefreshingKnownCreation || !knownCreatedOperation) return;
@@ -440,7 +509,9 @@ export function PeoplePage({
               type="email"
             />
             <Button
-              disabled={!selectedCompany || mutation.isPending}
+              disabled={
+                !selectedCompany || Boolean(attempt) || mutation.isPending
+              }
               type="submit"
               variant="contained"
             >
@@ -505,7 +576,11 @@ function isAuthorizationFailure(failure: EmployeeDirectoryFailure): boolean {
 }
 
 function isAmbiguous(failure: EmployeeDirectoryFailure): boolean {
-  return failure.kind === "network" || failure.kind === "unavailable";
+  return (
+    failure.kind === "network" ||
+    failure.kind === "unavailable" ||
+    failure.mayHaveCommitted === true
+  );
 }
 
 function isCurrentOperation(
