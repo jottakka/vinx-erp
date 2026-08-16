@@ -9,8 +9,8 @@ import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import { Skeleton, Stack } from "@mui/material";
 import { lazy, type ReactElement, Suspense } from "react";
-import { PaguaiPage } from "../features/paguai/paguai-page";
 import { AtendimentoPage } from "../features/atendimento/atendimento-page";
+import { PaguaiPage } from "../features/paguai/paguai-page";
 import {
   type AppRouteCatalogEntry,
   agentPath,

@@ -551,8 +551,15 @@
         "dependencies": {
           "Microsoft.AspNetCore.OpenApi": "[10.0.10, )",
           "Microsoft.OpenApi": "[2.7.5, )",
+          "Vinx.Erp.Atendimento": "[1.0.0, )",
           "Vinx.Erp.Foundation": "[1.0.0, )",
           "Vinx.Erp.Paguai": "[1.0.0, )"
+        }
+      },
+      "vinx.erp.atendimento": {
+        "type": "Project",
+        "dependencies": {
+          "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
       "vinx.erp.foundation": {
