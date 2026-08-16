@@ -40,11 +40,16 @@ As guardas obrigatórias dessa adoção são:
 - `AutoBuildMessageStorageOnStartup = AutoCreate.None` e
   `OverrideAutoCreateResources(AutoCreate.None)` impedem criação ou alteração
   automática de recursos no startup.
-- Somente migrations EF revisadas criam ou alteram schema de negócio e de
-  outbox. `FoundationDbContext`, suas migrations e seu histórico EF continuam
-  fonte canônica desse schema.
+- Schema de negócio VINX/Foundation e qualquer intenção própria são criados ou
+  alterados somente por migrations EF revisadas. `FoundationDbContext`, suas
+  migrations e seu histórico EF continuam fonte canônica desse schema.
 - `UseEntityFrameworkCoreWolverineManagedMigrations()` não pode gerir
   `FoundationDbContext`; Weasel não será usado nesse contexto.
+- Storage e envelopes técnicos do Wolverine são provisionados ou alterados
+  somente no deploy explícito, nunca no startup ou runtime, pela identidade
+  migradora/deploy com `resources setup` (ou equivalente aprovado). Esse passo
+  pode usar Weasel somente para o schema técnico Wolverine e deve ser validado
+  com `db-assert`.
 - A outbox contém somente identificadores internos opacos, tipo de evento e
   correlação mínima. O worker consulta dados necessários em fronteira estreita
   e autorizada.
@@ -52,7 +57,7 @@ As guardas obrigatórias dessa adoção são:
 ## Limites de entrega e falha externa
 
 A #26 implementará intenção e outbox transacionais e provará rollback sem
-intenção/outbox e commit atômico. A #48 implementará worker, lease/concor­rência,
+intenção/outbox e commit atômico. A #48 implementará worker, lease/concorrência,
 retry e DLQ observáveis, incluindo prova de que dois workers não concluem duas
 vezes a mesma mensagem internamente. Adapter Supabase/Meta e aceite de convite
 não pertencem a estas entregas.
@@ -85,4 +90,5 @@ correlacionável.
 - [Wolverine: EF Core transactional middleware](https://wolverinefx.net/guide/durability/efcore/transactional-middleware.html)
 - [Wolverine: EF Core and Weasel-managed migrations](https://wolverinefx.net/guide/durability/efcore/migrations)
 - [Wolverine: durable inbox and outbox messaging](https://wolverinefx.net/guide/durability/)
+- [Wolverine: managing message storage](https://wolverinefx.net/guide/durability/managing)
 - [MassTransit: transactional outbox](https://masstransit.io/documentation/patterns/transactional-outbox)
