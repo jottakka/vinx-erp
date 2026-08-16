@@ -14,27 +14,32 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     public async Task Organization_creation_persists_one_opaque_owner_invitation_message_and_replay_does_not_duplicate_it()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
-            aal: "aal2");
+            aal: "aal2"
+        );
         await SeedPlatformOperatorAsync(factory);
         var requestId = Guid.NewGuid();
+        var ownerDisplayName = $"outbox-display-name-{Guid.NewGuid():N}";
         using var client = factory.CreateClient();
 
         using var created = await client.PostAsJsonAsync(
             "/foundation/platform/organizations",
-            NewRequest(requestId));
+            NewRequest(requestId, ownerDisplayName: ownerDisplayName)
+        );
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         using var createdDocument = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
         var invitationId = Guid.Parse(
-            createdDocument.RootElement.GetProperty("ownerInvitationId").GetString()!);
+            createdDocument.RootElement.GetProperty("ownerInvitationId").GetString()!
+        );
 
         var firstMessages = await ReadOwnerInvitationMessagesAsync(factory);
         var firstMessage = Assert.Single(firstMessages);
         AssertOpaqueInvitationBody(firstMessage.Body, invitationId);
-        AssertOpaqueInvitationHeaders(firstMessage.Headers, requestId);
+        AssertOpaqueInvitationHeaders(firstMessage.Headers, requestId, ownerDisplayName);
 
         using var replay = await client.PostAsJsonAsync(
             "/foundation/platform/organizations",
-            NewRequest(requestId));
+            NewRequest(requestId, ownerDisplayName: ownerDisplayName)
+        );
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
 
         var replayMessages = await ReadOwnerInvitationMessagesAsync(factory);
@@ -45,27 +50,41 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Runtime_startup_does_not_create_wolverine_owner_invitation_storage()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
-            aal: "aal2");
+        var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var queueBeforeStartup = await OwnerInvitationQueueExistsAsync(fixture);
 
-        Assert.False(await WolverineStorageExistsAsync(factory));
+        await using var factory = await FoundationApiFactory.CreateForLifecycleTestAsync(
+            fixture,
+            () => ValueTask.CompletedTask,
+            () => ValueTask.CompletedTask
+        );
+        using var client = factory.CreateClient();
+        var queueAfterStartup = await OwnerInvitationQueueExistsAsync(fixture);
+
+        Assert.Equal(queueBeforeStartup, queueAfterStartup);
+        Assert.False(queueBeforeStartup);
+        Assert.False(queueAfterStartup);
     }
 
     [Fact]
     public async Task Organization_creation_rejects_aal1_without_writing_an_owner_invitation_message()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
-            aal: "aal1");
+            aal: "aal1"
+        );
         await SeedPlatformOperatorAsync(factory);
 
-        using var response = await factory.CreateClient().PostAsJsonAsync(
-            "/foundation/platform/organizations",
-            NewRequest(Guid.NewGuid()));
+        using var response = await factory
+            .CreateClient()
+            .PostAsJsonAsync("/foundation/platform/organizations", NewRequest(Guid.NewGuid()));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal(
             "{\"code\":\"mfa_assurance_required\"}",
-            await response.Content.ReadAsStringAsync());
+            await response.Content.ReadAsStringAsync()
+        );
         Assert.Empty(await ReadOwnerInvitationMessagesAsync(factory));
     }
 
@@ -73,16 +92,18 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     public async Task Organization_creation_rejects_an_aal2_nonoperator_without_writing_an_owner_invitation_message()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
-            aal: "aal2");
+            aal: "aal2"
+        );
 
-        using var response = await factory.CreateClient().PostAsJsonAsync(
-            "/foundation/platform/organizations",
-            NewRequest(Guid.NewGuid()));
+        using var response = await factory
+            .CreateClient()
+            .PostAsJsonAsync("/foundation/platform/organizations", NewRequest(Guid.NewGuid()));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal(
             "{\"code\":\"platform_operator_required\"}",
-            await response.Content.ReadAsStringAsync());
+            await response.Content.ReadAsStringAsync()
+        );
         Assert.Empty(await ReadOwnerInvitationMessagesAsync(factory));
     }
 
@@ -90,49 +111,60 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     public async Task Organization_creation_rejects_a_payload_conflict_without_writing_an_extra_owner_invitation_message()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
-            aal: "aal2");
+            aal: "aal2"
+        );
         await SeedPlatformOperatorAsync(factory);
         var requestId = Guid.NewGuid();
         using var client = factory.CreateClient();
 
         using var created = await client.PostAsJsonAsync(
             "/foundation/platform/organizations",
-            NewRequest(requestId));
+            NewRequest(requestId)
+        );
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
 
         using var conflict = await client.PostAsJsonAsync(
             "/foundation/platform/organizations",
-            NewRequest(requestId, "Contoso Group", "Contoso HQ"));
+            NewRequest(requestId, "Contoso Group", "Contoso HQ")
+        );
         Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
         Assert.Equal(
             "{\"code\":\"idempotency_conflict\"}",
-            await conflict.Content.ReadAsStringAsync());
+            await conflict.Content.ReadAsStringAsync()
+        );
         Assert.Single(await ReadOwnerInvitationMessagesAsync(factory));
     }
 
     private static object NewRequest(
         Guid requestId,
         string groupName = "Northwind Group",
-        string companyName = "Northwind HQ") => new
-    {
-        requestId,
-        groupName,
-        companyName,
-        ownerDisplayName = "Owner",
-        ownerEmail = "owner@example.test",
-    };
+        string companyName = "Northwind HQ",
+        string ownerDisplayName = "Owner",
+        string ownerEmail = "owner@example.test"
+    ) =>
+        new
+        {
+            requestId,
+            groupName,
+            companyName,
+            ownerDisplayName,
+            ownerEmail,
+        };
 
-    private static async Task<IReadOnlyList<OwnerInvitationMessage>> ReadOwnerInvitationMessagesAsync(
-        FoundationApiFactory factory)
+    private static async Task<
+        IReadOnlyList<OwnerInvitationMessage>
+    > ReadOwnerInvitationMessagesAsync(FoundationApiFactory factory)
     {
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         Assert.True(
             await OwnerInvitationQueueExistsAsync(administrator),
-            "Wolverine owner-invitation-delivery storage must be provisioned by deploy before message assertions; tests never create it.");
+            "Wolverine owner-invitation-delivery storage must be provisioned by deploy before message assertions; tests never create it."
+        );
 
         await using var command = new NpgsqlCommand(
             "SELECT body, headers FROM vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery",
-            administrator);
+            administrator
+        );
         await using var reader = await command.ExecuteReaderAsync();
         var messages = new List<OwnerInvitationMessage>();
         while (await reader.ReadAsync())
@@ -145,20 +177,20 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         return messages;
     }
 
-    private static async Task<bool> WolverineStorageExistsAsync(FoundationApiFactory factory)
+    private static async Task<bool> OwnerInvitationQueueExistsAsync(
+        FoundationPostgresFixture fixture
+    )
     {
-        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
-        await using var command = new NpgsqlCommand(
-            "SELECT to_regnamespace('vinx_wolverine_queues') IS NOT NULL OR to_regclass('vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery') IS NOT NULL",
-            administrator);
-        return (bool)(await command.ExecuteScalarAsync())!;
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        return await OwnerInvitationQueueExistsAsync(administrator);
     }
 
     private static async Task<bool> OwnerInvitationQueueExistsAsync(NpgsqlConnection administrator)
     {
         await using var exists = new NpgsqlCommand(
             "SELECT to_regclass('vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery')::text",
-            administrator);
+            administrator
+        );
         var tableName = await exists.ExecuteScalarAsync();
         return tableName is string;
     }
@@ -169,27 +201,31 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         var properties = document.RootElement.EnumerateObject().ToArray();
         Assert.Single(properties);
         Assert.Equal("invitationId", properties[0].Name, ignoreCase: true);
-        Assert.Equal(
-            invitationId,
-            Guid.Parse(properties[0].Value.GetString() ?? string.Empty));
+        Assert.Equal(invitationId, Guid.Parse(properties[0].Value.GetString() ?? string.Empty));
     }
 
-    private static void AssertOpaqueInvitationHeaders(string headers, Guid requestId)
+    private static void AssertOpaqueInvitationHeaders(
+        string headers,
+        Guid requestId,
+        string ownerDisplayName
+    )
     {
-        foreach (var forbidden in new[]
-        {
-            "Northwind Group",
-            "Northwind HQ",
-            "Owner",
-            "owner@example.test",
-            "groupName",
-            "companyName",
-            "ownerDisplayName",
-            "ownerEmail",
-            "payload",
-            "payloadHash",
-            requestId.ToString("D"),
-        })
+        foreach (
+            var forbidden in new[]
+            {
+                "Northwind Group",
+                "Northwind HQ",
+                ownerDisplayName,
+                "owner@example.test",
+                "groupName",
+                "companyName",
+                "ownerDisplayName",
+                "ownerEmail",
+                "payload",
+                "payloadHash",
+                requestId.ToString("D"),
+            }
+        )
         {
             Assert.DoesNotContain(forbidden, headers, StringComparison.OrdinalIgnoreCase);
         }
@@ -205,7 +241,8 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
             FROM foundation.external_identities AS identity_record
             WHERE identity_record.user_id = @user_id
             """,
-            administrator);
+            administrator
+        );
         command.Parameters.AddWithValue("user_id", factory.ActorUserId);
         await command.ExecuteNonQueryAsync();
     }
