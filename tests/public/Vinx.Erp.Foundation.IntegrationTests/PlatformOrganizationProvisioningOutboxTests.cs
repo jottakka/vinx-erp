@@ -50,16 +50,10 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Runtime_startup_does_not_create_wolverine_owner_invitation_storage()
     {
-        var fixture = new FoundationPostgresFixture();
-        await fixture.StartAsync();
-        await fixture.MigrateAsync();
+        await using var factory = await FoundationApiFactory.CreateAsync(aal: "aal2");
+        var fixture = factory.Fixture;
         var queueBeforeStartup = await OwnerInvitationQueueExistsAsync(fixture);
 
-        await using var factory = await FoundationApiFactory.CreateForLifecycleTestAsync(
-            fixture,
-            () => ValueTask.CompletedTask,
-            () => ValueTask.CompletedTask
-        );
         using var client = factory.CreateClient();
         var queueAfterStartup = await OwnerInvitationQueueExistsAsync(fixture);
 
