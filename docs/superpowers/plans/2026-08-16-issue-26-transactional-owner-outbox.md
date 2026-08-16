@@ -33,13 +33,18 @@ EF Core 6.28.2, PostgreSQL, xUnit/Testcontainers.
 - Não usar `AddDbContextWithWolverineIntegration`,
   `MapWolverineEnvelopeStorage`,
   `UseEntityFrameworkCoreWolverineManagedMigrations` ou `AutoProvision`.
-- Storage/envelopes técnicos Wolverine ficam fora de `FoundationDbContext` e
-  são provisionados somente no deploy por identidade migradora; `db-assert`
-  ocorre antes da liberação.
+- Storage/envelopes técnicos Wolverine ficam fora de `FoundationDbContext`, em
+  schemas dedicados `vinx_wolverine` e `vinx_wolverine_queues`. Eles são
+  provisionados somente no deploy por identidade migradora com `db-apply`,
+  recebem grants mínimos de DML para `vinx_runtime` por script explícito e
+  passam por `db-assert` antes da liberação.
 - Se a biblioteca não persistir o envelope na transação existente, parar a
   fatia: não criar fila/outbox própria como substituto.
-- A rota é explicitamente durável e única; é proibido fallback inline ou
-  buffered, handler/listener/provider no ApiHost e fan-out implícito.
+- A rota é única e explicitamente `PublishMessage<OwnerInvitationDeliveryRequested>()`
+  para `ToPostgresqlQueue("owner-invitation-delivery").UseDurableOutbox()`.
+  Esta é a configuração durável do assinante dessa única saída; não usar a
+  policy global `UseDurableOutboxOnAllSendingEndpoints`, fila local, modo
+  buffered, handler/listener/provider no ApiHost ou fan-out implícito.
 - Falha antes do commit retorna `503` e faz rollback integral. Commit lançado
   ou cancelado é ambíguo: não fazer flush, compensar ou republicar; registrar
   `outbox_commit_outcome_unknown` e deixar o mesmo `requestId` decidir entre
@@ -78,11 +83,16 @@ EF Core 6.28.2, PostgreSQL, xUnit/Testcontainers.
 - Create: contrato `OwnerInvitationDeliveryRequested` no módulo Foundation.
 - Modify: configuração/DI do ApiHost e
   `PlatformOrganizationProvisioningService`.
+- Create: script de deploy para grants mínimos dos schemas técnicos Wolverine.
 
 - [ ] Adicionar os pacotes Wolverine 6.28.2 mínimos e travar os lockfiles.
-- [ ] Configurar ApiHost somente como produtor PostgreSQL, com as duas opções
-  `AutoCreate.None`, fila explícita e `UseDurableOutbox()`, sem
-  handler/WorkerHost/provider.
+- [ ] Configurar ApiHost somente como produtor PostgreSQL, usando
+  `WOLVERINE_STORAGE_CONNECTION`,
+  `PersistMessagesWithPostgresql(...).OverrideAutoCreateResources(AutoCreate.None)`
+  e `EnableMessageTransport(...)` para a única fila PostgreSQL explícita e
+  durável. Sem handler/WorkerHost/provider. Expor somente os comandos JasperFx
+  `db-apply` e `db-assert` para o deploy; a execução normal continua sem setup
+  automático.
 - [ ] Dentro da transação já aberta de provisionamento, publicar pelo
   `IDbContextOutbox` apenas após `Created`; chamar `Enroll` antes de
   `PublishAsync`, fazer o único `CommitAsync` do serviço e tentar
