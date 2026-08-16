@@ -8,6 +8,7 @@ using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
+using Wolverine.EntityFrameworkCore;
 
 namespace Vinx.Erp.Foundation.Platform;
 
@@ -44,6 +45,7 @@ public sealed record PlatformOrganizationProvisioningResult(
 /// </summary>
 public sealed class PlatformOrganizationProvisioningService(
     FoundationDbContext database,
+    IDbContextOutbox outbox,
     ILogger<PlatformOrganizationProvisioningService> logger
 )
 {
@@ -63,30 +65,55 @@ public sealed class PlatformOrganizationProvisioningService(
             );
         }
 
+        var commitAttempted = false;
+        PlatformOrganizationProvisioningResult? result = null;
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(
                 cancellationToken
             );
             await FoundationRlsContext.ApplyActorAsync(database.Database, actor, cancellationToken);
-            var result = await ExecuteAsync(normalized, transaction, cancellationToken);
+            result = await ExecuteAsync(normalized, transaction, cancellationToken);
+            if (result.State is PlatformOrganizationProvisioningState.Created)
+            {
+                outbox.Enroll(database);
+                await outbox.PublishAsync(
+                    new OwnerInvitationDeliveryRequested(result.OwnerInvitationId!.Value)
+                );
+            }
+
+            commitAttempted = true;
             await transaction.CommitAsync(cancellationToken);
-            return result;
         }
-        catch (PostgresException exception) when (IsExpectedAccessDenial(exception))
+        catch (PostgresException exception)
+            when (!commitAttempted && IsExpectedAccessDenial(exception))
         {
             return new PlatformOrganizationProvisioningResult(
                 PlatformOrganizationProvisioningState.Forbidden
             );
         }
-        catch (PostgresException exception) when (IsExpectedResourceConflict(exception))
+        catch (PostgresException exception)
+            when (!commitAttempted && IsExpectedResourceConflict(exception))
         {
             return new PlatformOrganizationProvisioningResult(
                 PlatformOrganizationProvisioningState.Conflict
             );
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception)
+            when (cancellationToken.IsCancellationRequested)
         {
+            if (commitAttempted)
+            {
+                logger.LogError(
+                    exception,
+                    "Platform organization provisioning {Operation} {Module} {Result} {Reason}",
+                    Operation,
+                    Module,
+                    "unavailable",
+                    "outbox_commit_outcome_unknown"
+                );
+            }
+
             throw;
         }
         catch (Exception exception)
@@ -97,12 +124,33 @@ public sealed class PlatformOrganizationProvisioningService(
                 Operation,
                 Module,
                 "unavailable",
-                "database_or_audit_unavailable"
+                commitAttempted ? "outbox_commit_outcome_unknown" : "database_or_audit_unavailable"
             );
             return new PlatformOrganizationProvisioningResult(
                 PlatformOrganizationProvisioningState.Unavailable
             );
         }
+
+        if (result.State is PlatformOrganizationProvisioningState.Created)
+        {
+            try
+            {
+                await outbox.FlushOutgoingMessagesAsync();
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Platform organization provisioning {Operation} {Module} {Result} {Reason}",
+                    Operation,
+                    Module,
+                    "created",
+                    "outbox_flush_deferred"
+                );
+            }
+        }
+
+        return result;
     }
 
     private async Task<PlatformOrganizationProvisioningResult> ExecuteAsync(

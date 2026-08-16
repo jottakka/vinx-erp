@@ -1,9 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Platform;
+using Wolverine.Runtime.Serialization;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -13,9 +14,10 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Organization_creation_persists_one_opaque_owner_invitation_message_and_replay_does_not_duplicate_it()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
-            aal: "aal2"
-        );
+        await using var factory =
+            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
+                aal: "aal2"
+            );
         await SeedPlatformOperatorAsync(factory);
         var requestId = Guid.NewGuid();
         var ownerDisplayName = $"outbox-display-name-{Guid.NewGuid():N}";
@@ -33,8 +35,7 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
 
         var firstMessages = await ReadOwnerInvitationMessagesAsync(factory);
         var firstMessage = Assert.Single(firstMessages);
-        AssertOpaqueInvitationBody(firstMessage.Body, invitationId);
-        AssertOpaqueInvitationHeaders(firstMessage.Headers, requestId, ownerDisplayName);
+        AssertOpaqueInvitationEnvelope(firstMessage, invitationId, requestId, ownerDisplayName);
 
         using var replay = await client.PostAsJsonAsync(
             "/foundation/platform/organizations",
@@ -43,8 +44,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
 
         var replayMessages = await ReadOwnerInvitationMessagesAsync(factory);
-        Assert.Single(replayMessages);
-        Assert.Equal(firstMessage, replayMessages[0]);
+        var replayMessage = Assert.Single(replayMessages);
+        Assert.Equal(firstMessage.Body, replayMessage.Body);
+        Assert.Equal(firstMessage.Metadata, replayMessage.Metadata);
     }
 
     [Fact]
@@ -54,7 +56,7 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         var fixture = factory.Fixture;
         var queueBeforeStartup = await OwnerInvitationQueueExistsAsync(fixture);
 
-        using var client = factory.CreateClient();
+        Assert.Throws<PostgresException>(() => factory.CreateClient());
         var queueAfterStartup = await OwnerInvitationQueueExistsAsync(fixture);
 
         Assert.Equal(queueBeforeStartup, queueAfterStartup);
@@ -63,11 +65,109 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     }
 
     [Fact]
+    public async Task Envelope_persistence_failure_before_commit_rolls_back_the_organization_graph()
+    {
+        await using var factory =
+            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
+                aal: "aal2"
+            );
+        await SeedPlatformOperatorAsync(factory);
+        await RevokeOutboxInsertAsync(factory);
+        var userCountBeforeRequest = await CountUsersAsync(factory);
+
+        using var response = await factory
+            .CreateClient()
+            .PostAsJsonAsync("/foundation/platform/organizations", NewRequest(Guid.NewGuid()));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        await AssertOrganizationGraphIsEmptyAsync(factory, userCountBeforeRequest);
+        Assert.Empty(await ReadOwnerInvitationMessagesAsync(factory));
+    }
+
+    [Fact]
+    public async Task Flush_failure_after_commit_keeps_created_response_and_durable_envelope()
+    {
+        await using var factory =
+            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
+                aal: "aal2"
+            );
+        await SeedPlatformOperatorAsync(factory);
+        await RevokeQueueInsertAsync(factory);
+
+        using var response = await factory
+            .CreateClient()
+            .PostAsJsonAsync("/foundation/platform/organizations", NewRequest(Guid.NewGuid()));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(1L, await CountOutgoingEnvelopesAsync(factory));
+    }
+
+    [Fact]
+    public async Task Commit_acknowledgement_failure_does_not_flush_and_retry_does_not_duplicate_the_envelope()
+    {
+        await using var factory =
+            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
+                aal: "aal2"
+            );
+        await SeedPlatformOperatorAsync(factory);
+        using var client = factory.CreateClient();
+        using var admission = await client.GetAsync("/foundation/platform/bootstrap");
+        Assert.Equal(HttpStatusCode.OK, admission.StatusCode);
+        var requestId = Guid.NewGuid();
+
+        CommitAcknowledgementFailure.Arm(factory.Fixture);
+        using var uncertain = await client.PostAsJsonAsync(
+            "/foundation/platform/organizations",
+            NewRequest(requestId)
+        );
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, uncertain.StatusCode);
+        Assert.Equal(1L, await CountOutgoingEnvelopesAsync(factory));
+
+        using var replay = await client.PostAsJsonAsync(
+            "/foundation/platform/organizations",
+            NewRequest(requestId)
+        );
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(1L, await CountOutgoingEnvelopesAsync(factory));
+    }
+
+    [Fact]
+    public async Task Runtime_role_cannot_create_or_alter_wolverine_storage()
+    {
+        await using var factory =
+            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
+                aal: "aal2"
+            );
+        await using var runtime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+
+        await using var create = new NpgsqlCommand(
+            "CREATE TABLE vinx_wolverine.runtime_must_not_create (id integer)",
+            runtime
+        );
+        var createFailure = await Assert.ThrowsAsync<PostgresException>(() =>
+            create.ExecuteNonQueryAsync()
+        );
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, createFailure.SqlState);
+
+        await using var alter = new NpgsqlCommand(
+            "ALTER TABLE vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery ADD COLUMN runtime_must_not_alter integer",
+            runtime
+        );
+        var alterFailure = await Assert.ThrowsAsync<PostgresException>(() =>
+            alter.ExecuteNonQueryAsync()
+        );
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, alterFailure.SqlState);
+    }
+
+    [Fact]
     public async Task Organization_creation_rejects_aal1_without_writing_an_owner_invitation_message()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
-            aal: "aal1"
-        );
+        await using var factory =
+            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
+                aal: "aal1"
+            );
         await SeedPlatformOperatorAsync(factory);
 
         using var response = await factory
@@ -85,9 +185,10 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Organization_creation_rejects_an_aal2_nonoperator_without_writing_an_owner_invitation_message()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
-            aal: "aal2"
-        );
+        await using var factory =
+            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
+                aal: "aal2"
+            );
 
         using var response = await factory
             .CreateClient()
@@ -104,9 +205,10 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Organization_creation_rejects_a_payload_conflict_without_writing_an_extra_owner_invitation_message()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
-            aal: "aal2"
-        );
+        await using var factory =
+            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
+                aal: "aal2"
+            );
         await SeedPlatformOperatorAsync(factory);
         var requestId = Guid.NewGuid();
         using var client = factory.CreateClient();
@@ -156,16 +258,16 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         );
 
         await using var command = new NpgsqlCommand(
-            "SELECT body, headers FROM vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery",
+            "SELECT body, row_to_json(queue)::text FROM vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery AS queue",
             administrator
         );
         await using var reader = await command.ExecuteReaderAsync();
         var messages = new List<OwnerInvitationMessage>();
         while (await reader.ReadAsync())
         {
-            var body = Encoding.UTF8.GetString(reader.GetFieldValue<byte[]>(0));
-            var headers = reader.IsDBNull(1) ? string.Empty : reader.GetFieldValue<string>(1);
-            messages.Add(new OwnerInvitationMessage(body, headers));
+            var body = reader.GetFieldValue<byte[]>(0);
+            var metadata = reader.GetString(1);
+            messages.Add(new OwnerInvitationMessage(body, metadata));
         }
 
         return messages;
@@ -189,21 +291,31 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         return tableName is string;
     }
 
-    private static void AssertOpaqueInvitationBody(string body, Guid invitationId)
-    {
-        using var document = JsonDocument.Parse(body);
-        var properties = document.RootElement.EnumerateObject().ToArray();
-        Assert.Single(properties);
-        Assert.Equal("invitationId", properties[0].Name, ignoreCase: true);
-        Assert.Equal(invitationId, Guid.Parse(properties[0].Value.GetString() ?? string.Empty));
-    }
-
-    private static void AssertOpaqueInvitationHeaders(
-        string headers,
+    private static void AssertOpaqueInvitationEnvelope(
+        OwnerInvitationMessage message,
+        Guid invitationId,
         Guid requestId,
         string ownerDisplayName
     )
     {
+        var envelope = EnvelopeSerializer.Deserialize(message.Body);
+        Assert.Equal("application/json", envelope.ContentType);
+        var requested = Assert.IsType<OwnerInvitationDeliveryRequested>(
+            new SystemTextJsonSerializer(
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            ).ReadFromData(typeof(OwnerInvitationDeliveryRequested), envelope)
+        );
+        Assert.Equal(invitationId, requested.InvitationId);
+        Assert.Contains(
+            "OwnerInvitationDeliveryRequested",
+            message.Metadata,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            invitationId.ToString("D"),
+            message.Metadata,
+            StringComparison.OrdinalIgnoreCase
+        );
         foreach (
             var forbidden in new[]
             {
@@ -221,7 +333,7 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
             }
         )
         {
-            Assert.DoesNotContain(forbidden, headers, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(forbidden, message.Metadata, StringComparison.OrdinalIgnoreCase);
         }
     }
 
@@ -241,5 +353,79 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private sealed record OwnerInvitationMessage(string Body, string Headers);
+    private static async Task RevokeOutboxInsertAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "REVOKE INSERT ON vinx_wolverine.wolverine_outgoing_envelopes FROM vinx_runtime;",
+            administrator
+        );
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task RevokeQueueInsertAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "REVOKE INSERT ON vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery FROM vinx_runtime;",
+            administrator
+        );
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<long> CountOutgoingEnvelopesAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM vinx_wolverine.wolverine_outgoing_envelopes",
+            administrator
+        );
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static async Task AssertOrganizationGraphIsEmptyAsync(
+        FoundationApiFactory factory,
+        long expectedUserCount
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                (SELECT count(*) FROM foundation.groups),
+                (SELECT count(*) FROM foundation.companies),
+                (SELECT count(*) FROM foundation.users),
+                (SELECT count(*) FROM foundation.memberships),
+                (SELECT count(*) FROM foundation.role_assignments),
+                (SELECT count(*) FROM foundation.pending_owner_invitations),
+                (SELECT count(*) FROM foundation.organization_provisioning_receipts),
+                (SELECT count(*) FROM audit.audit_events WHERE action = 'platform.organization.provision' AND outcome = 'success')
+            """,
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(expectedUserCount, reader.GetInt64(2));
+        for (var index = 0; index < reader.FieldCount; index++)
+        {
+            if (index == 2)
+            {
+                continue;
+            }
+
+            Assert.Equal(0L, reader.GetInt64(index));
+        }
+    }
+
+    private static async Task<long> CountUsersAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM foundation.users",
+            administrator
+        );
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private sealed record OwnerInvitationMessage(byte[] Body, string Metadata);
 }

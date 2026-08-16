@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using JasperFx;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Diagnostics;
@@ -22,6 +23,9 @@ using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Platform;
+using Wolverine;
+using Wolverine.EntityFrameworkCore;
+using Wolverine.Postgresql;
 
 var builder = WebApplication.CreateBuilder(args);
 const string ProtectedRateLimitPolicy = "foundation";
@@ -68,6 +72,24 @@ builder.Services.AddDbContext<FoundationDbContext>(
             .UseSnakeCaseNamingConvention()
             .AddInterceptors(new RowVersionInterceptor())
 );
+var foundationConnectionString =
+    builder.Configuration[FoundationDatabaseOptions.ConnectionStringConfigurationKey]
+    ?? throw new InvalidOperationException("Foundation database connection must be configured.");
+builder.Host.UseWolverine(options =>
+{
+    options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
+    options
+        .PersistMessagesWithPostgresql(foundationConnectionString, schemaName: "vinx_wolverine")
+        .OverrideAutoCreateResources(AutoCreate.None)
+        .EnableMessageTransport(transport =>
+            transport.TransportSchemaName("vinx_wolverine_queues")
+        );
+    options.UseEntityFrameworkCoreTransactions();
+    options
+        .PublishMessage<OwnerInvitationDeliveryRequested>()
+        .ToPostgresqlQueue("owner-invitation-delivery")
+        .UseDurableOutbox();
+});
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
 builder.Services.AddScoped<AuthorizedCompanySetResolver>();
@@ -873,7 +895,13 @@ foundation.MapPost(
         return result.ToMinimalApiResult();
     }
 );
+if (args.FirstOrDefault() is "db-apply" or "db-assert")
+{
+    return await app.RunJasperFxCommands(args);
+}
+
 app.Run();
+return 0;
 
 internal sealed class FoundationDatabaseOptions
 {

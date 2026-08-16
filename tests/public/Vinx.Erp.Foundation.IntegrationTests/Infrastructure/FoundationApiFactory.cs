@@ -1,8 +1,9 @@
-using System.Security.Claims;
 using System.Data.Common;
-using System.IdentityModel.Tokens.Jwt;
+using System.Diagnostics;
 using System.Globalization;
+using System.IdentityModel.Tokens.Jwt;
 using System.Net;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -23,12 +24,12 @@ using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
-using Vinx.Erp.Foundation.Identity;
-using JsonClaimValueTypes = Microsoft.IdentityModel.JsonWebTokens.JsonClaimValueTypes;
-using Vinx.Erp.Foundation.Persistence;
-using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Files;
+using Vinx.Erp.Foundation.Identity;
+using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Foundation.Persistence.Interceptors;
+using JsonClaimValueTypes = Microsoft.IdentityModel.JsonWebTokens.JsonClaimValueTypes;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -58,7 +59,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         HttpMessageHandler? browserSessionProviderHandler = null,
         IFoundationFixtureLifecycle? fixture = null,
         Func<ValueTask>? disposeHostAsync = null,
-        Func<ValueTask>? disposeJwtAsync = null)
+        Func<ValueTask>? disposeJwtAsync = null
+    )
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
@@ -76,21 +78,32 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     public Guid ActorUserId { get; }
     public Guid CorrelationId { get; }
-    public FoundationPostgresFixture Fixture => _fixture as FoundationPostgresFixture
-        ?? throw new InvalidOperationException("The factory is configured with a test lifecycle double.");
-    public int IdentityProviderCallCount => _countingIdentityProvider?.CallCount
-        ?? throw new InvalidOperationException("The factory is not configured with a counting identity provider.");
+    public FoundationPostgresFixture Fixture =>
+        _fixture as FoundationPostgresFixture
+        ?? throw new InvalidOperationException(
+            "The factory is configured with a test lifecycle double."
+        );
+    public int IdentityProviderCallCount =>
+        _countingIdentityProvider?.CallCount
+        ?? throw new InvalidOperationException(
+            "The factory is not configured with a counting identity provider."
+        );
     public ClaimsPrincipal? AuthenticatedJwtPrincipal { get; private set; }
 
     public string CreateJwtToken(JwtTokenVariation variation) =>
-        (_jwtAuthority ?? throw new InvalidOperationException("The factory is not configured for JWT bearer testing."))
-        .CreateToken(variation);
+        (
+            _jwtAuthority
+            ?? throw new InvalidOperationException(
+                "The factory is not configured for JWT bearer testing."
+            )
+        ).CreateToken(variation);
 
     public static async Task<FoundationApiFactory> CreateAsync(
         Guid? actorUserId = null,
         Guid? correlationId = null,
         FileStorage? fileStorage = null,
-        string? aal = null)
+        string? aal = null
+    )
     {
         var resolvedActorUserId = actorUserId ?? Guid.NewGuid();
         var resolvedCorrelationId = correlationId ?? Guid.NewGuid();
@@ -102,8 +115,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 "external-subject",
                 "same-address@example.test",
                 resolvedCorrelationId.ToString(),
-                aal),
-            testFileStorage: fileStorage);
+                aal
+            ),
+            testFileStorage: fileStorage
+        );
         return await PrepareAsync(factory);
     }
 
@@ -111,14 +126,39 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Guid? actorUserId = null,
         Guid? correlationId = null,
         FileStorage? fileStorage = null,
-        string? aal = null)
+        string? aal = null
+    )
     {
         var factory = await CreateAsync(actorUserId, correlationId, fileStorage, aal);
         return await SeedAuthenticatedActorAndReturnAsync(factory);
     }
 
+    public static async Task<FoundationApiFactory> CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
+        Guid? actorUserId = null,
+        Guid? correlationId = null,
+        string? aal = null
+    )
+    {
+        var factory = await CreateWithAuthenticatedIdentityAsync(
+            actorUserId,
+            correlationId,
+            aal: aal
+        );
+        try
+        {
+            await WolverineStorageDeployment.ApplyAsync(factory.Fixture);
+            return factory;
+        }
+        catch (Exception primaryFailure)
+        {
+            await factory.DisposeResourcesAsync(primaryFailure);
+            throw;
+        }
+    }
+
     private static async Task<FoundationApiFactory> SeedAuthenticatedActorAndReturnAsync(
-        FoundationApiFactory factory)
+        FoundationApiFactory factory
+    )
     {
         try
         {
@@ -137,19 +177,22 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         string? subject,
         string? email = "same-address@example.test",
         string? correlationIdClaim = null,
-        string? aal = null)
+        string? aal = null
+    )
     {
         var factory = new FoundationApiFactory(
             Guid.NewGuid(),
             Guid.NewGuid(),
-            CreateTestPrincipalClaims(issuer, subject, email, correlationIdClaim, aal));
+            CreateTestPrincipalClaims(issuer, subject, email, correlationIdClaim, aal)
+        );
         return await PrepareAsync(factory);
     }
 
     internal static async Task<FoundationApiFactory> CreateForLifecycleTestAsync(
         IFoundationFixtureLifecycle fixture,
         Func<ValueTask> disposeHostAsync,
-        Func<ValueTask> disposeJwtAsync)
+        Func<ValueTask> disposeJwtAsync
+    )
     {
         var factory = new FoundationApiFactory(
             Guid.NewGuid(),
@@ -157,14 +200,16 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             CreateTestPrincipalClaims(null, null, null, null),
             fixture: fixture,
             disposeHostAsync: disposeHostAsync,
-            disposeJwtAsync: disposeJwtAsync);
+            disposeJwtAsync: disposeJwtAsync
+        );
         return await PrepareAsync(factory);
     }
 
     internal static async Task<FoundationApiFactory> CreateForSeedLifecycleTestAsync(
         IFoundationFixtureLifecycle fixture,
         Func<ValueTask> disposeHostAsync,
-        Func<ValueTask> disposeJwtAsync)
+        Func<ValueTask> disposeJwtAsync
+    )
     {
         var factory = new FoundationApiFactory(
             Guid.NewGuid(),
@@ -172,7 +217,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             CreateTestPrincipalClaims(null, null, null, null),
             fixture: fixture,
             disposeHostAsync: disposeHostAsync,
-            disposeJwtAsync: disposeJwtAsync);
+            disposeJwtAsync: disposeJwtAsync
+        );
         return await SeedAuthenticatedActorAndReturnAsync(await PrepareAsync(factory));
     }
 
@@ -189,7 +235,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     public static async Task<FoundationApiFactory> CreateWithJwtBearerAndBrowserSessionProviderAsync(
         HttpMessageHandler browserSessionProviderHandler,
         bool seedAuthenticatedActor = true,
-        GateDatabaseFailurePoint? databaseFailurePoint = null)
+        GateDatabaseFailurePoint? databaseFailurePoint = null
+    )
     {
         ArgumentNullException.ThrowIfNull(browserSessionProviderHandler);
         var factory = new FoundationApiFactory(
@@ -198,23 +245,28 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             CreateTestPrincipalClaims(null, null, null, null),
             new JwtTestAuthority(),
             databaseFailurePoint: databaseFailurePoint,
-            browserSessionProviderHandler: browserSessionProviderHandler);
+            browserSessionProviderHandler: browserSessionProviderHandler
+        );
         return await PrepareAsync(factory, seedAuthenticatedActor);
     }
 
     public static async Task<FoundationApiFactory> CreateWithJwtBearerAndDatabaseFailureAsync(
-        GateDatabaseFailurePoint databaseFailurePoint)
+        GateDatabaseFailurePoint databaseFailurePoint
+    )
     {
         var factory = new FoundationApiFactory(
             Guid.NewGuid(),
             Guid.NewGuid(),
             CreateTestPrincipalClaims(null, null, null, null),
             new JwtTestAuthority(),
-            databaseFailurePoint: databaseFailurePoint);
+            databaseFailurePoint: databaseFailurePoint
+        );
         return await PrepareAsync(factory, seedAuthenticatedActor: true);
     }
 
-    private static async Task<FoundationApiFactory> CreateWithJwtBearerAsync(bool useCountingIdentityProvider)
+    private static async Task<FoundationApiFactory> CreateWithJwtBearerAsync(
+        bool useCountingIdentityProvider
+    )
     {
         var identityProvider = useCountingIdentityProvider
             ? new CountingIdentityProvider(new SupabaseIdentityProvider(JwtTestAuthority.Issuer))
@@ -224,7 +276,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             Guid.NewGuid(),
             CreateTestPrincipalClaims(null, null, null, null),
             new JwtTestAuthority(),
-            identityProvider);
+            identityProvider
+        );
         return await PrepareAsync(factory, seedAuthenticatedActor: true);
     }
 
@@ -240,12 +293,17 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         {
             services.AddTransient<IStartupFilter, AllowAnonymousTestEndpointStartupFilter>();
             services.RemoveAll<DbContextOptions<FoundationDbContext>>();
-            services.AddDbContext<FoundationDbContext>((_, options) => options
-                .UseNpgsql(_fixture.RuntimeConnectionString)
-                .UseSnakeCaseNamingConvention()
-                .AddInterceptors(
-                    new RowVersionInterceptor(),
-                    new GateDatabaseFailureInterceptor(_databaseFailurePoint)));
+            services.AddDbContext<FoundationDbContext>(
+                (_, options) =>
+                    options
+                        .UseNpgsql(_fixture.RuntimeConnectionString)
+                        .UseSnakeCaseNamingConvention()
+                        .AddInterceptors(
+                            new RowVersionInterceptor(),
+                            new GateDatabaseFailureInterceptor(_databaseFailurePoint),
+                            new CommitAcknowledgementFailureInterceptor()
+                        )
+            );
             if (_testFileStorage is not null)
             {
                 services.RemoveAll<FileStorage>();
@@ -259,41 +317,52 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                     services.AddSingleton<IIdentityProvider>(_countingIdentityProvider);
                 }
 
-                services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
-                {
-                    options.MetadataAddress = JwtTestAuthority.MetadataAddress;
-                    options.Backchannel = new HttpClient(new JwtMetadataHandler(_jwtAuthority!));
-                    options.ConfigurationManager = new ConfigurationManager<OpenIdConnectConfiguration>(
-                        options.MetadataAddress,
-                        new OpenIdConnectConfigurationRetriever(),
-                        new HttpDocumentRetriever(options.Backchannel));
-                    options.Events = new JwtBearerEvents
+                services.PostConfigure<JwtBearerOptions>(
+                    JwtBearerDefaults.AuthenticationScheme,
+                    options =>
                     {
-                        OnTokenValidated = context =>
+                        options.MetadataAddress = JwtTestAuthority.MetadataAddress;
+                        options.Backchannel = new HttpClient(
+                            new JwtMetadataHandler(_jwtAuthority!)
+                        );
+                        options.ConfigurationManager =
+                            new ConfigurationManager<OpenIdConnectConfiguration>(
+                                options.MetadataAddress,
+                                new OpenIdConnectConfigurationRetriever(),
+                                new HttpDocumentRetriever(options.Backchannel)
+                            );
+                        options.Events = new JwtBearerEvents
                         {
-                            AuthenticatedJwtPrincipal = context.Principal;
-                            return Task.CompletedTask;
-                        }
-                    };
-                });
+                            OnTokenValidated = context =>
+                            {
+                                AuthenticatedJwtPrincipal = context.Principal;
+                                return Task.CompletedTask;
+                            },
+                        };
+                    }
+                );
             }
 
             if (_browserSessionProviderHandler is not null)
             {
-                services.AddHttpClient<SupabasePasswordSessionClient>()
+                services
+                    .AddHttpClient<SupabasePasswordSessionClient>()
                     .ConfigurePrimaryHttpMessageHandler(() => _browserSessionProviderHandler);
             }
 
             if (!_useJwtBearer)
             {
                 services.AddSingleton(_principalClaims);
-                services.AddAuthentication(options =>
-                {
-                    options.DefaultAuthenticateScheme = TestAuthenticationScheme;
-                    options.DefaultChallengeScheme = TestAuthenticationScheme;
-                }).AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(
-                    TestAuthenticationScheme,
-                    _ => { });
+                services
+                    .AddAuthentication(options =>
+                    {
+                        options.DefaultAuthenticateScheme = TestAuthenticationScheme;
+                        options.DefaultChallengeScheme = TestAuthenticationScheme;
+                    })
+                    .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(
+                        TestAuthenticationScheme,
+                        _ => { }
+                    );
             }
         });
     }
@@ -305,7 +374,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             primaryFailure,
             DisposeHostAsync,
             DisposeJwtAsync,
-            _fixture.DisposeAsync);
+            _fixture.DisposeAsync
+        );
 
     private ValueTask DisposeHostAsync() => _disposeHostAsync?.Invoke() ?? base.DisposeAsync();
 
@@ -322,7 +392,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     private static async Task<FoundationApiFactory> PrepareAsync(
         FoundationApiFactory factory,
-        bool seedAuthenticatedActor = false)
+        bool seedAuthenticatedActor = false
+    )
     {
         try
         {
@@ -352,14 +423,18 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 Guid.NewGuid(),
                 ActorUserId,
                 "https://project.supabase.co/auth/v1",
-                "external-subject"));
+                "external-subject"
+            )
+        );
         await administrator.SaveChangesAsync();
     }
 
     private async Task ConfigureDatabaseFailureAsync()
     {
-        if (_databaseFailurePoint != GateDatabaseFailurePoint.SelfSessionRevocation
-            || _fixture is not FoundationPostgresFixture fixture)
+        if (
+            _databaseFailurePoint != GateDatabaseFailurePoint.SelfSessionRevocation
+            || _fixture is not FoundationPostgresFixture fixture
+        )
         {
             return;
         }
@@ -370,7 +445,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         await using var administrator = await fixture.OpenAdministratorConnectionAsync();
         await using var command = new Npgsql.NpgsqlCommand(
             "REVOKE EXECUTE ON FUNCTION foundation.revoke_all_user_sessions(uuid) FROM vinx_runtime;",
-            administrator);
+            administrator
+        );
         await command.ExecuteNonQueryAsync();
     }
 
@@ -379,7 +455,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         string? subject,
         string? email,
         string? correlationId,
-        string? aal = null)
+        string? aal = null
+    )
     {
         var issuedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         return new TestPrincipalClaims(
@@ -393,9 +470,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             [
                 new AmrEntry("password", issuedAt - 10),
                 new AmrEntry("email", issuedAt - 20),
-                new AmrEntry("token_refresh", issuedAt - 5)
+                new AmrEntry("token_refresh", issuedAt - 5),
             ],
-            aal);
+            aal
+        );
     }
 }
 
@@ -414,7 +492,7 @@ public enum JwtTokenVariation
     AuthenticatorAfterIssuedAt,
     IssuedAtAtOrAfterExpiresAt,
     TwoAmrEntries,
-    AmrWithProviderOnlyMetadata
+    AmrWithProviderOnlyMetadata,
 }
 
 internal sealed class JwtTestAuthority : IDisposable
@@ -433,36 +511,48 @@ internal sealed class JwtTestAuthority : IDisposable
         {
             JwtTokenVariation.Expired => now.ToUnixTimeSeconds() - 3600,
             JwtTokenVariation.IssuedAtAtOrAfterExpiresAt => now.ToUnixTimeSeconds() + 3600,
-            _ => now.ToUnixTimeSeconds() + 300
+            _ => now.ToUnixTimeSeconds() + 300,
         };
-        var issuedAt = variation == JwtTokenVariation.IssuedAtAtOrAfterExpiresAt
-            ? expiresAt
-            : now.ToUnixTimeSeconds();
+        var issuedAt =
+            variation == JwtTokenVariation.IssuedAtAtOrAfterExpiresAt
+                ? expiresAt
+                : now.ToUnixTimeSeconds();
         var signingKey = new RsaSecurityKey(
-            variation == JwtTokenVariation.InvalidSignature ? _invalidSigningRsa : _signingRsa)
+            variation == JwtTokenVariation.InvalidSignature ? _invalidSigningRsa : _signingRsa
+        )
         {
-            KeyId = "test-key"
+            KeyId = "test-key",
         };
         var claims = new List<Claim>
         {
             new("sub", "external-subject"),
-            new("iat", issuedAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64)
+            new("iat", issuedAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64),
         };
         if (variation != JwtTokenVariation.MissingSessionId)
         {
-            claims.Add(new Claim(
-                "session_id",
-                variation == JwtTokenVariation.MalformedSessionId ? "not-a-uuid" : Guid.NewGuid().ToString("D")));
+            claims.Add(
+                new Claim(
+                    "session_id",
+                    variation == JwtTokenVariation.MalformedSessionId
+                        ? "not-a-uuid"
+                        : Guid.NewGuid().ToString("D")
+                )
+            );
         }
 
         claims.AddRange(CreateAmrClaims(variation, issuedAt));
         var token = new JwtSecurityToken(
-            issuer: variation == JwtTokenVariation.InvalidIssuer ? "https://other.supabase.co/auth/v1" : Issuer,
+            issuer: variation == JwtTokenVariation.InvalidIssuer
+                ? "https://other.supabase.co/auth/v1"
+                : Issuer,
             audience: variation == JwtTokenVariation.InvalidAudience ? "other-audience" : Audience,
             claims: claims,
-            notBefore: variation == JwtTokenVariation.Expired ? now.AddHours(-2).UtcDateTime : now.AddMinutes(-1).UtcDateTime,
+            notBefore: variation == JwtTokenVariation.Expired
+                ? now.AddHours(-2).UtcDateTime
+                : now.AddMinutes(-1).UtcDateTime,
             expires: DateTimeOffset.FromUnixTimeSeconds(expiresAt).UtcDateTime,
-            signingCredentials: new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
+            signingCredentials: new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256)
+        );
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
@@ -483,37 +573,42 @@ internal sealed class JwtTestAuthority : IDisposable
         {
             yield return new Claim(
                 "amr",
-                JsonSerializer.Serialize(new
-                {
-                    method = "password",
-                    timestamp = issuedAt - 10,
-                    provider_session_metadata = "not-for-browser",
-                }),
-                JsonClaimValueTypes.Json);
+                JsonSerializer.Serialize(
+                    new
+                    {
+                        method = "password",
+                        timestamp = issuedAt - 10,
+                        provider_session_metadata = "not-for-browser",
+                    }
+                ),
+                JsonClaimValueTypes.Json
+            );
             yield return new Claim(
                 "amr",
                 SerializeAmrEntry(new AmrEntry("email", issuedAt - 20)),
-                JsonClaimValueTypes.Json);
+                JsonClaimValueTypes.Json
+            );
             yield break;
         }
 
         AmrEntry[] entries = variation switch
         {
-            JwtTokenVariation.RefreshOnlyAmr =>
-            [new AmrEntry("token_refresh", issuedAt - 1)],
+            JwtTokenVariation.RefreshOnlyAmr => [new AmrEntry("token_refresh", issuedAt - 1)],
             JwtTokenVariation.AuthenticatorAfterIssuedAt =>
-            [new AmrEntry("password", issuedAt + 1)],
+            [
+                new AmrEntry("password", issuedAt + 1),
+            ],
             JwtTokenVariation.TwoAmrEntries =>
             [
                 new AmrEntry("password", issuedAt - 10),
-                new AmrEntry("email", issuedAt - 20)
+                new AmrEntry("email", issuedAt - 20),
             ],
             _ =>
             [
                 new AmrEntry("password", issuedAt - 10),
                 new AmrEntry("email", issuedAt - 20),
-                new AmrEntry("token_refresh", issuedAt - 5)
-            ]
+                new AmrEntry("token_refresh", issuedAt - 5),
+            ],
         };
 
         foreach (var entry in entries)
@@ -522,11 +617,8 @@ internal sealed class JwtTestAuthority : IDisposable
         }
     }
 
-    private static string SerializeAmrEntry(AmrEntry entry) => JsonSerializer.Serialize(new
-    {
-        method = entry.Method,
-        timestamp = entry.Timestamp
-    });
+    private static string SerializeAmrEntry(AmrEntry entry) =>
+        JsonSerializer.Serialize(new { method = entry.Method, timestamp = entry.Timestamp });
 
     public HttpResponseMessage GetResponse(Uri requestUri)
     {
@@ -538,20 +630,22 @@ internal sealed class JwtTestAuthority : IDisposable
         if (requestUri.AbsoluteUri == JwksAddress)
         {
             var parameters = _signingRsa.ExportParameters(false);
-            return JsonResponse(new
-            {
-                keys = new[]
+            return JsonResponse(
+                new
                 {
-                    new
+                    keys = new[]
                     {
-                        kty = "RSA",
-                        use = "sig",
-                        kid = "test-key",
-                        n = Base64UrlEncoder.Encode(parameters.Modulus),
-                        e = Base64UrlEncoder.Encode(parameters.Exponent)
-                    }
+                        new
+                        {
+                            kty = "RSA",
+                            use = "sig",
+                            kid = "test-key",
+                            n = Base64UrlEncoder.Encode(parameters.Modulus),
+                            e = Base64UrlEncoder.Encode(parameters.Exponent),
+                        },
+                    },
                 }
-            });
+            );
         }
 
         return new HttpResponseMessage(HttpStatusCode.NotFound);
@@ -563,17 +657,31 @@ internal sealed class JwtTestAuthority : IDisposable
         _invalidSigningRsa.Dispose();
     }
 
-    private static HttpResponseMessage JsonResponse(object payload) => new(HttpStatusCode.OK)
-    {
-        Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json")
-    };
+    private static HttpResponseMessage JsonResponse(object payload) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(payload),
+                System.Text.Encoding.UTF8,
+                "application/json"
+            ),
+        };
 }
 
 internal sealed class JwtMetadataHandler(JwtTestAuthority authority) : HttpMessageHandler
 {
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-        Task.FromResult(authority.GetResponse(request.RequestUri
-            ?? throw new InvalidOperationException("The JWT metadata request did not have a URI.")));
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken
+    ) =>
+        Task.FromResult(
+            authority.GetResponse(
+                request.RequestUri
+                    ?? throw new InvalidOperationException(
+                        "The JWT metadata request did not have a URI."
+                    )
+            )
+        );
 }
 
 public sealed record TestPrincipalClaims(
@@ -585,7 +693,8 @@ public sealed record TestPrincipalClaims(
     long IssuedAt,
     long ExpiresAt,
     IReadOnlyList<AmrEntry> Amr,
-    string? Aal = null);
+    string? Aal = null
+);
 
 public sealed record AmrEntry(string Method, long Timestamp);
 
@@ -593,7 +702,8 @@ public sealed class TestAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory logger,
     UrlEncoder encoder,
-    TestPrincipalClaims claims) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+    TestPrincipalClaims claims
+) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -619,18 +729,33 @@ public sealed class TestAuthenticationHandler(
         }
 
         identityClaims.Add(new Claim("session_id", claims.SessionId));
-        identityClaims.Add(new Claim("iat", claims.IssuedAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
-        identityClaims.Add(new Claim("exp", claims.ExpiresAt.ToString(CultureInfo.InvariantCulture), ClaimValueTypes.Integer64));
+        identityClaims.Add(
+            new Claim(
+                "iat",
+                claims.IssuedAt.ToString(CultureInfo.InvariantCulture),
+                ClaimValueTypes.Integer64
+            )
+        );
+        identityClaims.Add(
+            new Claim(
+                "exp",
+                claims.ExpiresAt.ToString(CultureInfo.InvariantCulture),
+                ClaimValueTypes.Integer64
+            )
+        );
         if (claims.Aal is not null)
         {
             identityClaims.Add(new Claim("aal", claims.Aal));
         }
-        identityClaims.AddRange(claims.Amr.Select(entry =>
-            new Claim("amr", JsonSerializer.Serialize(new
-            {
-                method = entry.Method,
-                timestamp = entry.Timestamp
-            }), JsonClaimValueTypes.Json)));
+        identityClaims.AddRange(
+            claims.Amr.Select(entry => new Claim(
+                "amr",
+                JsonSerializer.Serialize(
+                    new { method = entry.Method, timestamp = entry.Timestamp }
+                ),
+                JsonClaimValueTypes.Json
+            ))
+        );
 
         var identity = new ClaimsIdentity(identityClaims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
@@ -645,7 +770,10 @@ internal sealed class CountingIdentityProvider(IIdentityProvider inner) : IIdent
 
     public int CallCount => Volatile.Read(ref _callCount);
 
-    public bool TryGetExternalIdentityProof(ClaimsPrincipal principal, out ExternalIdentityProof proof)
+    public bool TryGetExternalIdentityProof(
+        ClaimsPrincipal principal,
+        out ExternalIdentityProof proof
+    )
     {
         Interlocked.Increment(ref _callCount);
         return inner.TryGetExternalIdentityProof(principal, out proof);
@@ -658,12 +786,14 @@ public enum GateDatabaseFailurePoint
     SelfSessionRevocation,
 }
 
-internal sealed class GateDatabaseFailureInterceptor(GateDatabaseFailurePoint? failurePoint) : DbCommandInterceptor
+internal sealed class GateDatabaseFailureInterceptor(GateDatabaseFailurePoint? failurePoint)
+    : DbCommandInterceptor
 {
     public override InterceptionResult<DbDataReader> ReaderExecuting(
         DbCommand command,
         CommandEventData eventData,
-        InterceptionResult<DbDataReader> result)
+        InterceptionResult<DbDataReader> result
+    )
     {
         ThrowWhenConfigured(command);
         return result;
@@ -673,7 +803,8 @@ internal sealed class GateDatabaseFailureInterceptor(GateDatabaseFailurePoint? f
         DbCommand command,
         CommandEventData eventData,
         InterceptionResult<DbDataReader> result,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ThrowWhenConfigured(command);
         return ValueTask.FromResult(result);
@@ -681,41 +812,53 @@ internal sealed class GateDatabaseFailureInterceptor(GateDatabaseFailurePoint? f
 
     private void ThrowWhenConfigured(DbCommand command)
     {
-        var failsResolution = failurePoint == GateDatabaseFailurePoint.Resolution
+        var failsResolution =
+            failurePoint == GateDatabaseFailurePoint.Resolution
             && command.CommandText.Contains("external_identities", StringComparison.Ordinal);
-        var failsSelfSessionRevocation = failurePoint == GateDatabaseFailurePoint.SelfSessionRevocation
+        var failsSelfSessionRevocation =
+            failurePoint == GateDatabaseFailurePoint.SelfSessionRevocation
             && command.CommandText.Contains("revoke_all_user_sessions", StringComparison.Ordinal);
         if (failsResolution || failsSelfSessionRevocation)
         {
-            throw new InvalidOperationException("Configured database failure for the identity gate test.");
+            throw new InvalidOperationException(
+                "Configured database failure for the identity gate test."
+            );
         }
     }
 }
 
 internal sealed class AllowAnonymousTestEndpointStartupFilter : IStartupFilter
 {
-    public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
-    {
-        app.Use((context, next) =>
+    public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) =>
+        app =>
         {
-            if (IPAddress.TryParse(context.Request.Headers["X-Test-Remote-IP"], out var remoteIpAddress))
-            {
-                context.Connection.RemoteIpAddress = remoteIpAddress;
-            }
+            app.Use(
+                (context, next) =>
+                {
+                    if (
+                        IPAddress.TryParse(
+                            context.Request.Headers["X-Test-Remote-IP"],
+                            out var remoteIpAddress
+                        )
+                    )
+                    {
+                        context.Connection.RemoteIpAddress = remoteIpAddress;
+                    }
 
-            if (context.Request.Path == "/test/identity-gate/allow-anonymous")
-            {
-                context.SetEndpoint(AllowAnonymousEndpoint);
-            }
-            else if (context.Request.Path == "/test/browser-bff/claims")
-            {
-                context.SetEndpoint(BrowserBffClaimsEndpoint);
-            }
+                    if (context.Request.Path == "/test/identity-gate/allow-anonymous")
+                    {
+                        context.SetEndpoint(AllowAnonymousEndpoint);
+                    }
+                    else if (context.Request.Path == "/test/browser-bff/claims")
+                    {
+                        context.SetEndpoint(BrowserBffClaimsEndpoint);
+                    }
 
-            return next();
-        });
-        next(app);
-    };
+                    return next();
+                }
+            );
+            next(app);
+        };
 
     private static readonly Endpoint AllowAnonymousEndpoint = new(
         async context =>
@@ -724,7 +867,8 @@ internal sealed class AllowAnonymousTestEndpointStartupFilter : IStartupFilter
             await context.Response.WriteAsync("Anonymous");
         },
         new EndpointMetadataCollection(new AuthorizeAttribute(), new AllowAnonymousAttribute()),
-        "Test allow-anonymous endpoint");
+        "Test allow-anonymous endpoint"
+    );
 
     private static readonly Endpoint BrowserBffClaimsEndpoint = new(
         async context =>
@@ -732,8 +876,10 @@ internal sealed class AllowAnonymousTestEndpointStartupFilter : IStartupFilter
             context.Response.ContentType = "application/json";
             await JsonSerializer.SerializeAsync(
                 context.Response.Body,
-                new { amr = context.User.FindAll("amr").Select(claim => claim.Value) });
+                new { amr = context.User.FindAll("amr").Select(claim => claim.Value) }
+            );
         },
         new EndpointMetadataCollection(new AuthorizeAttribute()),
-        "Test browser BFF claims endpoint");
+        "Test browser BFF claims endpoint"
+    );
 }
