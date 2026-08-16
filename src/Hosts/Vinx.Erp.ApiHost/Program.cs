@@ -11,7 +11,9 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
+using Vinx.Erp.ApiHost;
 using Vinx.Erp.ApiHost.Identity;
+using Vinx.Erp.Atendimento;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
@@ -81,6 +83,7 @@ builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddScoped<PaguaiDraftService>();
+builder.Services.AddScoped<AtendimentoCardService>();
 builder
     .Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false)
     .AddJsonOptions(options =>
@@ -705,6 +708,127 @@ foundation.MapPost(
         return result.ToMinimalApiResult();
     }
 );
+var atendimento = app.MapGroup("/atendimento")
+    .RequireAuthorization()
+    .RequireRateLimiting(ProtectedRateLimitPolicy);
+atendimento
+    .MapGet(
+        "/cards",
+        async (
+            Guid? companyId,
+            HttpContext context,
+            AtendimentoCardService service,
+            CancellationToken cancellationToken
+        ) =>
+        {
+            if (companyId is null)
+            {
+                return AtendimentoHttpContract.Error(
+                    "invalid_request",
+                    StatusCodes.Status400BadRequest
+                );
+            }
+
+            var result = await service.GetQueueAsync(
+                context.GetRequiredActorContext(),
+                companyId.Value,
+                cancellationToken
+            );
+            return AtendimentoHttpContract.ToQueueResult(result);
+        }
+    )
+    .WithName("AtendimentoCards")
+    .Produces<IReadOnlyList<AtendimentoCardResponse>>(StatusCodes.Status200OK)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
+    .Produces(StatusCodes.Status401Unauthorized)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
+    .Produces(StatusCodes.Status429TooManyRequests);
+atendimento
+    .MapPost(
+        "/cards",
+        async (
+            CreateAtendimentoCardCommand command,
+            HttpContext context,
+            AtendimentoCardService service,
+            CancellationToken cancellationToken
+        ) =>
+        {
+            var result = await service.CreateAsync(
+                context.GetRequiredActorContext(),
+                command,
+                cancellationToken
+            );
+            return AtendimentoHttpContract.ToCommandResult(result);
+        }
+    )
+    .WithName("CreateAtendimentoCard")
+    .Produces<AtendimentoCardResponse>(StatusCodes.Status201Created)
+    .Produces<AtendimentoCardResponse>(StatusCodes.Status200OK)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
+    .Produces(StatusCodes.Status401Unauthorized)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status409Conflict)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
+    .Produces(StatusCodes.Status429TooManyRequests);
+atendimento
+    .MapPost(
+        "/cards/{id:guid}/assign",
+        async (
+            Guid id,
+            AssignAtendimentoCardCommand command,
+            HttpContext context,
+            AtendimentoCardService service,
+            CancellationToken cancellationToken
+        ) =>
+        {
+            var result = await service.AssignAsync(
+                context.GetRequiredActorContext(),
+                id,
+                command,
+                cancellationToken
+            );
+            return AtendimentoHttpContract.ToCommandResult(result);
+        }
+    )
+    .WithName("AssignAtendimentoCard")
+    .Produces<AtendimentoCardResponse>(StatusCodes.Status200OK)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
+    .Produces(StatusCodes.Status401Unauthorized)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status404NotFound)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status409Conflict)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
+    .Produces(StatusCodes.Status429TooManyRequests);
+atendimento
+    .MapPost(
+        "/cards/{id:guid}/move",
+        async (
+            Guid id,
+            MoveAtendimentoCardCommand command,
+            HttpContext context,
+            AtendimentoCardService service,
+            CancellationToken cancellationToken
+        ) =>
+        {
+            var result = await service.MoveAsync(
+                context.GetRequiredActorContext(),
+                id,
+                command,
+                cancellationToken
+            );
+            return AtendimentoHttpContract.ToCommandResult(result);
+        }
+    )
+    .WithName("MoveAtendimentoCard")
+    .Produces<AtendimentoCardResponse>(StatusCodes.Status200OK)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
+    .Produces(StatusCodes.Status401Unauthorized)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status404NotFound)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status409Conflict)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
+    .Produces(StatusCodes.Status429TooManyRequests);
 app.Run();
 
 internal sealed class FoundationDatabaseOptions

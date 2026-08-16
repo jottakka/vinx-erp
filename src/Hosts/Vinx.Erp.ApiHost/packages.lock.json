@@ -251,6 +251,12 @@
           "Microsoft.IdentityModel.Tokens": "8.19.2"
         }
       },
+      "vinx.erp.atendimento": {
+        "type": "Project",
+        "dependencies": {
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
       "vinx.erp.foundation": {
         "type": "Project",
         "dependencies": {

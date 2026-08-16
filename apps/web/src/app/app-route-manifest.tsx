@@ -10,6 +10,7 @@ import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import { Skeleton, Stack } from "@mui/material";
 import { lazy, type ReactElement, Suspense } from "react";
 import { PaguaiPage } from "../features/paguai/paguai-page";
+import { AtendimentoPage } from "../features/atendimento/atendimento-page";
 import {
   type AppRouteCatalogEntry,
   agentPath,
@@ -55,21 +56,11 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
   },
   "/atendimento": {
     icon: SupportAgentOutlinedIcon,
-    render: () => (
-      <FeaturePreparationPage
-        feature="Atendimento"
-        scope="Fila, tickets e histórico de atendimento."
-      />
-    ),
+    render: () => <AtendimentoPage />,
   },
   "/kanban": {
     icon: ViewKanbanOutlinedIcon,
-    render: () => (
-      <FeaturePreparationPage
-        feature="Kanban"
-        scope="Quadros, cards e acompanhamento do trabalho."
-      />
-    ),
+    render: () => <AtendimentoPage title="Kanban" />,
   },
   "/pessoas": {
     icon: GroupsOutlinedIcon,

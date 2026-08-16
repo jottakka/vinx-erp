@@ -122,6 +122,43 @@ public sealed class AtendimentoCardEndpointTests
         Assert.Equal(created.Version + 1, current.Version);
     }
 
+    [Fact]
+    public async Task Assigning_an_active_membership_updates_the_card_and_replays_the_same_request()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var created = await CreateCardAsync(client, scenario.CompanyId);
+        var request = new AssignCardRequest(
+            scenario.CompanyId,
+            Guid.NewGuid(),
+            created.Version,
+            scenario.AssigneeMembershipId
+        );
+
+        using var first = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/assign",
+            request
+        );
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var assigned = await first.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.NotNull(assigned);
+        Assert.Equal(scenario.AssigneeMembershipId, assigned.AssigneeMembershipId);
+        Assert.Equal(created.Version + 1, assigned.Version);
+
+        using var replay = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/assign",
+            request
+        );
+
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        var replayed = await replay.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.NotNull(replayed);
+        Assert.Equal(assigned.Id, replayed.Id);
+        Assert.Equal(assigned.Version, replayed.Version);
+    }
+
     private static async Task<CardResponse> CreateCardAsync(HttpClient client, Guid companyId)
     {
         using var response = await client.PostAsJsonAsync(
@@ -171,13 +208,10 @@ public sealed class AtendimentoCardEndpointTests
             factory.ActorUserId,
             requestId
         );
-        var capabilities = new[]
-        {
-            new Capability(Guid.NewGuid(), "service_desk.ticket.read_queue"),
-            new Capability(Guid.NewGuid(), "service_desk.ticket.create"),
-            new Capability(Guid.NewGuid(), "service_desk.ticket.assign"),
-            new Capability(Guid.NewGuid(), "service_desk.ticket.move"),
-        };
+        var capabilities = await administrator
+            .Capabilities.Where(capability => capability.Name.StartsWith("service_desk.ticket."))
+            .ToArrayAsync();
+        Assert.Equal(4, capabilities.Length);
         var assignment = new RoleAssignment(
             Guid.NewGuid(),
             company.Id,
@@ -196,7 +230,6 @@ public sealed class AtendimentoCardEndpointTests
             role,
             assignment
         );
-        administrator.Capabilities.AddRange(capabilities);
         administrator.RoleCapabilities.AddRange(
             capabilities.Select(capability => new RoleCapability(
                 Guid.NewGuid(),
@@ -228,13 +261,21 @@ public sealed class AtendimentoCardEndpointTests
         string Column
     );
 
+    private sealed record AssignCardRequest(
+        Guid CompanyId,
+        Guid RequestId,
+        long ExpectedVersion,
+        Guid AssigneeMembershipId
+    );
+
     private sealed record CardResponse(
         Guid Id,
         Guid CompanyId,
         string Title,
         string Description,
         string Column,
-        long Version
+        long Version,
+        Guid? AssigneeMembershipId
     );
 
     private sealed record ErrorResponse(string Code);

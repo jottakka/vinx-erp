@@ -33,4 +33,24 @@ public static class KnownCapabilities
     public static readonly Guid PaguaiDraftCreateId = Guid.Parse(
         "aecaa296-6a6f-5815-93ac-bd1ccdff3f44"
     );
+
+    public const string ServiceDeskTicketReadQueue = "service_desk.ticket.read_queue";
+    public static readonly Guid ServiceDeskTicketReadQueueId = Guid.Parse(
+        "611e4143-0a7a-49df-97af-783b28dd8974"
+    );
+
+    public const string ServiceDeskTicketCreate = "service_desk.ticket.create";
+    public static readonly Guid ServiceDeskTicketCreateId = Guid.Parse(
+        "20d15110-0862-4098-96f6-0a1931d48848"
+    );
+
+    public const string ServiceDeskTicketAssign = "service_desk.ticket.assign";
+    public static readonly Guid ServiceDeskTicketAssignId = Guid.Parse(
+        "7a4911f9-5ff2-4cad-b8e4-f907ff3159b3"
+    );
+
+    public const string ServiceDeskTicketMove = "service_desk.ticket.move";
+    public static readonly Guid ServiceDeskTicketMoveId = Guid.Parse(
+        "86622ee5-7117-471a-90a7-1ecd90fabc18"
+    );
 }

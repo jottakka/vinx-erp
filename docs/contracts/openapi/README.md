@@ -91,3 +91,23 @@ apenas `id`, `companyId`, `requestId`, `title`, `description`, `state`,
 
 O contrato não expõe payload em logs ou auditoria. Todas as respostas privadas
 recebem `Cache-Control: private, no-store` e o header de correlação do host.
+
+## Atendimento / Kanban MVP
+
+`GET /atendimento/cards?companyId={uuid}` aceita bearer ou cookie BFF e exige
+`service_desk.ticket.read_queue` no escopo Company. Retorna `200` com cartões
+da empresa selecionada, ou `400 invalid_request`, `401`, `403
+membership_required|capability_denied`, `429` e `503 atendimento_unavailable`.
+
+`POST /atendimento/cards` exige `service_desk.ticket.create`; o corpo possui
+`companyId`, `requestId`, `title` e `description`. Retorna `201`, ou `200` no
+replay equivalente; `400 invalid_request`, `401`, `403`, `409
+idempotency_conflict`, `429` e `503` são publicados. `POST
+/atendimento/cards/{id}/assign` exige `.assign` e recebe também
+`expectedVersion` e `assigneeMembershipId`. `POST /atendimento/cards/{id}/move`
+exige `.move` e recebe `expectedVersion` e `column` (`novo`, `em_andamento` ou
+`concluido`). As duas retornam `200`, e podem retornar `404 resource_not_found`,
+`409 idempotency_conflict|integrity_conflict`, `400`, `401`, `403`, `429` ou
+`503`. `integrity_conflict` devolve apenas o estado atual já autorizado do
+cartão, nunca dados de outra empresa. Todas as respostas mantêm
+`X-Correlation-ID` e as mutações usam auditoria transacional.
