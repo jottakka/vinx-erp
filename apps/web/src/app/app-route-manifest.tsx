@@ -9,6 +9,7 @@ import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import { Skeleton, Stack } from "@mui/material";
 import { lazy, type ReactElement, Suspense } from "react";
+import { PeoplePage } from "../features/people/people-page";
 import {
   type AppRouteCatalogEntry,
   agentPath,
@@ -77,12 +78,7 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
   },
   "/pessoas": {
     icon: GroupsOutlinedIcon,
-    render: () => (
-      <FeaturePreparationPage
-        feature="Pessoas"
-        scope="Diretório, ausências e visão de equipe."
-      />
-    ),
+    render: () => <PeoplePage />,
   },
 };
 
