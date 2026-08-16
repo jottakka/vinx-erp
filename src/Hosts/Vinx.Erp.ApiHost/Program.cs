@@ -163,7 +163,11 @@ builder.Services.AddRateLimiter(options =>
         ProtectedRateLimitPolicy,
         context =>
             RateLimitPartition.GetFixedWindowLimiter(
-                context.User.Identity?.IsAuthenticated == true ? "authenticated" : "anonymous",
+                context.User.Identity?.IsAuthenticated == true
+                    ? context.User.FindFirst("sub")?.Value is { Length: > 0 } subject
+                        ? $"authenticated:{subject}"
+                        : "authenticated-without-sub"
+                    : "anonymous",
                 _ => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit = 60,
@@ -364,7 +368,12 @@ builder.Services.AddOpenApi(options =>
                     {
                         Name = BrowserBffAuthenticationExtensions.AntiforgeryHeaderName,
                         In = ParameterLocation.Header,
-                        Required = true,
+                        Required =
+                            metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
+                            || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any()
+                                == true,
+                        Description =
+                            "Obrigatório quando a operação autenticada usa o cookie de sessão BFF.",
                         Schema = new OpenApiSchema { Type = JsonSchemaType.String },
                     }
                 );

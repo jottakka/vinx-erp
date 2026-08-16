@@ -115,6 +115,10 @@ antiforgery não consome esses limites. A entrega não amplia #44 com JIT por
 e-mail, MFA, recuperação ou fluxos adicionais de provedor, nem entrega #79:
 listagem ou revogação individual de sessões continuam adiadas.
 
+As rotas protegidas usam limite de 60 requisições por minuto por sujeito
+autenticado (`sub`). Pedido anônimo e identidade autenticada sem `sub` ficam em
+partições separadas e não consomem a cota de outra pessoa.
+
 O operador de plataforma é um registro global singleton em
 `foundation.platform_operators`, separado de company, membership, role e
 capability de tenant. A policy `platform.operator` consulta somente a função

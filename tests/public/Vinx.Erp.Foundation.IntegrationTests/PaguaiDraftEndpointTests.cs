@@ -234,6 +234,10 @@ public sealed class PaguaiDraftEndpointTests
             parameter =>
                 parameter.GetProperty("name").GetString() == "X-CSRF-TOKEN"
                 && parameter.GetProperty("in").GetString() == "header"
+                && (
+                    !parameter.TryGetProperty("required", out var required)
+                    || !required.GetBoolean()
+                )
         );
         var responses = operation.GetProperty("responses");
         foreach (
