@@ -49,7 +49,9 @@ de preferências deve abrir pelo botão nomeado e manter foco e nomes acessívei
 ## Próxima ação
 
 Use este fluxo somente para desenvolvimento da interface. Para orientações de navegação voltadas a quem usa o produto, consulte
-`docs/manuals/frontend/app-shell-home.md`. A prova de autenticação real com API e banco pertence às issues #114 e #115.
+`docs/manuals/frontend/app-shell-home.md`. O cliente e estado do bootstrap
+autenticado estão documentados em `docs/manuals/frontend/foundation-bootstrap.md`;
+a composição da sessão BFF real no caminho de release pertence a #117.
 
 Esta sessão é uma mock de desenvolvimento não persistente: cada instância do
 navegador cria seu próprio estado em memória e o descarta ao recarregar. As

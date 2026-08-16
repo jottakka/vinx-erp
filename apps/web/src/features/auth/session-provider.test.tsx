@@ -11,7 +11,7 @@ function SessionProbe() {
   return (
     <>
       <p>{session.status}</p>
-      <p>{session.bootstrap?.user.name ?? "anonymous"}</p>
+      <p>{session.bootstrap?.user.displayName ?? "anonymous"}</p>
       <p>{session.error ?? "no error"}</p>
       <output>{signOutResult}</output>
       <button onClick={() => session.signIn("maria")} type="button">

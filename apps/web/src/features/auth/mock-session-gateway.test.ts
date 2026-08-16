@@ -24,10 +24,10 @@ describe("MockSessionGateway", () => {
     await gateway.login("maria");
 
     expect(sourceCompanies).toContainEqual(
-      expect.objectContaining({ access: "denied", name: "Gama" }),
+      expect.objectContaining({ access: "denied", companyName: "Gama" }),
     );
     await expect(gateway.getBootstrap()).resolves.toMatchObject({
-      companies: [{ name: "Alfa" }, { name: "Beta" }],
+      companies: [{ companyName: "Alfa" }, { companyName: "Beta" }],
     });
   });
 
@@ -39,11 +39,11 @@ describe("MockSessionGateway", () => {
     const bootstrap = await gateway.getBootstrap();
 
     expect(bootstrap).toMatchObject({
-      companies: [{ name: "Alfa" }, { name: "Beta" }],
+      companies: [{ companyName: "Alfa" }, { companyName: "Beta" }],
     });
-    expect(bootstrap?.companies.map((company) => company.name)).not.toContain(
-      "Gama",
-    );
+    expect(
+      bootstrap?.companies.map((company) => company.companyName),
+    ).not.toContain("Gama");
   });
 
   it("rejects an unavailable profile without creating a session", async () => {
@@ -81,7 +81,7 @@ describe("MockSessionGateway", () => {
     await gateway.login("maria");
 
     await expect(gateway.getBootstrap()).resolves.toMatchObject({
-      user: { name: "Maria" },
+      user: { displayName: "Maria" },
     });
   });
 
@@ -102,7 +102,7 @@ describe("MockSessionGateway", () => {
     await pendingLogin;
 
     await expect(gateway.getBootstrap()).resolves.toMatchObject({
-      user: { name: "Maria" },
+      user: { displayName: "Maria" },
     });
   });
 });

@@ -60,7 +60,7 @@ export function AppShell() {
           mobileNavigationOpen={mobileNavigationOpen}
           onOpenNavigation={() => setMobileNavigationOpen(true)}
           onSignOut={() => void signOut()}
-          userName={bootstrap?.user.name ?? ""}
+          userName={bootstrap?.user.displayName ?? ""}
         />
         <Drawer
           open

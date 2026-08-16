@@ -47,7 +47,7 @@ export function HomePage({ navigationLinks }: HomePageProps) {
     <Stack spacing={4}>
       <PageHeader
         description="Uma visão geral das empresas autorizadas e das áreas de trabalho do VINX."
-        eyebrow={`Olá, ${bootstrap.user.name}`}
+        eyebrow={`Olá, ${bootstrap.user.displayName}`}
         title="Início"
       />
       <Card
@@ -66,8 +66,8 @@ export function HomePage({ navigationLinks }: HomePageProps) {
             </Typography>
             <Typography color="text.secondary">
               Consulte a ajuda para entender a navegação, suas empresas e as
-              preferências visuais. As áreas abaixo respeitam o contexto da
-              empresa selecionada, sem misturar dados operacionais.
+              preferências visuais. As áreas abaixo preservam o contexto
+              explícito de cada empresa, sem misturar dados operacionais.
             </Typography>
             <Box>
               <Button component={RouterLink} to="/ajuda" variant="outlined">
@@ -108,10 +108,17 @@ export function HomePage({ navigationLinks }: HomePageProps) {
             }}
           >
             {bootstrap.companies.map((company) => (
-              <Card component="article" key={company.id} variant="outlined">
+              <Card
+                component="article"
+                key={company.membershipId}
+                variant="outlined"
+              >
                 <CardContent>
                   <Stack spacing={1.5}>
-                    <CompanyBadge id={company.id} name={company.name} />
+                    <CompanyBadge
+                      id={company.companyId}
+                      name={company.companyName}
+                    />
                     <Typography color="text.secondary">
                       {company.capabilities.length
                         ? `Acesso autorizado a ${company.capabilities.length} ${

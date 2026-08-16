@@ -16,11 +16,12 @@ export function AppProviders({ children, sessionGateway }: AppProvidersProps) {
   const [gateway] = useState(
     () => sessionGateway ?? createMockSessionGateway(),
   );
+  const [queryClient] = useState(createQueryClient);
 
   return (
     <VinxThemeProvider>
-      <QueryClientProvider client={createQueryClient()}>
-        <SessionProvider gateway={gateway}>
+      <QueryClientProvider client={queryClient}>
+        <SessionProvider gateway={gateway} queryClient={queryClient}>
           <FeedbackProvider>{children}</FeedbackProvider>
         </SessionProvider>
       </QueryClientProvider>

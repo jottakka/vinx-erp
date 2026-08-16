@@ -12,7 +12,6 @@ import {
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import { agentPath } from "../../shared/routing/app-paths";
-import { useSession } from "../auth/session-provider";
 import { AgentConversation } from "./agent-conversation";
 import { useAgentConversation } from "./agent-conversation-provider";
 
@@ -20,10 +19,7 @@ export const AGENT_DOCK_WIDTH = 380;
 
 function DockContent() {
   const { closeDock, resetConversation } = useAgentConversation();
-  const { bootstrap } = useSession();
   const navigate = useNavigate();
-  const companyLabel =
-    bootstrap?.companies[0]?.name ?? "Nenhuma empresa selecionada";
 
   return (
     <Stack
@@ -39,7 +35,7 @@ function DockContent() {
             Agente
           </Typography>
           <Typography color="text.secondary" variant="caption">
-            {companyLabel} · Painel · Demonstração
+            Todas as empresas autorizadas · Painel · Demonstração
           </Typography>
         </Stack>
         <IconButton

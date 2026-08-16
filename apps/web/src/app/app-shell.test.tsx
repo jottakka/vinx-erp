@@ -76,9 +76,17 @@ describe("AppShell", () => {
     const futureCompanyRouter = renderShell(
       "/",
       gatewayFor({
-        companies: [{ capabilities: [], id: "delta", name: "Delta" }],
-        flags: { prototypeSession: true },
-        user: { id: "maria", name: "Maria" },
+        companies: [
+          {
+            capabilities: [],
+            companyId: "company-delta",
+            companyName: "Delta",
+            membershipId: "membership-delta",
+          },
+        ],
+        flags: {},
+        platform: { isPlatformOperator: false },
+        user: { id: "maria", displayName: "Maria" },
       }),
     );
     expect(
@@ -247,8 +255,9 @@ describe("AppShell", () => {
       "/",
       gatewayFor({
         companies: [],
-        flags: { prototypeSession: true },
-        user: { id: "maria", name: "Maria" },
+        flags: {},
+        platform: { isPlatformOperator: false },
+        user: { id: "maria", displayName: "Maria" },
       }),
     );
 

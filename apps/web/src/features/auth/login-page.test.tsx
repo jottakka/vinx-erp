@@ -339,8 +339,9 @@ describe("LoginPage", () => {
 
     resolveLogin({
       companies: [],
-      flags: { prototypeSession: true },
-      user: { id: "maria", name: "Maria" },
+      flags: {},
+      platform: { isPlatformOperator: false },
+      user: { id: "maria", displayName: "Maria" },
     });
 
     await waitFor(() => {
