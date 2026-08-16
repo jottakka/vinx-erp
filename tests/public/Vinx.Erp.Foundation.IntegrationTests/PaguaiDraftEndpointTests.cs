@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
@@ -121,6 +122,34 @@ public sealed class PaguaiDraftEndpointTests
 
         Assert.Equal(HttpStatusCode.Forbidden, foreignList.StatusCode);
         Assert.DoesNotContain("Office supplies", foreignListBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Draft_creation_requires_the_company_create_capability()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            await administrator
+                .RoleCapabilities.Where(grant =>
+                    grant.CompanyId == scenario.CompanyId
+                    && grant.CapabilityId == KnownCapabilities.PaguaiDraftCreateId
+                )
+                .ExecuteDeleteAsync();
+        }
+
+        using var client = factory.CreateClient();
+        using var response = await client.PostAsJsonAsync(
+            "/paguai/requests",
+            NewRequest(scenario.CompanyId, Guid.NewGuid())
+        );
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(
+            "{\"code\":\"capability_denied\"}",
+            await response.Content.ReadAsStringAsync()
+        );
     }
 
     private static DraftRequest NewRequest(Guid companyId, Guid requestId) =>
