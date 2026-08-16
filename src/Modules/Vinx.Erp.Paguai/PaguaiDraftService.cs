@@ -493,13 +493,20 @@ public sealed class PaguaiDraftService(
             ? new PaguaiDraftResult(PaguaiDraftState.Replay, draft)
             : PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
 
-    private static bool IsUniqueViolation(DbUpdateException exception) =>
-        exception.InnerException
-            is PostgresException
-            {
-                SqlState: PostgresErrorCodes.UniqueViolation,
-                ConstraintName: IdempotencyRecordConfiguration.KeyIndexDatabaseName,
-            };
+    private static bool IsUniqueViolation(DbUpdateException exception)
+    {
+        if (exception.InnerException is not PostgresException postgresException)
+        {
+            return false;
+        }
+
+        return postgresException.SqlState == PostgresErrorCodes.UniqueViolation
+            && string.Equals(
+                postgresException.ConstraintName,
+                IdempotencyRecordConfiguration.KeyIndexDatabaseName,
+                StringComparison.Ordinal
+            );
+    }
 
     private static string ComputePayloadHash(CreateDraftCommand command)
     {
