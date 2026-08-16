@@ -8,8 +8,10 @@
 | Formulário inválido não faz POST | `apps/web/src/features/people/people-page.test.tsx` — `validates locally before reserving` |
 | POST usa antiforgery novo, contrato estrito e não expõe IDs | `apps/web/src/features/people/employee-directory-client.test.ts` — `gets a fresh antiforgery token before a single strict create request and hides identifiers` |
 | Sucesso só recarrega após revalidar bootstrap | `apps/web/src/features/people/people-page.test.tsx` — `refreshes bootstrap before reloading the selected directory after success` |
-| Falhas de acesso removem o estado e revalidam a sessão | `apps/web/src/features/people/people-page.test.tsx` — `clears the selected directory and revalidates bootstrap after unauthorized` e `clears the selected directory and revalidates bootstrap after forbidden` |
+| Falhas de acesso tardias neutralizam o estado antes de reconciliar mudança de capability ou usuário | `apps/web/src/features/people/people-page.test.tsx` — `neutralizes a delayed create unauthorized before reconciling a capability change`, `neutralizes a delayed create forbidden before reconciling a capability change`, `neutralizes a delayed list unauthorized before reconciling a user change` e `neutralizes a delayed list forbidden before reconciling a user change` |
 | Resultado ambíguo admite uma tentativa manual com o mesmo pedido | `apps/web/src/features/people/people-page.test.tsx` — `offers one explicit retry with the same request after an ambiguous result` |
+| Resultado potencialmente confirmado preserva o comando exato para retry explícito | `apps/web/src/features/people/people-page.test.tsx` — `preserves the exact command for explicit retry after a potentially committed 201 result` e `preserves the exact command for explicit retry after a potentially committed 500 result` |
+| Durante ambiguidade, o envio normal é bloqueado e a mudança de empresa limpa a tentativa | `apps/web/src/features/people/people-page.test.tsx` — `blocks normal submit after ambiguity and clears both fields on company change` |
 | Concorrência não cria reservas duplicadas | `apps/web/src/features/people/people-page.test.tsx` — `disables duplicate reservation while the mutation is pending` e `synchronously ignores a second submit before React publishes pending state` |
 
 Não há teste E2E nesta fatia. Paguai, Atendimento e Kanban permanecem fora do
