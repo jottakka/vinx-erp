@@ -114,6 +114,15 @@ public sealed class AuditTransactionTests
     {
         private const string MeterName = "Vinx.Erp.Foundation.Authorization";
         private const string CounterName = "foundation.authorization.audit_unavailable";
+        private static readonly string[] ApprovedOperations =
+        [
+            "capability_map",
+            "membership_map",
+            "role_assignment",
+            "membership_revocation",
+            "approval_preparation",
+            "approval_confirmation",
+        ];
         private readonly ConcurrentQueue<IReadOnlyDictionary<string, string>> _measurements = new();
         private readonly MeterListener _listener = new();
 
@@ -146,7 +155,7 @@ public sealed class AuditTransactionTests
             {
                 Assert.Equal(2, measurement.Count);
                 Assert.All(measurement.Keys, key => Assert.Contains(key, new[] { "operation", "phase" }));
-                Assert.Contains(measurement["operation"], new[] { "capability_map", "role_assignment" });
+                Assert.Contains(measurement["operation"], ApprovedOperations);
                 Assert.Contains(measurement["phase"], new[]
                 {
                     "authorization",
