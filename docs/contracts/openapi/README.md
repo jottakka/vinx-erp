@@ -7,6 +7,11 @@ está publicado em `/openapi/v1.json`: declara bearer HTTP na operação e as
 respostas `200`, `401`, `429` e `503`. O `401` não tem corpo e o `503` declara
 somente `{ code: string }`. O documento não é publicado em Production.
 
+`GET /foundation/platform/bootstrap` segue a mesma publicação bearer e
+declara `200`, `401`, `403`, `429` e `503`. A resposta de sucesso contém apenas
+`isPlatformOperator`; `403` e `503` expõem somente códigos estáveis de policy,
+sem revelar dados de tenant ou de identidade.
+
 Todo comando recebe contexto explícito de empresa e é autorizado no servidor
 por membership, capability nomeada e escopo. A resposta não revela dados de
 empresa inacessível. O frontend pode ocultar UI pelas capabilities efetivas,

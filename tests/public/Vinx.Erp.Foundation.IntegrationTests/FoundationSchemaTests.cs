@@ -45,6 +45,7 @@ public sealed class FoundationSchemaTests
         "foundation.groups",
         "foundation.idempotency_records",
         "foundation.memberships",
+        "foundation.platform_operators",
         "foundation.role_assignments",
         "foundation.role_capabilities",
         "foundation.roles",

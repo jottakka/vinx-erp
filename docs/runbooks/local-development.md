@@ -65,7 +65,10 @@ endereços e credenciais geradas apenas para uso local.
 | Variável | Processo que a usa | Uso |
 |---|---|---|
 | `FOUNDATION_RUNTIME_CONNECTION` | API C# | Conexão de runtime com privilégios mínimos. |
-| `FOUNDATION_MIGRATOR_CONNECTION` | Ferramentas EF | Conexão de migração, separada do runtime. |
+| `FOUNDATION_MIGRATOR_CONNECTION` | Ferramentas EF e bootstrap de operador | Conexão de migração, separada do runtime. |
+| `SUPABASE_AUTH_SERVICE_ROLE_KEY` | Bootstrap de operador C# | Credencial Admin Auth exclusiva do servidor; nunca usar no browser. |
+| `PLATFORM_OPERATOR_SUBJECT` | Bootstrap de operador C# | Subject já confirmado no Supabase Auth para o único operador inicial. |
+| `PLATFORM_OPERATOR_DISPLAY_NAME` | Bootstrap de operador C# | Nome de apresentação validado no deployment; não participa da autorização. |
 | `SUPABASE_AUTH_ISSUER` | API e MCP C# | Emissor JWT do Supabase Auth. |
 | `SUPABASE_AUTH_AUDIENCE` | API e MCP C# | Audiência JWT aceita. |
 | `SUPABASE_STORAGE_URL` | API C# | URL do adapter de Storage. |
@@ -111,6 +114,20 @@ A saúde fica em `http://127.0.0.1:5081/health`; o transporte stateless fica em
 discovery OAuth MCP nem cliente browser: todo header `Origin` é rejeitado.
 HTTP para o issuer/storage local só é aceito em loopback com o ambiente
 `Development`; qualquer outro ambiente exige HTTPS.
+
+## Bootstrap do operador de plataforma
+
+Depois de aplicar o bootstrap de roles e as migrações, configure no ambiente
+de deployment a conexão migradora, as variáveis de Auth e o subject do
+operador já existente no Supabase. O comando não aceita argumentos:
+
+    dotnet run --project src/Tools/Vinx.Erp.PlatformBootstrap
+
+Ele consulta o usuário pelo Admin Auth somente no servidor e devolve uma
+categoria estável: `created`, `already_configured`, `conflict`,
+`provider_rejected`, `unavailable` ou `configuration_invalid`. A repetição
+do mesmo subject é segura; outro subject exige investigação operacional, sem
+alterar dados diretamente no banco.
 
 ## Executar e testar o web
 

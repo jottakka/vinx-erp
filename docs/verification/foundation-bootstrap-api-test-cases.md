@@ -4,8 +4,9 @@
 
 `GET /foundation/bootstrap` atende somente à pessoa já admitida pelo gate. Não
 recebe corpo, usuário, empresa, capability ou flag do cliente. A resposta traz
-`user` self-only, memberships ativas ordenadas com capabilities efetivas e
-`flags` como mapa `string -> bool`.
+`user` self-only, memberships ativas ordenadas com capabilities efetivas,
+`flags` como mapa `string -> bool` e a projeção global somente-leitura
+`platform.isPlatformOperator`.
 
 Não expõe papel, e-mail, issuer, subject, token, sessão ou empresa não
 autorizada. Uma pessoa autenticada sem membership recebe `companies: []`.
@@ -20,7 +21,7 @@ autorizada. Uma pessoa autenticada sem membership recebe `companies: []`.
 
 ## Limites mantidos
 
-Não há CRUD ou UI de flags, criação de empresa, operador global, role ou
-capability administrativa nesta rota. `429` é documentado e herdado do limite
-de taxa do grupo; este documento não afirma uma prova de saturação exclusiva da
-rota.
+Não há CRUD ou UI de flags, criação de empresa, gestão do operador global,
+role ou capability administrativa nesta rota. `429` é documentado e herdado
+do limite de taxa do grupo; este documento não afirma uma prova de saturação
+exclusiva da rota.

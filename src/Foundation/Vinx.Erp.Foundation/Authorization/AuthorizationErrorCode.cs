@@ -10,5 +10,6 @@ public enum AuthorizationErrorCode
     IntegrityConflict,
     AuditUnavailable,
     ProposalUnavailable,
-    ProposalConflict
+    ProposalConflict,
+    PlatformOperatorUnavailable,
 }

@@ -7,10 +7,12 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Bootstrap;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Platform;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -27,14 +29,19 @@ public sealed class BootstrapEndpointTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.EnsureSuccessStatusCode();
-        var bootstrap = await response.Content.ReadFromJsonAsync<BootstrapResponse>()
+        var bootstrap =
+            await response.Content.ReadFromJsonAsync<BootstrapResponse>()
             ?? throw new InvalidOperationException("The bootstrap response body was empty.");
         Assert.Equal(factory.ActorUserId, bootstrap.User.Id);
         Assert.Equal("Ana", bootstrap.User.DisplayName);
-        Assert.Equal(["Alfa", "Beta", "Gama"], bootstrap.Companies.Select(company => company.CompanyName));
+        Assert.Equal(
+            ["Alfa", "Beta", "Gama"],
+            bootstrap.Companies.Select(company => company.CompanyName)
+        );
         Assert.Equal(
             [seeded.AlfaMembershipId, seeded.BetaMembershipId, seeded.GamaMembershipId],
-            bootstrap.Companies.Select(company => company.MembershipId));
+            bootstrap.Companies.Select(company => company.MembershipId)
+        );
         Assert.Equal(seeded.AlfaCompanyId, bootstrap.Companies[0].CompanyId);
         Assert.Equal("payment.approve", Assert.Single(bootstrap.Companies[0].Capabilities).Name);
         Assert.Equal(["Company"], Assert.Single(bootstrap.Companies[0].Capabilities).Scopes);
@@ -57,7 +64,8 @@ public sealed class BootstrapEndpointTests
         using var response = await factory.CreateClient().GetAsync("/foundation/bootstrap");
 
         response.EnsureSuccessStatusCode();
-        var bootstrap = await response.Content.ReadFromJsonAsync<BootstrapResponse>()
+        var bootstrap =
+            await response.Content.ReadFromJsonAsync<BootstrapResponse>()
             ?? throw new InvalidOperationException("The bootstrap response body was empty.");
         Assert.Equal(factory.ActorUserId, bootstrap.User.Id);
         Assert.Equal("Ana", bootstrap.User.DisplayName);
@@ -81,7 +89,8 @@ public sealed class BootstrapEndpointTests
     {
         await using var factory = await FoundationApiFactory.CreateWithClaimsAsync(
             "https://project.supabase.co/auth/v1",
-            "unknown-subject");
+            "unknown-subject"
+        );
 
         using var response = await factory.CreateClient().GetAsync("/foundation/bootstrap");
 
@@ -107,20 +116,23 @@ public sealed class BootstrapEndpointTests
         await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
         {
             var membership = await administrator.Memberships.SingleAsync(candidate =>
-                candidate.Id == seeded.AlfaMembershipId);
+                candidate.Id == seeded.AlfaMembershipId
+            );
             membership.Revoke("membership_revoked", factory.ActorUserId, Guid.NewGuid());
             await administrator.SaveChangesAsync();
         }
 
         using var after = await client.GetAsync("/foundation/bootstrap");
-        var bootstrap = await after.Content.ReadFromJsonAsync<BootstrapResponse>()
+        var bootstrap =
+            await after.Content.ReadFromJsonAsync<BootstrapResponse>()
             ?? throw new InvalidOperationException("The bootstrap response body was empty.");
 
         after.EnsureSuccessStatusCode();
         Assert.Equal(["Beta", "Gama"], bootstrap.Companies.Select(company => company.CompanyName));
         Assert.DoesNotContain(
             bootstrap.Companies,
-            company => company.CompanyId == seeded.AlfaCompanyId);
+            company => company.CompanyId == seeded.AlfaCompanyId
+        );
     }
 
     [Fact]
@@ -155,7 +167,10 @@ public sealed class BootstrapEndpointTests
             builder.UseSetting("Foundation:Bootstrap:Flags:release.dashboard:Scope", "release");
             builder.UseSetting("Foundation:Bootstrap:Flags:release.dashboard:Owner", "foundation");
             builder.UseSetting("Foundation:Bootstrap:Flags:release.dashboard:Reason", "test");
-            builder.UseSetting("Foundation:Bootstrap:Flags:release.dashboard:RemoveAfter", "2026-12-31");
+            builder.UseSetting(
+                "Foundation:Bootstrap:Flags:release.dashboard:RemoveAfter",
+                "2026-12-31"
+            );
         });
         using var client = configuredHost.CreateClient();
 
@@ -180,7 +195,8 @@ public sealed class BootstrapEndpointTests
 
         var result = await service.GetCurrentActorAsync(
             new ActorContext(Guid.NewGuid(), factory.CorrelationId),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(AuthorizationErrorCode.AuditUnavailable, result.ErrorCode);
@@ -196,9 +212,7 @@ public sealed class BootstrapEndpointTests
         var service = CreateService(database, logs);
         var actor = new ActorContext(Guid.NewGuid(), factory.CorrelationId);
 
-        var result = await service.GetCurrentActorAsync(
-            actor,
-            CancellationToken.None);
+        var result = await service.GetCurrentActorAsync(actor, CancellationToken.None);
 
         Assert.False(result.IsSuccess);
         var log = Assert.Single(logs.Entries);
@@ -209,9 +223,18 @@ public sealed class BootstrapEndpointTests
         Assert.Equal("foundation", log.Properties["Module"]);
         Assert.Equal("unavailable", log.Properties["Result"]);
         Assert.Equal("profile_not_found", log.Properties["Reason"]);
-        Assert.Equal(["Module", "Operation", "Reason", "Result"], log.Properties.Keys.OrderBy(key => key));
-        Assert.DoesNotContain(actor.UserId.ToString(), log.Properties.Values.Select(value => value?.ToString()));
-        Assert.DoesNotContain(factory.CorrelationId.ToString(), log.Properties.Values.Select(value => value?.ToString()));
+        Assert.Equal(
+            ["Module", "Operation", "Reason", "Result"],
+            log.Properties.Keys.OrderBy(key => key)
+        );
+        Assert.DoesNotContain(
+            actor.UserId.ToString(),
+            log.Properties.Values.Select(value => value?.ToString())
+        );
+        Assert.DoesNotContain(
+            factory.CorrelationId.ToString(),
+            log.Properties.Values.Select(value => value?.ToString())
+        );
     }
 
     [Fact]
@@ -225,7 +248,8 @@ public sealed class BootstrapEndpointTests
 
         var result = await service.GetCurrentActorAsync(
             new ActorContext(factory.ActorUserId, factory.CorrelationId),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(AuthorizationErrorCode.AuditUnavailable, result.ErrorCode);
@@ -242,23 +266,34 @@ public sealed class BootstrapEndpointTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.GetCurrentActorAsync(
-            new ActorContext(factory.ActorUserId, factory.CorrelationId),
-            cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.GetCurrentActorAsync(
+                new ActorContext(factory.ActorUserId, factory.CorrelationId),
+                cancellation.Token
+            )
+        );
     }
 
     private static FoundationBootstrapService CreateService(
         Vinx.Erp.Foundation.Persistence.FoundationDbContext database,
-        ILogger<FoundationBootstrapService>? logger = null)
+        ILogger<FoundationBootstrapService>? logger = null
+    )
     {
         var resolver = new AuthorizedCompanySetResolver(
             database,
-            NullLogger<AuthorizedCompanySetResolver>.Instance);
+            NullLogger<AuthorizedCompanySetResolver>.Instance
+        );
         return new FoundationBootstrapService(
             database,
             resolver,
+            new PlatformOperatorAccessService(
+                database,
+                new AuditAppender(database),
+                NullLogger<PlatformOperatorAccessService>.Instance
+            ),
             Options.Create(new FoundationBootstrapFeatureFlagsOptions()),
-            logger ?? NullLogger<FoundationBootstrapService>.Instance);
+            logger ?? NullLogger<FoundationBootstrapService>.Instance
+        );
     }
 
     private static async Task<BootstrapResponse> GetBootstrapAsync(HttpClient client)
@@ -274,7 +309,8 @@ public sealed class BootstrapEndpointTests
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
             $"REVOKE EXECUTE ON FUNCTION {functionName} FROM vinx_runtime;",
-            administrator);
+            administrator
+        );
         await command.ExecuteNonQueryAsync();
     }
 
@@ -282,13 +318,17 @@ public sealed class BootstrapEndpointTests
     {
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
-        Assert.Equal("{\"code\":\"audit_unavailable\"}", await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "{\"code\":\"audit_unavailable\"}",
+            await response.Content.ReadAsStringAsync()
+        );
     }
 
     private sealed record BootstrapResponse(
         BootstrapUser User,
         IReadOnlyList<BootstrapCompany> Companies,
-        IReadOnlyDictionary<string, bool> Flags);
+        IReadOnlyDictionary<string, bool> Flags
+    );
 
     private sealed record BootstrapUser(Guid Id, string DisplayName);
 
@@ -296,7 +336,8 @@ public sealed class BootstrapEndpointTests
         Guid MembershipId,
         Guid CompanyId,
         string CompanyName,
-        IReadOnlyList<BootstrapCapability> Capabilities);
+        IReadOnlyList<BootstrapCapability> Capabilities
+    );
 
     private sealed record BootstrapCapability(string Name, IReadOnlyList<string> Scopes);
 
@@ -304,13 +345,15 @@ public sealed class BootstrapEndpointTests
         LogLevel Level,
         Exception? Exception,
         string Template,
-        IReadOnlyDictionary<string, object?> Properties);
+        IReadOnlyDictionary<string, object?> Properties
+    );
 
     private sealed class BootstrapLogCapture : ILogger<FoundationBootstrapService>
     {
         public List<CapturedBootstrapLog> Entries { get; } = [];
 
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
@@ -319,11 +362,16 @@ public sealed class BootstrapEndpointTests
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter)
+            Func<TState, Exception?, string> formatter
+        )
         {
-            var values = ((IEnumerable<KeyValuePair<string, object?>>)state!)
-                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-            var template = values["{OriginalFormat}"]?.ToString()
+            var values = ((IEnumerable<KeyValuePair<string, object?>>)state!).ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value,
+                StringComparer.Ordinal
+            );
+            var template =
+                values["{OriginalFormat}"]?.ToString()
                 ?? throw new InvalidOperationException("The structured log template was missing.");
             values.Remove("{OriginalFormat}");
             Entries.Add(new CapturedBootstrapLog(logLevel, exception, template, values));

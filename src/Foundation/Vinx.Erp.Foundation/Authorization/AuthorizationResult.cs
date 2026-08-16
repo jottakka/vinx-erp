@@ -10,7 +10,8 @@ public sealed record AuthorizationResult<T>(T? Value, AuthorizationErrorCode? Er
 
     public static AuthorizationResult<T> Success(T value) => new(value, null);
 
-    public static AuthorizationResult<T> Failure(AuthorizationErrorCode errorCode) => new(default, errorCode);
+    public static AuthorizationResult<T> Failure(AuthorizationErrorCode errorCode) =>
+        new(default, errorCode);
 
     public IResult ToMinimalApiResult()
     {
@@ -19,38 +20,53 @@ public sealed record AuthorizationResult<T>(T? Value, AuthorizationErrorCode? Er
             return Results.Ok(Value);
         }
 
-        return Results.Json(new AuthorizationErrorResponse(ErrorCode!.Value.ToStableCode()), statusCode: ErrorCode.Value.ToHttpStatusCode());
+        return Results.Json(
+            new AuthorizationErrorResponse(ErrorCode!.Value.ToStableCode()),
+            statusCode: ErrorCode.Value.ToHttpStatusCode()
+        );
     }
-
 }
 
 public static class AuthorizationErrorCodeExtensions
 {
-    public static string ToStableCode(this AuthorizationErrorCode errorCode) => errorCode switch
-    {
-        AuthorizationErrorCode.CompanyContextRequired => "company_context_required",
-        AuthorizationErrorCode.MembershipRequired => "membership_required",
-        AuthorizationErrorCode.CapabilityDenied => "capability_denied",
-        AuthorizationErrorCode.ResourceNotFound => "resource_not_found",
-        AuthorizationErrorCode.IdempotencyConflict => "idempotency_conflict",
-        AuthorizationErrorCode.IntegrityConflict => "integrity_conflict",
-        AuthorizationErrorCode.AuditUnavailable => "audit_unavailable",
-        AuthorizationErrorCode.ProposalUnavailable => "proposal_unavailable",
-        AuthorizationErrorCode.ProposalConflict => "proposal_conflict",
-        _ => throw new ArgumentOutOfRangeException(nameof(errorCode), errorCode, "Unsupported authorization error code.")
-    };
+    public static string ToStableCode(this AuthorizationErrorCode errorCode) =>
+        errorCode switch
+        {
+            AuthorizationErrorCode.CompanyContextRequired => "company_context_required",
+            AuthorizationErrorCode.MembershipRequired => "membership_required",
+            AuthorizationErrorCode.CapabilityDenied => "capability_denied",
+            AuthorizationErrorCode.ResourceNotFound => "resource_not_found",
+            AuthorizationErrorCode.IdempotencyConflict => "idempotency_conflict",
+            AuthorizationErrorCode.IntegrityConflict => "integrity_conflict",
+            AuthorizationErrorCode.AuditUnavailable => "audit_unavailable",
+            AuthorizationErrorCode.ProposalUnavailable => "proposal_unavailable",
+            AuthorizationErrorCode.ProposalConflict => "proposal_conflict",
+            AuthorizationErrorCode.PlatformOperatorUnavailable => "platform_operator_unavailable",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(errorCode),
+                errorCode,
+                "Unsupported authorization error code."
+            ),
+        };
 
-    public static int ToHttpStatusCode(this AuthorizationErrorCode errorCode) => errorCode switch
-    {
-        AuthorizationErrorCode.CompanyContextRequired => StatusCodes.Status400BadRequest,
-        AuthorizationErrorCode.MembershipRequired => StatusCodes.Status403Forbidden,
-        AuthorizationErrorCode.CapabilityDenied => StatusCodes.Status403Forbidden,
-        AuthorizationErrorCode.ResourceNotFound => StatusCodes.Status404NotFound,
-        AuthorizationErrorCode.IdempotencyConflict => StatusCodes.Status409Conflict,
-        AuthorizationErrorCode.IntegrityConflict => StatusCodes.Status409Conflict,
-        AuthorizationErrorCode.AuditUnavailable => StatusCodes.Status503ServiceUnavailable,
-        AuthorizationErrorCode.ProposalUnavailable => StatusCodes.Status404NotFound,
-        AuthorizationErrorCode.ProposalConflict => StatusCodes.Status409Conflict,
-        _ => throw new ArgumentOutOfRangeException(nameof(errorCode), errorCode, "Unsupported authorization error code.")
-    };
+    public static int ToHttpStatusCode(this AuthorizationErrorCode errorCode) =>
+        errorCode switch
+        {
+            AuthorizationErrorCode.CompanyContextRequired => StatusCodes.Status400BadRequest,
+            AuthorizationErrorCode.MembershipRequired => StatusCodes.Status403Forbidden,
+            AuthorizationErrorCode.CapabilityDenied => StatusCodes.Status403Forbidden,
+            AuthorizationErrorCode.ResourceNotFound => StatusCodes.Status404NotFound,
+            AuthorizationErrorCode.IdempotencyConflict => StatusCodes.Status409Conflict,
+            AuthorizationErrorCode.IntegrityConflict => StatusCodes.Status409Conflict,
+            AuthorizationErrorCode.AuditUnavailable => StatusCodes.Status503ServiceUnavailable,
+            AuthorizationErrorCode.ProposalUnavailable => StatusCodes.Status404NotFound,
+            AuthorizationErrorCode.ProposalConflict => StatusCodes.Status409Conflict,
+            AuthorizationErrorCode.PlatformOperatorUnavailable =>
+                StatusCodes.Status503ServiceUnavailable,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(errorCode),
+                errorCode,
+                "Unsupported authorization error code."
+            ),
+        };
 }

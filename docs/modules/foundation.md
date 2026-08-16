@@ -50,8 +50,9 @@ autenticação não `token_refresh`; ausência ou malformação falha fechada co
 por função SQL, grava uma sessão EF só quando a autenticação é estritamente
 posterior à barreira e registra auditoria global na mesma transação. Repetição
 ativa não cria auditoria; barreira, revogação e colisão produzem negação
-auditada sem identificador externo. O gate cria o `ActorContext` e decide
-entre `401` e `503` antes do endpoint protegido.
+auditada sem identificador externo. O gate cria o `ActorContext` com o `User`
+interno e o ID da linha de identidade externa resolvida, ambos derivados no
+servidor, e decide entre `401` e `503` antes do endpoint protegido.
 
 `GET /foundation/memberships` usa somente esse `ActorContext`. Em uma única
 transação de leitura, descobre as memberships ativas do ator e projeta as
@@ -76,6 +77,36 @@ perfil ou memberships retorna somente `503 {"code":"audit_unavailable"}`.
 Não há resposta parcial e cancelamento propaga. As flags são validadas no
 startup e materializadas para o processo: mudança de configuração exige novo
 deploy ou restart.
+
+O operador de plataforma é um registro global singleton em
+`foundation.platform_operators`, separado de company, membership, role e
+capability de tenant. A policy `platform.operator` consulta somente a função
+SQL `current_actor_is_platform_operator()` usando o ID exato de identidade
+externa do `ActorContext`, aplicado como `app.external_identity_id` somente na
+transação do servidor; ausência desse ID nega acesso. Papel de tenant, claim
+JWT, metadado do provedor e outra identidade ligada ao mesmo `User` nunca
+concedem esse acesso. A negação da policy registra
+`platform.operator.required` em auditoria global e retorna somente `403` com
+code `platform_operator_required`. Indisponibilidade da função ou da auditoria
+falha fechada com `503` e code
+`platform_operator_unavailable`.
+
+`GET /foundation/bootstrap` inclui a projeção aditiva
+`platform.isPlatformOperator`, sem e-mail, issuer, subject, papel ou token.
+`GET /foundation/platform/bootstrap` exige a mesma policy e retorna somente
+`isPlatformOperator: true`; ele não lê dados de empresa. A projeção orienta a
+interface, mas toda mutação futura continua reavaliando o operador no banco.
+
+O único bootstrap inicial é o comando de deployment
+`Vinx.Erp.PlatformBootstrap`, sem argumentos. Ele usa a conexão migradora e
+configuração de deployment para consultar `GET /auth/v1/admin/users/{id}` no
+Supabase com credencial exclusiva de servidor, confirma sujeito, audiência,
+e-mail confirmado, identidade não anônima e estado não banido/removido, e só
+então chama a função SQL exclusiva do migrador. O comando nunca usa
+`user_metadata`, não cria operador por HTTP, não imprime identificador,
+e-mail, chave, conexão ou corpo do provedor; sua saída é uma categoria estável.
+Reexecução do mesmo issuer e subject devolve `already_configured`, enquanto
+outro sujeito falha em conflito sem anexar identidade por e-mail.
 
 O resolver interno de contexto parte somente do `ActorContext` e materializa
 um snapshot sem filtro de memberships ativas, nome legível e capabilities por
@@ -169,7 +200,7 @@ auditoria; a purga física continua fora desta fatia, na issue #201.
 
 ## Contract version
 
-`1.1`
+`1.2`
 
 ## Modelo de entidades e dados
 
@@ -212,6 +243,17 @@ possui somente `USAGE` em `foundation`, `SELECT` em `foundation.users` e
 somente leitura necessária para `current_actor_memberships()`. Essas roles são
 distintas das roles legadas do Supabase: `anon`, `authenticated` e
 `service_role`.
+
+O `vinx_platform_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui somente as
+colunas e funções necessárias para manter o singleton de operador de
+plataforma. O runtime não é seu membro, não recebe `SELECT` nem DML direto
+nessa tabela, e só pode executar a função de consulta do ator atual. A função
+de bootstrap permanece exclusiva da conexão migradora. O singleton fixa a
+`external_identity_id` do primeiro par `issuer` + `subject` verificado; outra
+identidade ligada ao mesmo `User` também recebe conflito. As funções de
+segurança usam relações qualificadas e `pg_temp` explícito ao fim do
+`search_path`; o appender de auditoria recebe a mesma proteção para que a
+evidência transacional não possa ser desviada por uma tabela temporária.
 
 A revogação de membership marca somente soft-delete e auditoria técnica da
 membership própria. O runtime recebe `UPDATE` apenas nas colunas de ciclo de

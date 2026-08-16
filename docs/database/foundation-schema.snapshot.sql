@@ -27,7 +27,7 @@ CREATE SCHEMA foundation;
 
 CREATE FUNCTION audit.append_event(p_actor_user_id uuid, p_scope text, p_requested_company_id uuid, p_source text, p_action text, p_resource_type text, p_resource_id uuid, p_outcome text, p_correlation_id uuid, p_reason text, p_metadata jsonb) RETURNS void
     LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'audit', 'pg_catalog'
+    SET search_path TO 'pg_catalog', 'audit', 'pg_temp'
     AS $$
 BEGIN
     IF p_scope IS NULL OR p_scope NOT IN ('global', 'company') THEN
@@ -66,6 +66,161 @@ BEGIN
     END IF;
     RETURN OLD;
 END;
+$$;
+
+
+-- Name: bootstrap_platform_operator(text, text, text, text, uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.bootstrap_platform_operator(p_subject text, p_issuer text, p_display_name text, p_provider_email text, p_correlation_id uuid) RETURNS TABLE(status text, user_id uuid)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_deployment_actor_id constant uuid := '00000000-0000-0000-0000-000000000001';
+    v_operator_user_id uuid;
+    v_operator_identity_id uuid;
+    v_identity_user_id uuid;
+    v_identity_id uuid;
+    v_email_user_id uuid;
+BEGIN
+    IF p_subject IS NULL
+        OR btrim(p_subject) = ''
+        OR char_length(p_subject) > 400
+        OR p_issuer IS NULL
+        OR btrim(p_issuer) = ''
+        OR char_length(p_issuer) > 200
+        OR p_display_name IS NULL
+        OR btrim(p_display_name) = ''
+        OR char_length(p_display_name) > 200
+        OR p_provider_email IS NULL
+        OR btrim(p_provider_email) = ''
+        OR char_length(p_provider_email) > 320
+        OR p_correlation_id IS NULL THEN
+        RAISE EXCEPTION 'platform operator bootstrap parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    LOCK TABLE foundation.platform_operators IN SHARE ROW EXCLUSIVE MODE;
+
+    SELECT platform_operator.external_identity_id, identity_record.user_id
+    INTO v_operator_identity_id, v_operator_user_id
+    FROM foundation.platform_operators AS platform_operator
+    INNER JOIN foundation.external_identities AS identity_record
+        ON identity_record.id = platform_operator.external_identity_id
+    WHERE platform_operator.singleton = 1;
+
+    IF FOUND THEN
+        SELECT identity_record.id, identity_record.user_id
+        INTO v_identity_id, v_identity_user_id
+        FROM foundation.external_identities AS identity_record
+        WHERE identity_record.issuer = p_issuer
+          AND identity_record.subject = p_subject;
+
+        IF FOUND AND v_identity_id = v_operator_identity_id THEN
+            RETURN QUERY SELECT 'already_configured'::text, v_operator_user_id;
+            RETURN;
+        END IF;
+
+        PERFORM audit.append_event(
+            v_deployment_actor_id,
+            'global',
+            NULL,
+            'worker',
+            'platform.operator.bootstrap',
+            'platform_operator',
+            NULL,
+            'denied',
+            p_correlation_id,
+            'deployment_bootstrap_conflict',
+            '{}'::jsonb);
+        RETURN QUERY SELECT 'conflict'::text, NULL::uuid;
+        RETURN;
+    END IF;
+
+    SELECT identity_record.id, identity_record.user_id
+    INTO v_identity_id, v_identity_user_id
+    FROM foundation.external_identities AS identity_record
+    WHERE identity_record.issuer = p_issuer
+      AND identity_record.subject = p_subject;
+
+    IF FOUND THEN
+        v_operator_user_id := v_identity_user_id;
+    ELSE
+        SELECT user_record.id
+        INTO v_email_user_id
+        FROM foundation.users AS user_record
+        WHERE lower(user_record.email) = lower(p_provider_email);
+
+        IF FOUND THEN
+            PERFORM audit.append_event(
+                v_deployment_actor_id,
+                'global',
+                NULL,
+                'worker',
+                'platform.operator.bootstrap',
+                'platform_operator',
+                NULL,
+                'denied',
+                p_correlation_id,
+                'deployment_bootstrap_conflict',
+                '{}'::jsonb);
+            RETURN QUERY SELECT 'conflict'::text, NULL::uuid;
+            RETURN;
+        END IF;
+
+        v_operator_user_id := gen_random_uuid();
+        v_identity_id := gen_random_uuid();
+        INSERT INTO foundation.users (id, display_name, email, created_at)
+        VALUES (
+            v_operator_user_id,
+            btrim(p_display_name),
+            btrim(p_provider_email),
+            clock_timestamp());
+        INSERT INTO foundation.external_identities (
+            id,
+            user_id,
+            issuer,
+            subject,
+            created_at)
+        VALUES (
+            v_identity_id,
+            v_operator_user_id,
+            p_issuer,
+            p_subject,
+            clock_timestamp());
+    END IF;
+
+    INSERT INTO foundation.platform_operators (singleton, external_identity_id)
+    VALUES (1, v_identity_id);
+
+    PERFORM audit.append_event(
+        v_deployment_actor_id,
+        'global',
+        NULL,
+        'worker',
+        'platform.operator.bootstrap',
+        'user',
+        v_operator_user_id,
+        'success',
+        p_correlation_id,
+        'deployment_bootstrap',
+        '{}'::jsonb);
+    RETURN QUERY SELECT 'created'::text, v_operator_user_id;
+END;
+$$;
+
+
+-- Name: current_actor_is_platform_operator(); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.current_actor_is_platform_operator() RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM foundation.platform_operators AS platform_operator
+        WHERE platform_operator.external_identity_id =
+            NULLIF(current_setting('app.external_identity_id', true), '')::uuid);
 $$;
 
 
@@ -379,6 +534,18 @@ CREATE TABLE foundation.memberships (
 ALTER TABLE ONLY foundation.memberships FORCE ROW LEVEL SECURITY;
 
 
+-- Name: platform_operators; Type: TABLE; Schema: foundation; Owner: -
+
+CREATE TABLE foundation.platform_operators (
+    singleton smallint NOT NULL,
+    external_identity_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_platform_operators_singleton CHECK ((singleton = 1))
+);
+
+ALTER TABLE ONLY foundation.platform_operators FORCE ROW LEVEL SECURITY;
+
+
 -- Name: role_assignments; Type: TABLE; Schema: foundation; Owner: -
 
 CREATE TABLE foundation.role_assignments (
@@ -635,6 +802,12 @@ ALTER TABLE ONLY foundation.memberships
     ADD CONSTRAINT pk_memberships PRIMARY KEY (id);
 
 
+-- Name: platform_operators pk_platform_operators; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.platform_operators
+    ADD CONSTRAINT pk_platform_operators PRIMARY KEY (singleton);
+
+
 -- Name: role_assignments pk_role_assignments; Type: CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.role_assignments
@@ -675,6 +848,12 @@ ALTER TABLE ONLY foundation.user_sessions
 
 ALTER TABLE ONLY foundation.users
     ADD CONSTRAINT pk_users PRIMARY KEY (id);
+
+
+-- Name: platform_operators uq_platform_operators_external_identity_id; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.platform_operators
+    ADD CONSTRAINT uq_platform_operators_external_identity_id UNIQUE (external_identity_id);
 
 
 -- Name: ix_audit_events_actor_user_id_occurred_at; Type: INDEX; Schema: audit; Owner: -
@@ -893,6 +1072,12 @@ ALTER TABLE ONLY foundation.memberships
     ADD CONSTRAINT fk_memberships_users_user_id FOREIGN KEY (user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
 
 
+-- Name: platform_operators fk_platform_operators_external_identities_external_identity_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.platform_operators
+    ADD CONSTRAINT fk_platform_operators_external_identities_external_identity_id FOREIGN KEY (external_identity_id) REFERENCES foundation.external_identities(id) ON DELETE RESTRICT;
+
+
 -- Name: role_assignments fk_role_assignments_companies_company_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.role_assignments
@@ -1066,6 +1251,15 @@ CREATE POLICY memberships_authorized_company_read ON foundation.memberships FOR 
 -- Name: memberships memberships_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY memberships_company_isolation ON foundation.memberships USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: platform_operators; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.platform_operators ENABLE ROW LEVEL SECURITY;
+
+-- Name: platform_operators platform_operators_owner_access; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY platform_operators_owner_access ON foundation.platform_operators TO vinx_platform_owner USING (true) WITH CHECK (true);
 
 
 -- Name: role_assignments; Type: ROW SECURITY; Schema: foundation; Owner: -

@@ -3,7 +3,10 @@ using Vinx.Erp.Foundation.Observability;
 
 namespace Vinx.Erp.Foundation.Identity;
 
-public sealed record ActorContext(Guid UserId, Guid CorrelationId);
+/// <summary>
+/// Contexto de ator resolvido pelo servidor; políticas globais usam a identidade externa exata quando disponível.
+/// </summary>
+public sealed record ActorContext(Guid UserId, Guid CorrelationId, Guid? ExternalIdentityId = null);
 
 public static class ServerCorrelationContext
 {
@@ -19,5 +22,7 @@ public static class ServerCorrelationContext
     public static CorrelationContext Get(HttpContext context) =>
         context.Items.TryGetValue(ItemKey, out var value) && value is CorrelationContext correlation
             ? correlation
-            : throw new InvalidOperationException("The request correlation context was not initialized.");
+            : throw new InvalidOperationException(
+                "The request correlation context was not initialized."
+            );
 }

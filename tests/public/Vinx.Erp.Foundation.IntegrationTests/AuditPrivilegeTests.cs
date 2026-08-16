@@ -19,22 +19,28 @@ public sealed class AuditPrivilegeTests
         await using var writer = await OpenTableWriterAsync(fixture);
 
         await using var update = new NpgsqlCommand(
-            "UPDATE audit.audit_events SET action = 'changed' WHERE id = @id", writer);
+            "UPDATE audit.audit_events SET action = 'changed' WHERE id = @id",
+            writer
+        );
         update.Parameters.AddWithValue("id", auditEventId);
         var updateException = await Assert.ThrowsAsync<PostgresException>(async () =>
-            await update.ExecuteNonQueryAsync());
+            await update.ExecuteNonQueryAsync()
+        );
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, updateException.SqlState);
 
         await using var delete = new NpgsqlCommand(
-            "DELETE FROM audit.audit_events WHERE id = @id", writer);
+            "DELETE FROM audit.audit_events WHERE id = @id",
+            writer
+        );
         delete.Parameters.AddWithValue("id", auditEventId);
         var deleteException = await Assert.ThrowsAsync<PostgresException>(async () =>
-            await delete.ExecuteNonQueryAsync());
+            await delete.ExecuteNonQueryAsync()
+        );
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, deleteException.SqlState);
     }
 
     [Fact]
-    public async Task Audit_objects_are_owned_by_the_dedicated_owner_and_runtime_can_only_execute_the_appender()
+    public async Task Audit_objects_are_owned_by_the_dedicated_owner_and_only_runtime_or_platform_owner_can_execute_the_appender()
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
@@ -54,6 +60,7 @@ public sealed class AuditPrivilegeTests
                 has_function_privilege('vinx_runtime', 'audit.reject_audit_event_mutation()', 'EXECUTE'),
                 appender.prosecdef,
                 appender.proconfig,
+                has_function_privilege('vinx_platform_owner', 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE'),
                 NOT EXISTS (
                     SELECT 1
                     FROM aclexplode(COALESCE(appender.proacl, acldefault('f', appender.proowner))) AS privilege
@@ -73,10 +80,13 @@ public sealed class AuditPrivilegeTests
                       AND privilege.grantee NOT IN (
                           0,
                           appender.proowner,
-                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_runtime')))
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_runtime'),
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_platform_owner')))
             FROM pg_proc AS appender
             WHERE appender.oid = 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)'::regprocedure
-            """, administrator);
+            """,
+            administrator
+        );
         await using var reader = await command.ExecuteReaderAsync();
 
         Assert.True(await reader.ReadAsync());
@@ -89,10 +99,11 @@ public sealed class AuditPrivilegeTests
         Assert.True(reader.GetBoolean(6));
         Assert.False(reader.GetBoolean(7));
         Assert.True(reader.GetBoolean(8));
-        Assert.Equal(["search_path=audit, pg_catalog"], reader.GetFieldValue<string[]>(9));
+        Assert.Equal(["search_path=pg_catalog, audit, pg_temp"], reader.GetFieldValue<string[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));
+        Assert.True(reader.GetBoolean(13));
     }
 
     [Theory]
@@ -100,21 +111,25 @@ public sealed class AuditPrivilegeTests
     [InlineData(AuditScope.Company, false)]
     public void Audit_scope_rejects_invalid_requested_company_pair(
         AuditScope scope,
-        bool hasRequestedCompany)
+        bool hasRequestedCompany
+    )
     {
-        Assert.Throws<ArgumentException>(() => new AuditEvent(
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            scope,
-            hasRequestedCompany ? Guid.NewGuid() : null,
-            AuditSource.Web,
-            "another_action",
-            "authorization",
-            null,
-            AuditOutcome.Denied,
-            Guid.NewGuid(),
-            "redacted",
-            "{}"));
+        Assert.Throws<ArgumentException>(() =>
+            new AuditEvent(
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                scope,
+                hasRequestedCompany ? Guid.NewGuid() : null,
+                AuditSource.Web,
+                "another_action",
+                "authorization",
+                null,
+                AuditOutcome.Denied,
+                Guid.NewGuid(),
+                "redacted",
+                "{}"
+            )
+        );
     }
 
     [Fact]
@@ -132,7 +147,8 @@ public sealed class AuditPrivilegeTests
             AuditOutcome.Success,
             Guid.NewGuid(),
             "redacted",
-            "{}");
+            "{}"
+        );
 
         Assert.Null(auditEvent.RequestedCompanyId);
     }
@@ -161,7 +177,9 @@ public sealed class AuditPrivilegeTests
             WHERE (actor_user_id = @global_actor_user_id AND correlation_id = @global_correlation_id)
                OR (actor_user_id = @company_actor_user_id AND correlation_id = @company_correlation_id)
             ORDER BY scope
-            """, administrator);
+            """,
+            administrator
+        );
         command.Parameters.AddWithValue("global_actor_user_id", globalActorId);
         command.Parameters.AddWithValue("global_correlation_id", globalCorrelationId);
         command.Parameters.AddWithValue("company_actor_user_id", companyActorId);
@@ -183,7 +201,8 @@ public sealed class AuditPrivilegeTests
     [InlineData("unknown", false)]
     public async Task Runtime_appender_rejects_invalid_scope_company_pairs_with_check_violation(
         string? scope,
-        bool hasCompany)
+        bool hasCompany
+    )
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
@@ -192,7 +211,14 @@ public sealed class AuditPrivilegeTests
         await runtime.OpenAsync();
 
         var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
-            await AppendAsync(runtime, Guid.NewGuid(), scope, hasCompany ? Guid.NewGuid() : null, Guid.NewGuid()));
+            await AppendAsync(
+                runtime,
+                Guid.NewGuid(),
+                scope,
+                hasCompany ? Guid.NewGuid() : null,
+                Guid.NewGuid()
+            )
+        );
 
         Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
     }
@@ -211,7 +237,9 @@ public sealed class AuditPrivilegeTests
                 to_regprocedure('audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)') IS NOT NULL,
                 (SELECT count(*) FROM pg_proc
                  WHERE pronamespace = 'audit'::regnamespace AND proname = 'append_event')
-            """, administrator);
+            """,
+            administrator
+        );
         await using var reader = await command.ExecuteReaderAsync();
 
         Assert.True(await reader.ReadAsync());
@@ -225,17 +253,23 @@ public sealed class AuditPrivilegeTests
         Guid actorId,
         string? scope,
         Guid? requestedCompanyId,
-        Guid correlationId)
+        Guid correlationId
+    )
     {
         await using var append = new NpgsqlCommand(
             """
             SELECT audit.append_event(
                 @actor_user_id, @scope, @requested_company_id, @source, @action,
                 @resource_type, @resource_id, @outcome, @correlation_id, @reason, @metadata)
-            """, connection);
+            """,
+            connection
+        );
         append.Parameters.AddWithValue("actor_user_id", actorId);
         append.Parameters.AddWithValue("scope", (object?)scope ?? DBNull.Value);
-        append.Parameters.AddWithValue("requested_company_id", (object?)requestedCompanyId ?? DBNull.Value);
+        append.Parameters.AddWithValue(
+            "requested_company_id",
+            (object?)requestedCompanyId ?? DBNull.Value
+        );
         append.Parameters.AddWithValue("source", "web");
         append.Parameters.AddWithValue("action", "foundation.test");
         append.Parameters.AddWithValue("resource_type", "test");
@@ -262,24 +296,31 @@ public sealed class AuditPrivilegeTests
             AuditOutcome.Success,
             Guid.NewGuid(),
             "redacted",
-            "{}");
+            "{}"
+        );
 
         administrator.AuditEvents.Add(auditEvent);
         await administrator.SaveChangesAsync();
         return auditEvent.Id;
     }
 
-    private static async Task<NpgsqlConnection> OpenTableWriterAsync(FoundationPostgresFixture fixture)
+    private static async Task<NpgsqlConnection> OpenTableWriterAsync(
+        FoundationPostgresFixture fixture
+    )
     {
         var roleName = $"audit_trigger_writer_{Guid.NewGuid():N}";
         var password = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
         await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
-        await using (var grant = new NpgsqlCommand(
-            $"""
-            CREATE ROLE {roleName} LOGIN PASSWORD '{password}';
-            GRANT USAGE ON SCHEMA audit TO {roleName};
-            GRANT SELECT, UPDATE, DELETE ON TABLE audit.audit_events TO {roleName};
-            """, administrator))
+        await using (
+            var grant = new NpgsqlCommand(
+                $"""
+                CREATE ROLE {roleName} LOGIN PASSWORD '{password}';
+                GRANT USAGE ON SCHEMA audit TO {roleName};
+                GRANT SELECT, UPDATE, DELETE ON TABLE audit.audit_events TO {roleName};
+                """,
+                administrator
+            )
+        )
         {
             await grant.ExecuteNonQueryAsync();
         }
@@ -287,7 +328,7 @@ public sealed class AuditPrivilegeTests
         var connectionString = new NpgsqlConnectionStringBuilder(fixture.RuntimeConnectionString)
         {
             Username = roleName,
-            Password = password
+            Password = password,
         }.ConnectionString;
         var writer = new NpgsqlConnection(connectionString);
         await writer.OpenAsync();
