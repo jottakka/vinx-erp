@@ -155,7 +155,7 @@ describe("AppShell", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/ajuda"));
   });
 
-  it("navigates from a module card to its preparation route", async () => {
+  it("navigates from a module card to the real Paguai workspace", async () => {
     const user = userEvent.setup();
     const router = renderShell("/", await signedInGateway());
     await screen.findByRole("heading", { name: "Início" });
@@ -197,9 +197,17 @@ describe("AppShell", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Esta área ainda não possui dados ou ações operacionais.",
+        "Rascunhos de solicitações. Este MVP registra somente metadados; não cria cobrança ou pagamento.",
       ),
     ).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Nenhuma empresa tem acesso ao Paguai.",
+    );
+    expect(
+      screen.queryByText(
+        "Esta área ainda não possui dados ou ações operacionais.",
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps product routes primary and exposes only the available Paguai prototype action in development", async () => {
