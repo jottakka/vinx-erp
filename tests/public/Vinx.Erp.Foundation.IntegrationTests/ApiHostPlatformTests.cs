@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Vinx.Erp.Foundation.Bootstrap;
 using Vinx.Erp.Foundation.Files;
+using Wolverine;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -693,6 +694,12 @@ public sealed class ApiHostPlatformTests
             {
                 builder.UseSetting(setting.Key, setting.Value);
             }
+
+            builder.ConfigureTestServices(services =>
+            {
+                services.DisableAllWolverineMessagePersistence();
+                services.DisableAllExternalWolverineTransports();
+            });
 
             if (_exposeFailureEndpoint)
             {

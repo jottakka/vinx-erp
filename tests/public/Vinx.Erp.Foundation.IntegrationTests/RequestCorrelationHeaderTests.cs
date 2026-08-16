@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Wolverine;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -237,26 +238,25 @@ public sealed class RequestCorrelationHeaderTests
             builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
             builder.UseSetting("SUPABASE_AUTH_PUBLISHABLE_KEY", "test-publishable-key");
 
-            if (_exposeFailureEndpoint || _exposeNoContentEndpoint || _exposeScopeEndpoint)
+            builder.ConfigureTestServices(services =>
             {
-                builder.ConfigureTestServices(services =>
+                services.DisableAllWolverineMessagePersistence();
+                services.DisableAllExternalWolverineTransports();
+                if (_exposeFailureEndpoint)
                 {
-                    if (_exposeFailureEndpoint)
-                    {
-                        services.AddTransient<IStartupFilter, FailureEndpointStartupFilter>();
-                    }
+                    services.AddTransient<IStartupFilter, FailureEndpointStartupFilter>();
+                }
 
-                    if (_exposeNoContentEndpoint)
-                    {
-                        services.AddTransient<IStartupFilter, NoContentEndpointStartupFilter>();
-                    }
+                if (_exposeNoContentEndpoint)
+                {
+                    services.AddTransient<IStartupFilter, NoContentEndpointStartupFilter>();
+                }
 
-                    if (_exposeScopeEndpoint)
-                    {
-                        services.AddTransient<IStartupFilter, CorrelationScopeEndpointStartupFilter>();
-                    }
-                });
-            }
+                if (_exposeScopeEndpoint)
+                {
+                    services.AddTransient<IStartupFilter, CorrelationScopeEndpointStartupFilter>();
+                }
+            });
         }
     }
 

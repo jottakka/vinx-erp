@@ -72,11 +72,17 @@ builder.Services.AddDbContext<FoundationDbContext>(
             .UseSnakeCaseNamingConvention()
             .AddInterceptors(new RowVersionInterceptor())
 );
-var foundationConnectionString =
-    builder.Configuration[FoundationDatabaseOptions.ConnectionStringConfigurationKey]
-    ?? throw new InvalidOperationException("Foundation database connection must be configured.");
+var foundationConnectionString = builder.Configuration[
+    FoundationDatabaseOptions.ConnectionStringConfigurationKey
+];
 builder.Host.UseWolverine(options =>
 {
+    options.UseEntityFrameworkCoreTransactions();
+    if (string.IsNullOrWhiteSpace(foundationConnectionString))
+    {
+        return;
+    }
+
     options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
     options
         .PersistMessagesWithPostgresql(foundationConnectionString, schemaName: "vinx_wolverine")
@@ -84,7 +90,6 @@ builder.Host.UseWolverine(options =>
         .EnableMessageTransport(transport =>
             transport.TransportSchemaName("vinx_wolverine_queues")
         );
-    options.UseEntityFrameworkCoreTransactions();
     options
         .PublishMessage<OwnerInvitationDeliveryRequested>()
         .ToPostgresqlQueue("owner-invitation-delivery")
