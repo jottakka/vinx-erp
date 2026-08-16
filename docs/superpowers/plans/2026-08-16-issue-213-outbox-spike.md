@@ -36,7 +36,7 @@ Escolher Wolverine para PostgreSQL sem broker. Exigir que #26 e #48, conforme a 
 
 - [ ] **Step 3: Delimitar as próximas PRs**
 
-Vincular #26 somente à intenção/outbox transacional. Fixar #48 como infraestrutura genérica de worker, lease, retry, DLQ e observabilidade, com prova por fake/contrato de provider e sem chamada real a provider de convite. Fixar #211B, após #48, como única dona do adapter Supabase Admin de convite e da reconciliação real de `provider_ambiguous`; ela usa somente `issuer+subject` confirmado, nunca email. Adapter Meta/WhatsApp e webhook de notificações ficam fora desta spike e dependem da cadeia de notificações. Fixar a proibição de PII/segredo na outbox, DLQ, log e auditoria.
+Vincular #26 somente à intenção/outbox transacional. Fixar #48 como infraestrutura genérica de worker, lease, retry, DLQ e observabilidade, com prova por fake/contrato de provider e sem chamada real a provider de convite. Fixar #211B, após #48, como única dona do adapter Supabase Admin de convite e da reconciliação real de `provider_ambiguous`; ela usa somente `issuer+subject` confirmado, nunca email. Fixar #28, também posterior à infraestrutura #48, como dona do adapter Meta/WhatsApp, opt-in, templates, integração específica do webhook de canal assinado e reconciliação Meta de `provider_ambiguous`: idempotente, observável, usando status, webhook ou identificador do provider quando disponíveis e sem retry cego. #48 conserva somente o contrato genérico de worker e estado de entrega. Fixar a proibição de PII/segredo na outbox, DLQ, log e auditoria.
 
 ### Task 2: Mapear a verificação da decisão
 

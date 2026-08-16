@@ -75,8 +75,13 @@ convite.
 
 A #211B, posterior à #48, é a única dona do adapter Supabase Admin de convite
 e da reconciliação real de `provider_ambiguous`. Ela vincula apenas
-`issuer+subject` confirmado, nunca email. Adapter Meta/WhatsApp e webhook de
-notificações não pertencem a esta spike e dependem da cadeia de notificações.
+`issuer+subject` confirmado, nunca email. A #28, posterior à infraestrutura
+genérica da #48, é dona do adapter Meta/WhatsApp, opt-in, templates e da
+integração específica do webhook de canal assinado. Ela também reconcilia
+`provider_ambiguous` do Meta de modo idempotente e observável, usando status,
+webhook ou identificador do provider quando disponíveis, sem retry cego. A
+#48 conserva apenas o contrato genérico de worker e estado de entrega; nenhum
+desses adapters ou webhooks específicos pertence a esta spike.
 
 Timeout externo com resultado desconhecido é `provider_ambiguous`. Ele exige
 reconciliação idempotente e decisão observável; é proibido retry automático
@@ -93,7 +98,8 @@ correlacionável.
   exactly-once.
 - A operação precisa de migrations EF revisadas para VINX/Foundation e
   intenções próprias, deploy técnico Wolverine explícito, observabilidade de
-  estado e reconciliação para `provider_ambiguous` na #211B.
+  estado e reconciliação para `provider_ambiguous` na #211B ou na #28,
+  conforme o provider.
 - MassTransit será reavaliado se surgir broker, saga ou necessidade que
   justifique sua topologia e licença. Mudança de licença ou de topologia do
   MassTransit também exige reavaliação explícita antes de adoção.
