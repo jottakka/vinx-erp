@@ -65,7 +65,7 @@ endereços e credenciais geradas apenas para uso local.
 | Variável | Processo que a usa | Uso |
 |---|---|---|
 | `FOUNDATION_RUNTIME_CONNECTION` | API C# | Conexão de runtime com privilégios mínimos. |
-| `FOUNDATION_MIGRATOR_CONNECTION` | Ferramentas EF e bootstrap de operador | Conexão de migração, separada do runtime. |
+| `FOUNDATION_MIGRATOR_CONNECTION` | Ferramentas EF, bootstrap de operador e deploy do outbox | Conexão de migração, separada do runtime. |
 | `SUPABASE_AUTH_SERVICE_ROLE_KEY` | Bootstrap de operador C# | Credencial Admin Auth exclusiva do servidor; nunca usar no browser. |
 | `PLATFORM_OPERATOR_SUBJECT` | Bootstrap de operador C# | Subject já confirmado no Supabase Auth para o único operador inicial. |
 | `PLATFORM_OPERATOR_DISPLAY_NAME` | Bootstrap de operador C# | Nome de apresentação validado no deployment; não participa da autorização. |
@@ -148,6 +148,24 @@ categoria estável: `created`, `already_configured`, `conflict`,
 `provider_rejected`, `unavailable` ou `configuration_invalid`. A repetição
 do mesmo subject é segura; outro subject exige investigação operacional, sem
 alterar dados diretamente no banco.
+
+## Provisionar o storage técnico do outbox
+
+Depois das migrations Foundation e antes de iniciar o ApiHost produtor com a
+role de runtime, execute no diretório raiz:
+
+```bash
+./scripts/setup-wolverine-storage.sh
+```
+
+O comando exige `FOUNDATION_MIGRATOR_CONNECTION`, sem imprimi-la, e executa na
+ordem `db-apply`, grants mínimos e `db-assert`. Durante os comandos de deploy,
+essa conexão é fornecida como `FOUNDATION_RUNTIME_CONNECTION` somente ao
+processo para apontar Foundation e Wolverine para o mesmo banco físico. Isso
+não concede ownership ao runtime: os schemas técnicos são `vinx_wolverine` e
+`vinx_wolverine_queues`, e o ApiHost produtor não pode criar ou alterar seus
+recursos em startup. O WorkerHost atual não participa desta fatia nem
+provisiona esses schemas.
 
 ## Executar e testar o web
 

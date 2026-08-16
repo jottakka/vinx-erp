@@ -164,6 +164,28 @@ continua sem membership ou acesso ao tenant criado. Não há envio ou aceite no
 provedor, employee criado para o owner, interface ou fluxo de convite nesta
 fatia.
 
+### Outbox transacional do convite inicial
+
+Quando o resultado é `created`, a mesma transação persiste uma única mensagem
+durável `OwnerInvitationDeliveryRequested`. O evento contém somente o UUID
+opaco `invitationId`: nome, e-mail, token, corpo HTTP, hash e segredo não
+entram no evento, nos metadados do envelope nem nos logs. `replay`, negações e
+conflitos não criam mensagem.
+
+Negócio, recibo de idempotência, auditoria e envelope pertencem à mesma
+transação, cujo commit é único no serviço. O flush acontece apenas depois de
+confirmação do commit. Falha antes do commit reverte todas essas gravações;
+resultado ambíguo do commit não é compensado nem republicado; falha isolada de
+flush conserva o convite como `pending_delivery` e o envelope durável para
+recuperação posterior pelo relay.
+
+O runtime usa a única conexão `FOUNDATION_RUNTIME_CONNECTION` tanto para
+Foundation quanto para Wolverine. O storage técnico fica em
+`vinx_wolverine` e `vinx_wolverine_queues`, sem confundir esses schemas com as
+migrations ou snapshot de Foundation. O ApiHost produtor não cria DDL nem tem
+ownership desses recursos; o provisionamento é etapa explícita de deploy. O
+WorkerHost atual ainda não participa deste fluxo.
+
 ## Diretório local de funcionários
 
 `POST /foundation/companies/{companyId}/employees` reserva uma pessoa no
