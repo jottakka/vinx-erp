@@ -38,6 +38,11 @@ EF Core 6.28.2, PostgreSQL, xUnit/Testcontainers.
   provisionados somente no deploy por identidade migradora com `db-apply`,
   recebem grants mínimos de DML para `vinx_runtime` por script explícito e
   passam por `db-assert` antes da liberação.
+- Em runtime, `UseNpgsql` e a persistência Wolverine usam a mesma conexão
+  resolvida de `FOUNDATION_RUNTIME_CONNECTION`; nunca há uma segunda origem de
+  conexão que possa apontar a outro banco. O deploy substitui essa variável
+  pela conexão migradora apenas no processo único de `db-apply`/`db-assert`,
+  que não inicia o servidor HTTP.
 - Se a biblioteca não persistir o envelope na transação existente, parar a
   fatia: não criar fila/outbox própria como substituto.
 - A rota é única e explicitamente `PublishMessage<OwnerInvitationDeliveryRequested>()`
@@ -86,8 +91,8 @@ EF Core 6.28.2, PostgreSQL, xUnit/Testcontainers.
 - Create: script de deploy para grants mínimos dos schemas técnicos Wolverine.
 
 - [ ] Adicionar os pacotes Wolverine 6.28.2 mínimos e travar os lockfiles.
-- [ ] Configurar ApiHost somente como produtor PostgreSQL, usando
-  `WOLVERINE_STORAGE_CONNECTION`,
+- [ ] Configurar ApiHost somente como produtor PostgreSQL, reutilizando a
+  conexão Foundation já resolvida,
   `PersistMessagesWithPostgresql(...).OverrideAutoCreateResources(AutoCreate.None)`
   e `EnableMessageTransport(...)` para a única fila PostgreSQL explícita e
   durável. Sem handler/WorkerHost/provider. Expor somente os comandos JasperFx
