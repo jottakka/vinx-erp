@@ -800,7 +800,7 @@ atendimento
     .Produces(StatusCodes.Status401Unauthorized)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status404NotFound)
-    .Produces<AuthorizationErrorResponse>(StatusCodes.Status409Conflict)
+    .Produces<AtendimentoCardConflictResponse>(StatusCodes.Status409Conflict)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
     .Produces(StatusCodes.Status429TooManyRequests);
 atendimento
@@ -830,7 +830,7 @@ atendimento
     .Produces(StatusCodes.Status401Unauthorized)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status404NotFound)
-    .Produces<AuthorizationErrorResponse>(StatusCodes.Status409Conflict)
+    .Produces<AtendimentoCardConflictResponse>(StatusCodes.Status409Conflict)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
     .Produces(StatusCodes.Status429TooManyRequests);
 app.Run();

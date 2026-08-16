@@ -53,7 +53,7 @@ internal static class AtendimentoHttpContract
                 StatusCodes.Status409Conflict
             ),
             AtendimentoCardOperationState.IntegrityConflict => Results.Json(
-                new { code = "integrity_conflict", current = result.Current },
+                new AtendimentoCardConflictResponse("integrity_conflict", result.Current),
                 statusCode: StatusCodes.Status409Conflict
             ),
             _ => Error("atendimento_unavailable", StatusCodes.Status503ServiceUnavailable),
@@ -62,3 +62,8 @@ internal static class AtendimentoHttpContract
     public static IResult Error(string code, int statusCode) =>
         Results.Json(new { code }, statusCode: statusCode);
 }
+
+internal sealed record AtendimentoCardConflictResponse(
+    string Code,
+    AtendimentoCardResponse? Current
+);

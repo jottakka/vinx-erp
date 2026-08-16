@@ -25,7 +25,7 @@ como `X-CSRF-TOKEN`. A falha ou resposta inválida do antiforgery interrompe a
 mutação, sem token persistido ou tentativa automática.
 
 O proxy Vite é exclusivo de desenvolvimento: `VINX_API_ORIGIN` aceita apenas
-`http://127.0.0.1:<porta>` e encaminha `/foundation` e `/atendimento`. Não use
+`http://127.0.0.1:<porta>` e encaminha `/foundation`, `/atendimento` e `/paguai`. Não use
 `VITE_*` para esta origem. Em preview e produção, o reverse proxy/ingress da
 mesma origem é responsabilidade do deployment.
 

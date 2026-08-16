@@ -522,7 +522,7 @@ public sealed class AtendimentoCardEndpointTests
     }
 
     [Fact]
-    public async Task Openapi_marks_each_atendimento_mutation_with_the_bff_antiforgery_header()
+    public async Task Openapi_marks_each_atendimento_mutation_with_the_bff_antiforgery_header_and_conflict_schema()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         using var client = factory.CreateClient();
@@ -547,6 +547,56 @@ public sealed class AtendimentoCardEndpointTests
             Assert.Equal("header", csrf.GetProperty("in").GetString());
             Assert.True(csrf.GetProperty("required").GetBoolean());
         }
+
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        foreach (
+            var path in new[] { "/atendimento/cards/{id}/assign", "/atendimento/cards/{id}/move" }
+        )
+        {
+            var conflictSchema = paths
+                .GetProperty(path)
+                .GetProperty("post")
+                .GetProperty("responses")
+                .GetProperty("409")
+                .GetProperty("content")
+                .GetProperty("application/json")
+                .GetProperty("schema");
+            Assert.Equal(
+                "#/components/schemas/AtendimentoCardConflictResponse",
+                conflictSchema.GetProperty("$ref").GetString()
+            );
+        }
+
+        var conflictProperties = schemas
+            .GetProperty("AtendimentoCardConflictResponse")
+            .GetProperty("properties");
+        Assert.Equal(
+            "string",
+            conflictProperties.GetProperty("code").GetProperty("type").GetString()
+        );
+        Assert.True(IsNullableSchema(conflictProperties.GetProperty("current")));
+    }
+
+    private static bool IsNullableSchema(JsonElement schema)
+    {
+        if (
+            schema.TryGetProperty("nullable", out var nullable)
+            && nullable.ValueKind == JsonValueKind.True
+        )
+        {
+            return true;
+        }
+
+        return new[] { "anyOf", "oneOf" }.Any(composition =>
+            schema.TryGetProperty(composition, out var alternatives)
+            && alternatives
+                .EnumerateArray()
+                .Any(alternative =>
+                    alternative.TryGetProperty("type", out var type)
+                    && type.ValueKind == JsonValueKind.String
+                    && type.GetString() == "null"
+                )
+        );
     }
 
     private static async Task<CardResponse> CreateCardAsync(HttpClient client, Guid companyId)
