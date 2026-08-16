@@ -9,9 +9,13 @@ describe("development API proxy", () => {
     expect(resolveDevelopmentApiProxy()).toBeUndefined();
   });
 
-  it("proxies only the foundation API to the exact loopback origin", () => {
+  it("proxies Foundation and Paguai APIs to the exact loopback origin", () => {
     expect(resolveDevelopmentApiProxy("http://127.0.0.1:5080")).toEqual({
       "/foundation": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "/paguai": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
@@ -37,6 +41,10 @@ describe("web Vite configuration", () => {
 
     expect(config.server?.proxy).toEqual({
       "/foundation": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "/paguai": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },

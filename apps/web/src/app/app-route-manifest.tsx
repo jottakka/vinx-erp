@@ -9,6 +9,7 @@ import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import { Skeleton, Stack } from "@mui/material";
 import { lazy, type ReactElement, Suspense } from "react";
+import { PaguaiPage } from "../features/paguai/paguai-page";
 import {
   type AppRouteCatalogEntry,
   agentPath,
@@ -50,12 +51,7 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
   },
   "/paguai": {
     icon: PaymentsOutlinedIcon,
-    render: () => (
-      <FeaturePreparationPage
-        feature="Paguai"
-        scope="Solicitações, conferência e fluxo financeiro."
-      />
-    ),
+    render: () => <PaguaiPage />,
   },
   "/atendimento": {
     icon: SupportAgentOutlinedIcon,

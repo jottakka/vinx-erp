@@ -67,3 +67,25 @@ schemas e requisitos de segurança verificáveis antes de entrar no contrato.
 Bytes de arquivo não trafegam pela rota comum da API. O servidor autoriza URL
 privada e curta de upload ou download e registra metadados e evidência de
 auditoria.
+
+## Paguai MVP #227
+
+`GET /paguai/requests?companyId={uuid}` e
+`GET /paguai/requests/{id}?companyId={uuid}` exigem bearer HTTP ou cookie BFF
+de mesma origem. Ambos recebem somente a empresa explícita e devolvem somente
+rascunhos do solicitante autenticado. A lista declara `200`, `400`, `401`,
+`403`, `429` e `503`; o detalhe declara `200`, `401`, `404`, `429` e `503`.
+Detalhe de outro solicitante, outra empresa ou sem permissão é sempre
+`404 {"code":"resource_not_found"}`.
+
+`POST /paguai/requests` usa a mesma segurança; para cookie BFF, CSRF exige
+`X-CSRF-TOKEN`. O corpo JSON estrito contém exatamente `companyId`, `requestId`,
+`title` e `description`; textos são aparados, não vazios, e limitados a 200 e
+4000 caracteres. Retorna `201` e `Location` na primeira criação, `200` no
+replay idêntico, `400`, `401`, `403`, `409 {"code":"idempotency_conflict"}`,
+`429` ou `503 {"code":"paguai_unavailable"}`. A resposta de sucesso contém
+apenas `id`, `companyId`, `requestId`, `title`, `description`, `state`,
+`version` e `createdAt`; `state` é `rascunho` e `version` é `1`.
+
+O contrato não expõe payload em logs ou auditoria. Todas as respostas privadas
+recebem `Cache-Control: private, no-store` e o header de correlação do host.

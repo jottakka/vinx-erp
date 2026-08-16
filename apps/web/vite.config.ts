@@ -1,8 +1,12 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig, type UserConfig } from "vite";
 
-type FoundationApiProxy = {
+type VinxApiProxy = {
   "/foundation": {
+    changeOrigin: false;
+    target: string;
+  };
+  "/paguai": {
     changeOrigin: false;
     target: string;
   };
@@ -14,7 +18,7 @@ type FoundationApiProxy = {
  */
 export function resolveDevelopmentApiProxy(
   origin = process.env.VINX_API_ORIGIN,
-): FoundationApiProxy | undefined {
+): VinxApiProxy | undefined {
   if (!origin) {
     return undefined;
   }
@@ -35,6 +39,10 @@ export function resolveDevelopmentApiProxy(
 
     return {
       "/foundation": {
+        changeOrigin: false,
+        target: target.origin,
+      },
+      "/paguai": {
         changeOrigin: false,
         target: target.origin,
       },
