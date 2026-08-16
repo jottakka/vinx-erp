@@ -87,6 +87,9 @@ export type EmployeeDirectoryGateway = {
 type FetchResult =
   | { response: Response }
   | { failure: EmployeeDirectoryFailureResult };
+type SameOriginRequestInit = RequestInit & {
+  mayHaveCommittedOnAbort?: boolean;
+};
 type Operation = "antiforgery" | "list" | "create";
 
 /**
@@ -98,7 +101,7 @@ export function createEmployeeDirectoryClient(
 ): EmployeeDirectoryGateway {
   async function fetchSameOrigin(
     path: string,
-    init: RequestInit = {},
+    { mayHaveCommittedOnAbort = false, ...init }: SameOriginRequestInit = {},
   ): Promise<FetchResult> {
     if (init.signal?.aborted) {
       return { failure: failure("aborted") };
@@ -115,8 +118,13 @@ export function createEmployeeDirectoryClient(
         }),
       };
     } catch (reason) {
+      const aborted = isAbort(reason, init.signal);
       return {
-        failure: failure(isAbort(reason, init.signal) ? "aborted" : "network"),
+        failure: failure(aborted ? "aborted" : "network", {
+          ...(aborted && mayHaveCommittedOnAbort
+            ? { mayHaveCommitted: true }
+            : {}),
+        }),
       };
     }
   }
@@ -218,6 +226,7 @@ export function createEmployeeDirectoryClient(
           [antiforgeryHeaderName]: antiforgery.requestToken,
         },
         method: "POST",
+        mayHaveCommittedOnAbort: true,
         signal,
       },
     );
@@ -249,6 +258,7 @@ export function createEmployeeDirectoryClient(
       return isAbort(reason, signal)
         ? failure("aborted", {
             correlationId,
+            mayHaveCommitted: true,
             status: result.response.status,
           })
         : failure("protocol", {
@@ -268,7 +278,10 @@ async function normalizeFailure(
   signal?: AbortSignal,
 ): Promise<EmployeeDirectoryFailureResult> {
   if (signal?.aborted) {
-    return failure("aborted");
+    return failure(
+      "aborted",
+      operation === "create" ? { mayHaveCommitted: true } : {},
+    );
   }
 
   const correlationId = readCorrelationId(response);

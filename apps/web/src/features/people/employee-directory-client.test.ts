@@ -340,6 +340,89 @@ describe("createEmployeeDirectoryClient", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps a pre-POST create abort definitive without starting antiforgery", async () => {
+    const fetchSpy = createFetchSpy();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      createEmployeeDirectoryClient(fetchSpy).create(
+        validCommand(),
+        controller.signal,
+      ),
+    ).resolves.toEqual({ error: { kind: "aborted" }, ok: false });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("marks an abort after create dispatch as potentially committed without leaking details", async () => {
+    const postAbort = Object.assign(new Error("private transport detail"), {
+      name: "AbortError",
+    });
+    const fetchImplementation = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === antiforgeryPath)
+        return new Response(JSON.stringify({ requestToken: "fresh-token" }));
+      throw postAbort;
+    });
+
+    const result = await createEmployeeDirectoryClient(
+      fetchImplementation,
+    ).create(validCommand());
+
+    expect(result).toEqual({
+      error: { kind: "aborted", mayHaveCommitted: true },
+      ok: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("private transport detail");
+  });
+
+  it.each([200, 201])(
+    "marks an abort while parsing a received %i create response as potentially committed",
+    async (status) => {
+      const parseAbort = Object.assign(new Error("private body detail"), {
+        name: "AbortError",
+      });
+      const receivedCreateResponse = new Response(null, { status });
+      vi.spyOn(receivedCreateResponse, "json").mockRejectedValue(parseAbort);
+      const fetchImplementation = vi.fn(async (input: RequestInfo | URL) =>
+        String(input) === antiforgeryPath
+          ? new Response(JSON.stringify({ requestToken: "fresh-token" }))
+          : receivedCreateResponse,
+      );
+
+      const result = await createEmployeeDirectoryClient(
+        fetchImplementation,
+      ).create(validCommand());
+
+      expect(result).toEqual({
+        error: { kind: "aborted", mayHaveCommitted: true, status },
+        ok: false,
+      });
+      expect(JSON.stringify(result)).not.toContain("private body detail");
+    },
+  );
+
+  it("marks an abort after a create response before failure normalization as potentially committed", async () => {
+    const controller = new AbortController();
+    const fetchImplementation = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === antiforgeryPath)
+        return new Response(JSON.stringify({ requestToken: "fresh-token" }));
+
+      controller.abort();
+      return new Response(null, { status: 503 });
+    });
+
+    await expect(
+      createEmployeeDirectoryClient(fetchImplementation).create(
+        validCommand(),
+        controller.signal,
+      ),
+    ).resolves.toEqual({
+      error: { kind: "aborted", mayHaveCommitted: true },
+      ok: false,
+    });
+  });
+
   it("maps network failures without exposing exception text", async () => {
     const client = createEmployeeDirectoryClient(
       vi.fn().mockRejectedValue(new Error("secret socket details")),
