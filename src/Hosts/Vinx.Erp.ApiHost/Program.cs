@@ -226,6 +226,40 @@ builder.Services.AddOpenApi(options =>
         (operation, context, _) =>
         {
             var metadata = context.Description.ActionDescriptor.EndpointMetadata;
+            if (operation.Responses is not null)
+            {
+                var document = context.Document
+                    ?? throw new InvalidOperationException(
+                        "OpenAPI response contract requires a document context."
+                    );
+                // Os transformers executam antes do registro final dos componentes pelo host.
+                document.Workspace ??= new OpenApiWorkspace();
+                document.RegisterComponents();
+                foreach (var response in operation.Responses.Values)
+                {
+                    var concreteResponse = response switch
+                    {
+                        OpenApiResponse direct => direct,
+                        OpenApiResponseReference reference => reference.RecursiveTarget
+                            ?? throw new InvalidOperationException(
+                                "OpenAPI response reference must resolve to a concrete response."
+                            ),
+                        _ => throw new InvalidOperationException(
+                            "OpenAPI response must be a concrete response or a resolvable response reference."
+                        ),
+                    };
+
+                    concreteResponse.Headers ??= new Dictionary<string, IOpenApiHeader>();
+                    concreteResponse.Headers[RequestCorrelationMiddleware.ResponseHeaderName] =
+                        new OpenApiHeader
+                        {
+                            Description = "Referência opaca gerada pelo servidor para suporte da requisição.",
+                            Required = true,
+                            Schema = new OpenApiSchema { Type = JsonSchemaType.String, Format = "uuid" },
+                        };
+                }
+            }
+
             if (metadata?.OfType<BrowserBffSessionSignInOpenApiMetadata>().Any() == true)
             {
                 operation.RequestBody = new OpenApiRequestBody

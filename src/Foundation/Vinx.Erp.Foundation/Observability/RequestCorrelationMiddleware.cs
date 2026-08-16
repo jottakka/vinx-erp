@@ -8,9 +8,19 @@ namespace Vinx.Erp.Foundation.Observability;
 
 public sealed class RequestCorrelationMiddleware(RequestDelegate next, ILogger<RequestCorrelationMiddleware> logger)
 {
+    /// <summary>
+    /// Referência opaca gerada pelo servidor para suporte de uma resposta HTTP.
+    /// </summary>
+    public const string ResponseHeaderName = "X-Correlation-ID";
+
     public async Task InvokeAsync(HttpContext context)
     {
         var correlation = ServerCorrelationContext.Begin(context);
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers[ResponseHeaderName] = correlation.CorrelationId.ToString("D");
+            return Task.CompletedTask;
+        });
         Activity.Current?.SetTag("vinx.correlation_id", correlation.CorrelationId.ToString());
 
         using var scope = logger.BeginScope(new Dictionary<string, object?>

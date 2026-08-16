@@ -8,6 +8,12 @@ publicado em Production. Operações protegidas comuns de Foundation, incluindo
 as respostas aplicáveis (`200`, `401`, `429` e `503`). O `401` não tem corpo e
 o `503` declara somente `{ code: string }`.
 
+Toda resposta declarada pelo `ApiHost` inclui o header obrigatório de resposta
+`X-Correlation-ID` (`string`, formato `uuid`). Ele é criado pelo servidor para
+suporte e pode acompanhar uma falha sem expor detalhes internos. Nunca é
+parâmetro de requisição, não aceita valor do cliente e não representa
+autorização, sessão ou idempotência.
+
 As operações BFF de mesma origem são públicas apenas onde indicado:
 
 - `GET /foundation/identity/browser-session/antiforgery`: anônima, `200` com

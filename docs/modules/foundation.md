@@ -264,7 +264,7 @@ auditoria; a purga física continua fora desta fatia, na issue #201.
 
 ## Contract version
 
-`1.3`
+`1.4`
 
 ## Modelo de entidades e dados
 
@@ -340,6 +340,11 @@ Todos os hosts configuram `AddVinxLogging`, que preserva `ILogger<T>` nativo e
 emite console JSON com timestamp UTC ISO 8601. Hosts HTTP usam
 `UseVinxRequestCorrelation` antes dos endpoints; o middleware gera o
 `CorrelationId` no servidor, marca a `Activity` atual e o propaga por scope.
+No `ApiHost`, toda resposta concluída também devolve
+`X-Correlation-ID` com esse UUID em formato canônico, inclusive sucesso,
+negação segura e exceção tratada. O cabeçalho é referência diagnóstica opaca:
+o servidor ignora qualquer valor enviado pelo cliente e ele não concede acesso,
+não é chave de idempotência nem contém dado pessoal.
 Auditoria é append-only, transacional com a mutação e redigida. Logs usam
 templates constantes, operação, módulo, resultado e motivo seguro; nunca
 registram tokens, credenciais, PII, prompts ou payload bruto. O host autentica
