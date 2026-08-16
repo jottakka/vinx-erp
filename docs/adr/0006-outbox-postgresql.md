@@ -33,34 +33,50 @@ topologia orientada a transporte que ainda não é necessária.
 As futuras entregas #26 e #48 adotarão Wolverine como primeira opção de
 outbox PostgreSQL sem broker. A escolha reduz a superfície inicial para a
 intenção transacional e o worker local, mantendo MassTransit como alternativa
-reavaliável, não como dependência instalada.
+reavaliável, não como dependência instalada. A #26 é somente dona da intenção
+e outbox transacionais.
 
 As guardas obrigatórias dessa adoção são:
 
-- `AutoBuildMessageStorageOnStartup = AutoCreate.None` e
+- #26 e #48 devem provar, conforme sua responsabilidade, que
+  `AutoBuildMessageStorageOnStartup = AutoCreate.None` e
   `OverrideAutoCreateResources(AutoCreate.None)` impedem criação ou alteração
   automática de recursos no startup.
-- Schema de negócio VINX/Foundation e qualquer intenção própria são criados ou
-  alterados somente por migrations EF revisadas. `FoundationDbContext`, suas
-  migrations e seu histórico EF continuam fonte canônica desse schema.
+- EF é exclusivo do schema de negócio VINX/Foundation e de qualquer intenção
+  própria. Esses recursos são criados ou alterados somente por migrations EF
+  revisadas. `FoundationDbContext`, suas migrations e seu histórico EF
+  continuam fonte canônica desse schema.
 - `UseEntityFrameworkCoreWolverineManagedMigrations()` não pode gerir
-  `FoundationDbContext`; Weasel não será usado nesse contexto.
-- Storage e envelopes técnicos do Wolverine são provisionados ou alterados
-  somente no deploy explícito, nunca no startup ou runtime, pela identidade
-  migradora/deploy com `resources setup` (ou equivalente aprovado). Esse passo
-  pode usar Weasel somente para o schema técnico Wolverine e deve ser validado
-  com `db-assert`.
+  `FoundationDbContext`; #26 e #48 devem prová-lo. Weasel não será usado
+  nesse contexto.
+- Storage e envelopes técnicos do Wolverine são separados do schema
+  VINX/Foundation e só podem ser provisionados ou alterados no deploy
+  explícito, nunca em startup ou runtime. `resources setup` (ou equivalente
+  aprovado) roda somente com identidade migradora/deploy; pode usar Weasel
+  somente para o schema técnico Wolverine. `db-assert` deve validar esse
+  storage antes da liberação.
+- Runtime e worker não possuem DDL nem ownership dos schemas técnicos
+  Wolverine. #26 e #48 devem produzir a prova correspondente antes de uso.
 - A outbox contém somente identificadores internos opacos, tipo de evento e
   correlação mínima. O worker consulta dados necessários em fronteira estreita
   e autorizada.
 
+Esta spike não executou nenhuma dessas provas futuras de configuração, deploy,
+`db-assert`, DDL ou ownership.
+
 ## Limites de entrega e falha externa
 
 A #26 implementará intenção e outbox transacionais e provará rollback sem
-intenção/outbox e commit atômico. A #48 implementará worker, lease/concorrência,
-retry e DLQ observáveis, incluindo prova de que dois workers não concluem duas
-vezes a mesma mensagem internamente. Adapter Supabase/Meta e aceite de convite
-não pertencem a estas entregas.
+intenção/outbox e commit atômico. A #48 implementará somente infraestrutura
+genérica de worker, lease/concorrência, retry, DLQ e observabilidade, incluindo
+prova por fake ou contrato de provider de que dois workers não concluem duas
+vezes a mesma mensagem internamente. Ela não fará chamada real a provider de
+convite.
+
+A #211B, posterior à #48, é a única dona do adapter Supabase Admin de convite
+e da reconciliação real de `provider_ambiguous`. Ela vincula apenas
+`issuer+subject` confirmado, nunca email. Adapter Meta/WhatsApp e webhook de
+notificações não pertencem a esta spike e dependem da cadeia de notificações.
 
 Timeout externo com resultado desconhecido é `provider_ambiguous`. Ele exige
 reconciliação idempotente e decisão observável; é proibido retry automático
@@ -75,8 +91,9 @@ correlacionável.
 
 - A primeira entrega continua sem broker e sem promessa de entrega externa
   exactly-once.
-- A operação precisa de migrations EF revisadas, observabilidade de estado e
-  reconciliação para `provider_ambiguous`.
+- A operação precisa de migrations EF revisadas para VINX/Foundation e
+  intenções próprias, deploy técnico Wolverine explícito, observabilidade de
+  estado e reconciliação para `provider_ambiguous` na #211B.
 - MassTransit será reavaliado se surgir broker, saga ou necessidade que
   justifique sua topologia e licença. Mudança de licença ou de topologia do
   MassTransit também exige reavaliação explícita antes de adoção.

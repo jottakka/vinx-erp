@@ -4,7 +4,7 @@
 
 **Goal:** Registrar uma decisão reproduzível para a primeira infraestrutura durável de outbox PostgreSQL, sem introduzir runtime, worker produtivo ou entrega externa.
 
-**Architecture:** A decisão usa Wolverine com PostgreSQL e integração EF somente como a biblioteca escolhida para as futuras #26 e #48. Esta spike não altera `FoundationDbContext`, migrations, `WorkerHost`, configuração ou lockfiles; ela fixa as guardas para que a adoção futura preserve migrations EF, RLS, auditoria e dados mínimos.
+**Architecture:** A decisão usa Wolverine com PostgreSQL e integração EF como biblioteca para as futuras #26 e #48. EF é exclusivo do schema VINX/Foundation e das intenções próprias; storage e envelopes técnicos do Wolverine são separados. Esta spike não altera `FoundationDbContext`, migrations, `WorkerHost`, configuração ou lockfiles; ela fixa as guardas para que a adoção futura preserve migrations EF, RLS, auditoria e dados mínimos.
 
 **Tech Stack:** .NET 10, EF Core/Npgsql PostgreSQL, Wolverine PostgreSQL/EF Core, MassTransit apenas como alternativa comparada, Markdown.
 
@@ -14,7 +14,8 @@
 - Não instalar dependência, criar migration, tabela, endpoint, job, capability, convite, token, provider ou UI nesta spike.
 - Não tocar Paguai, Atendimento ou Kanban.
 - Não registrar e-mail, token, segredo, payload externo ou connection string em documentação, evidência ou código.
-- A primeira adoção deve manter `AutoCreate.None`, deixar migrations exclusivamente no EF e impedir Weasel de gerir `FoundationDbContext`.
+- A primeira adoção deve manter `AutoCreate.None`. Migrations EF são exclusivas do schema VINX/Foundation e das intenções próprias; Weasel não pode gerir `FoundationDbContext`.
+- Storage e envelopes técnicos do Wolverine só podem ser provisionados pelo passo explícito de deploy, nunca por startup ou runtime.
 - Timeout externo ambíguo deve resultar em estado observável `provider_ambiguous`, sem retry automático cego; deduplicação interna não promete exactly-once externo.
 - A futura outbox guarda somente IDs opacos, tipo de evento e correlação; o worker busca dados pessoais por fronteira estreita autorizada.
 
@@ -31,11 +32,11 @@ Documentar que o scratch descartável de 2026-08-16 restaurou e compilou, em .NE
 
 - [ ] **Step 2: Fixar a escolha e as guardas**
 
-Escolher Wolverine para PostgreSQL sem broker e registrar `AutoBuildMessageStorageOnStartup = AutoCreate.None` e `OverrideAutoCreateResources(AutoCreate.None)` como requisitos da adoção futura. Declarar que `UseEntityFrameworkCoreWolverineManagedMigrations()` não pode gerir `FoundationDbContext` e que MassTransit volta à avaliação apenas se houver broker ou saga que justifique sua topologia/licença.
+Escolher Wolverine para PostgreSQL sem broker. Exigir que #26 e #48, conforme a responsabilidade de cada uma, provem `AutoBuildMessageStorageOnStartup = AutoCreate.None`, `OverrideAutoCreateResources(AutoCreate.None)` e que `FoundationDbContext` não use `UseEntityFrameworkCoreWolverineManagedMigrations()`. Exigir que `resources setup` (ou equivalente) execute somente com identidade migradora/deploy, que `db-assert` valide storage Wolverine antes da liberação e que runtime/worker não tenham DDL nem ownership desses schemas. Manter EF exclusivo do schema VINX/Foundation e das intenções próprias; storage/envelopes técnicos Wolverine são separados e só podem ser provisionados por esse deploy explícito. Declarar que MassTransit volta à avaliação apenas se houver broker ou saga que justifique sua topologia/licença. Não afirmar que esta spike executou essas provas.
 
 - [ ] **Step 3: Delimitar as próximas PRs**
 
-Vincular #26 à intenção/outbox transacional e #48 ao worker/retry/DLQ; deixar adapter Supabase/Meta e aceite de convite fora. Fixar a política de timeout ambíguo e a proibição de PII/segredo na outbox, DLQ, log e auditoria.
+Vincular #26 somente à intenção/outbox transacional. Fixar #48 como infraestrutura genérica de worker, lease, retry, DLQ e observabilidade, com prova por fake/contrato de provider e sem chamada real a provider de convite. Fixar #211B, após #48, como única dona do adapter Supabase Admin de convite e da reconciliação real de `provider_ambiguous`; ela usa somente `issuer+subject` confirmado, nunca email. Adapter Meta/WhatsApp e webhook de notificações ficam fora desta spike e dependem da cadeia de notificações. Fixar a proibição de PII/segredo na outbox, DLQ, log e auditoria.
 
 ### Task 2: Mapear a verificação da decisão
 
@@ -44,11 +45,11 @@ Vincular #26 à intenção/outbox transacional e #48 ao worker/retry/DLQ; deixar
 
 - [ ] **Step 1: Mapear as cinco classes BDD da issue #213**
 
-Criar uma tabela curta para sucesso, validação/erros, acesso, estado/exceções e concorrência. Marcar como evidência da spike somente o restore/build do scratch e a revisão dos contratos oficiais; apontar explicitamente as provas de transação, lease, retry, DLQ e provider para #26/#48, sem afirmar que já existem.
+Criar uma tabela curta para sucesso, validação/erros, acesso, estado/exceções e concorrência. Marcar como evidência da spike somente o restore/build do scratch e a revisão dos contratos oficiais; apontar explicitamente as provas de transação para #26, infraestrutura genérica de worker/lease/retry/DLQ/observabilidade para #48 e adapter/reconciliação real de convite para #211B, sem afirmar que já existem.
 
 - [ ] **Step 2: Registrar critérios de adoção futura**
 
-Exigir que #26 prove rollback sem intenção/outbox e commit atômico, e que #48 prove dois workers sem dupla conclusão interna, retry/DLQ observáveis e logs sem payload sensível.
+Exigir que #26 prove rollback sem intenção/outbox e commit atômico. Exigir que #48 prove dois workers sem dupla conclusão interna, retry/DLQ observáveis, logs sem payload sensível e contrato fake de provider, sem chamada externa real. Exigir que #211B prove adapter Supabase Admin de convite e reconciliação real de `provider_ambiguous` por `issuer+subject` confirmado.
 
 ### Task 3: Validar e publicar a documentação
 
