@@ -14,10 +14,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Organization_creation_persists_one_opaque_owner_invitation_message_and_replay_does_not_duplicate_it()
     {
-        await using var factory =
-            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
-                aal: "aal2"
-            );
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2"
+        );
         await SeedPlatformOperatorAsync(factory);
         var requestId = Guid.NewGuid();
         var ownerDisplayName = $"outbox-display-name-{Guid.NewGuid():N}";
@@ -52,7 +51,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Runtime_startup_does_not_create_wolverine_owner_invitation_storage()
     {
-        await using var factory = await FoundationApiFactory.CreateAsync(aal: "aal2");
+        await using var factory = await FoundationApiFactory.CreateWithoutWolverineStorageAsync(
+            aal: "aal2"
+        );
         var fixture = factory.Fixture;
         var queueBeforeStartup = await OwnerInvitationQueueExistsAsync(fixture);
 
@@ -67,10 +68,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Envelope_persistence_failure_before_commit_rolls_back_the_organization_graph()
     {
-        await using var factory =
-            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
-                aal: "aal2"
-            );
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2"
+        );
         await SeedPlatformOperatorAsync(factory);
         await RevokeOutboxInsertAsync(factory);
         var userCountBeforeRequest = await CountUsersAsync(factory);
@@ -87,10 +87,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Flush_failure_after_commit_keeps_created_response_and_durable_envelope()
     {
-        await using var factory =
-            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
-                aal: "aal2"
-            );
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2"
+        );
         await SeedPlatformOperatorAsync(factory);
         await RevokeQueueInsertAsync(factory);
 
@@ -105,10 +104,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Commit_acknowledgement_failure_does_not_flush_and_retry_does_not_duplicate_the_envelope()
     {
-        await using var factory =
-            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
-                aal: "aal2"
-            );
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2"
+        );
         await SeedPlatformOperatorAsync(factory);
         using var client = factory.CreateClient();
         using var admission = await client.GetAsync("/foundation/platform/bootstrap");
@@ -135,10 +133,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Runtime_role_cannot_create_or_alter_wolverine_storage()
     {
-        await using var factory =
-            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
-                aal: "aal2"
-            );
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2"
+        );
         await using var runtime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString);
         await runtime.OpenAsync();
 
@@ -164,10 +161,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Organization_creation_rejects_aal1_without_writing_an_owner_invitation_message()
     {
-        await using var factory =
-            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
-                aal: "aal1"
-            );
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal1"
+        );
         await SeedPlatformOperatorAsync(factory);
 
         using var response = await factory
@@ -185,10 +181,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Organization_creation_rejects_an_aal2_nonoperator_without_writing_an_owner_invitation_message()
     {
-        await using var factory =
-            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
-                aal: "aal2"
-            );
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2"
+        );
 
         using var response = await factory
             .CreateClient()
@@ -205,10 +200,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     [Fact]
     public async Task Organization_creation_rejects_a_payload_conflict_without_writing_an_extra_owner_invitation_message()
     {
-        await using var factory =
-            await FoundationApiFactory.CreateWithAuthenticatedIdentityAndWolverineStorageAsync(
-                aal: "aal2"
-            );
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2"
+        );
         await SeedPlatformOperatorAsync(factory);
         var requestId = Guid.NewGuid();
         using var client = factory.CreateClient();
@@ -300,6 +294,12 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     {
         var envelope = EnvelopeSerializer.Deserialize(message.Body);
         Assert.Equal("application/json", envelope.ContentType);
+        using var payload = JsonDocument.Parse(envelope.Data);
+        var properties = payload.RootElement.EnumerateObject().ToArray();
+        var invitationIdProperty = Assert.Single(properties);
+        Assert.Equal("invitationId", invitationIdProperty.Name);
+        Assert.Equal(JsonValueKind.String, invitationIdProperty.Value.ValueKind);
+        Assert.Equal(invitationId, invitationIdProperty.Value.GetGuid());
         var requested = Assert.IsType<OwnerInvitationDeliveryRequested>(
             new SystemTextJsonSerializer(
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)
