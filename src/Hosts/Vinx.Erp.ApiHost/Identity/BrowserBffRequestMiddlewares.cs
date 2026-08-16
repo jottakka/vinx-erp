@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Net.Http.Headers;
+using Vinx.Erp.Paguai;
 
 namespace Vinx.Erp.ApiHost.Identity;
 
@@ -104,14 +105,20 @@ internal sealed class BrowserBffAntiforgeryMiddleware(RequestDelegate next)
             return false;
         }
 
+        var browserSession = context.User.Identities.Any(identity =>
+            string.Equals(
+                identity.AuthenticationType,
+                BrowserBffAuthenticationExtensions.CookieScheme,
+                StringComparison.Ordinal
+            )
+        );
         return context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffAntiforgeryRequiredMetadata>()
                 is not null
-            || context.User.Identities.Any(identity =>
-                string.Equals(
-                    identity.AuthenticationType,
-                    BrowserBffAuthenticationExtensions.CookieScheme,
-                    StringComparison.Ordinal
-                )
-            );
+            || (
+                context.GetEndpoint()?.Metadata.GetMetadata<PaguaiAntiforgeryRequiredMetadata>()
+                    is not null
+                && browserSession
+            )
+            || browserSession;
     }
 }

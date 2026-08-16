@@ -81,7 +81,9 @@ Detalhe de outro solicitante, outra empresa ou sem permissão é sempre
 `POST /paguai/requests` usa a mesma segurança; para cookie BFF, CSRF exige
 `X-CSRF-TOKEN`. O corpo JSON estrito contém exatamente `companyId`, `requestId`,
 `title` e `description`; textos são aparados, não vazios, e limitados a 200 e
-4000 caracteres. Retorna `201` e `Location` na primeira criação, `200` no
+4000 caracteres. Aceita somente `Content-Type: application/json` e no máximo
+24 KiB de bytes recebidos; mídia incorreta devolve `415` e corpo excedente
+devolve `400 {"code":"invalid_request"}`, ambos antes de qualquer mutação. Retorna `201` e `Location` na primeira criação, `200` no
 replay idêntico, `400`, `401`, `403`, `409 {"code":"idempotency_conflict"}`,
 `429` ou `503 {"code":"paguai_unavailable"}`. A resposta de sucesso contém
 apenas `id`, `companyId`, `requestId`, `title`, `description`, `state`,

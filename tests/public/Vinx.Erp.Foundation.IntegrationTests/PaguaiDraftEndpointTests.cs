@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -152,6 +153,191 @@ public sealed class PaguaiDraftEndpointTests
         );
     }
 
+    [Fact]
+    public async Task Draft_creation_rejects_a_non_json_content_type_before_any_mutation()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid());
+        using var content = new StringContent(
+            JsonSerializer.Serialize(request),
+            System.Text.Encoding.UTF8,
+            "text/plain"
+        );
+        using var response = await client.PostAsync("/paguai/requests", content);
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+        await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+    }
+
+    [Fact]
+    public async Task Draft_creation_rejects_a_body_larger_than_the_explicit_http_limit_before_any_mutation()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            Description = new string('a', 25 * 1024),
+        };
+
+        using var response = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+        await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+    }
+
+    [Fact]
+    public async Task Draft_create_openapi_declares_json_body_antiforgery_and_safe_error_responses()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var response = await factory.CreateClient().GetAsync("/openapi/v1.json");
+
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var operation = document
+            .RootElement.GetProperty("paths")
+            .GetProperty("/paguai/requests")
+            .GetProperty("post");
+        var requestBody = operation.GetProperty("requestBody");
+
+        Assert.True(requestBody.GetProperty("required").GetBoolean());
+        Assert.True(
+            requestBody
+                .GetProperty("content")
+                .TryGetProperty("application/json", out var applicationJson)
+        );
+        var schema = applicationJson.GetProperty("schema");
+        Assert.Equal("object", schema.GetProperty("type").GetString());
+        Assert.Equal(
+            ["companyId", "description", "requestId", "title"],
+            schema
+                .GetProperty("required")
+                .EnumerateArray()
+                .Select(value => value.GetString())
+                .Order()
+        );
+        Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
+        var properties = schema.GetProperty("properties");
+        Assert.Equal("uuid", properties.GetProperty("companyId").GetProperty("format").GetString());
+        Assert.Equal("uuid", properties.GetProperty("requestId").GetProperty("format").GetString());
+        Assert.Equal(200, properties.GetProperty("title").GetProperty("maxLength").GetInt32());
+        Assert.Equal(
+            4000,
+            properties.GetProperty("description").GetProperty("maxLength").GetInt32()
+        );
+        Assert.Contains(
+            operation.GetProperty("parameters").EnumerateArray(),
+            parameter =>
+                parameter.GetProperty("name").GetString() == "X-CSRF-TOKEN"
+                && parameter.GetProperty("in").GetString() == "header"
+        );
+        var responses = operation.GetProperty("responses");
+        foreach (
+            var status in new[] { "200", "201", "400", "401", "403", "409", "415", "429", "503" }
+        )
+        {
+            Assert.True(responses.TryGetProperty(status, out _));
+        }
+    }
+
+    [Fact]
+    public async Task Draft_creation_appends_exactly_one_safe_success_audit_event_and_replay_does_not_append_another()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid());
+
+        using var created = await client.PostAsJsonAsync("/paguai/requests", request);
+        using var replay = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        using var createdDocument = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var draftId = ReadGuid(createdDocument.RootElement, "id");
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var events = await administrator
+            .AuditEvents.Where(auditEvent =>
+                auditEvent.Action == "paguai.draft.create"
+                && auditEvent.ResourceType == "paguai_request"
+                && auditEvent.ResourceId == draftId
+            )
+            .ToListAsync();
+        var auditEvent = Assert.Single(events);
+
+        Assert.Equal("{}", auditEvent.MetadataJson);
+        Assert.Null(auditEvent.Reason);
+        Assert.Equal(factory.ActorUserId, auditEvent.ActorUserId);
+    }
+
+    [Fact]
+    public async Task Audit_failure_rolls_back_draft_and_idempotency_then_the_same_request_can_retry()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid());
+        using var admission = await client.GetAsync("/foundation/bootstrap");
+        Assert.Equal(HttpStatusCode.OK, admission.StatusCode);
+        await RevokeAuditAppendAsync(factory);
+
+        using var failed = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.StatusCode);
+        Assert.Equal("{\"code\":\"paguai_unavailable\"}", await failed.Content.ReadAsStringAsync());
+        await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+        await GrantAuditAppendAsync(factory);
+
+        using var retry = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
+        await AssertPersistedDraftAndReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+    }
+
+    [Fact]
+    public async Task Concurrent_identical_draft_creates_return_one_creation_one_replay_and_one_audit()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid());
+        using var firstClient = factory.CreateClient();
+        using var secondClient = factory.CreateClient();
+
+        var responses = await Task.WhenAll(
+            firstClient.PostAsJsonAsync("/paguai/requests", request),
+            secondClient.PostAsJsonAsync("/paguai/requests", request)
+        );
+        try
+        {
+            Assert.Equal(
+                [HttpStatusCode.OK, HttpStatusCode.Created],
+                responses.Select(response => response.StatusCode).Order()
+            );
+            await AssertPersistedDraftAndReceiptAsync(
+                factory,
+                scenario.CompanyId,
+                request.RequestId
+            );
+            await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+            Assert.Equal(
+                1,
+                await administrator.AuditEvents.CountAsync(auditEvent =>
+                    auditEvent.Action == "paguai.draft.create"
+                    && auditEvent.RequestedCompanyId == scenario.CompanyId
+                )
+            );
+        }
+        finally
+        {
+            foreach (var response in responses)
+                response.Dispose();
+        }
+    }
+
     private static DraftRequest NewRequest(Guid companyId, Guid requestId) =>
         new(companyId, requestId, "Office supplies", "Replacement printer paper");
 
@@ -160,6 +346,76 @@ public sealed class PaguaiDraftEndpointTests
         Assert.True(root.TryGetProperty(propertyName, out var property));
         Assert.True(Guid.TryParse(property.GetString(), out var value));
         return value;
+    }
+
+    private static async Task RevokeAuditAppendAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "REVOKE EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) FROM vinx_runtime;",
+            administrator
+        );
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task GrantAuditAppendAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "GRANT EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) TO vinx_runtime;",
+            administrator
+        );
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task AssertNoPersistedDraftOrReceiptAsync(
+        FoundationApiFactory factory,
+        Guid companyId,
+        Guid requestId
+    )
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.False(
+            await administrator.IdempotencyRecords.AnyAsync(record =>
+                record.CompanyId == companyId
+                && record.ActorUserId == factory.ActorUserId
+                && record.CommandName == "paguai.draft.create"
+                && record.RequestId == requestId
+            )
+        );
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM paguai.requests WHERE company_id = @company_id AND request_id = @request_id",
+            connection
+        );
+        command.Parameters.AddWithValue("company_id", companyId);
+        command.Parameters.AddWithValue("request_id", requestId);
+        Assert.Equal(0L, await command.ExecuteScalarAsync());
+    }
+
+    private static async Task AssertPersistedDraftAndReceiptAsync(
+        FoundationApiFactory factory,
+        Guid companyId,
+        Guid requestId
+    )
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.True(
+            await administrator.IdempotencyRecords.AnyAsync(record =>
+                record.CompanyId == companyId
+                && record.ActorUserId == factory.ActorUserId
+                && record.CommandName == "paguai.draft.create"
+                && record.RequestId == requestId
+            )
+        );
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM paguai.requests WHERE company_id = @company_id AND request_id = @request_id",
+            connection
+        );
+        command.Parameters.AddWithValue("company_id", companyId);
+        command.Parameters.AddWithValue("request_id", requestId);
+        Assert.Equal(1L, await command.ExecuteScalarAsync());
     }
 
     private static async Task<Scenario> SeedScenarioAsync(FoundationApiFactory factory)

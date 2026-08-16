@@ -8,6 +8,8 @@ namespace Vinx.Erp.Paguai;
 
 public static class PaguaiEndpointMapping
 {
+    private const int MaximumCreateRequestBodyBytes = 24 * 1024;
+
     public static IEndpointRouteBuilder MapPaguaiEndpoints(
         this IEndpointRouteBuilder endpoints,
         string rateLimitPolicy
@@ -49,10 +51,11 @@ public static class PaguaiEndpointMapping
             )
             .WithName("PaguaiDraftList")
             .Produces<IReadOnlyList<PaguaiDraft>>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest)
+            .Produces<PaguaiError>(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status401Unauthorized)
-            .Produces(StatusCodes.Status403Forbidden)
-            .Produces(StatusCodes.Status503ServiceUnavailable);
+            .Produces<PaguaiError>(StatusCodes.Status403Forbidden)
+            .Produces<PaguaiError>(StatusCodes.Status429TooManyRequests)
+            .Produces<PaguaiError>(StatusCodes.Status503ServiceUnavailable);
 
         paguai
             .MapGet(
@@ -85,8 +88,9 @@ public static class PaguaiEndpointMapping
             .WithName("PaguaiDraftDetail")
             .Produces<PaguaiDraft>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status401Unauthorized)
-            .Produces(StatusCodes.Status404NotFound)
-            .Produces(StatusCodes.Status503ServiceUnavailable);
+            .Produces<PaguaiError>(StatusCodes.Status404NotFound)
+            .Produces<PaguaiError>(StatusCodes.Status429TooManyRequests)
+            .Produces<PaguaiError>(StatusCodes.Status503ServiceUnavailable);
 
         paguai
             .MapPost(
@@ -98,19 +102,26 @@ public static class PaguaiEndpointMapping
                     CancellationToken cancellationToken
                 ) =>
                 {
-                    JsonDocument document;
+                    if (!HasApplicationJsonContentType(request))
+                    {
+                        return Error("invalid_request", StatusCodes.Status415UnsupportedMediaType);
+                    }
+
+                    JsonDocument? document;
                     try
                     {
-                        document = await JsonDocument.ParseAsync(
-                            request.Body,
-                            cancellationToken: cancellationToken
-                        );
+                        document = await ReadJsonDocumentAsync(request, cancellationToken);
                     }
                     catch (JsonException)
                     {
                         return Error("invalid_request", StatusCodes.Status400BadRequest);
                     }
                     catch (IOException)
+                    {
+                        return Error("invalid_request", StatusCodes.Status400BadRequest);
+                    }
+
+                    if (document is null)
                     {
                         return Error("invalid_request", StatusCodes.Status400BadRequest);
                     }
@@ -153,16 +164,60 @@ public static class PaguaiEndpointMapping
                 }
             )
             .WithName("PaguaiDraftCreate")
+            .WithMetadata(new PaguaiAntiforgeryRequiredMetadata())
+            .WithMetadata(new PaguaiJsonRequestBodyMetadata())
             .Produces<PaguaiDraft>(StatusCodes.Status201Created)
             .Produces<PaguaiDraft>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest)
+            .Produces<PaguaiError>(StatusCodes.Status400BadRequest)
+            .Produces<PaguaiError>(StatusCodes.Status415UnsupportedMediaType)
             .Produces(StatusCodes.Status401Unauthorized)
-            .Produces(StatusCodes.Status403Forbidden)
-            .Produces(StatusCodes.Status409Conflict)
-            .Produces(StatusCodes.Status503ServiceUnavailable);
+            .Produces<PaguaiError>(StatusCodes.Status403Forbidden)
+            .Produces<PaguaiError>(StatusCodes.Status409Conflict)
+            .Produces<PaguaiError>(StatusCodes.Status429TooManyRequests)
+            .Produces<PaguaiError>(StatusCodes.Status503ServiceUnavailable);
         return endpoints;
     }
 
     private static IResult Error(string code, int statusCode) =>
         Results.Json(new { code }, statusCode: statusCode);
+
+    private static bool HasApplicationJsonContentType(HttpRequest request) =>
+        request.ContentType is { } contentType
+        && string.Equals(
+            contentType.Split(';', 2)[0].Trim(),
+            "application/json",
+            StringComparison.OrdinalIgnoreCase
+        );
+
+    private static async Task<JsonDocument?> ReadJsonDocumentAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken
+    )
+    {
+        if (request.ContentLength is > MaximumCreateRequestBodyBytes)
+        {
+            return null;
+        }
+
+        await using var body = new MemoryStream();
+        var buffer = new byte[4096];
+        int read;
+        while ((read = await request.Body.ReadAsync(buffer, cancellationToken)) > 0)
+        {
+            if (body.Length + read > MaximumCreateRequestBodyBytes)
+            {
+                return null;
+            }
+
+            await body.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
+
+        return JsonDocument.Parse(body.ToArray());
+    }
 }
+
+public sealed record PaguaiError(string Code);
+
+public sealed class PaguaiAntiforgeryRequiredMetadata;
+
+public sealed class PaguaiJsonRequestBodyMetadata;

@@ -54,4 +54,13 @@ describe("Paguai draft client", () => {
       createPaguaiDraftClient(fetchImplementation).detail(companyId, draft.id),
     ).resolves.toEqual({ ok: false, error: "protocol" });
   });
+
+  it("preserves a documented rate limit response for the page to handle", async () => {
+    const fetchImplementation: typeof fetch = async () =>
+      Response.json({ code: "rate_limited" }, { status: 429 });
+
+    await expect(
+      createPaguaiDraftClient(fetchImplementation).list(companyId),
+    ).resolves.toEqual({ ok: false, error: 429 });
+  });
 });

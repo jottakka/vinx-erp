@@ -303,8 +303,58 @@ builder.Services.AddOpenApi(options =>
                 };
             }
 
+            if (metadata?.OfType<PaguaiJsonRequestBodyMetadata>().Any() == true)
+            {
+                operation.RequestBody = new OpenApiRequestBody
+                {
+                    Required = true,
+                    Content = new Dictionary<string, OpenApiMediaType>
+                    {
+                        ["application/json"] = new OpenApiMediaType
+                        {
+                            Schema = new OpenApiSchema
+                            {
+                                Type = JsonSchemaType.Object,
+                                Required = new HashSet<string>
+                                {
+                                    "companyId",
+                                    "requestId",
+                                    "title",
+                                    "description",
+                                },
+                                Properties = new Dictionary<string, IOpenApiSchema>
+                                {
+                                    ["companyId"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        Format = "uuid",
+                                    },
+                                    ["requestId"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        Format = "uuid",
+                                    },
+                                    ["title"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        MaxLength = 200,
+                                    },
+                                    ["description"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        MaxLength = 4000,
+                                    },
+                                },
+                                AdditionalPropertiesAllowed = false,
+                            },
+                        },
+                    },
+                };
+            }
+
             if (
                 metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
+                || metadata?.OfType<PaguaiAntiforgeryRequiredMetadata>().Any() == true
                 || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true
             )
             {

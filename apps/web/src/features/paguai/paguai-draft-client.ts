@@ -27,6 +27,7 @@ export type PaguaiDraftError =
   | 403
   | 404
   | 409
+  | 429
   | 503
   | "network"
   | "protocol";
@@ -49,7 +50,7 @@ function request(
 }
 
 async function readError(response: Response): Promise<PaguaiDraftError> {
-  if ([400, 401, 403, 404, 409, 503].includes(response.status)) {
+  if ([400, 401, 403, 404, 409, 429, 503].includes(response.status)) {
     try {
       if (errorSchema.safeParse(await response.json()).success)
         return response.status as PaguaiDraftError;
