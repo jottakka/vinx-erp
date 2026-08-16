@@ -388,9 +388,10 @@ builder.Services.AddOpenApi(options =>
                         Name = BrowserBffAuthenticationExtensions.AntiforgeryHeaderName,
                         In = ParameterLocation.Header,
                         Required =
-                            metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
-                            || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any()
-                                == true,
+                            metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true
+                            || metadata
+                                ?.OfType<BrowserBffAntiforgeryRequiredMetadata>()
+                                .Any(requirement => !requirement.CookieAuthenticatedOnly) == true,
                         Description =
                             "Obrigatório quando a operação autenticada usa o cookie de sessão BFF.",
                         Schema = new OpenApiSchema { Type = JsonSchemaType.String },
@@ -763,6 +764,7 @@ atendimento
         }
     )
     .WithName("CreateAtendimentoCard")
+    .WithMetadata(new BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true))
     .Produces<AtendimentoCardResponse>(StatusCodes.Status201Created)
     .Produces<AtendimentoCardResponse>(StatusCodes.Status200OK)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
@@ -792,6 +794,7 @@ atendimento
         }
     )
     .WithName("AssignAtendimentoCard")
+    .WithMetadata(new BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true))
     .Produces<AtendimentoCardResponse>(StatusCodes.Status200OK)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
     .Produces(StatusCodes.Status401Unauthorized)
@@ -821,6 +824,7 @@ atendimento
         }
     )
     .WithName("MoveAtendimentoCard")
+    .WithMetadata(new BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true))
     .Produces<AtendimentoCardResponse>(StatusCodes.Status200OK)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
     .Produces(StatusCodes.Status401Unauthorized)

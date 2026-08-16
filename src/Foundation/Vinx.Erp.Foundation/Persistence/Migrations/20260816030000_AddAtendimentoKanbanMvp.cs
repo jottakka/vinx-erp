@@ -15,26 +15,11 @@ public sealed class AddAtendimentoKanbanMvp : Migration
             """
             INSERT INTO foundation.capabilities (id, name, description, created_at)
             VALUES
-                ('611e4143-0a7a-49df-97af-783b28dd8974', 'service_desk.ticket.read_queue', 'Consultar fila de Atendimento', clock_timestamp()),
-                ('20d15110-0862-4098-96f6-0a1931d48848', 'service_desk.ticket.create', 'Criar cartão de Atendimento', clock_timestamp()),
-                ('7a4911f9-5ff2-4cad-b8e4-f907ff3159b3', 'service_desk.ticket.assign', 'Atribuir responsável de Atendimento', clock_timestamp()),
-                ('86622ee5-7117-471a-90a7-1ecd90fabc18', 'service_desk.ticket.move', 'Mover cartão de Atendimento', clock_timestamp())
-            ON CONFLICT (id) DO NOTHING;
-            DO $block$
-            BEGIN
-                IF EXISTS (
-                    SELECT 1
-                    FROM (VALUES
-                        ('611e4143-0a7a-49df-97af-783b28dd8974'::uuid, 'service_desk.ticket.read_queue'),
-                        ('20d15110-0862-4098-96f6-0a1931d48848'::uuid, 'service_desk.ticket.create'),
-                        ('7a4911f9-5ff2-4cad-b8e4-f907ff3159b3'::uuid, 'service_desk.ticket.assign'),
-                        ('86622ee5-7117-471a-90a7-1ecd90fabc18'::uuid, 'service_desk.ticket.move')) AS expected(id, name)
-                    LEFT JOIN foundation.capabilities AS capability ON capability.id = expected.id
-                    WHERE capability.name IS DISTINCT FROM expected.name) THEN
-                    RAISE EXCEPTION 'canonical service desk capability UUID is occupied by a divergent name' USING ERRCODE = '23505';
-                END IF;
-            END;
-            $block$;
+                ('f02fa2b2-aa34-50ca-99bd-b17a55d2989f', 'service_desk.ticket.read_queue', 'Consultar fila de Atendimento', clock_timestamp()),
+                ('e7a53081-b6d9-5509-9300-bff9204eaa8f', 'service_desk.ticket.create', 'Criar cartão de Atendimento', clock_timestamp()),
+                ('e5f8c74a-d854-57bb-916f-25b63824cab7', 'service_desk.ticket.assign', 'Atribuir responsável de Atendimento', clock_timestamp()),
+                ('db9f6a71-6da5-5933-8204-6b16cad2af8a', 'service_desk.ticket.move', 'Mover cartão de Atendimento', clock_timestamp())
+            ON CONFLICT (name) DO NOTHING;
 
             CREATE SCHEMA service_desk;
 
@@ -106,12 +91,20 @@ public sealed class AddAtendimentoKanbanMvp : Migration
             DROP TABLE service_desk.atendimento_cards;
             REVOKE USAGE ON SCHEMA service_desk FROM vinx_runtime;
             DROP SCHEMA service_desk;
-            DELETE FROM foundation.capabilities
-            WHERE id IN (
-                '611e4143-0a7a-49df-97af-783b28dd8974',
-                '20d15110-0862-4098-96f6-0a1931d48848',
-                '7a4911f9-5ff2-4cad-b8e4-f907ff3159b3',
-                '86622ee5-7117-471a-90a7-1ecd90fabc18');
+            DO $block$
+            BEGIN
+                DELETE FROM foundation.capabilities
+                WHERE (id, name) IN (
+                    ('f02fa2b2-aa34-50ca-99bd-b17a55d2989f'::uuid, 'service_desk.ticket.read_queue'),
+                    ('e7a53081-b6d9-5509-9300-bff9204eaa8f'::uuid, 'service_desk.ticket.create'),
+                    ('e5f8c74a-d854-57bb-916f-25b63824cab7'::uuid, 'service_desk.ticket.assign'),
+                    ('db9f6a71-6da5-5933-8204-6b16cad2af8a'::uuid, 'service_desk.ticket.move'));
+            EXCEPTION
+                WHEN foreign_key_violation THEN
+                    RAISE EXCEPTION 'cannot downgrade service desk capability catalog while capabilities are referenced'
+                        USING ERRCODE = '23503';
+            END;
+            $block$;
             """
         );
 }

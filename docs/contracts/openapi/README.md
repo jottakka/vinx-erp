@@ -109,5 +109,9 @@ exige `.move` e recebe `expectedVersion` e `column` (`novo`, `em_andamento` ou
 `concluido`). As duas retornam `200`, e podem retornar `404 resource_not_found`,
 `409 idempotency_conflict|integrity_conflict`, `400`, `401`, `403`, `429` ou
 `503`. `integrity_conflict` devolve apenas o estado atual já autorizado do
-cartão, nunca dados de outra empresa. Todas as respostas mantêm
-`X-Correlation-ID` e as mutações usam auditoria transacional.
+cartão, nunca dados de outra empresa. As três mutações publicam o header
+`X-CSRF-TOKEN`: ele é obrigatório quando a operação usa cookie de sessão BFF e
+é obtido em `GET /foundation/identity/browser-session/antiforgery`; clientes
+bearer não precisam de antiforgery. Todas as respostas mantêm
+`X-Correlation-ID`, usam `Cache-Control: private, no-store` e as mutações usam
+auditoria transacional.

@@ -36,21 +36,21 @@ public static class KnownCapabilities
 
     public const string ServiceDeskTicketReadQueue = "service_desk.ticket.read_queue";
     public static readonly Guid ServiceDeskTicketReadQueueId = Guid.Parse(
-        "611e4143-0a7a-49df-97af-783b28dd8974"
+        "f02fa2b2-aa34-50ca-99bd-b17a55d2989f"
     );
 
     public const string ServiceDeskTicketCreate = "service_desk.ticket.create";
     public static readonly Guid ServiceDeskTicketCreateId = Guid.Parse(
-        "20d15110-0862-4098-96f6-0a1931d48848"
+        "e7a53081-b6d9-5509-9300-bff9204eaa8f"
     );
 
     public const string ServiceDeskTicketAssign = "service_desk.ticket.assign";
     public static readonly Guid ServiceDeskTicketAssignId = Guid.Parse(
-        "7a4911f9-5ff2-4cad-b8e4-f907ff3159b3"
+        "e5f8c74a-d854-57bb-916f-25b63824cab7"
     );
 
     public const string ServiceDeskTicketMove = "service_desk.ticket.move";
     public static readonly Guid ServiceDeskTicketMoveId = Guid.Parse(
-        "86622ee5-7117-471a-90a7-1ecd90fabc18"
+        "db9f6a71-6da5-5933-8204-6b16cad2af8a"
     );
 }

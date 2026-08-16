@@ -175,7 +175,10 @@ internal sealed class BrowserBffSessionAuthorizationHandler
     }
 }
 
-internal sealed class BrowserBffAntiforgeryRequiredMetadata;
+internal sealed class BrowserBffAntiforgeryRequiredMetadata(bool cookieAuthenticatedOnly = false)
+{
+    public bool CookieAuthenticatedOnly { get; } = cookieAuthenticatedOnly;
+}
 
 internal sealed class BrowserBffCookieOnlyEndpointMetadata;
 

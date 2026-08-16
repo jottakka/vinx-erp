@@ -15,6 +15,8 @@ type CommandResult =
   | { ok: false; code: string; current?: AtendimentoCard };
 
 const basePath = "/atendimento/cards";
+const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
+const antiforgeryHeaderName = "X-CSRF-TOKEN";
 
 function request(path: string, init: RequestInit = {}) {
   return fetch(path, {
@@ -26,11 +28,34 @@ function request(path: string, init: RequestInit = {}) {
   });
 }
 
+async function getAntiforgeryToken(): Promise<string | null> {
+  try {
+    const response = await request(antiforgeryPath, {
+      headers: { Accept: "application/json" },
+      method: "GET",
+    });
+    if (!response.ok) return null;
+
+    const payload = (await response.json()) as { requestToken?: unknown };
+    return typeof payload.requestToken === "string" && payload.requestToken
+      ? payload.requestToken
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function command(path: string, body: object): Promise<CommandResult> {
   try {
+    const requestToken = await getAntiforgeryToken();
+    if (!requestToken) return { code: "atendimento_unavailable", ok: false };
+
     const response = await request(path, {
       body: JSON.stringify(body),
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        [antiforgeryHeaderName]: requestToken,
+      },
       method: "POST",
     });
     if (response.ok)

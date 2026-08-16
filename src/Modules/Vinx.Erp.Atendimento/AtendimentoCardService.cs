@@ -1,14 +1,18 @@
+using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Foundation.Persistence.Configurations;
 
 namespace Vinx.Erp.Atendimento;
 
@@ -22,7 +26,13 @@ public sealed class AtendimentoCardService(
     ILogger<AtendimentoCardService> logger
 )
 {
+    private const string Module = "service_desk";
+    private const string Operation = "atendimento_card";
     private const string ResourceType = "atendimento_card";
+    private const string ReadQueueAction = "service_desk.ticket.read_queue";
+    private const string CreateAction = "service_desk.ticket.create";
+    private const string AssignAction = "service_desk.ticket.assign";
+    private const string MoveAction = "service_desk.ticket.move";
 
     public Task<AtendimentoCardOperationResult> CreateAsync(
         ActorContext actor,
@@ -34,13 +44,14 @@ public sealed class AtendimentoCardService(
             command.CompanyId,
             command.RequestId,
             KnownCapabilities.ServiceDeskTicketCreate,
-            "service_desk.ticket.create",
+            CreateAction,
+            CreateAction,
             IsValid(command),
             Hash(command),
             async () =>
             {
                 var card = await InsertCardAsync(actor, command, cancellationToken);
-                return new Mutation(card, AtendimentoCardOperationState.Created);
+                return Mutation.Succeeded(card, AtendimentoCardOperationState.Created);
             },
             cancellationToken
         );
@@ -56,30 +67,44 @@ public sealed class AtendimentoCardService(
             command.CompanyId,
             command.RequestId,
             KnownCapabilities.ServiceDeskTicketAssign,
-            "service_desk.ticket.assign",
+            AssignAction,
+            CommandScope(AssignAction, cardId),
             IsValid(command),
-            Hash(command),
+            Hash(new RoutedCommandPayload<AssignAtendimentoCardCommand>(cardId, command)),
             async () =>
             {
-                var card = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
-                if (card is null)
-                    return new Mutation(null, AtendimentoCardOperationState.ResourceNotFound);
-                if (card.Version != command.ExpectedVersion)
-                    return new Mutation(card, AtendimentoCardOperationState.IntegrityConflict);
-                var member = await database.Memberships.SingleOrDefaultAsync(
-                    candidate =>
-                        candidate.CompanyId == command.CompanyId
-                        && candidate.Id == command.AssigneeMembershipId,
-                    cancellationToken
-                );
-                if (member is null)
-                    return new Mutation(null, AtendimentoCardOperationState.ResourceNotFound);
+                if (
+                    !await IsActiveMembershipAsync(
+                        command.CompanyId,
+                        command.AssigneeMembershipId,
+                        cancellationToken
+                    )
+                )
+                {
+                    return Mutation.ResourceNotFound();
+                }
+
                 var updated = await UpdateAssigneeAsync(actor, cardId, command, cancellationToken);
-                return new Mutation(
-                    updated ?? card,
-                    updated is null
-                        ? AtendimentoCardOperationState.IntegrityConflict
-                        : AtendimentoCardOperationState.Success
+                if (updated is not null)
+                {
+                    return Mutation.Succeeded(updated, AtendimentoCardOperationState.Success);
+                }
+
+                if (
+                    !await IsActiveMembershipAsync(
+                        command.CompanyId,
+                        command.AssigneeMembershipId,
+                        cancellationToken
+                    )
+                )
+                {
+                    return Mutation.ResourceNotFound();
+                }
+
+                return await ReadCurrentAfterMutationMissAsync(
+                    command.CompanyId,
+                    cardId,
+                    cancellationToken
                 );
             },
             cancellationToken
@@ -96,28 +121,37 @@ public sealed class AtendimentoCardService(
             command.CompanyId,
             command.RequestId,
             KnownCapabilities.ServiceDeskTicketMove,
-            "service_desk.ticket.move",
+            MoveAction,
+            CommandScope(MoveAction, cardId),
             IsValid(command),
-            Hash(command),
+            Hash(new RoutedCommandPayload<MoveAtendimentoCardCommand>(cardId, command)),
             async () =>
             {
-                var card = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
-                if (card is null)
-                    return new Mutation(null, AtendimentoCardOperationState.ResourceNotFound);
-                if (card.Version != command.ExpectedVersion)
-                    return new Mutation(card, AtendimentoCardOperationState.IntegrityConflict);
-                var updated = await MoveCardAsync(actor, card, command, cancellationToken);
+                var before = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
+                if (before is null)
+                {
+                    return Mutation.ResourceNotFound();
+                }
+
+                var updated = await MoveCardAsync(actor, before.Id, command, cancellationToken);
                 if (updated is null)
-                    return new Mutation(card, AtendimentoCardOperationState.IntegrityConflict);
+                {
+                    return await ReadCurrentAfterMutationMissAsync(
+                        command.CompanyId,
+                        cardId,
+                        cancellationToken
+                    );
+                }
+
                 await database.Database.ExecuteSqlInterpolatedAsync(
                     $"""
                     INSERT INTO service_desk.atendimento_card_history
                         (id, company_id, card_id, from_column, to_column, actor_user_id, request_id)
-                    VALUES ({Guid.NewGuid()}, {command.CompanyId}, {cardId}, {card.Column}, {command.Column.Trim()}, {actor.UserId}, {command.RequestId})
+                    VALUES ({Guid.NewGuid()}, {command.CompanyId}, {cardId}, {before.Column}, {command.Column.Trim()}, {actor.UserId}, {command.RequestId})
                     """,
                     cancellationToken
                 );
-                return new Mutation(updated, AtendimentoCardOperationState.Success);
+                return Mutation.Succeeded(updated, AtendimentoCardOperationState.Success);
             },
             cancellationToken
         );
@@ -129,7 +163,10 @@ public sealed class AtendimentoCardService(
     )
     {
         if (companyId == Guid.Empty)
+        {
             return new(AtendimentoCardOperationState.Invalid);
+        }
+
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(
@@ -145,19 +182,27 @@ public sealed class AtendimentoCardService(
             if (denied is not null)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return await AuditDenialAsync(actor, companyId, denied.Value, cancellationToken);
+                return await AuditDeniedResultAsync(
+                    actor,
+                    companyId,
+                    ReadQueueAction,
+                    denied.Value,
+                    cancellationToken
+                );
             }
+
             var cards = await QueryCardsAsync(companyId, cancellationToken);
             await AppendAuditAsync(
                 actor,
                 companyId,
-                "service_desk.ticket.read_queue",
+                ReadQueueAction,
                 null,
                 AuditOutcome.Success,
                 null,
                 cancellationToken
             );
             await transaction.CommitAsync(cancellationToken);
+            LogInformation("succeeded", "queue_read");
             return new(AtendimentoCardOperationState.Success, Cards: cards);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -167,7 +212,7 @@ public sealed class AtendimentoCardService(
         catch (Exception exception)
         {
             database.ChangeTracker.Clear();
-            logger.LogError(exception, "Atendimento queue operation failed safely.");
+            LogUnavailable(exception, "queue_read_failed");
             return new(AtendimentoCardOperationState.Unavailable);
         }
     }
@@ -177,7 +222,8 @@ public sealed class AtendimentoCardService(
         Guid companyId,
         Guid requestId,
         string capability,
-        string commandName,
+        string auditAction,
+        string idempotencyCommandName,
         bool valid,
         string payloadHash,
         Func<Task<Mutation>> mutation,
@@ -185,7 +231,10 @@ public sealed class AtendimentoCardService(
     )
     {
         if (companyId == Guid.Empty || requestId == Guid.Empty || !valid)
+        {
             return new(AtendimentoCardOperationState.Invalid);
+        }
+
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(
@@ -196,51 +245,83 @@ public sealed class AtendimentoCardService(
             if (denied is not null)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return await AuditDenialAsync(actor, companyId, denied.Value, cancellationToken);
+                return await AuditDeniedResultAsync(
+                    actor,
+                    companyId,
+                    auditAction,
+                    denied.Value,
+                    cancellationToken
+                );
             }
-            var existing = await database.IdempotencyRecords.SingleOrDefaultAsync(
-                record =>
-                    record.CompanyId == companyId
-                    && record.ActorUserId == actor.UserId
-                    && record.CommandName == commandName
-                    && record.RequestId == requestId,
+
+            var existing = await FindIdempotencyRecordAsync(
+                companyId,
+                actor.UserId,
+                idempotencyCommandName,
+                requestId,
                 cancellationToken
             );
             if (existing is not null)
             {
                 await transaction.RollbackAsync(cancellationToken);
                 if (!string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal))
-                    return await AuditDenialAsync(
+                {
+                    return await AuditDeniedResultAsync(
                         actor,
                         companyId,
+                        auditAction,
                         AtendimentoCardOperationState.IdempotencyConflict,
                         cancellationToken
                     );
+                }
+
                 var replay = JsonSerializer.Deserialize<AtendimentoCardResponse>(
                     existing.ResultJson
                 );
-                return replay is null
-                    ? new(AtendimentoCardOperationState.Unavailable)
-                    : new(AtendimentoCardOperationState.Replay, replay);
+                if (replay is null)
+                {
+                    LogUnavailable(null, "idempotency_result_invalid");
+                    return new(AtendimentoCardOperationState.Unavailable);
+                }
+
+                LogInformation("replayed", "idempotency_match");
+                return new(AtendimentoCardOperationState.Replay, replay);
             }
+
             var result = await mutation();
-            if (
-                result.State
-                is AtendimentoCardOperationState.ResourceNotFound
-                    or AtendimentoCardOperationState.IntegrityConflict
-            )
+            if (result.State is AtendimentoCardOperationState.ResourceNotFound)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return result.State == AtendimentoCardOperationState.IntegrityConflict
-                    ? new(result.State, Current: result.Card)
-                    : await AuditDenialAsync(actor, companyId, result.State, cancellationToken);
+                return await AuditDeniedResultAsync(
+                    actor,
+                    companyId,
+                    auditAction,
+                    result.State,
+                    cancellationToken
+                );
             }
+
+            if (result.State is AtendimentoCardOperationState.IntegrityConflict)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                var audited = await AuditDeniedResultAsync(
+                    actor,
+                    companyId,
+                    auditAction,
+                    result.State,
+                    cancellationToken
+                );
+                return audited.State == AtendimentoCardOperationState.IntegrityConflict
+                    ? new(AtendimentoCardOperationState.IntegrityConflict, Current: result.Current)
+                    : audited;
+            }
+
             database.IdempotencyRecords.Add(
                 new IdempotencyRecord(
                     Guid.NewGuid(),
                     companyId,
                     actor.UserId,
-                    commandName,
+                    idempotencyCommandName,
                     requestId,
                     payloadHash,
                     JsonSerializer.Serialize(result.Card)
@@ -249,7 +330,7 @@ public sealed class AtendimentoCardService(
             await AppendAuditAsync(
                 actor,
                 companyId,
-                commandName,
+                auditAction,
                 result.Card!.Id,
                 AuditOutcome.Success,
                 null,
@@ -257,21 +338,27 @@ public sealed class AtendimentoCardService(
             );
             await database.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            LogInformation("succeeded", "command_completed");
             return new(result.State, result.Card);
         }
-        catch (DbUpdateConcurrencyException)
+        catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
             database.ChangeTracker.Clear();
-            return new(AtendimentoCardOperationState.IntegrityConflict);
-        }
-        catch (DbUpdateException)
-        {
-            database.ChangeTracker.Clear();
-            return await ResolveReplayAsync(
+            logger.LogWarning(
+                exception,
+                "Atendimento {Operation} {Module} {Result} {Reason}",
+                Operation,
+                Module,
+                "retrying",
+                "idempotency_unique_conflict"
+            );
+            return await ResolveConcurrentReplayAsync(
                 actor,
                 companyId,
                 requestId,
-                commandName,
+                auditAction,
+                idempotencyCommandName,
+                capability,
                 payloadHash,
                 cancellationToken
             );
@@ -283,17 +370,106 @@ public sealed class AtendimentoCardService(
         catch (Exception exception)
         {
             database.ChangeTracker.Clear();
-            logger.LogError(exception, "Atendimento command failed safely.");
+            LogUnavailable(exception, "database_or_audit_failed");
             return new(AtendimentoCardOperationState.Unavailable);
         }
     }
 
-    private async Task<AtendimentoCardOperationResult> ResolveReplayAsync(
+    private async Task<AtendimentoCardOperationResult> ResolveConcurrentReplayAsync(
         ActorContext actor,
         Guid companyId,
         Guid requestId,
-        string commandName,
+        string auditAction,
+        string idempotencyCommandName,
+        string capability,
         string payloadHash,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            IdempotencyRecord? record = null;
+            AtendimentoCardOperationState? denial = null;
+            await using (
+                var transaction = await database.Database.BeginTransactionAsync(cancellationToken)
+            )
+            {
+                await SetContextAsync(actor, companyId, cancellationToken);
+                denial = await AuthorizeAsync(actor, companyId, capability, cancellationToken);
+                if (denial is null)
+                {
+                    record = await FindIdempotencyRecordAsync(
+                        companyId,
+                        actor.UserId,
+                        idempotencyCommandName,
+                        requestId,
+                        cancellationToken
+                    );
+                }
+
+                await transaction.RollbackAsync(cancellationToken);
+            }
+
+            if (denial is not null)
+            {
+                return await AuditDeniedResultAsync(
+                    actor,
+                    companyId,
+                    auditAction,
+                    denial.Value,
+                    cancellationToken
+                );
+            }
+
+            if (record is null)
+            {
+                return await AuditDeniedResultAsync(
+                    actor,
+                    companyId,
+                    auditAction,
+                    AtendimentoCardOperationState.IntegrityConflict,
+                    cancellationToken
+                );
+            }
+
+            if (!string.Equals(record.PayloadHash, payloadHash, StringComparison.Ordinal))
+            {
+                return await AuditDeniedResultAsync(
+                    actor,
+                    companyId,
+                    auditAction,
+                    AtendimentoCardOperationState.IdempotencyConflict,
+                    cancellationToken
+                );
+            }
+
+            var replay = JsonSerializer.Deserialize<AtendimentoCardResponse>(record.ResultJson);
+            if (replay is null)
+            {
+                LogUnavailable(null, "idempotency_result_invalid");
+                return new(AtendimentoCardOperationState.Unavailable);
+            }
+
+            LogInformation("replayed", "concurrent_idempotency_match");
+            return new(AtendimentoCardOperationState.Replay, replay);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            database.ChangeTracker.Clear();
+            LogUnavailable(exception, "idempotency_reconciliation_failed");
+            return new(AtendimentoCardOperationState.Unavailable);
+        }
+    }
+
+    private async Task<AtendimentoCardOperationResult> AuditDeniedResultAsync(
+        ActorContext actor,
+        Guid companyId,
+        string auditAction,
+        AtendimentoCardOperationState state,
         CancellationToken cancellationToken
     )
     {
@@ -303,37 +479,28 @@ public sealed class AtendimentoCardService(
                 cancellationToken
             );
             await SetContextAsync(actor, companyId, cancellationToken);
-            var record = await database
-                .IdempotencyRecords.AsNoTracking()
-                .SingleOrDefaultAsync(
-                    candidate =>
-                        candidate.CompanyId == companyId
-                        && candidate.ActorUserId == actor.UserId
-                        && candidate.CommandName == commandName
-                        && candidate.RequestId == requestId,
-                    cancellationToken
-                );
-            await transaction.RollbackAsync(cancellationToken);
-            if (record is null)
-                return new(AtendimentoCardOperationState.IntegrityConflict);
-            if (!string.Equals(record.PayloadHash, payloadHash, StringComparison.Ordinal))
-                return await AuditDenialAsync(
-                    actor,
-                    companyId,
-                    AtendimentoCardOperationState.IdempotencyConflict,
-                    cancellationToken
-                );
-            var replay = JsonSerializer.Deserialize<AtendimentoCardResponse>(record.ResultJson);
-            return replay is null
-                ? new(AtendimentoCardOperationState.Unavailable)
-                : new(AtendimentoCardOperationState.Replay, replay);
+            var reason = ErrorCode(state);
+            await AppendAuditAsync(
+                actor,
+                companyId,
+                auditAction,
+                null,
+                AuditOutcome.Denied,
+                reason,
+                cancellationToken
+            );
+            await transaction.CommitAsync(cancellationToken);
+            LogInformation("denied", reason);
+            return new(state);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            database.ChangeTracker.Clear();
+            LogUnavailable(exception, "denial_audit_failed");
             return new(AtendimentoCardOperationState.Unavailable);
         }
     }
@@ -350,7 +517,10 @@ public sealed class AtendimentoCardService(
             cancellationToken
         );
         if (membership is null)
+        {
             return AtendimentoCardOperationState.MembershipRequired;
+        }
+
         return await capabilityEvaluator.HasGrantAsync(
             companyId,
             membership.Id,
@@ -361,40 +531,40 @@ public sealed class AtendimentoCardService(
             : AtendimentoCardOperationState.CapabilityDenied;
     }
 
-    private async Task<AtendimentoCardOperationResult> AuditDenialAsync(
-        ActorContext actor,
+    private Task<IdempotencyRecord?> FindIdempotencyRecordAsync(
         Guid companyId,
-        AtendimentoCardOperationState state,
+        Guid actorUserId,
+        string commandName,
+        Guid requestId,
+        CancellationToken cancellationToken
+    ) =>
+        database.IdempotencyRecords.SingleOrDefaultAsync(
+            record =>
+                record.CompanyId == companyId
+                && record.ActorUserId == actorUserId
+                && record.CommandName == commandName
+                && record.RequestId == requestId,
+            cancellationToken
+        );
+
+    private Task<bool> IsActiveMembershipAsync(
+        Guid companyId,
+        Guid membershipId,
+        CancellationToken cancellationToken
+    ) =>
+        database.Memberships.AnyAsync(
+            candidate => candidate.CompanyId == companyId && candidate.Id == membershipId,
+            cancellationToken
+        );
+
+    private async Task<Mutation> ReadCurrentAfterMutationMissAsync(
+        Guid companyId,
+        Guid cardId,
         CancellationToken cancellationToken
     )
     {
-        try
-        {
-            await using var transaction = await database.Database.BeginTransactionAsync(
-                cancellationToken
-            );
-            await SetContextAsync(actor, companyId, cancellationToken);
-            var code = ErrorCode(state);
-            await AppendAuditAsync(
-                actor,
-                companyId,
-                code,
-                null,
-                AuditOutcome.Denied,
-                code,
-                cancellationToken
-            );
-            await transaction.CommitAsync(cancellationToken);
-            return new(state);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            return new(AtendimentoCardOperationState.Unavailable);
-        }
+        var current = await FindCardAsync(companyId, cardId, cancellationToken);
+        return current is null ? Mutation.ResourceNotFound() : Mutation.IntegrityConflict(current);
     }
 
     private async Task SetContextAsync(
@@ -495,37 +665,128 @@ public sealed class AtendimentoCardService(
         CancellationToken cancellationToken
     )
     {
-        var affected = await database.Database.ExecuteSqlInterpolatedAsync(
-            $"""
+        await using var dbCommand = CreateDatabaseCommand(
+            """
             UPDATE service_desk.atendimento_cards
-            SET assignee_membership_id = {command.AssigneeMembershipId}, updated_by_user_id = {actor.UserId}, updated_at = clock_timestamp(), request_id = {command.RequestId}, row_version = row_version + 1
-            WHERE company_id = {command.CompanyId} AND id = {cardId} AND row_version = {command.ExpectedVersion} AND deleted_at IS NULL
-            """,
-            cancellationToken
+            SET assignee_membership_id = @assignee_membership_id,
+                updated_by_user_id = @actor_user_id,
+                updated_at = clock_timestamp(),
+                request_id = @request_id,
+                row_version = row_version + 1
+            WHERE company_id = @company_id
+              AND id = @card_id
+              AND row_version = @expected_version
+              AND deleted_at IS NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM foundation.memberships
+                  WHERE company_id = @company_id
+                    AND id = @assignee_membership_id
+                    AND deleted_at IS NULL)
+            RETURNING id, company_id, title, description, column_name, row_version, assignee_membership_id;
+            """
         );
-        return affected == 1
-            ? await FindCardAsync(command.CompanyId, cardId, cancellationToken)
-            : null;
+        AddParameter(dbCommand, "company_id", command.CompanyId);
+        AddParameter(dbCommand, "card_id", cardId);
+        AddParameter(dbCommand, "expected_version", command.ExpectedVersion);
+        AddParameter(dbCommand, "assignee_membership_id", command.AssigneeMembershipId);
+        AddParameter(dbCommand, "actor_user_id", actor.UserId);
+        AddParameter(dbCommand, "request_id", command.RequestId);
+        return await ExecuteReturningCardAsync(dbCommand, cancellationToken);
     }
 
     private async Task<AtendimentoCardResponse?> MoveCardAsync(
         ActorContext actor,
-        AtendimentoCardResponse card,
+        Guid cardId,
         MoveAtendimentoCardCommand command,
         CancellationToken cancellationToken
     )
     {
-        var affected = await database.Database.ExecuteSqlInterpolatedAsync(
-            $"""
+        await using var dbCommand = CreateDatabaseCommand(
+            """
             UPDATE service_desk.atendimento_cards
-            SET column_name = {command.Column.Trim()}, updated_by_user_id = {actor.UserId}, updated_at = clock_timestamp(), request_id = {command.RequestId}, row_version = row_version + 1
-            WHERE company_id = {command.CompanyId} AND id = {card.Id} AND row_version = {command.ExpectedVersion} AND deleted_at IS NULL
-            """,
-            cancellationToken
+            SET column_name = @column_name,
+                updated_by_user_id = @actor_user_id,
+                updated_at = clock_timestamp(),
+                request_id = @request_id,
+                row_version = row_version + 1
+            WHERE company_id = @company_id
+              AND id = @card_id
+              AND row_version = @expected_version
+              AND deleted_at IS NULL
+            RETURNING id, company_id, title, description, column_name, row_version, assignee_membership_id;
+            """
         );
-        return affected == 1
-            ? await FindCardAsync(command.CompanyId, card.Id, cancellationToken)
-            : null;
+        AddParameter(dbCommand, "company_id", command.CompanyId);
+        AddParameter(dbCommand, "card_id", cardId);
+        AddParameter(dbCommand, "expected_version", command.ExpectedVersion);
+        AddParameter(dbCommand, "column_name", command.Column.Trim());
+        AddParameter(dbCommand, "actor_user_id", actor.UserId);
+        AddParameter(dbCommand, "request_id", command.RequestId);
+        return await ExecuteReturningCardAsync(dbCommand, cancellationToken);
+    }
+
+    private DbCommand CreateDatabaseCommand(string commandText)
+    {
+        var command = database.Database.GetDbConnection().CreateCommand();
+        command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
+        command.CommandText = commandText;
+        return command;
+    }
+
+    private static void AddParameter(DbCommand command, string name, object value)
+    {
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = name;
+        parameter.Value = value;
+        command.Parameters.Add(parameter);
+    }
+
+    private static async Task<AtendimentoCardResponse?> ExecuteReturningCardAsync(
+        DbCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new AtendimentoCardResponse(
+            reader.GetGuid(0),
+            reader.GetGuid(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetInt64(5),
+            reader.IsDBNull(6) ? null : reader.GetGuid(6)
+        );
+    }
+
+    private static bool IsIdempotencyKeyConflict(DbUpdateException exception)
+    {
+        for (
+            Exception? inner = exception.InnerException;
+            inner is not null;
+            inner = inner.InnerException
+        )
+        {
+            if (
+                inner is PostgresException postgresException
+                && postgresException.SqlState == PostgresErrorCodes.UniqueViolation
+                && string.Equals(
+                    postgresException.ConstraintName,
+                    IdempotencyRecordConfiguration.KeyIndexDatabaseName,
+                    StringComparison.Ordinal
+                )
+            )
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsValid(CreateAtendimentoCardCommand command) =>
@@ -538,6 +799,8 @@ public sealed class AtendimentoCardService(
     private static bool IsValid(MoveAtendimentoCardCommand command) =>
         command.ExpectedVersion > 0
         && command.Column?.Trim() is "novo" or "em_andamento" or "concluido";
+
+    private static string CommandScope(string action, Guid cardId) => $"{action}:{cardId:N}";
 
     private static string Hash<T>(T value) =>
         Convert
@@ -555,8 +818,42 @@ public sealed class AtendimentoCardService(
             _ => "atendimento_unavailable",
         };
 
+    private void LogInformation(string result, string reason) =>
+        logger.LogInformation(
+            "Atendimento {Operation} {Module} {Result} {Reason}",
+            Operation,
+            Module,
+            result,
+            reason
+        );
+
+    private void LogUnavailable(Exception? exception, string reason) =>
+        logger.LogError(
+            exception,
+            "Atendimento {Operation} {Module} {Result} {Reason}",
+            Operation,
+            Module,
+            "unavailable",
+            reason
+        );
+
+    private sealed record RoutedCommandPayload<T>(Guid CardId, T Command);
+
     private sealed record Mutation(
-        AtendimentoCardResponse? Card,
-        AtendimentoCardOperationState State
-    );
+        AtendimentoCardOperationState State,
+        AtendimentoCardResponse? Card = null,
+        AtendimentoCardResponse? Current = null
+    )
+    {
+        public static Mutation Succeeded(
+            AtendimentoCardResponse card,
+            AtendimentoCardOperationState state
+        ) => new(state, card);
+
+        public static Mutation ResourceNotFound() =>
+            new(AtendimentoCardOperationState.ResourceNotFound);
+
+        public static Mutation IntegrityConflict(AtendimentoCardResponse current) =>
+            new(AtendimentoCardOperationState.IntegrityConflict, Current: current);
+    }
 }

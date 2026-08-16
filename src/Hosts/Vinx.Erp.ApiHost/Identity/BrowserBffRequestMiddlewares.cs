@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Net.Http.Headers;
-using Vinx.Erp.Paguai;
 
 namespace Vinx.Erp.ApiHost.Identity;
 
@@ -21,7 +20,8 @@ internal sealed class BrowserBffNoStoreMiddleware(RequestDelegate next)
                 var browserSessionRoute =
                     context.Request.Path.Equals("/foundation/bootstrap", StringComparison.Ordinal)
                     || context.Request.Path.StartsWithSegments("/foundation/identity/browser-session")
-                    || context.Request.Path.StartsWithSegments("/paguai");
+                    || context.Request.Path.StartsWithSegments("/paguai")
+                    || context.Request.Path.StartsWithSegments("/atendimento");
                 if (browserSessionRoute || IsBrowserCookieAuthenticated(context))
                 {
                     context.Response.Headers[HeaderNames.CacheControl] = "private, no-store";
@@ -105,20 +105,20 @@ internal sealed class BrowserBffAntiforgeryMiddleware(RequestDelegate next)
             return false;
         }
 
-        var browserSession = context.User.Identities.Any(identity =>
+        var antiforgeryRequirement = context
+            .GetEndpoint()
+            ?.Metadata.GetMetadata<BrowserBffAntiforgeryRequiredMetadata>();
+        if (antiforgeryRequirement is { CookieAuthenticatedOnly: false })
+        {
+            return true;
+        }
+
+        return context.User.Identities.Any(identity =>
             string.Equals(
                 identity.AuthenticationType,
                 BrowserBffAuthenticationExtensions.CookieScheme,
                 StringComparison.Ordinal
             )
         );
-        return context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffAntiforgeryRequiredMetadata>()
-                is not null
-            || (
-                context.GetEndpoint()?.Metadata.GetMetadata<PaguaiAntiforgeryRequiredMetadata>()
-                    is not null
-                && browserSession
-            )
-            || browserSession;
     }
 }

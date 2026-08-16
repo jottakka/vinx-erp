@@ -47,11 +47,13 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   useEffect(() => {
     if (!companyId) return;
     let active = true;
+    setCards([]);
     setLoading(true);
     setError(null);
     void atendimentoClient.list(companyId).then((result) => {
       if (!active) return;
-      if (result) setCards(result);
+      if (result)
+        setCards(result.filter((card) => card.companyId === companyId));
       else setError("Não foi possível carregar a fila. Tente novamente.");
       setLoading(false);
     });
