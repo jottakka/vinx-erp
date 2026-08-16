@@ -62,7 +62,11 @@ public sealed class ApiHostPlatformTests
         var failure = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
 
         Assert.NotNull(FindException<OptionsValidationException>(failure));
-        Assert.DoesNotContain(DataProtectionCredential, failure.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            DataProtectionCredential,
+            failure.ToString(),
+            StringComparison.Ordinal
+        );
     }
 
     [Theory]
@@ -246,9 +250,12 @@ public sealed class ApiHostPlatformTests
 
         var signOutSecurity = signOut.GetProperty("security");
         Assert.Single(signOutSecurity.EnumerateArray());
-        Assert.True(IsEmptySecurityRequirement(
-            signOutSecurity.EnumerateArray().Single(),
-            "BrowserSessionCookie"));
+        Assert.True(
+            IsEmptySecurityRequirement(
+                signOutSecurity.EnumerateArray().Single(),
+                "BrowserSessionCookie"
+            )
+        );
         var browserCookie = document
             .RootElement.GetProperty("components")
             .GetProperty("securitySchemes")
@@ -266,8 +273,8 @@ public sealed class ApiHostPlatformTests
 
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var session = document.RootElement
-            .GetProperty("paths")
+        var session = document
+            .RootElement.GetProperty("paths")
             .GetProperty("/foundation/identity/browser-session");
         var signIn = session.GetProperty("post");
         var signOut = session.GetProperty("delete");
@@ -276,17 +283,97 @@ public sealed class ApiHostPlatformTests
         Assert.True(requestBody.GetProperty("required").GetBoolean());
         var schema = ResolveSchema(
             document.RootElement,
-            requestBody.GetProperty("content").GetProperty("application/json").GetProperty("schema"));
+            requestBody.GetProperty("content").GetProperty("application/json").GetProperty("schema")
+        );
         Assert.Equal(
             new[] { "email", "password" },
-            schema.GetProperty("required").EnumerateArray().Select(value => value.GetString()).ToArray());
+            schema
+                .GetProperty("required")
+                .EnumerateArray()
+                .Select(value => value.GetString())
+                .ToArray()
+        );
         Assert.Equal(
             new[] { "email", "password" },
-            schema.GetProperty("properties").EnumerateObject().Select(property => property.Name).ToArray());
+            schema
+                .GetProperty("properties")
+                .EnumerateObject()
+                .Select(property => property.Name)
+                .ToArray()
+        );
         Assert.All(
             schema.GetProperty("properties").EnumerateObject(),
-            property => Assert.Equal("string", property.Value.GetProperty("type").GetString()));
+            property => Assert.Equal("string", property.Value.GetProperty("type").GetString())
+        );
+    }
 
+    [Fact]
+    public async Task Employee_directory_openapi_declares_strict_body_opaque_responses_and_bearer_security()
+    {
+        using var factory = new ApiHostPlatformFactory();
+        using var response = await factory.CreateClient().GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var post = document
+            .RootElement.GetProperty("paths")
+            .GetProperty("/foundation/companies/{companyId}/employees")
+            .GetProperty("post");
+        var schema = ResolveSchema(
+            document.RootElement,
+            post.GetProperty("requestBody")
+                .GetProperty("content")
+                .GetProperty("application/json")
+                .GetProperty("schema")
+        );
+        Assert.Equal(
+            new[] { "companyId", "displayName", "email", "requestId" },
+            schema.GetProperty("required").EnumerateArray().Select(x => x.GetString()).Order()
+        );
+        Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
+        foreach (var status in new[] { "200", "201" })
+        {
+            var output = ResolveSchema(
+                document.RootElement,
+                post.GetProperty("responses")
+                    .GetProperty(status)
+                    .GetProperty("content")
+                    .GetProperty("application/json")
+                    .GetProperty("schema")
+            );
+            Assert.Equal(
+                new[] { "employeeId", "membershipId", "userId" },
+                output.GetProperty("required").EnumerateArray().Select(x => x.GetString()).Order()
+            );
+            Assert.False(output.GetProperty("additionalProperties").GetBoolean());
+        }
+        var security = post.GetProperty("security");
+        Assert.Contains(
+            security.EnumerateArray(),
+            requirement => IsEmptySecurityRequirement(requirement, "Bearer")
+        );
+        Assert.Contains(
+            security.EnumerateArray(),
+            requirement => IsEmptySecurityRequirement(requirement, "BrowserSessionCookie")
+        );
+
+        var csrfHeader = Assert.Single(
+            post.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("name").GetString() == "X-CSRF-TOKEN"
+        );
+        Assert.Equal("header", csrfHeader.GetProperty("in").GetString());
+        Assert.False(
+            csrfHeader.TryGetProperty("required", out var required) && required.GetBoolean()
+        );
+        Assert.Equal("string", csrfHeader.GetProperty("schema").GetProperty("type").GetString());
+        var csrfDescription = csrfHeader.GetProperty("description").GetString() ?? string.Empty;
+        Assert.Contains(
+            "BrowserSessionCookie",
+            csrfDescription,
+            StringComparison.OrdinalIgnoreCase
+        );
+        Assert.Contains("Bearer", csrfDescription, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("obrigat", csrfDescription, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dispens", csrfDescription, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -297,8 +384,8 @@ public sealed class ApiHostPlatformTests
 
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var session = document.RootElement
-            .GetProperty("paths")
+        var session = document
+            .RootElement.GetProperty("paths")
             .GetProperty("/foundation/identity/browser-session");
 
         AssertRequiredCsrfHeader(session.GetProperty("post"));
@@ -521,7 +608,8 @@ public sealed class ApiHostPlatformTests
             return schema;
         }
 
-        var schemaName = reference.GetString()?.Split('/').Last()
+        var schemaName =
+            reference.GetString()?.Split('/').Last()
             ?? throw new InvalidOperationException("The request schema reference was empty.");
         return document.GetProperty("components").GetProperty("schemas").GetProperty(schemaName);
     }
@@ -653,37 +741,46 @@ public sealed class ApiHostPlatformTests
         {
             _dataProtectionKeyDirectory = Path.Combine(
                 Path.GetTempPath(),
-                $"vinx-erp-data-protection-{Guid.NewGuid():N}");
+                $"vinx-erp-data-protection-{Guid.NewGuid():N}"
+            );
             Directory.CreateDirectory(_dataProtectionKeyDirectory);
 
             _dataProtectionCertificatePath = Path.Combine(
                 _dataProtectionKeyDirectory,
-                "certificate.pfx");
+                "certificate.pfx"
+            );
             using var rsa = RSA.Create(2048);
             var request = new CertificateRequest(
                 "CN=Vinx ERP integration test",
                 rsa,
                 HashAlgorithmName.SHA256,
-                RSASignaturePadding.Pkcs1);
+                RSASignaturePadding.Pkcs1
+            );
             using var certificate = request.CreateSelfSigned(
                 DateTimeOffset.UtcNow.AddMinutes(-1),
-                DateTimeOffset.UtcNow.AddHours(1));
+                DateTimeOffset.UtcNow.AddHours(1)
+            );
             File.WriteAllBytes(
                 _dataProtectionCertificatePath,
-                certificate.Export(X509ContentType.Pfx, DataProtectionCredential));
+                certificate.Export(X509ContentType.Pfx, DataProtectionCredential)
+            );
 
             builder.UseSetting(
                 "BROWSER_SESSION_DATA_PROTECTION_KEY_DIRECTORY",
-                _dataProtectionKeyDirectory);
+                _dataProtectionKeyDirectory
+            );
             builder.UseSetting(
                 "BROWSER_SESSION_DATA_PROTECTION_APPLICATION_NAME",
-                "vinx-erp-integration-tests");
+                "vinx-erp-integration-tests"
+            );
             builder.UseSetting(
                 "BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PATH",
-                _dataProtectionCertificatePath);
+                _dataProtectionCertificatePath
+            );
             builder.UseSetting(
                 "BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PASSWORD",
-                DataProtectionCredential);
+                DataProtectionCredential
+            );
         }
     }
 

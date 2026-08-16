@@ -40,7 +40,7 @@ public sealed class AuditPrivilegeTests
     }
 
     [Fact]
-    public async Task Audit_objects_are_owned_by_the_dedicated_owner_and_only_runtime_platform_or_provisioning_owner_can_execute_the_appender()
+    public async Task Audit_objects_are_owned_by_the_dedicated_owner_and_only_runtime_platform_provisioning_or_employee_directory_owner_can_execute_the_appender()
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
@@ -62,6 +62,7 @@ public sealed class AuditPrivilegeTests
                 appender.proconfig,
                 has_function_privilege('vinx_platform_owner', 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE'),
                 has_function_privilege('vinx_provisioning_owner', 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE'),
+                has_function_privilege('vinx_employee_directory_owner', 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE'),
                 NOT EXISTS (
                     SELECT 1
                     FROM aclexplode(COALESCE(appender.proacl, acldefault('f', appender.proowner))) AS privilege
@@ -83,7 +84,8 @@ public sealed class AuditPrivilegeTests
                           appender.proowner,
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_runtime'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_platform_owner'),
-                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_provisioning_owner')))
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_provisioning_owner'),
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_employee_directory_owner')))
             FROM pg_proc AS appender
             WHERE appender.oid = 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)'::regprocedure
             """,
@@ -107,6 +109,7 @@ public sealed class AuditPrivilegeTests
         Assert.True(reader.GetBoolean(12));
         Assert.True(reader.GetBoolean(13));
         Assert.True(reader.GetBoolean(14));
+        Assert.True(reader.GetBoolean(15));
     }
 
     [Theory]

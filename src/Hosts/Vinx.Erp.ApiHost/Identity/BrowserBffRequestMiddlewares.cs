@@ -1,5 +1,5 @@
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.Net.Http.Headers;
 
 namespace Vinx.Erp.ApiHost.Identity;
@@ -20,7 +20,14 @@ internal sealed class BrowserBffNoStoreMiddleware(RequestDelegate next)
                 var browserSessionRoute =
                     context.Request.Path.Equals("/foundation/bootstrap", StringComparison.Ordinal)
                     || context.Request.Path.StartsWithSegments("/foundation/identity/browser-session");
-                if (browserSessionRoute || IsBrowserCookieAuthenticated(context))
+                var endpointOptedIntoNoStore =
+                    context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffNoStoreEndpointMetadata>()
+                    is not null;
+                if (
+                    browserSessionRoute
+                    || endpointOptedIntoNoStore
+                    || IsBrowserCookieAuthenticated(context)
+                )
                 {
                     context.Response.Headers[HeaderNames.CacheControl] = "private, no-store";
                 }
@@ -67,9 +74,12 @@ internal sealed class BrowserBffAntiforgeryMiddleware(RequestDelegate next)
         if (ShouldClearBrowserSessionCookie(context))
         {
             context.Response.OnStarting(
-                static state => ((HttpContext)state).SignOutAsync(
-                    BrowserBffAuthenticationExtensions.CookieScheme),
-                context);
+                static state =>
+                    ((HttpContext)state).SignOutAsync(
+                        BrowserBffAuthenticationExtensions.CookieScheme
+                    ),
+                context
+            );
         }
 
         await next(context);
@@ -77,26 +87,39 @@ internal sealed class BrowserBffAntiforgeryMiddleware(RequestDelegate next)
 
     private static bool ShouldClearBrowserSessionCookie(HttpContext context) =>
         HttpMethods.IsDelete(context.Request.Method)
-        && context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffCookieOnlyEndpointMetadata>() is not null
+        && context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffCookieOnlyEndpointMetadata>()
+            is not null
         && context.User.Identities.Any(identity =>
             identity.IsAuthenticated
             && string.Equals(
                 identity.AuthenticationType,
                 BrowserBffAuthenticationExtensions.CookieScheme,
-                StringComparison.Ordinal));
+                StringComparison.Ordinal
+            )
+        );
 
     private static bool RequiresValidation(HttpContext context)
     {
-        if (!HttpMethods.IsPost(context.Request.Method)
+        if (
+            !HttpMethods.IsPost(context.Request.Method)
             && !HttpMethods.IsPut(context.Request.Method)
             && !HttpMethods.IsPatch(context.Request.Method)
-            && !HttpMethods.IsDelete(context.Request.Method))
+            && !HttpMethods.IsDelete(context.Request.Method)
+        )
         {
             return false;
         }
 
-        return context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffAntiforgeryRequiredMetadata>() is not null
+        return context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffAntiforgeryRequiredMetadata>()
+                is not null
             || context.User.Identities.Any(identity =>
-                string.Equals(identity.AuthenticationType, BrowserBffAuthenticationExtensions.CookieScheme, StringComparison.Ordinal));
+                string.Equals(
+                    identity.AuthenticationType,
+                    BrowserBffAuthenticationExtensions.CookieScheme,
+                    StringComparison.Ordinal
+                )
+            );
     }
 }
+
+internal sealed class BrowserBffNoStoreEndpointMetadata;

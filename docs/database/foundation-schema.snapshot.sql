@@ -210,6 +210,130 @@ END;
 $$;
 
 
+-- Name: create_employee_directory_entry(uuid, uuid, text, text, text); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.create_employee_directory_entry(p_request_id uuid, p_company_id uuid, p_display_name text, p_email text, p_payload_hash text) RETURNS TABLE(status text, employee_id uuid, membership_id uuid, user_id uuid)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $_$
+DECLARE
+    v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+    v_correlation_id uuid := COALESCE(
+        NULLIF(current_setting('app.correlation_id', true), '')::uuid,
+        gen_random_uuid());
+    v_existing foundation.idempotency_records%ROWTYPE;
+    v_user_id uuid := gen_random_uuid();
+    v_membership_id uuid := gen_random_uuid();
+    v_employee_id uuid := gen_random_uuid();
+    v_now timestamp with time zone := clock_timestamp();
+BEGIN
+    IF p_company_id IS NULL
+        OR p_request_id IS NULL
+        OR p_payload_hash !~ '^[0-9a-f]{64}$'
+        OR p_display_name IS NULL
+        OR btrim(p_display_name) = ''
+        OR char_length(btrim(p_display_name)) > 200
+        OR p_email IS NULL
+        OR btrim(p_email) = ''
+        OR char_length(btrim(p_email)) > 320 THEN
+        RAISE EXCEPTION 'employee directory parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM set_config('app.company_id', p_company_id::text, true);
+
+    IF v_actor_user_id IS NULL
+        OR NOT EXISTS (
+            SELECT 1
+            FROM foundation.memberships AS membership
+            INNER JOIN foundation.role_assignments AS assignment
+                ON assignment.company_id = membership.company_id
+               AND assignment.membership_id = membership.id
+               AND assignment.deleted_at IS NULL
+            INNER JOIN foundation.roles AS role_record
+                ON role_record.company_id = assignment.company_id
+               AND role_record.id = assignment.role_id
+               AND role_record.deleted_at IS NULL
+            INNER JOIN foundation.role_capabilities AS grant_record
+                ON grant_record.company_id = assignment.company_id
+               AND grant_record.role_id = assignment.role_id
+               AND grant_record.scope = 'company'
+               AND grant_record.deleted_at IS NULL
+            INNER JOIN foundation.capabilities AS capability
+                ON capability.id = grant_record.capability_id
+               AND capability.name = 'foundation.employees.create'
+            WHERE membership.company_id = p_company_id
+              AND membership.user_id = v_actor_user_id
+              AND membership.deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'employee directory capability is required'
+            USING ERRCODE = '42501';
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended(
+            v_actor_user_id::text || '|' || p_company_id::text || '|' || p_request_id::text,
+            0));
+    SELECT * INTO v_existing
+    FROM foundation.idempotency_records
+    WHERE company_id = p_company_id
+      AND actor_user_id = v_actor_user_id
+      AND command_name = 'foundation.employee.create'
+      AND request_id = p_request_id;
+    IF FOUND THEN
+        RETURN QUERY
+        SELECT
+            CASE
+                WHEN v_existing.payload_hash = p_payload_hash THEN 'replay'
+                ELSE 'idempotency_conflict'
+            END,
+            (v_existing.result_json ->> 'employeeId')::uuid,
+            (v_existing.result_json ->> 'membershipId')::uuid,
+            (v_existing.result_json ->> 'userId')::uuid;
+        RETURN;
+    END IF;
+
+    INSERT INTO foundation.users (id, display_name, email, created_at)
+    VALUES (v_user_id, btrim(p_display_name), lower(btrim(p_email)), v_now);
+    INSERT INTO foundation.memberships (
+        id, company_id, user_id, created_by_user_id, updated_by_user_id,
+        request_id, created_at, updated_at)
+    VALUES (
+        v_membership_id, p_company_id, v_user_id, v_actor_user_id, v_actor_user_id,
+        p_request_id, v_now, v_now);
+    INSERT INTO foundation.employees (
+        id, company_id, membership_id, display_name, created_by_user_id,
+        updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (
+        v_employee_id, p_company_id, v_membership_id, btrim(p_display_name),
+        v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.idempotency_records (
+        id, company_id, actor_user_id, command_name, request_id,
+        payload_hash, result_json, created_at)
+    VALUES (
+        gen_random_uuid(), p_company_id, v_actor_user_id, 'foundation.employee.create',
+        p_request_id, p_payload_hash,
+        jsonb_build_object(
+            'employeeId', v_employee_id,
+            'membershipId', v_membership_id,
+            'userId', v_user_id),
+        v_now);
+    PERFORM audit.append_event(
+        v_actor_user_id,
+        'company',
+        p_company_id,
+        'web',
+        'foundation.employee.create',
+        'employee',
+        v_employee_id,
+        'success',
+        v_correlation_id,
+        NULL,
+        '{}'::jsonb);
+    RETURN QUERY SELECT 'created'::text, v_employee_id, v_membership_id, v_user_id;
+END;
+$_$;
+
+
 -- Name: current_actor_is_platform_operator(); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.current_actor_is_platform_operator() RETURNS boolean
@@ -262,6 +386,103 @@ CREATE FUNCTION foundation.current_authorized_company_ids() RETURNS SETOF uuid
     FROM regexp_split_to_table(
         NULLIF(current_setting('app.authorized_company_ids', true), ''), ',') AS value
     WHERE value <> '';
+$$;
+
+
+-- Name: ensure_platform_owner_employee_create(uuid, uuid, uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.ensure_platform_owner_employee_create(p_request_id uuid, p_company_id uuid, p_owner_membership_id uuid) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+    v_has_roles_assign boolean;
+BEGIN
+    IF p_request_id IS NULL OR p_company_id IS NULL OR p_owner_membership_id IS NULL THEN
+        RAISE EXCEPTION 'initial owner employee capability parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM set_config('app.company_id', p_company_id::text, true);
+
+    IF v_actor_user_id IS NULL
+        OR NOT foundation.current_actor_is_platform_operator() THEN
+        RAISE EXCEPTION 'platform operator is required' USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('app.mfa_assurance', true) IS DISTINCT FROM 'aal2' THEN
+        RAISE EXCEPTION 'mfa assurance is required' USING ERRCODE = '42501';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM foundation.organization_provisioning_receipts AS receipt
+        WHERE receipt.actor_user_id = v_actor_user_id
+          AND receipt.request_id = p_request_id
+          AND receipt.company_id = p_company_id
+          AND receipt.owner_membership_id = p_owner_membership_id) THEN
+        RAISE EXCEPTION 'initial owner provisioning receipt is required'
+            USING ERRCODE = '42501';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM foundation.memberships AS membership
+        INNER JOIN foundation.role_assignments AS assignment
+            ON assignment.company_id = membership.company_id
+           AND assignment.membership_id = membership.id
+           AND assignment.deleted_at IS NULL
+        INNER JOIN foundation.roles AS role_record
+            ON role_record.company_id = assignment.company_id
+           AND role_record.id = assignment.role_id
+           AND role_record.deleted_at IS NULL
+        INNER JOIN foundation.role_capabilities AS grant_record
+            ON grant_record.company_id = assignment.company_id
+           AND grant_record.role_id = assignment.role_id
+           AND grant_record.scope = 'company'
+           AND grant_record.deleted_at IS NULL
+        INNER JOIN foundation.capabilities AS capability
+            ON capability.id = grant_record.capability_id
+           AND capability.name = 'foundation.roles.assign'
+        WHERE membership.company_id = p_company_id
+          AND membership.id = p_owner_membership_id
+          AND membership.deleted_at IS NULL)
+    INTO v_has_roles_assign;
+    IF NOT v_has_roles_assign THEN
+        RAISE EXCEPTION 'initial owner employee capability is unavailable'
+            USING ERRCODE = '23514';
+    END IF;
+
+    INSERT INTO foundation.role_capabilities (
+        id, company_id, role_id, capability_id, scope,
+        created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    SELECT
+        gen_random_uuid(),
+        assignment.company_id,
+        assignment.role_id,
+        employee_capability.id,
+        'company',
+        v_actor_user_id,
+        v_actor_user_id,
+        gen_random_uuid(),
+        clock_timestamp(),
+        clock_timestamp()
+    FROM foundation.role_assignments AS assignment
+    INNER JOIN foundation.role_capabilities AS roles_assign
+        ON roles_assign.company_id = assignment.company_id
+       AND roles_assign.role_id = assignment.role_id
+       AND roles_assign.scope = 'company'
+       AND roles_assign.deleted_at IS NULL
+    INNER JOIN foundation.capabilities AS assigned_capability
+        ON assigned_capability.id = roles_assign.capability_id
+       AND assigned_capability.name = 'foundation.roles.assign'
+    INNER JOIN foundation.capabilities AS employee_capability
+        ON employee_capability.name = 'foundation.employees.create'
+    WHERE assignment.company_id = p_company_id
+      AND assignment.membership_id = p_owner_membership_id
+      AND assignment.deleted_at IS NULL
+    ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+        DO NOTHING;
+END;
 $$;
 
 
@@ -1342,6 +1563,11 @@ CREATE POLICY approvals_company_isolation ON foundation.approvals USING (((compa
 
 ALTER TABLE foundation.capabilities ENABLE ROW LEVEL SECURITY;
 
+-- Name: capabilities capabilities_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_employee_directory_owner_select ON foundation.capabilities FOR SELECT TO vinx_employee_directory_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying])::text[])));
+
+
 -- Name: capabilities capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY capabilities_provisioning_owner ON foundation.capabilities FOR SELECT TO vinx_provisioning_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.memberships.revoke'::character varying, 'foundation.files.upload'::character varying, 'foundation.files.confirm'::character varying])::text[])));
@@ -1390,6 +1616,11 @@ CREATE POLICY employees_authorized_company_read ON foundation.employees FOR SELE
 CREATE POLICY employees_company_isolation ON foundation.employees USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: employees employees_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY employees_employee_directory_owner_insert ON foundation.employees FOR INSERT TO vinx_employee_directory_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
 -- Name: files; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.files ENABLE ROW LEVEL SECURITY;
@@ -1429,6 +1660,16 @@ CREATE POLICY groups_company_isolation ON foundation.groups USING ((id = ( SELEC
 CREATE POLICY groups_provisioning_owner ON foundation.groups FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
 
 
+-- Name: idempotency_records idempotency_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY idempotency_employee_directory_owner_insert ON foundation.idempotency_records FOR INSERT TO vinx_employee_directory_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: idempotency_records idempotency_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY idempotency_employee_directory_owner_select ON foundation.idempotency_records FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
 -- Name: idempotency_records; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.idempotency_records ENABLE ROW LEVEL SECURITY;
@@ -1462,6 +1703,16 @@ CREATE POLICY memberships_authorized_company_read ON foundation.memberships FOR 
 CREATE POLICY memberships_company_isolation ON foundation.memberships USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: memberships memberships_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_employee_directory_owner_insert ON foundation.memberships FOR INSERT TO vinx_employee_directory_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: memberships memberships_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_employee_directory_owner_select ON foundation.memberships FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
 -- Name: memberships memberships_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY memberships_provisioning_owner ON foundation.memberships FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
@@ -1470,6 +1721,11 @@ CREATE POLICY memberships_provisioning_owner ON foundation.memberships FOR INSER
 -- Name: organization_provisioning_receipts; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.organization_provisioning_receipts ENABLE ROW LEVEL SECURITY;
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_employee_directory_owner_sel; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY organization_provisioning_receipts_employee_directory_owner_sel ON foundation.organization_provisioning_receipts FOR SELECT TO vinx_employee_directory_owner USING (((actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid) AND (company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)));
+
 
 -- Name: organization_provisioning_receipts organization_provisioning_receipts_provisioning_owner_insert; Type: POLICY; Schema: foundation; Owner: -
 
@@ -1513,6 +1769,11 @@ CREATE POLICY role_assignments_authorized_company_read ON foundation.role_assign
 CREATE POLICY role_assignments_company_isolation ON foundation.role_assignments USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: role_assignments role_assignments_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_assignments_employee_directory_owner_select ON foundation.role_assignments FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
 -- Name: role_assignments role_assignments_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_assignments_provisioning_owner ON foundation.role_assignments FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
@@ -1532,6 +1793,16 @@ CREATE POLICY role_capabilities_authorized_company_read ON foundation.role_capab
 CREATE POLICY role_capabilities_company_isolation ON foundation.role_capabilities USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: role_capabilities role_capabilities_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_employee_directory_owner_insert ON foundation.role_capabilities FOR INSERT TO vinx_employee_directory_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: role_capabilities role_capabilities_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_employee_directory_owner_select ON foundation.role_capabilities FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
 -- Name: role_capabilities role_capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_capabilities_provisioning_owner ON foundation.role_capabilities FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
@@ -1549,6 +1820,11 @@ CREATE POLICY roles_authorized_company_read ON foundation.roles FOR SELECT USING
 -- Name: roles roles_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY roles_company_isolation ON foundation.roles USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: roles roles_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY roles_employee_directory_owner_select ON foundation.roles FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
 -- Name: roles roles_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -

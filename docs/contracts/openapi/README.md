@@ -50,6 +50,27 @@ convite com `invitationStatus: "pending_delivery"`; replay retorna o mesmo
 corpo com `200`. Conflitos são exclusivamente
 `idempotency_conflict` ou `organization_conflict`.
 
+`POST /foundation/companies/{companyId}/employees` publica bearer ou cookie
+BFF e declara `201`, `200`, `400`, `401`, `403`, `409`, `429` e `503`.
+Quando autenticado pelo cookie BFF, exige o header `X-CSRF-TOKEN`; chamadas
+autenticadas por bearer não exigem esse header.
+Exige `foundation.employees.create` no escopo `company`; o corpo
+`application/json` contém exatamente `requestId`, `companyId`, `displayName` e
+`email`, e os dois IDs de empresa devem coincidir. JSON não compatível, campo
+desconhecido ou duplicado, e-mail sem sintaxe válida ou corpo maior que 8 KiB
+retorna `400 {"code":"invalid_request"}` antes da mutação; o limite conta os
+bytes efetivamente lidos, inclusive transferência chunked. Criação retorna
+apenas os IDs opacos de employee, membership e user; replay retorna os mesmos
+IDs com `200`. Os únicos conflitos publicados são
+`idempotency_conflict` e `employee_conflict`; o último não revela se o e-mail
+já existe. As respostas desse POST usam `Cache-Control: private, no-store`.
+
+`GET /foundation/companies/{companyId}/employees` usa a mesma autenticação e
+capability e declara `200`, `401`, `403`, `429` e `503`. A lista contém
+somente `employeeId`, `membershipId` e `displayName` da empresa autorizada; não
+publica e-mail, role, identidade externa, convite ou estado de entrega. Todas
+as respostas desse GET, inclusive erros, usam `Cache-Control: private, no-store`.
+
 Todo comando recebe contexto explícito de empresa e é autorizado no servidor
 por membership, capability nomeada e escopo. A resposta não revela dados de
 empresa inacessível. O frontend pode ocultar UI pelas capabilities efetivas,

@@ -284,6 +284,29 @@ public sealed class FoundationPostgresFixtureTests
     }
 
     [Fact]
+    public async Task ReapplyBootstrapAsync_revokes_unexpected_employee_directory_owner_membership()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using (
+            var contaminate = new NpgsqlCommand(
+                "GRANT vinx_employee_directory_owner TO vinx_runtime",
+                connection
+            )
+        )
+            await contaminate.ExecuteNonQueryAsync();
+
+        await fixture.ReapplyBootstrapAsync();
+
+        await using var membership = new NpgsqlCommand(
+            "SELECT EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid JOIN pg_roles u ON u.oid=m.member WHERE r.rolname='vinx_employee_directory_owner' AND u.rolname='vinx_runtime')",
+            connection
+        );
+        Assert.False((bool)(await membership.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
     public async Task StartAsync_creates_the_four_non_superuser_roles_and_migrator_can_set_isolated_owners()
     {
         await using var fixture = new FoundationPostgresFixture();

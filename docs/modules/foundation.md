@@ -157,9 +157,49 @@ A função `SECURITY DEFINER` pertence a `vinx_provisioning_owner`, role
 empresa, usuário local, membership, role fixa `owner`, quatro grants
 necessários, assignment e convite técnico `pending_delivery`; então grava
 recibo e auditoria global `platform.organization.provision` na mesma
-transação. O operador não recebe membership nem acesso ao tenant criado. Não
-há envio ou aceite no provedor, employee, interface ou fluxo de convite nesta
+transação. Antes do commit, o serviço acrescenta ao papel `owner` a capability
+`foundation.employees.create` pela função estreita do diretório, vinculada ao
+recibo exato daquele operador, request, empresa e membership; o operador
+continua sem membership ou acesso ao tenant criado. Não há envio ou aceite no
+provedor, employee criado para o owner, interface ou fluxo de convite nesta
 fatia.
+
+## Diretório local de funcionários
+
+`POST /foundation/companies/{companyId}/employees` reserva uma pessoa no
+diretório local. O corpo estrito `application/json` contém somente `requestId`,
+`companyId`, `displayName` e `email`, e o identificador do corpo deve coincidir
+com a empresa da rota. A operação exige identidade interna conhecida,
+membership ativa e a capability `foundation.employees.create` em escopo
+`company`; a função SQL reavalia as três condições antes de consultar a
+idempotência. O corpo é limitado a 8 KiB pelos bytes efetivamente lidos,
+inclusive em transferência chunked; JSON inválido ou e-mail sem sintaxe válida
+retorna `400 {"code":"invalid_request"}` antes da mutação.
+Quando autenticado pelo cookie BFF, o POST exige `X-CSRF-TOKEN`; chamadas
+autenticadas por bearer não exigem esse header.
+
+A criação transacional insere somente um `User` novo, uma `Membership` nova e
+um `Employee` da empresa, além de recibo e auditoria
+`foundation.employee.create`. Ela não cria `ExternalIdentity`, role assignment,
+convite, token, outbox ou chamada ao provedor. E-mail é normalizado apenas para
+a unicidade global do `User`; nunca volta na resposta, no diretório, na
+auditoria ou no log. Colisão de e-mail retorna `employee_conflict` sem revelar
+o cadastro existente.
+
+O mesmo ator, empresa, `requestId` e payload retorna os mesmos IDs opacos sem
+duplicar linhas nem auditoria. Payload divergente retorna
+`idempotency_conflict`. Negação de capability gera auditoria compacta separada;
+se essa evidência não puder ser gravada, a API retorna `503` seguro em vez de
+confirmar uma negação sem rastro. `GET /foundation/companies/{companyId}/employees`
+requer a mesma capability e devolve apenas IDs opacos e `displayName` da própria
+empresa. Ambas as rotas do diretório usam `Cache-Control: private, no-store`,
+inclusive para respostas de erro produzidas pelo pipeline.
+
+Esta etapa é deliberadamente uma reserva sem login. Entrega pelo provedor,
+outbox/worker, token com expiração, vínculo exato de `issuer` + `subject` e
+aceite browser permanecem nas próximas fatias da issue #211; identidade
+desconhecida continua recebendo `401` fora de um futuro fluxo de aceite
+explicitamente limitado.
 
 O único bootstrap inicial é o comando de deployment
 `Vinx.Erp.PlatformBootstrap`, sem argumentos. Ele usa a conexão migradora e
@@ -264,7 +304,7 @@ auditoria; a purga física continua fora desta fatia, na issue #201.
 
 ## Contract version
 
-`1.4`
+`1.5`
 
 ## Modelo de entidades e dados
 
@@ -323,6 +363,14 @@ evidência transacional não possa ser desviada por uma tabela temporária.
 permissões transitórias e relações necessárias para a função de provisionamento
 de organização. O runtime não recebe leitura nem DML nas tabelas de convite e
 recibo, e executa apenas a função estreita; `PUBLIC` e migrador não a executam.
+
+`vinx_employee_directory_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui somente
+as colunas, policies RLS e funções necessárias para reservar o grafo local de
+funcionário e acrescentar a capability inicial ao papel `owner`. O runtime não
+recebe DML direto em `users`, `memberships`, `employees`, idempotência ou
+grants; executa apenas as duas funções estreitas. O downgrade falha fechado se
+existir recibo de criação de funcionário ou grant ativo da capability, para não
+remover acesso ou estado observado.
 
 A revogação de membership marca somente soft-delete e auditoria técnica da
 membership própria. O runtime recebe `UPDATE` apenas nas colunas de ciclo de

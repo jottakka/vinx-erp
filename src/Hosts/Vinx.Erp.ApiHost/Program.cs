@@ -15,6 +15,7 @@ using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Bootstrap;
 using Vinx.Erp.Foundation.Domain;
+using Vinx.Erp.Foundation.Employees;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
@@ -25,6 +26,7 @@ using Vinx.Erp.Foundation.Platform;
 var builder = WebApplication.CreateBuilder(args);
 const string ProtectedRateLimitPolicy = "foundation";
 const string BrowserSessionLoginRateLimitPolicy = "browser-session-login";
+const int MaximumEmployeeDirectoryRequestBodyBytes = 8 * 1024;
 builder.Logging.AddVinxLogging();
 builder
     .Services.AddOptions<FoundationDatabaseOptions>()
@@ -73,6 +75,7 @@ builder.Services.AddScoped<ActorMembershipMapService>();
 builder.Services.AddScoped<FoundationBootstrapService>();
 builder.Services.AddScoped<PlatformOperatorAccessService>();
 builder.Services.AddScoped<PlatformOrganizationProvisioningService>();
+builder.Services.AddScoped<EmployeeDirectoryService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
@@ -88,8 +91,10 @@ builder.Services.AddAuthorization(options =>
     );
     options.AddPolicy(
         PlatformOperatorAuthorization.MfaAssurancePolicyName,
-        policy => policy.RequireAuthenticatedUser()
-            .AddRequirements(new PlatformOperatorRequirement(requiresMfaAssurance: true))
+        policy =>
+            policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new PlatformOperatorRequirement(requiresMfaAssurance: true))
     );
 });
 builder.Services.AddScoped<IAuthorizationHandler, PlatformOperatorAuthorizationHandler>();
@@ -137,10 +142,11 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
         HttpMethods.IsPost(context.Request.Method)
-            && string.Equals(
-                context.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName,
-                BrowserSessionLoginRateLimitPolicy,
-                StringComparison.Ordinal)
+        && string.Equals(
+            context.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName,
+            BrowserSessionLoginRateLimitPolicy,
+            StringComparison.Ordinal
+        )
             ? RateLimitPartition.GetFixedWindowLimiter(
                 "browser-session-global",
                 _ => new FixedWindowRateLimiterOptions
@@ -150,8 +156,10 @@ builder.Services.AddRateLimiter(options =>
                     QueueLimit = 0,
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     AutoReplenishment = true,
-                })
-            : RateLimitPartition.GetNoLimiter("not-browser-session"));
+                }
+            )
+            : RateLimitPartition.GetNoLimiter("not-browser-session")
+    );
     options.AddPolicy(
         ProtectedRateLimitPolicy,
         context =>
@@ -217,7 +225,9 @@ builder.Services.AddOpenApi(options =>
                 {
                     Type = SecuritySchemeType.ApiKey,
                     In = ParameterLocation.Cookie,
-                    Name = BrowserBffAuthenticationExtensions.GetSessionCookieName(builder.Environment),
+                    Name = BrowserBffAuthenticationExtensions.GetSessionCookieName(
+                        builder.Environment
+                    ),
                 };
             return Task.CompletedTask;
         }
@@ -228,7 +238,8 @@ builder.Services.AddOpenApi(options =>
             var metadata = context.Description.ActionDescriptor.EndpointMetadata;
             if (operation.Responses is not null)
             {
-                var document = context.Document
+                var document =
+                    context.Document
                     ?? throw new InvalidOperationException(
                         "OpenAPI response contract requires a document context."
                     );
@@ -253,9 +264,14 @@ builder.Services.AddOpenApi(options =>
                     concreteResponse.Headers[RequestCorrelationMiddleware.ResponseHeaderName] =
                         new OpenApiHeader
                         {
-                            Description = "Referência opaca gerada pelo servidor para suporte da requisição.",
+                            Description =
+                                "Referência opaca gerada pelo servidor para suporte da requisição.",
                             Required = true,
-                            Schema = new OpenApiSchema { Type = JsonSchemaType.String, Format = "uuid" },
+                            Schema = new OpenApiSchema
+                            {
+                                Type = JsonSchemaType.String,
+                                Format = "uuid",
+                            },
                         };
                 }
             }
@@ -276,7 +292,10 @@ builder.Services.AddOpenApi(options =>
                                 Properties = new Dictionary<string, IOpenApiSchema>
                                 {
                                     ["email"] = new OpenApiSchema { Type = JsonSchemaType.String },
-                                    ["password"] = new OpenApiSchema { Type = JsonSchemaType.String },
+                                    ["password"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                    },
                                 },
                                 AdditionalPropertiesAllowed = false,
                             },
@@ -285,8 +304,108 @@ builder.Services.AddOpenApi(options =>
                 };
             }
 
-            if (metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
-                || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true)
+            if (metadata?.OfType<EmployeeDirectoryCreateOpenApiMetadata>().Any() == true)
+            {
+                operation.Parameters ??= [];
+                operation.Parameters.Add(
+                    new OpenApiParameter
+                    {
+                        Name = BrowserBffAuthenticationExtensions.AntiforgeryHeaderName,
+                        In = ParameterLocation.Header,
+                        Required = false,
+                        Description =
+                            "Obrigatório somente quando autenticado por BrowserSessionCookie; dispensado para Bearer.",
+                        Schema = new OpenApiSchema { Type = JsonSchemaType.String },
+                    }
+                );
+                var opaqueResponse = new OpenApiSchema
+                {
+                    Type = JsonSchemaType.Object,
+                    Required = new HashSet<string> { "employeeId", "membershipId", "userId" },
+                    Properties = new Dictionary<string, IOpenApiSchema>
+                    {
+                        ["employeeId"] = new OpenApiSchema
+                        {
+                            Type = JsonSchemaType.String,
+                            Format = "uuid",
+                        },
+                        ["membershipId"] = new OpenApiSchema
+                        {
+                            Type = JsonSchemaType.String,
+                            Format = "uuid",
+                        },
+                        ["userId"] = new OpenApiSchema
+                        {
+                            Type = JsonSchemaType.String,
+                            Format = "uuid",
+                        },
+                    },
+                    AdditionalPropertiesAllowed = false,
+                };
+                operation.RequestBody = new OpenApiRequestBody
+                {
+                    Required = true,
+                    Content = new Dictionary<string, OpenApiMediaType>
+                    {
+                        ["application/json"] = new OpenApiMediaType
+                        {
+                            Schema = new OpenApiSchema
+                            {
+                                Type = JsonSchemaType.Object,
+                                Required = new HashSet<string>
+                                {
+                                    "requestId",
+                                    "companyId",
+                                    "displayName",
+                                    "email",
+                                },
+                                Properties = new Dictionary<string, IOpenApiSchema>
+                                {
+                                    ["requestId"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        Format = "uuid",
+                                    },
+                                    ["companyId"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        Format = "uuid",
+                                    },
+                                    ["displayName"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                    },
+                                    ["email"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        Format = "email",
+                                    },
+                                },
+                                AdditionalPropertiesAllowed = false,
+                            },
+                        },
+                    },
+                };
+                foreach (var status in new[] { "200", "201" })
+                {
+                    var response = operation.Responses![status] switch
+                    {
+                        OpenApiResponse direct => direct,
+                        OpenApiResponseReference reference => reference.RecursiveTarget!,
+                        _ => throw new InvalidOperationException("Employee response must resolve."),
+                    };
+                    response.Content ??= new Dictionary<string, OpenApiMediaType>();
+                    response.Content["application/json"] = new OpenApiMediaType
+                    {
+                        Schema = opaqueResponse,
+                    };
+                }
+            }
+
+            if (
+                metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
+                || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true
+            )
             {
                 operation.Parameters ??= [];
                 operation.Parameters.Add(
@@ -296,7 +415,8 @@ builder.Services.AddOpenApi(options =>
                         In = ParameterLocation.Header,
                         Required = true,
                         Schema = new OpenApiSchema { Type = JsonSchemaType.String },
-                    });
+                    }
+                );
             }
 
             if (
@@ -310,10 +430,13 @@ builder.Services.AddOpenApi(options =>
                     operation.Security.Add(
                         new OpenApiSecurityRequirement
                         {
-                            [new OpenApiSecuritySchemeReference(
-                                BrowserBffAuthenticationExtensions.CookieScheme,
-                                context.Document,
-                                null)] = [],
+                            [
+                                new OpenApiSecuritySchemeReference(
+                                    BrowserBffAuthenticationExtensions.CookieScheme,
+                                    context.Document,
+                                    null
+                                )
+                            ] = [],
                         }
                     );
                 }
@@ -322,16 +445,21 @@ builder.Services.AddOpenApi(options =>
                     operation.Security.Add(
                         new OpenApiSecurityRequirement
                         {
-                            [new OpenApiSecuritySchemeReference("Bearer", context.Document, null)] = [],
+                            [
+                                new OpenApiSecuritySchemeReference("Bearer", context.Document, null)
+                            ] = [],
                         }
                     );
                     operation.Security.Add(
                         new OpenApiSecurityRequirement
                         {
-                            [new OpenApiSecuritySchemeReference(
-                                BrowserBffAuthenticationExtensions.CookieScheme,
-                                context.Document,
-                                null)] = [],
+                            [
+                                new OpenApiSecuritySchemeReference(
+                                    BrowserBffAuthenticationExtensions.CookieScheme,
+                                    context.Document,
+                                    null
+                                )
+                            ] = [],
                         }
                     );
                 }
@@ -398,62 +526,108 @@ foundation
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
     .Produces(StatusCodes.Status429TooManyRequests);
-foundation.MapPost(
-    "/platform/organizations",
-    async (
-        HttpRequest request,
-        HttpContext httpContext,
-        PlatformOrganizationProvisioningService service,
-        CancellationToken cancellationToken
-    ) =>
-    {
-        System.Text.Json.JsonDocument document;
-        try
+foundation
+    .MapPost(
+        "/platform/organizations",
+        async (
+            HttpRequest request,
+            HttpContext httpContext,
+            PlatformOrganizationProvisioningService service,
+            CancellationToken cancellationToken
+        ) =>
         {
-            document = await System.Text.Json.JsonDocument.ParseAsync(
-                request.Body,
-                cancellationToken: cancellationToken);
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
-        }
-        catch (IOException)
-        {
-            return Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
-        }
-
-        using (document)
-        {
-            if (!PlatformOrganizationHttpContract.TryParse(document.RootElement, out var command))
+            System.Text.Json.JsonDocument document;
+            try
             {
-                return Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
+                document = await System.Text.Json.JsonDocument.ParseAsync(
+                    request.Body,
+                    cancellationToken: cancellationToken
+                );
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return Results.Json(
+                    new { code = "invalid_request" },
+                    statusCode: StatusCodes.Status400BadRequest
+                );
+            }
+            catch (IOException)
+            {
+                return Results.Json(
+                    new { code = "invalid_request" },
+                    statusCode: StatusCodes.Status400BadRequest
+                );
             }
 
-            var result = await service.ProvisionAsync(
-                httpContext.GetRequiredActorContext(),
-                command,
-                cancellationToken);
-            return result.State switch
+            using (document)
             {
-                PlatformOrganizationProvisioningState.Created => Results.Json(
-                    new { result.GroupId, result.CompanyId, result.OwnerUserId, result.OwnerMembershipId, result.OwnerInvitationId, invitationStatus = "pending_delivery" },
-                    statusCode: StatusCodes.Status201Created),
-                PlatformOrganizationProvisioningState.Replay => Results.Ok(
-                    new { result.GroupId, result.CompanyId, result.OwnerUserId, result.OwnerMembershipId, result.OwnerInvitationId, invitationStatus = "pending_delivery" }),
-                PlatformOrganizationProvisioningState.IdempotencyConflict =>
-                    Results.Json(new { code = "idempotency_conflict" }, statusCode: StatusCodes.Status409Conflict),
-                PlatformOrganizationProvisioningState.Conflict =>
-                    Results.Json(new { code = "organization_conflict" }, statusCode: StatusCodes.Status409Conflict),
-                PlatformOrganizationProvisioningState.Invalid =>
-                    Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest),
-                PlatformOrganizationProvisioningState.Forbidden =>
-                    Results.Json(new { code = "platform_operator_required" }, statusCode: StatusCodes.Status403Forbidden),
-                _ => Results.Json(new { code = "platform_organization_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable),
-            };
+                if (
+                    !PlatformOrganizationHttpContract.TryParse(
+                        document.RootElement,
+                        out var command
+                    )
+                )
+                {
+                    return Results.Json(
+                        new { code = "invalid_request" },
+                        statusCode: StatusCodes.Status400BadRequest
+                    );
+                }
+
+                var result = await service.ProvisionAsync(
+                    httpContext.GetRequiredActorContext(),
+                    command,
+                    cancellationToken
+                );
+                return result.State switch
+                {
+                    PlatformOrganizationProvisioningState.Created => Results.Json(
+                        new
+                        {
+                            result.GroupId,
+                            result.CompanyId,
+                            result.OwnerUserId,
+                            result.OwnerMembershipId,
+                            result.OwnerInvitationId,
+                            invitationStatus = "pending_delivery",
+                        },
+                        statusCode: StatusCodes.Status201Created
+                    ),
+                    PlatformOrganizationProvisioningState.Replay => Results.Ok(
+                        new
+                        {
+                            result.GroupId,
+                            result.CompanyId,
+                            result.OwnerUserId,
+                            result.OwnerMembershipId,
+                            result.OwnerInvitationId,
+                            invitationStatus = "pending_delivery",
+                        }
+                    ),
+                    PlatformOrganizationProvisioningState.IdempotencyConflict => Results.Json(
+                        new { code = "idempotency_conflict" },
+                        statusCode: StatusCodes.Status409Conflict
+                    ),
+                    PlatformOrganizationProvisioningState.Conflict => Results.Json(
+                        new { code = "organization_conflict" },
+                        statusCode: StatusCodes.Status409Conflict
+                    ),
+                    PlatformOrganizationProvisioningState.Invalid => Results.Json(
+                        new { code = "invalid_request" },
+                        statusCode: StatusCodes.Status400BadRequest
+                    ),
+                    PlatformOrganizationProvisioningState.Forbidden => Results.Json(
+                        new { code = "platform_operator_required" },
+                        statusCode: StatusCodes.Status403Forbidden
+                    ),
+                    _ => Results.Json(
+                        new { code = "platform_organization_unavailable" },
+                        statusCode: StatusCodes.Status503ServiceUnavailable
+                    ),
+                };
+            }
         }
-    }
-)
+    )
     .WithName("PlatformOrganizationProvisioning")
     .RequireAuthorization(PlatformOperatorAuthorization.MfaAssurancePolicyName)
     .Produces(StatusCodes.Status201Created)
@@ -480,6 +654,151 @@ foundation.MapGet(
         return result.ToMinimalApiResult();
     }
 );
+foundation
+    .MapPost(
+        "/companies/{companyId:guid}/employees",
+        async (
+            Guid companyId,
+            HttpRequest request,
+            HttpContext httpContext,
+            EmployeeDirectoryService service,
+            CancellationToken cancellationToken
+        ) =>
+        {
+            try
+            {
+                if (!request.HasJsonContentType())
+                    return Results.Json(
+                        new { code = "invalid_request" },
+                        statusCode: StatusCodes.Status400BadRequest
+                    );
+                var body = new byte[MaximumEmployeeDirectoryRequestBodyBytes + 1];
+                var bodyLength = 0;
+                int bytesRead;
+                do
+                {
+                    bytesRead = await request.Body.ReadAsync(
+                        body.AsMemory(bodyLength),
+                        cancellationToken
+                    );
+                    bodyLength += bytesRead;
+                } while (bytesRead != 0 && bodyLength <= MaximumEmployeeDirectoryRequestBodyBytes);
+
+                if (bodyLength > MaximumEmployeeDirectoryRequestBodyBytes)
+                    return Results.Json(
+                        new { code = "invalid_request" },
+                        statusCode: StatusCodes.Status400BadRequest
+                    );
+
+                using var document = System.Text.Json.JsonDocument.Parse(
+                    body.AsMemory(0, bodyLength)
+                );
+                if (
+                    !EmployeeDirectoryHttpContract.TryParse(document.RootElement, out var command)
+                    || command.CompanyId != companyId
+                )
+                    return Results.Json(
+                        new { code = "invalid_request" },
+                        statusCode: StatusCodes.Status400BadRequest
+                    );
+                var result = await service.CreateAsync(
+                    httpContext.GetRequiredActorContext(),
+                    command,
+                    cancellationToken
+                );
+                return result.State switch
+                {
+                    EmployeeDirectoryWriteState.Created => Results.Json(
+                        new
+                        {
+                            result.EmployeeId,
+                            result.MembershipId,
+                            result.UserId,
+                        },
+                        statusCode: StatusCodes.Status201Created
+                    ),
+                    EmployeeDirectoryWriteState.Replay => Results.Ok(
+                        new
+                        {
+                            result.EmployeeId,
+                            result.MembershipId,
+                            result.UserId,
+                        }
+                    ),
+                    EmployeeDirectoryWriteState.IdempotencyConflict => Results.Json(
+                        new { code = "idempotency_conflict" },
+                        statusCode: StatusCodes.Status409Conflict
+                    ),
+                    EmployeeDirectoryWriteState.Conflict => Results.Json(
+                        new { code = "employee_conflict" },
+                        statusCode: StatusCodes.Status409Conflict
+                    ),
+                    EmployeeDirectoryWriteState.Forbidden => Results.Json(
+                        new { code = "capability_denied" },
+                        statusCode: StatusCodes.Status403Forbidden
+                    ),
+                    EmployeeDirectoryWriteState.Invalid => Results.Json(
+                        new { code = "invalid_request" },
+                        statusCode: StatusCodes.Status400BadRequest
+                    ),
+                    _ => Results.Json(
+                        new { code = "employee_directory_unavailable" },
+                        statusCode: StatusCodes.Status503ServiceUnavailable
+                    ),
+                };
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return Results.Json(
+                    new { code = "invalid_request" },
+                    statusCode: StatusCodes.Status400BadRequest
+                );
+            }
+            catch (IOException)
+            {
+                return Results.Json(
+                    new { code = "invalid_request" },
+                    statusCode: StatusCodes.Status400BadRequest
+                );
+            }
+        }
+    )
+    .WithName("EmployeeDirectoryCreate")
+    .WithMetadata(new EmployeeDirectoryCreateOpenApiMetadata())
+    .WithMetadata(new BrowserBffNoStoreEndpointMetadata())
+    .Produces(StatusCodes.Status201Created)
+    .Produces(StatusCodes.Status200OK)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
+    .Produces(StatusCodes.Status401Unauthorized)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status409Conflict)
+    .Produces(StatusCodes.Status429TooManyRequests)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable);
+foundation
+    .MapGet(
+        "/companies/{companyId:guid}/employees",
+        async (
+            Guid companyId,
+            HttpContext httpContext,
+            EmployeeDirectoryService service,
+            CancellationToken cancellationToken
+        ) =>
+        {
+            var result = await service.ListAsync(
+                httpContext.GetRequiredActorContext(),
+                companyId,
+                cancellationToken
+            );
+            return result.ToMinimalApiResult();
+        }
+    )
+    .WithName("EmployeeDirectoryList")
+    .WithMetadata(new BrowserBffNoStoreEndpointMetadata())
+    .Produces<IReadOnlyList<EmployeeDirectoryItem>>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status401Unauthorized)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
+    .Produces(StatusCodes.Status429TooManyRequests)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable);
 foundation.MapGet(
     "/memberships",
     async (
@@ -569,11 +888,18 @@ public partial class Program;
 internal static class PlatformOrganizationHttpContract
 {
     private static readonly HashSet<string> Fields =
-    ["requestId", "groupName", "companyName", "ownerDisplayName", "ownerEmail"];
+    [
+        "requestId",
+        "groupName",
+        "companyName",
+        "ownerDisplayName",
+        "ownerEmail",
+    ];
 
     public static bool TryParse(
         System.Text.Json.JsonElement body,
-        out PlatformOrganizationProvisioningCommand command)
+        out PlatformOrganizationProvisioningCommand command
+    )
     {
         command = null!;
         if (body.ValueKind is not System.Text.Json.JsonValueKind.Object)
@@ -590,12 +916,14 @@ internal static class PlatformOrganizationHttpContract
             }
         }
 
-        if (values.Count != Fields.Count
+        if (
+            values.Count != Fields.Count
             || !values["requestId"].TryGetGuid(out var requestId)
             || values["groupName"].ValueKind is not System.Text.Json.JsonValueKind.String
             || values["companyName"].ValueKind is not System.Text.Json.JsonValueKind.String
             || values["ownerDisplayName"].ValueKind is not System.Text.Json.JsonValueKind.String
-            || values["ownerEmail"].ValueKind is not System.Text.Json.JsonValueKind.String)
+            || values["ownerEmail"].ValueKind is not System.Text.Json.JsonValueKind.String
+        )
         {
             return false;
         }
@@ -605,7 +933,50 @@ internal static class PlatformOrganizationHttpContract
             values["groupName"].GetString()!,
             values["companyName"].GetString()!,
             values["ownerDisplayName"].GetString()!,
-            values["ownerEmail"].GetString()!);
+            values["ownerEmail"].GetString()!
+        );
         return true;
     }
 }
+
+internal static class EmployeeDirectoryHttpContract
+{
+    private static readonly HashSet<string> Fields =
+    [
+        "requestId",
+        "companyId",
+        "displayName",
+        "email",
+    ];
+
+    public static bool TryParse(
+        System.Text.Json.JsonElement body,
+        out CreateEmployeeCommand command
+    )
+    {
+        command = null!;
+        if (body.ValueKind is not System.Text.Json.JsonValueKind.Object)
+            return false;
+        var values = new Dictionary<string, System.Text.Json.JsonElement>(StringComparer.Ordinal);
+        foreach (var property in body.EnumerateObject())
+            if (!Fields.Contains(property.Name) || !values.TryAdd(property.Name, property.Value))
+                return false;
+        if (
+            values.Count != Fields.Count
+            || !values["requestId"].TryGetGuid(out var requestId)
+            || !values["companyId"].TryGetGuid(out var companyId)
+            || values["displayName"].ValueKind is not System.Text.Json.JsonValueKind.String
+            || values["email"].ValueKind is not System.Text.Json.JsonValueKind.String
+        )
+            return false;
+        command = new CreateEmployeeCommand(
+            requestId,
+            companyId,
+            values["displayName"].GetString()!,
+            values["email"].GetString()!
+        );
+        return true;
+    }
+}
+
+internal sealed class EmployeeDirectoryCreateOpenApiMetadata;

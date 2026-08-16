@@ -1,0 +1,20 @@
+# Casos de verificação — diretório local de funcionários
+
+| Área | Cenário | Resultado exigido | Evidência automatizada |
+|---|---|---|---|
+| Cadastro | Ator com membership ativa e `foundation.employees.create@company` envia o JSON estrito para a própria empresa. | `201` com IDs opacos; uma transação cria `User`, `Membership`, `Employee`, recibo e auditoria de sucesso, sem identidade externa, role, convite, token, outbox ou chamada de provedor. | `EmployeeDirectoryEndpointTests`, incluindo `Create_creates_local_user_membership_and_employee_without_external_access`. |
+| Idempotência e concorrência | Mesmo ator, empresa, `requestId` e payload repetem o comando, inclusive em tentativas concorrentes. | Um resultado criado e os demais replayam os mesmos IDs, sem duplicar grafo ou auditoria. Payload diferente recebe `409 idempotency_conflict`. | `EmployeeDirectoryEndpointTests` e 3 cenários de `EmployeeDirectoryFunctionSecurityTests`. |
+| Conflito | O e-mail normalizado já pertence a outro `User`. | `409 employee_conflict`, sem registros parciais nem auditoria de sucesso; a conta existente não é vinculada. | `Create_rejects_duplicate_email_without_partial_rows_or_audit_success`. |
+| HTTP | Corpo ausente, não JSON, malformado, duplicado, com campo estranho, e-mail sintaticamente inválido, maior que 8 KiB ou `companyId` divergente da rota. | `400 {"code":"invalid_request"}` antes da mutação; o limite conta bytes efetivamente lidos, inclusive transferência chunked; criação e replay contêm somente IDs opacos permitidos. | Variantes estritas, de tamanho e allow-list de resposta em `EmployeeDirectoryEndpointTests`. |
+| Identidade e autorização | Chamada sem identidade interna admitida, sem membership, sem capability, com scope insuficiente ou para empresa alheia; cookie BFF sem CSRF, cookie BFF com token novo e bearer. | O gate mantém `401` para identidade desconhecida; os demais casos não criam estado e recebem negação segura. Cookie BFF sem `X-CSRF-TOKEN` recebe `400`; cookie com token novo e bearer criam com sucesso. Negação de capability recebe auditoria compacta; falha da auditoria retorna `503`. | `EmployeeDirectoryEndpointTests`, `EmployeeDirectoryFunctionSecurityTests`, `EmployeeDirectoryFailureTests` e `BrowserBffCookieSecurityTests.Employee_directory_cookie_requires_csrf_then_allows_fresh_token_and_bearer`. |
+| Leitura e isolamento | Ator autorizado consulta `GET /foundation/companies/{companyId}/employees`. | Recebe somente funcionários da empresa autorizada e `employeeId`, `membershipId` e `displayName`; e-mail, role, identidade externa e convite não aparecem. As respostas GET e POST, inclusive erros, usam `Cache-Control: private, no-store`. | Casos de autorização, isolamento e cache em `EmployeeDirectoryEndpointTests`. |
+| Banco e privilégios | Runtime tenta DML direto em usuários, memberships, funcionários, idempotência ou grants; a função é chamada sem contexto empresarial válido. | DML direto é negado; somente funções `SECURITY DEFINER` estreitas executam com `search_path` fixo, owner sem login/herança/bypass de RLS e rechecagem de membership/capability/empresa. | 3 cenários de `EmployeeDirectoryFunctionSecurityTests`. |
+| Provisionamento inicial | Operador global `aal2` provisiona organização nova ou repete o request. | O `owner` recebe uma única grant `foundation.employees.create@company` no mesmo commit; o helper exige recibo exato de operador, request, empresa e membership, sem dar membership ao operador global. | Cobertura de grant inicial em `PlatformOrganizationEndpointTests`. |
+| Migração | Migration é aplicada e depois revertida sem estado de diretório. | Cria/remove somente contratos, capability e privilégios da fatia; com recibo de funcionário ou grant ativo, o downgrade falha fechado e preserva o schema. | `EmployeeDirectoryMigrationTests`. |
+
+## Fora desta fatia
+
+- Convite por Supabase, outbox/worker, token recuperável com expiração,
+  vinculação de `issuer` + `subject`, entrega e aceite browser são fatias
+  posteriores da issue #211. A identidade desconhecida continua `401` até o
+  fluxo explícito de aceite.

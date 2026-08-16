@@ -16,7 +16,8 @@ public sealed record PlatformOrganizationProvisioningCommand(
     string GroupName,
     string CompanyName,
     string OwnerDisplayName,
-    string OwnerEmail);
+    string OwnerEmail
+);
 
 public enum PlatformOrganizationProvisioningState
 {
@@ -35,14 +36,16 @@ public sealed record PlatformOrganizationProvisioningResult(
     Guid? CompanyId = null,
     Guid? OwnerUserId = null,
     Guid? OwnerMembershipId = null,
-    Guid? OwnerInvitationId = null);
+    Guid? OwnerInvitationId = null
+);
 
 /// <summary>
 /// Chama a única função transacional que cria a organização inicial e o dono pendente.
 /// </summary>
 public sealed class PlatformOrganizationProvisioningService(
     FoundationDbContext database,
-    ILogger<PlatformOrganizationProvisioningService> logger)
+    ILogger<PlatformOrganizationProvisioningService> logger
+)
 {
     private const string Operation = "platform_organization_provisioning";
     private const string Module = "foundation";
@@ -50,28 +53,37 @@ public sealed class PlatformOrganizationProvisioningService(
     public async Task<PlatformOrganizationProvisioningResult> ProvisionAsync(
         ActorContext actor,
         PlatformOrganizationProvisioningCommand command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (!TryNormalize(command, out var normalized))
         {
-            return new PlatformOrganizationProvisioningResult(PlatformOrganizationProvisioningState.Invalid);
+            return new PlatformOrganizationProvisioningResult(
+                PlatformOrganizationProvisioningState.Invalid
+            );
         }
 
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                cancellationToken
+            );
             await FoundationRlsContext.ApplyActorAsync(database.Database, actor, cancellationToken);
-            var result = await ExecuteAsync(actor, normalized, transaction, cancellationToken);
+            var result = await ExecuteAsync(normalized, transaction, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return result;
         }
         catch (PostgresException exception) when (IsExpectedAccessDenial(exception))
         {
-            return new PlatformOrganizationProvisioningResult(PlatformOrganizationProvisioningState.Forbidden);
+            return new PlatformOrganizationProvisioningResult(
+                PlatformOrganizationProvisioningState.Forbidden
+            );
         }
         catch (PostgresException exception) when (IsExpectedResourceConflict(exception))
         {
-            return new PlatformOrganizationProvisioningResult(PlatformOrganizationProvisioningState.Conflict);
+            return new PlatformOrganizationProvisioningResult(
+                PlatformOrganizationProvisioningState.Conflict
+            );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -85,16 +97,19 @@ public sealed class PlatformOrganizationProvisioningService(
                 Operation,
                 Module,
                 "unavailable",
-                "database_or_audit_unavailable");
-            return new PlatformOrganizationProvisioningResult(PlatformOrganizationProvisioningState.Unavailable);
+                "database_or_audit_unavailable"
+            );
+            return new PlatformOrganizationProvisioningResult(
+                PlatformOrganizationProvisioningState.Unavailable
+            );
         }
     }
 
     private async Task<PlatformOrganizationProvisioningResult> ExecuteAsync(
-        ActorContext actor,
         NormalizedCommand command,
         IDbContextTransaction transaction,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var connection = database.Database.GetDbConnection();
         await using var sql = connection.CreateCommand();
@@ -110,26 +125,71 @@ public sealed class PlatformOrganizationProvisioningService(
         AddParameter(sql, "owner_display_name", command.OwnerDisplayName);
         AddParameter(sql, "owner_email", command.OwnerEmail);
         AddParameter(sql, "payload_hash", command.PayloadHash);
-        await using var reader = await sql.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        PlatformOrganizationProvisioningResult result;
+        await using (var reader = await sql.ExecuteReaderAsync(cancellationToken))
         {
-            throw new InvalidOperationException("Organization provisioning did not return a result.");
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new InvalidOperationException(
+                    "Organization provisioning did not return a result."
+                );
+            }
+
+            var state = reader.GetString(0) switch
+            {
+                "created" => PlatformOrganizationProvisioningState.Created,
+                "replay" => PlatformOrganizationProvisioningState.Replay,
+                "idempotency_conflict" => PlatformOrganizationProvisioningState.IdempotencyConflict,
+                _ => throw new InvalidOperationException(
+                    "Organization provisioning returned an unknown state."
+                ),
+            };
+            result = new PlatformOrganizationProvisioningResult(
+                state,
+                reader.GetGuid(1),
+                reader.GetGuid(2),
+                reader.GetGuid(3),
+                reader.GetGuid(4),
+                reader.GetGuid(5)
+            );
         }
 
-        var state = reader.GetString(0) switch
+        if (result.State is PlatformOrganizationProvisioningState.Created)
         {
-            "created" => PlatformOrganizationProvisioningState.Created,
-            "replay" => PlatformOrganizationProvisioningState.Replay,
-            "idempotency_conflict" => PlatformOrganizationProvisioningState.IdempotencyConflict,
-            _ => throw new InvalidOperationException("Organization provisioning returned an unknown state."),
-        };
-        return new PlatformOrganizationProvisioningResult(
-            state,
-            reader.GetGuid(1),
-            reader.GetGuid(2),
-            reader.GetGuid(3),
-            reader.GetGuid(4),
-            reader.GetGuid(5));
+            await EnsureInitialOwnerCanCreateEmployeesAsync(
+                connection,
+                transaction,
+                command.RequestId,
+                result.CompanyId!.Value,
+                result.OwnerMembershipId!.Value,
+                cancellationToken
+            );
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Mantém a reserva local de funcionário disponível para o dono inicial
+    /// sem conceder qualquer acesso de tenant ao operador global.
+    /// </summary>
+    private static async Task EnsureInitialOwnerCanCreateEmployeesAsync(
+        DbConnection connection,
+        IDbContextTransaction transaction,
+        Guid requestId,
+        Guid companyId,
+        Guid ownerMembershipId,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var sql = connection.CreateCommand();
+        sql.Transaction = transaction.GetDbTransaction();
+        sql.CommandText =
+            "SELECT foundation.ensure_platform_owner_employee_create(@request_id, @company_id, @owner_membership_id)";
+        AddParameter(sql, "request_id", requestId);
+        AddParameter(sql, "company_id", companyId);
+        AddParameter(sql, "owner_membership_id", ownerMembershipId);
+        await sql.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static void AddParameter(DbCommand command, string name, object value)
@@ -146,14 +206,15 @@ public sealed class PlatformOrganizationProvisioningService(
 
     private static bool IsExpectedResourceConflict(PostgresException exception) =>
         exception.SqlState == PostgresErrorCodes.UniqueViolation
-        && exception.ConstraintName is
-            "ix_groups_name"
-            or "ix_companies_normalized_name"
-            or "ix_users_email";
+        && exception.ConstraintName
+            is "ix_groups_name"
+                or "ix_companies_normalized_name"
+                or "ix_users_email";
 
     private static bool TryNormalize(
         PlatformOrganizationProvisioningCommand command,
-        out NormalizedCommand normalized)
+        out NormalizedCommand normalized
+    )
     {
         normalized = default!;
         if (command.RequestId == Guid.Empty)
@@ -165,18 +226,39 @@ public sealed class PlatformOrganizationProvisioningService(
         var companyName = command.CompanyName?.Trim();
         var ownerDisplayName = command.OwnerDisplayName?.Trim();
         var ownerEmail = command.OwnerEmail?.Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(groupName) || groupName.Length > 200
-            || string.IsNullOrWhiteSpace(companyName) || companyName.Length > 200
-            || string.IsNullOrWhiteSpace(ownerDisplayName) || ownerDisplayName.Length > 200
-            || string.IsNullOrWhiteSpace(ownerEmail) || ownerEmail.Length > 320)
+        if (
+            string.IsNullOrWhiteSpace(groupName)
+            || groupName.Length > 200
+            || string.IsNullOrWhiteSpace(companyName)
+            || companyName.Length > 200
+            || string.IsNullOrWhiteSpace(ownerDisplayName)
+            || ownerDisplayName.Length > 200
+            || string.IsNullOrWhiteSpace(ownerEmail)
+            || ownerEmail.Length > 320
+        )
         {
             return false;
         }
 
         var canonicalPayload = JsonSerializer.SerializeToUtf8Bytes(
-            new[] { command.RequestId.ToString("D"), groupName, companyName, ownerDisplayName, ownerEmail });
+            new[]
+            {
+                command.RequestId.ToString("D"),
+                groupName,
+                companyName,
+                ownerDisplayName,
+                ownerEmail,
+            }
+        );
         var payloadHash = Convert.ToHexString(SHA256.HashData(canonicalPayload)).ToLowerInvariant();
-        normalized = new NormalizedCommand(command.RequestId, groupName, companyName, ownerDisplayName, ownerEmail, payloadHash);
+        normalized = new NormalizedCommand(
+            command.RequestId,
+            groupName,
+            companyName,
+            ownerDisplayName,
+            ownerEmail,
+            payloadHash
+        );
         return true;
     }
 
@@ -186,5 +268,6 @@ public sealed class PlatformOrganizationProvisioningService(
         string CompanyName,
         string OwnerDisplayName,
         string OwnerEmail,
-        string PayloadHash);
+        string PayloadHash
+    );
 }

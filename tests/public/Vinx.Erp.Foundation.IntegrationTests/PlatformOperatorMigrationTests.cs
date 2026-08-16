@@ -84,7 +84,10 @@ public sealed class PlatformOperatorMigrationTests
                       AND privilege.grantee NOT IN (
                           SELECT oid
                           FROM pg_roles
-                          WHERE rolname IN ('vinx_runtime', 'vinx_provisioning_owner')))
+                          WHERE rolname IN (
+                              'vinx_runtime',
+                              'vinx_provisioning_owner',
+                              'vinx_employee_directory_owner')))
             FROM pg_proc AS current_function
             WHERE current_function.oid =
                 'foundation.current_actor_is_platform_operator()'::regprocedure;
