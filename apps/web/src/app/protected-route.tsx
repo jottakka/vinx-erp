@@ -9,7 +9,7 @@ type ProtectedRouteProps = {
 };
 
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const { bootstrap, error, refreshBootstrap, status } = useSession();
+  const { bootstrap, error, refreshBootstrap, signOut, status } = useSession();
   const location = useLocation();
 
   if (status === "pending") {
@@ -55,6 +55,33 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
                 variant="outlined"
               >
                 Tentar novamente
+              </Button>
+            </Box>
+          </Stack>
+        </Alert>
+      </Box>
+    );
+  }
+
+  if (status === "logout_recovery") {
+    return (
+      <Box
+        component="main"
+        sx={{
+          bgcolor: "background.default",
+          minHeight: "100dvh",
+          p: { sm: 4, xs: 2 },
+        }}
+      >
+        <Alert role="alert" severity="error" sx={{ maxWidth: "36rem" }}>
+          <Stack spacing={2}>
+            <Typography>
+              {error ??
+                "Não foi possível concluir a saída. Tente sair novamente."}
+            </Typography>
+            <Box>
+              <Button onClick={() => void signOut()} variant="outlined">
+                Tentar sair novamente
               </Button>
             </Box>
           </Stack>

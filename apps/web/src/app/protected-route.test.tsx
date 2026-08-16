@@ -43,7 +43,7 @@ describe("ProtectedRoute", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Entrada do ambiente de desenvolvimento",
+        name: "Entrar",
       }),
     ).toBeVisible();
     expect(screen.queryByText("Conteúdo protegido")).not.toBeInTheDocument();

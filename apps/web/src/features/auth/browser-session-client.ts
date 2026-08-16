@@ -55,6 +55,14 @@ export type BrowserSessionOperationResult =
   | { ok: true; correlationId?: string }
   | BrowserSessionFailureResult;
 
+export type BrowserSessionSignOutFailureResult = BrowserSessionFailureResult & {
+  stage: "antiforgery" | "session";
+};
+
+export type BrowserSessionSignOutResult =
+  | { ok: true; correlationId?: string }
+  | BrowserSessionSignOutFailureResult;
+
 type FetchResult =
   | { response: Response }
   | { failure: BrowserSessionFailureResult };
@@ -177,13 +185,19 @@ export function createBrowserSessionClient(
 
   async function signOut(
     signal?: AbortSignal,
-  ): Promise<BrowserSessionOperationResult> {
+  ): Promise<BrowserSessionSignOutResult> {
     const antiforgery = await getAntiforgery(signal);
     if (!antiforgery.ok) {
-      return antiforgery;
+      return { ...antiforgery, stage: "antiforgery" };
     }
 
-    return mutate("DELETE", antiforgery.requestToken, undefined, signal);
+    const result = await mutate(
+      "DELETE",
+      antiforgery.requestToken,
+      undefined,
+      signal,
+    );
+    return result.ok ? result : { ...result, stage: "session" };
   }
 
   return { signIn, signOut };

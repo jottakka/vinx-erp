@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { installBffSession } from "./support/bff-session";
+
+test.beforeEach(async ({ page }) => {
+  await installBffSession(page);
+});
 
 test("shows the public login fallback", async ({ page }) => {
   await page.goto("/");
@@ -6,7 +11,7 @@ test("shows the public login fallback", async ({ page }) => {
   await expect(page).toHaveURL(/\/login$/);
   await expect(
     page.getByRole("heading", {
-      name: "Entrada do ambiente de desenvolvimento",
+      name: "Entrar",
     }),
   ).toBeVisible();
 });

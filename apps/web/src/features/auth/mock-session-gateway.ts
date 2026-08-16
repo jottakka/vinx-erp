@@ -21,7 +21,10 @@ export function createMockSessionGateway(
 
   return {
     async login(profileId) {
-      const profile = mockSessionProfiles[profileId];
+      const profile =
+        mockSessionProfiles[
+          profileId === "maria@example.test" ? "maria" : profileId
+        ];
 
       if (!profile) {
         throw new Error(unavailableDevelopmentProfileMessage);

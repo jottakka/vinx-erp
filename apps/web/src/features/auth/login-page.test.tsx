@@ -39,6 +39,19 @@ function createLoginRouter(
   );
 }
 
+const TEST_CREDENTIALS = {
+  email: "maria@example.test",
+  password: "test-password",
+} as const;
+
+async function fillCredentials(
+  user: ReturnType<typeof userEvent.setup>,
+  credentials: { email: string; password: string } = TEST_CREDENTIALS,
+) {
+  await user.type(screen.getByLabelText("E-mail"), credentials.email);
+  await user.type(screen.getByLabelText("Senha"), credentials.password);
+}
+
 function renderLogin(
   gateway: MockSessionGateway,
   router = createLoginRouter(),
@@ -68,64 +81,94 @@ function runtimeCssFor(element: Element) {
 }
 
 describe("LoginPage", () => {
-  it("composes the responsive public development-login surface", async () => {
+  it("composes the responsive public login surface", async () => {
     const user = userEvent.setup();
     renderLogin(createMockSessionGateway());
 
     expect(
       await screen.findByRole("heading", {
-        name: "Entrada do ambiente de desenvolvimento",
+        name: "Entrar",
       }),
     ).toBeVisible();
     expect(
-      screen.getByText(
-        "Use o perfil de desenvolvimento autorizado para validar a interface.",
-      ),
-    ).toBeVisible();
-    expect(
-      screen.getByText(
-        "Entrada interna do protótipo. Não é autenticação de produção.",
-      ),
+      screen.getByText("Informe suas credenciais para acessar o aplicativo."),
     ).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Abrir preferências visuais" }),
     ).toBeVisible();
-    expect(screen.getByLabelText("Perfil de desenvolvimento")).toBeVisible();
+    expect(screen.getByLabelText("E-mail")).toBeVisible();
+    expect(screen.getByLabelText("Senha")).toBeVisible();
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(screen.getByRole("main")).toBeVisible();
 
-    const profileField = screen.getByLabelText("Perfil de desenvolvimento");
-    await user.clear(profileField);
+    const emailField = screen.getByLabelText("E-mail");
+    await user.clear(emailField);
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Informe um perfil",
+      "Informe seu e-mail",
     );
-    expect(profileField).toHaveFocus();
+    expect(emailField).toHaveFocus();
   });
 
-  it("rejects a whitespace-only profile before calling the mock gateway", async () => {
+  it("rejects a whitespace-only email before calling the mock gateway", async () => {
     const user = userEvent.setup();
     const gateway = createMockSessionGateway();
     const login = vi.spyOn(gateway, "login");
     renderLogin(gateway);
 
-    const profileField = await screen.findByLabelText(
-      "Perfil de desenvolvimento",
-    );
-    await user.clear(profileField);
-    await user.type(profileField, "   ");
+    const emailField = await screen.findByLabelText("E-mail");
+    await user.clear(emailField);
+    await user.type(emailField, "   ");
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Informe um perfil",
+      "Informe seu e-mail",
     );
     expect(login).not.toHaveBeenCalled();
-    expect(profileField).toHaveFocus();
-    expect(profileField).toHaveAttribute(
-      "aria-describedby",
-      "development-profile-error",
+    expect(emailField).toHaveFocus();
+    expect(emailField).toHaveAttribute("aria-describedby", "login-error");
+  });
+
+  it("requires a password and focuses it before calling the mock gateway", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockSessionGateway();
+    const login = vi.spyOn(gateway, "login");
+    renderLogin(gateway);
+
+    await user.type(screen.getByLabelText("E-mail"), TEST_CREDENTIALS.email);
+    const passwordField = screen.getByLabelText("Senha");
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Informe sua senha",
     );
+    expect(passwordField).toHaveFocus();
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("uses browser credential autocomplete and clears the password after an attempt", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockSessionGateway();
+    renderLogin(gateway);
+
+    const emailField = screen.getByLabelText("E-mail");
+    const passwordField = screen.getByLabelText("Senha");
+    expect(emailField).toHaveAttribute("autocomplete", "email");
+    expect(passwordField).toHaveAttribute("autocomplete", "current-password");
+    await fillCredentials(user, {
+      email: "missing@example.test",
+      password: TEST_CREDENTIALS.password,
+    });
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Não foi possível entrar. Verifique suas credenciais e tente novamente.",
+    );
+    expect(
+      screen.queryByText("Perfil de desenvolvimento indisponível"),
+    ).not.toBeInTheDocument();
+    expect(passwordField).toHaveValue("");
   });
 
   it("exposes the accessible visual preferences menu", async () => {
@@ -172,42 +215,37 @@ describe("LoginPage", () => {
     });
   });
 
-  it("shows an actionable development-profile error and keeps the route public", async () => {
+  it("shows a safe credential error and keeps the route public", async () => {
     const user = userEvent.setup();
     renderLogin(createMockSessionGateway());
 
-    const profileField = await screen.findByLabelText(
-      "Perfil de desenvolvimento",
-    );
-    await user.clear(profileField);
-    await user.type(profileField, "missing-profile");
+    const emailField = await screen.findByLabelText("E-mail");
+    await user.type(emailField, "missing@example.test");
+    await user.type(screen.getByLabelText("Senha"), TEST_CREDENTIALS.password);
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Perfil de desenvolvimento indisponível",
+      "Não foi possível entrar. Verifique suas credenciais e tente novamente.",
     );
-    expect(profileField).toHaveFocus();
-    expect(profileField).toHaveAttribute(
-      "aria-describedby",
-      "development-profile-error",
-    );
-    expect(screen.queryByText("Área protegida legada")).not.toBeInTheDocument();
+    expect(emailField).toHaveAttribute("aria-describedby", "login-error");
+    expect(
+      screen.queryByText("Perfil de desenvolvimento indisponível"),
+    ).not.toBeInTheDocument();
   });
 
-  it("trims the development profile before calling the mock gateway", async () => {
+  it("trims the email before calling the mock gateway", async () => {
     const user = userEvent.setup();
     const gateway = createMockSessionGateway();
     const login = vi.spyOn(gateway, "login");
     renderLogin(gateway);
 
-    const profileField = await screen.findByLabelText(
-      "Perfil de desenvolvimento",
-    );
-    await user.clear(profileField);
-    await user.type(profileField, "  maria  ");
+    await user.type(screen.getByLabelText("E-mail"), "  maria@example.test  ");
+    await user.type(screen.getByLabelText("Senha"), TEST_CREDENTIALS.password);
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
-    await waitFor(() => expect(login).toHaveBeenCalledWith("maria"));
+    await waitFor(() =>
+      expect(login).toHaveBeenCalledWith("maria@example.test"),
+    );
   });
 
   it("associates a gateway failure to the profile field and returns focus", async () => {
@@ -221,19 +259,15 @@ describe("LoginPage", () => {
     };
     renderLogin(gateway);
 
-    const profileField = await screen.findByLabelText(
-      "Perfil de desenvolvimento",
-    );
+    const emailField = await screen.findByLabelText("E-mail");
+    await user.type(emailField, TEST_CREDENTIALS.email);
+    await user.type(screen.getByLabelText("Senha"), TEST_CREDENTIALS.password);
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Falha temporária de entrada",
+      "Não foi possível entrar. Verifique suas credenciais e tente novamente.",
     );
-    expect(profileField).toHaveFocus();
-    expect(profileField).toHaveAttribute(
-      "aria-describedby",
-      "development-profile-error",
-    );
+    expect(emailField).toHaveAttribute("aria-describedby", "login-error");
   });
 
   it("keeps the labelled field, action and failure alert usable at a mobile viewport", async () => {
@@ -244,14 +278,13 @@ describe("LoginPage", () => {
     });
     renderLogin(createMockSessionGateway());
 
-    const profileField = await screen.findByLabelText(
-      "Perfil de desenvolvimento",
-    );
-    expect(profileField).toBeVisible();
+    const emailField = await screen.findByLabelText("E-mail");
+    expect(emailField).toBeVisible();
+    expect(screen.getByLabelText("Senha")).toBeVisible();
     expect(screen.getByRole("button", { name: "Entrar" })).toBeVisible();
 
-    await user.clear(profileField);
-    await user.type(profileField, "missing");
+    await user.type(emailField, "missing@example.test");
+    await user.type(screen.getByLabelText("Senha"), TEST_CREDENTIALS.password);
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(await screen.findByRole("alert")).toBeVisible();
@@ -266,6 +299,7 @@ describe("LoginPage", () => {
       ]),
     );
 
+    await fillCredentials(user);
     await user.click(await screen.findByRole("button", { name: "Entrar" }));
 
     expect(await screen.findByRole("heading", { name: "Ajuda" })).toBeVisible();
@@ -283,6 +317,7 @@ describe("LoginPage", () => {
       ]),
     );
 
+    await fillCredentials(user);
     await user.click(await screen.findByRole("button", { name: "Entrar" }));
 
     expect(
@@ -294,6 +329,7 @@ describe("LoginPage", () => {
     const user = userEvent.setup();
     renderLogin(createMockSessionGateway());
 
+    await fillCredentials(user);
     await user.click(await screen.findByRole("button", { name: "Entrar" }));
 
     expect(
@@ -328,6 +364,7 @@ describe("LoginPage", () => {
 
     const enterButton = await screen.findByRole("button", { name: "Entrar" });
     await waitFor(() => expect(enterButton).toBeEnabled());
+    await fillCredentials(user);
     await user.click(enterButton);
     expect(enterButton).toBeDisabled();
     expect(enterButton).toHaveTextContent("Entrando…");

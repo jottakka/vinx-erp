@@ -1,11 +1,16 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { installBffSession, signIn } from "./support/bff-session";
+
+test.beforeEach(async ({ page }) => {
+  await installBffSession(page);
+});
 
 async function waitForLogin(page: Page) {
   await page.goto("/login");
   await expect(
     page.getByRole("heading", {
-      name: "Entrada do ambiente de desenvolvimento",
+      name: "Entrar",
     }),
   ).toBeVisible();
   await expect(
@@ -33,7 +38,7 @@ async function expectSelectedAppearance(page: Page, optionName: string) {
 
 async function enterApplication(page: Page) {
   await waitForLogin(page);
-  await page.getByRole("button", { name: "Entrar" }).click();
+  await signIn(page);
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
 }
@@ -57,7 +62,7 @@ async function readSemanticSurface(page: Page) {
   });
 }
 
-test("Scenario: Maria uses the professional development entry", async ({
+test("Scenario: Maria uses the real-session credential entry", async ({
   page,
 }) => {
   await page.setViewportSize({ height: 800, width: 320 });
@@ -74,8 +79,7 @@ test("Scenario: Maria uses the professional development entry", async ({
     "16px",
   );
 
-  await page.getByLabel("Perfil de desenvolvimento").fill("maria");
-  await page.getByRole("button", { name: "Entrar" }).click();
+  await signIn(page);
 
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Início" })).toHaveCount(1);
@@ -88,18 +92,18 @@ test("Scenario: Maria uses the professional development entry", async ({
     .toBe(true);
 });
 
-test("Scenario: Invalid development profile remains recoverable", async ({
-  page,
-}) => {
+test("Scenario: Invalid credentials remain recoverable", async ({ page }) => {
   await page.goto("/login");
-  const profile = page.getByLabel("Perfil de desenvolvimento");
+  const email = page.getByLabel("E-mail");
+  const password = page.getByLabel("Senha");
 
-  for (const value of ["", "   ", "unavailable-profile"]) {
-    await profile.fill(value);
+  for (const value of ["", "   ", "missing@example.test"]) {
+    await email.fill(value);
+    await password.fill("test-password");
     await page.getByRole("button", { name: "Entrar" }).click();
     await expect(page).toHaveURL(/\/login$/);
     await expect(page.getByRole("alert")).toBeVisible();
-    await expect(profile).toBeFocused();
+    await expect(value.trim() ? password : email).toBeFocused();
   }
 });
 
@@ -115,17 +119,18 @@ test("successful Maria entry reaches all-authorized home with only Alfa and Beta
   await expect(page.getByText("prototype.view")).not.toBeVisible();
 });
 
-test("invalid profile stays on /login with a visible actionable error", async ({
+test("invalid credentials stay on /login with a visible actionable error", async ({
   page,
 }) => {
   await waitForLogin(page);
 
-  await page.getByLabel("Perfil de desenvolvimento").fill("missing-profile");
+  await page.getByLabel("E-mail").fill("missing@example.test");
+  await page.getByLabel("Senha").fill("test-password");
   await page.getByRole("button", { name: "Entrar" }).click();
 
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole("alert")).toHaveText(
-    "Perfil de desenvolvimento indisponível",
+    "Não foi possível entrar. Verifique suas credenciais e tente novamente.",
   );
 });
 
@@ -135,7 +140,7 @@ test("anonymous /protected deep link returns to /login", async ({ page }) => {
   await expect(page).toHaveURL(/\/login$/);
   await expect(
     page.getByRole("heading", {
-      name: "Entrada do ambiente de desenvolvimento",
+      name: "Entrar",
     }),
   ).toBeVisible();
 });
@@ -186,7 +191,8 @@ test("mobile login at 320 CSS pixels has no horizontal overflow", async ({
   await page.setViewportSize({ height: 800, width: 320 });
   await waitForLogin(page);
 
-  await expect(page.getByLabel("Perfil de desenvolvimento")).toBeVisible();
+  await expect(page.getByLabel("E-mail")).toBeVisible();
+  await expect(page.getByLabel("Senha")).toBeVisible();
   await expect(page.getByRole("button", { name: "Entrar" })).toBeVisible();
   await expect
     .poll(() =>
@@ -207,7 +213,7 @@ test("login and the authenticated Home have no automated WCAG AA violations", as
     .analyze();
   expect(loginResults.violations).toEqual([]);
 
-  await page.getByRole("button", { name: "Entrar" }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
   await page
     .getByRole("button", { name: "Abrir preferências visuais" })
@@ -225,19 +231,21 @@ test("keyboard-only login and forced colors retain named controls and focus land
   await page.emulateMedia({ forcedColors: "active" });
   await waitForLogin(page);
 
-  const profile = page.getByLabel("Perfil de desenvolvimento");
+  const email = page.getByLabel("E-mail");
   const enter = page.getByRole("button", { name: "Entrar" });
-  await profile.focus();
-  await profile.fill("maria");
-  await profile.press("Tab");
+  await email.focus();
+  await email.fill("maria@example.test");
+  await email.press("Tab");
+  await page.getByLabel("Senha").fill("test-password");
+  await page.getByLabel("Senha").press("Tab");
   await expect(enter).toBeFocused();
-  await expect(profile).toBeVisible();
+  await expect(email).toBeVisible();
   await expect(enter).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
 });
 
-test("compact density changes the selected visual density and survives reload without a mock session", async ({
+test("compact density survives anonymous BFF revalidation after reload", async ({
   page,
 }) => {
   await waitForLogin(page);

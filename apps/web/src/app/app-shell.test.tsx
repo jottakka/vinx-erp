@@ -272,7 +272,7 @@ describe("AppShell", () => {
     expect(await screen.findByRole("heading", { name: "Ajuda" })).toBeVisible();
   });
 
-  it("keeps the authenticated shell and announces a recoverable logout failure", async () => {
+  it("blocks the authenticated shell and offers a logout retry after failure", async () => {
     const router = renderShell(
       "/",
       await signedInGateway({
@@ -288,8 +288,12 @@ describe("AppShell", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Não foi possível sair do aplicativo. Tente novamente.",
     );
-    expect(screen.getByRole("alert")).toHaveAttribute("aria-live", "assertive");
-    expect(screen.getByRole("heading", { name: "Início" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Tentar sair novamente" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "Início" }),
+    ).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
   });
 

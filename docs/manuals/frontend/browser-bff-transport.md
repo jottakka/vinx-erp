@@ -22,5 +22,16 @@ O proxy Vite é exclusivo de desenvolvimento: `VINX_API_ORIGIN` aceita apenas
 esta origem. Em preview e produção, o reverse proxy/ingress da mesma origem é
 responsabilidade do deployment.
 
-Bootstrap, TanStack Query e a integração da tela/sessão real não pertencem a
-este módulo: #90 e #117 os consomem depois.
+## Composição de release
+
+`AppProviders`, iniciado por `main.tsx`, compõe `BrowserSessionClient` com
+`FoundationBootstrapClient` e `SessionProvider`. Assim, release usa
+exclusivamente o BFF real: `204` do login só libera conteúdo protegido depois
+de um bootstrap válido. Não há token de acesso ou refresh, storage, URL
+configurável ou provider de identidade no browser; o antiforgery é transitório
+por mutação.
+
+O gateway mock não participa dessa composição. Ele só pode ser fornecido de
+forma explícita a `AppProviders` por teste ou ambiente de desenvolvimento.
+Bootstrap, cache autenticado e a tela consomem este transporte sem ampliar suas
+fronteiras de rede.

@@ -177,6 +177,79 @@ describe("createBrowserSessionClient", () => {
     });
   });
 
+  it("marks an antiforgery 503 failure at the antiforgery stage", async () => {
+    const fetchSpy = createFetchSpy();
+    server.use(
+      http.get(handlerUrl(antiForgeryPath), () =>
+        HttpResponse.json(
+          { code: "identity_gate_unavailable" },
+          { status: 503 },
+        ),
+      ),
+    );
+    const client = createBrowserSessionClient(fetchSpy);
+
+    await expect(client.signOut()).resolves.toEqual({
+      ok: false,
+      stage: "antiforgery",
+      error: {
+        kind: "unavailable",
+        status: 503,
+        code: "identity_gate_unavailable",
+      },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks a DELETE 503 failure at the session stage", async () => {
+    const fetchSpy = createFetchSpy();
+    server.use(
+      http.get(handlerUrl(antiForgeryPath), () =>
+        HttpResponse.json({ requestToken: "csrf-token" }),
+      ),
+      http.delete(handlerUrl(sessionPath), () =>
+        HttpResponse.json(
+          { code: "identity_gate_unavailable" },
+          { status: 503 },
+        ),
+      ),
+    );
+    const client = createBrowserSessionClient(fetchSpy);
+
+    await expect(client.signOut()).resolves.toEqual({
+      ok: false,
+      stage: "session",
+      error: {
+        kind: "unavailable",
+        status: 503,
+        code: "identity_gate_unavailable",
+      },
+    });
+    expect(fetchSpy.mock.calls.map(([input]) => String(input))).toEqual([
+      antiForgeryPath,
+      sessionPath,
+    ]);
+  });
+
+  it("marks a DELETE 401 failure at the session stage", async () => {
+    const fetchSpy = createFetchSpy();
+    server.use(
+      http.get(handlerUrl(antiForgeryPath), () =>
+        HttpResponse.json({ requestToken: "csrf-token" }),
+      ),
+      http.delete(handlerUrl(sessionPath), () =>
+        HttpResponse.json({ code: "invalid_request" }, { status: 401 }),
+      ),
+    );
+    const client = createBrowserSessionClient(fetchSpy);
+
+    await expect(client.signOut()).resolves.toEqual({
+      ok: false,
+      stage: "session",
+      error: { kind: "unauthorized", status: 401 },
+    });
+  });
+
   it("does not leak malformed error bodies, status text, or server messages", async () => {
     installTokenHandler();
     server.use(
@@ -245,6 +318,7 @@ describe("createBrowserSessionClient", () => {
     const networkClient = createBrowserSessionClient(networkFetch);
     await expect(networkClient.signOut()).resolves.toEqual({
       ok: false,
+      stage: "antiforgery",
       error: { kind: "network" },
     });
 
@@ -255,7 +329,11 @@ describe("createBrowserSessionClient", () => {
       );
     const abortClient = createBrowserSessionClient(abortFetch);
     const result = await abortClient.signOut(new AbortController().signal);
-    expect(result).toEqual({ ok: false, error: { kind: "aborted" } });
+    expect(result).toEqual({
+      ok: false,
+      stage: "antiforgery",
+      error: { kind: "aborted" },
+    });
     expect(JSON.stringify(result)).not.toContain("secret");
   });
 
@@ -267,6 +345,7 @@ describe("createBrowserSessionClient", () => {
 
     await expect(client.signOut(controller.signal)).resolves.toEqual({
       ok: false,
+      stage: "antiforgery",
       error: { kind: "aborted" },
     });
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -306,9 +385,32 @@ describe("createBrowserSessionClient", () => {
 
     await expect(pendingSignOut).resolves.toEqual({
       ok: false,
+      stage: "antiforgery",
       error: { kind: "aborted" },
     });
     expect(calls.filter((init) => init.method === "DELETE")).toHaveLength(0);
+  });
+
+  it("marks a DELETE network failure at the session stage without exposing details", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ requestToken: "csrf-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockRejectedValueOnce(new Error("secret socket detail"));
+    const client = createBrowserSessionClient(fetchSpy);
+
+    const result = await client.signOut();
+
+    expect(result).toEqual({
+      ok: false,
+      stage: "session",
+      error: { kind: "network" },
+    });
+    expect(JSON.stringify(result)).not.toContain("secret");
   });
 
   it("rejects invalid credentials locally without any fetch", async () => {

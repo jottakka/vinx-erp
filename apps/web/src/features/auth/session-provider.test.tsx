@@ -14,7 +14,15 @@ function SessionProbe() {
       <p>{session.bootstrap?.user.displayName ?? "anonymous"}</p>
       <p>{session.error ?? "no error"}</p>
       <output>{signOutResult}</output>
-      <button onClick={() => session.signIn("maria")} type="button">
+      <button
+        onClick={() =>
+          session.signIn({
+            email: "maria@example.test",
+            password: "test-password",
+          })
+        }
+        type="button"
+      >
         Sign in
       </button>
       <button
@@ -66,7 +74,7 @@ describe("SessionProvider", () => {
     expect(await screen.findByText("anonymous")).toBeVisible();
   });
 
-  it("keeps the authenticated session and returns false when logout fails", async () => {
+  it("enters logout recovery without exposing a stale session when logout fails", async () => {
     const user = userEvent.setup();
     const gateway = createMockSessionGateway({
       beforeLogout: async () => {
@@ -90,8 +98,9 @@ describe("SessionProvider", () => {
         "Não foi possível sair do aplicativo. Tente novamente.",
       ),
     ).toBeVisible();
-    expect(screen.getByText("authenticated")).toBeVisible();
-    expect(screen.getByText("Maria")).toBeVisible();
+    expect(screen.getByText("logout_recovery")).toBeVisible();
+    expect(screen.getByText("anonymous")).toBeVisible();
+    expect(screen.queryByText("Maria")).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("false");
   });
 });

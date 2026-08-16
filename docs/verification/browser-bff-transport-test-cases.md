@@ -5,9 +5,9 @@
 O transporte chama somente antiforgery, login e logout pela mesma origem. Não
 monta bootstrap, não troca a tela e não persiste token ou sessão.
 
-Jornada Playwright: N/A nesta subfatia, porque não há interface real nem API
-local iniciada por ela. #90 e #117 consumirão este transporte em uma jornada
-autenticada observável.
+Jornada Playwright: a composição de #117 é mapeada em
+`frontend-real-session-test-cases.md`; este documento preserva somente o
+limite unitário do transporte.
 
 | Classe BDD | Dado / quando / então | Evidência pública | Resultado esperado |
 |---|---|---|---|
@@ -20,5 +20,6 @@ autenticada observável.
 
 ## Limites mantidos
 
-O ingress same-origin de produção, bootstrap, sessão real de interface,
-refresh/MFA/recuperação e retry explícito pertencem às fatias posteriores.
+O ingress same-origin de produção e refresh/MFA/recuperação pertencem às
+fatias posteriores. Nova tentativa é decisão explícita da interface; o
+transporte nunca repete mutação automaticamente.

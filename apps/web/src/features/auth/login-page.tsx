@@ -5,7 +5,7 @@ import { PublicLayout } from "../../app/public-layout";
 import { resolveAppPath } from "../../shared/routing/app-paths";
 import { useSession } from "./session-provider";
 
-const profileErrorId = "development-profile-error";
+const loginErrorId = "login-error";
 
 function returnPathFromState(state: unknown) {
   return state && typeof state === "object"
@@ -14,9 +14,11 @@ function returnPathFromState(state: unknown) {
 }
 
 export function LoginPage() {
-  const [profileId, setProfileId] = useState("maria");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
-  const profileInput = useRef<HTMLInputElement>(null);
+  const emailInput = useRef<HTMLInputElement>(null);
+  const passwordInput = useRef<HTMLInputElement>(null);
   const { error, signIn, status } = useSession();
   const location = useLocation();
   const navigate = useNavigate();
@@ -26,66 +28,82 @@ export function LoginPage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const normalizedProfileId = profileId.trim();
-
-    if (!normalizedProfileId) {
-      setValidationError("Informe um perfil");
-      profileInput.current?.focus();
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) {
+      setValidationError("Informe seu e-mail");
+      emailInput.current?.focus();
+      return;
+    }
+    if (!password) {
+      setValidationError("Informe sua senha");
+      passwordInput.current?.focus();
       return;
     }
 
     setValidationError(null);
-    if (await signIn(normalizedProfileId)) {
-      navigate(returnPath, { replace: true });
-      return;
+    try {
+      if (await signIn({ email: normalizedEmail, password })) {
+        navigate(returnPath, { replace: true });
+        return;
+      }
+      passwordInput.current?.focus();
+    } finally {
+      setPassword("");
     }
-
-    profileInput.current?.focus();
   }
 
   return (
     <PublicLayout>
       <Stack sx={(theme) => ({ gap: `${theme.vinx.layout.contentGap}px` })}>
         <Stack spacing={1}>
-          <Typography
-            color="primary"
-            component="p"
-            sx={{
-              fontWeight: 700,
-              letterSpacing: "0.24em",
-              textTransform: "uppercase",
-            }}
-            variant="overline"
-          >
-            Protótipo local
-          </Typography>
           <Typography component="h1" variant="h4">
-            Entrada do ambiente de desenvolvimento
+            Entrar
           </Typography>
           <Typography color="text.secondary" component="p">
-            Use o perfil de desenvolvimento autorizado para validar a interface.
+            Informe suas credenciais para acessar o aplicativo.
           </Typography>
         </Stack>
         <Stack component="form" onSubmit={submit} spacing={2}>
           <TextField
+            autoComplete="email"
             error={Boolean(visibleError)}
             fullWidth
-            id="development-profile"
-            inputRef={profileInput}
-            label="Perfil de desenvolvimento"
+            id="email"
+            inputRef={emailInput}
+            label="E-mail"
             onChange={(event) => {
-              setProfileId(event.target.value);
+              setEmail(event.target.value);
               setValidationError(null);
             }}
             slotProps={{
               htmlInput: {
-                "aria-describedby": visibleError ? profileErrorId : undefined,
+                "aria-describedby": visibleError ? loginErrorId : undefined,
               },
             }}
-            value={profileId}
+            type="email"
+            value={email}
+          />
+          <TextField
+            autoComplete="current-password"
+            error={Boolean(visibleError)}
+            fullWidth
+            id="password"
+            inputRef={passwordInput}
+            label="Senha"
+            onChange={(event) => {
+              setPassword(event.target.value);
+              setValidationError(null);
+            }}
+            slotProps={{
+              htmlInput: {
+                "aria-describedby": visibleError ? loginErrorId : undefined,
+              },
+            }}
+            type="password"
+            value={password}
           />
           {visibleError ? (
-            <Alert id={profileErrorId} role="alert" severity="error">
+            <Alert id={loginErrorId} role="alert" severity="error">
               {visibleError}
             </Alert>
           ) : null}
@@ -93,22 +111,12 @@ export function LoginPage() {
             disabled={pending}
             fullWidth
             size="large"
-            sx={(theme) => ({
-              minHeight: theme.vinx.layout.controlMinHeight,
-            })}
+            sx={(theme) => ({ minHeight: theme.vinx.layout.controlMinHeight })}
             type="submit"
             variant="contained"
           >
             {pending ? "Entrando…" : "Entrar"}
           </Button>
-          <Typography
-            color="text.secondary"
-            component="p"
-            sx={{ textAlign: "center" }}
-            variant="caption"
-          >
-            Entrada interna do protótipo. Não é autenticação de produção.
-          </Typography>
         </Stack>
       </Stack>
     </PublicLayout>
