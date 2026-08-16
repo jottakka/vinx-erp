@@ -29,11 +29,8 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
 
         var firstMessages = await ReadOwnerInvitationMessagesAsync(factory);
         var firstMessage = Assert.Single(firstMessages);
-        Assert.Contains(invitationId.ToString("D"), firstMessage.Body, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Northwind Group", firstMessage.Body, StringComparison.Ordinal);
-        Assert.DoesNotContain("Northwind HQ", firstMessage.Body, StringComparison.Ordinal);
-        Assert.DoesNotContain("owner@example.test", firstMessage.Body, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("payload", firstMessage.Body, StringComparison.OrdinalIgnoreCase);
+        AssertOpaqueInvitationBody(firstMessage.Body, invitationId);
+        AssertOpaqueInvitationHeaders(firstMessage.Headers, requestId);
 
         using var replay = await client.PostAsJsonAsync(
             "/foundation/platform/organizations",
@@ -43,6 +40,15 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         var replayMessages = await ReadOwnerInvitationMessagesAsync(factory);
         Assert.Single(replayMessages);
         Assert.Equal(firstMessage, replayMessages[0]);
+    }
+
+    [Fact]
+    public async Task Runtime_startup_does_not_create_wolverine_owner_invitation_storage()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2");
+
+        Assert.False(await WolverineStorageExistsAsync(factory));
     }
 
     [Fact]
@@ -59,6 +65,23 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal(
             "{\"code\":\"mfa_assurance_required\"}",
+            await response.Content.ReadAsStringAsync());
+        Assert.Empty(await ReadOwnerInvitationMessagesAsync(factory));
+    }
+
+    [Fact]
+    public async Task Organization_creation_rejects_an_aal2_nonoperator_without_writing_an_owner_invitation_message()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2");
+
+        using var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/platform/organizations",
+            NewRequest(Guid.NewGuid()));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(
+            "{\"code\":\"platform_operator_required\"}",
             await response.Content.ReadAsStringAsync());
         Assert.Empty(await ReadOwnerInvitationMessagesAsync(factory));
     }
@@ -103,13 +126,9 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         FoundationApiFactory factory)
     {
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
-        await using var exists = new NpgsqlCommand(
-            "SELECT to_regclass('vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery')::text",
-            administrator);
-        var tableName = await exists.ExecuteScalarAsync();
         Assert.True(
-            tableName is string,
-            "Wolverine owner-invitation-delivery storage is absent; startup/runtime must not create it.");
+            await OwnerInvitationQueueExistsAsync(administrator),
+            "Wolverine owner-invitation-delivery storage must be provisioned by deploy before message assertions; tests never create it.");
 
         await using var command = new NpgsqlCommand(
             "SELECT body, headers FROM vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery",
@@ -124,6 +143,56 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         }
 
         return messages;
+    }
+
+    private static async Task<bool> WolverineStorageExistsAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT to_regnamespace('vinx_wolverine_queues') IS NOT NULL OR to_regclass('vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery') IS NOT NULL",
+            administrator);
+        return (bool)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static async Task<bool> OwnerInvitationQueueExistsAsync(NpgsqlConnection administrator)
+    {
+        await using var exists = new NpgsqlCommand(
+            "SELECT to_regclass('vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery')::text",
+            administrator);
+        var tableName = await exists.ExecuteScalarAsync();
+        return tableName is string;
+    }
+
+    private static void AssertOpaqueInvitationBody(string body, Guid invitationId)
+    {
+        using var document = JsonDocument.Parse(body);
+        var properties = document.RootElement.EnumerateObject().ToArray();
+        Assert.Single(properties);
+        Assert.Equal("invitationId", properties[0].Name, ignoreCase: true);
+        Assert.Equal(
+            invitationId,
+            Guid.Parse(properties[0].Value.GetString() ?? string.Empty));
+    }
+
+    private static void AssertOpaqueInvitationHeaders(string headers, Guid requestId)
+    {
+        foreach (var forbidden in new[]
+        {
+            "Northwind Group",
+            "Northwind HQ",
+            "Owner",
+            "owner@example.test",
+            "groupName",
+            "companyName",
+            "ownerDisplayName",
+            "ownerEmail",
+            "payload",
+            "payloadHash",
+            requestId.ToString("D"),
+        })
+        {
+            Assert.DoesNotContain(forbidden, headers, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private static async Task SeedPlatformOperatorAsync(FoundationApiFactory factory)
