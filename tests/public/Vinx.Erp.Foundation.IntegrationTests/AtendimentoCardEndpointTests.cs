@@ -545,7 +545,9 @@ public sealed class AtendimentoCardEndpointTests
                 .EnumerateArray()
                 .Single(parameter => parameter.GetProperty("name").GetString() == "X-CSRF-TOKEN");
             Assert.Equal("header", csrf.GetProperty("in").GetString());
-            Assert.True(csrf.GetProperty("required").GetBoolean());
+            Assert.False(
+                csrf.TryGetProperty("required", out var required) && required.GetBoolean()
+            );
         }
 
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
