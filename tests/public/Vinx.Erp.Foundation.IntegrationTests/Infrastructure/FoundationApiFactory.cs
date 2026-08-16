@@ -42,6 +42,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly CountingIdentityProvider? _countingIdentityProvider;
     private readonly GateDatabaseFailurePoint? _databaseFailurePoint;
     private readonly FileStorage? _testFileStorage;
+    private readonly HttpMessageHandler? _browserSessionProviderHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
     private readonly Func<ValueTask>? _disposeJwtAsync;
     private readonly bool _useJwtBearer;
@@ -54,6 +55,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         CountingIdentityProvider? countingIdentityProvider = null,
         GateDatabaseFailurePoint? databaseFailurePoint = null,
         FileStorage? testFileStorage = null,
+        HttpMessageHandler? browserSessionProviderHandler = null,
         IFoundationFixtureLifecycle? fixture = null,
         Func<ValueTask>? disposeHostAsync = null,
         Func<ValueTask>? disposeJwtAsync = null)
@@ -65,6 +67,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _countingIdentityProvider = countingIdentityProvider;
         _databaseFailurePoint = databaseFailurePoint;
         _testFileStorage = testFileStorage;
+        _browserSessionProviderHandler = browserSessionProviderHandler;
         _fixture = fixture ?? new FoundationPostgresFixture();
         _disposeHostAsync = disposeHostAsync;
         _disposeJwtAsync = disposeJwtAsync;
@@ -183,6 +186,22 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         return await CreateWithJwtBearerAsync(useCountingIdentityProvider: true);
     }
 
+    public static async Task<FoundationApiFactory> CreateWithJwtBearerAndBrowserSessionProviderAsync(
+        HttpMessageHandler browserSessionProviderHandler,
+        bool seedAuthenticatedActor = true,
+        GateDatabaseFailurePoint? databaseFailurePoint = null)
+    {
+        ArgumentNullException.ThrowIfNull(browserSessionProviderHandler);
+        var factory = new FoundationApiFactory(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            CreateTestPrincipalClaims(null, null, null, null),
+            new JwtTestAuthority(),
+            databaseFailurePoint: databaseFailurePoint,
+            browserSessionProviderHandler: browserSessionProviderHandler);
+        return await PrepareAsync(factory, seedAuthenticatedActor);
+    }
+
     public static async Task<FoundationApiFactory> CreateWithJwtBearerAndDatabaseFailureAsync(
         GateDatabaseFailurePoint databaseFailurePoint)
     {
@@ -216,6 +235,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         builder.UseSetting("SUPABASE_STORAGE_SERVICE_ROLE_KEY", "test-service-role-key");
         builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.co/auth/v1");
         builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
+        builder.UseSetting("SUPABASE_AUTH_PUBLISHABLE_KEY", "test-publishable-key");
         builder.ConfigureTestServices(services =>
         {
             services.AddTransient<IStartupFilter, AllowAnonymousTestEndpointStartupFilter>();
@@ -257,7 +277,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                     };
                 });
             }
-            else
+
+            if (_browserSessionProviderHandler is not null)
+            {
+                services.AddHttpClient<SupabasePasswordSessionClient>()
+                    .ConfigurePrimaryHttpMessageHandler(() => _browserSessionProviderHandler);
+            }
+
+            if (!_useJwtBearer)
             {
                 services.AddSingleton(_principalClaims);
                 services.AddAuthentication(options =>
@@ -301,6 +328,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         {
             await factory._fixture.StartAsync();
             await factory._fixture.MigrateAsync();
+            await factory.ConfigureDatabaseFailureAsync();
             if (seedAuthenticatedActor)
             {
                 await factory.SeedAuthenticatedActorAsync();
@@ -326,6 +354,24 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 "https://project.supabase.co/auth/v1",
                 "external-subject"));
         await administrator.SaveChangesAsync();
+    }
+
+    private async Task ConfigureDatabaseFailureAsync()
+    {
+        if (_databaseFailurePoint != GateDatabaseFailurePoint.SelfSessionRevocation
+            || _fixture is not FoundationPostgresFixture fixture)
+        {
+            return;
+        }
+
+        // SelfSessionRevocationService executes its function through ADO.NET,
+        // outside EF's command-interceptor pipeline. Revoke only this function
+        // from the runtime role to model its actual database failure mode.
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new Npgsql.NpgsqlCommand(
+            "REVOKE EXECUTE ON FUNCTION foundation.revoke_all_user_sessions(uuid) FROM vinx_runtime;",
+            administrator);
+        await command.ExecuteNonQueryAsync();
     }
 
     private static TestPrincipalClaims CreateTestPrincipalClaims(
@@ -367,7 +413,8 @@ public enum JwtTokenVariation
     RefreshOnlyAmr,
     AuthenticatorAfterIssuedAt,
     IssuedAtAtOrAfterExpiresAt,
-    TwoAmrEntries
+    TwoAmrEntries,
+    AmrWithProviderOnlyMetadata
 }
 
 internal sealed class JwtTestAuthority : IDisposable
@@ -386,7 +433,7 @@ internal sealed class JwtTestAuthority : IDisposable
         {
             JwtTokenVariation.Expired => now.ToUnixTimeSeconds() - 3600,
             JwtTokenVariation.IssuedAtAtOrAfterExpiresAt => now.ToUnixTimeSeconds() + 3600,
-            _ => now.ToUnixTimeSeconds() + 1
+            _ => now.ToUnixTimeSeconds() + 300
         };
         var issuedAt = variation == JwtTokenVariation.IssuedAtAtOrAfterExpiresAt
             ? expiresAt
@@ -429,6 +476,24 @@ internal sealed class JwtTestAuthority : IDisposable
         if (variation == JwtTokenVariation.EmptyAmr)
         {
             yield return new Claim("amr", "[]", JsonClaimValueTypes.Json);
+            yield break;
+        }
+
+        if (variation == JwtTokenVariation.AmrWithProviderOnlyMetadata)
+        {
+            yield return new Claim(
+                "amr",
+                JsonSerializer.Serialize(new
+                {
+                    method = "password",
+                    timestamp = issuedAt - 10,
+                    provider_session_metadata = "not-for-browser",
+                }),
+                JsonClaimValueTypes.Json);
+            yield return new Claim(
+                "amr",
+                SerializeAmrEntry(new AmrEntry("email", issuedAt - 20)),
+                JsonClaimValueTypes.Json);
             yield break;
         }
 
@@ -589,7 +654,8 @@ internal sealed class CountingIdentityProvider(IIdentityProvider inner) : IIdent
 
 public enum GateDatabaseFailurePoint
 {
-    Resolution
+    Resolution,
+    SelfSessionRevocation,
 }
 
 internal sealed class GateDatabaseFailureInterceptor(GateDatabaseFailurePoint? failurePoint) : DbCommandInterceptor
@@ -617,7 +683,9 @@ internal sealed class GateDatabaseFailureInterceptor(GateDatabaseFailurePoint? f
     {
         var failsResolution = failurePoint == GateDatabaseFailurePoint.Resolution
             && command.CommandText.Contains("external_identities", StringComparison.Ordinal);
-        if (failsResolution)
+        var failsSelfSessionRevocation = failurePoint == GateDatabaseFailurePoint.SelfSessionRevocation
+            && command.CommandText.Contains("revoke_all_user_sessions", StringComparison.Ordinal);
+        if (failsResolution || failsSelfSessionRevocation)
         {
             throw new InvalidOperationException("Configured database failure for the identity gate test.");
         }
@@ -630,9 +698,18 @@ internal sealed class AllowAnonymousTestEndpointStartupFilter : IStartupFilter
     {
         app.Use((context, next) =>
         {
+            if (IPAddress.TryParse(context.Request.Headers["X-Test-Remote-IP"], out var remoteIpAddress))
+            {
+                context.Connection.RemoteIpAddress = remoteIpAddress;
+            }
+
             if (context.Request.Path == "/test/identity-gate/allow-anonymous")
             {
                 context.SetEndpoint(AllowAnonymousEndpoint);
+            }
+            else if (context.Request.Path == "/test/browser-bff/claims")
+            {
+                context.SetEndpoint(BrowserBffClaimsEndpoint);
             }
 
             return next();
@@ -648,4 +725,15 @@ internal sealed class AllowAnonymousTestEndpointStartupFilter : IStartupFilter
         },
         new EndpointMetadataCollection(new AuthorizeAttribute(), new AllowAnonymousAttribute()),
         "Test allow-anonymous endpoint");
+
+    private static readonly Endpoint BrowserBffClaimsEndpoint = new(
+        async context =>
+        {
+            context.Response.ContentType = "application/json";
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body,
+                new { amr = context.User.FindAll("amr").Select(claim => claim.Value) });
+        },
+        new EndpointMetadataCollection(new AuthorizeAttribute()),
+        "Test browser BFF claims endpoint");
 }

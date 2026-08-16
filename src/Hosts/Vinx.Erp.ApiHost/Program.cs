@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
+using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
@@ -23,6 +24,7 @@ using Vinx.Erp.Foundation.Platform;
 
 var builder = WebApplication.CreateBuilder(args);
 const string ProtectedRateLimitPolicy = "foundation";
+const string BrowserSessionLoginRateLimitPolicy = "browser-session-login";
 builder.Logging.AddVinxLogging();
 builder
     .Services.AddOptions<FoundationDatabaseOptions>()
@@ -76,6 +78,7 @@ builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddSupabaseJwtAuthentication(builder.Configuration, builder.Environment);
+builder.Services.AddBrowserBffSession(builder.Configuration, builder.Environment);
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy(
@@ -99,6 +102,7 @@ builder.Services.AddSingleton<IIdentityProvider>(serviceProvider => new Supabase
 ));
 builder.Services.AddScoped<InternalIdentityResolver>();
 builder.Services.AddScoped<InternalSessionAdmissionService>();
+builder.Services.AddScoped<InternalSessionAuthenticator>();
 builder.Services.AddScoped<SelfSessionRevocationService>();
 builder
     .Services.AddHttpClient<SupabaseFileStorage>(
@@ -131,6 +135,23 @@ builder.Services.AddHealthChecks();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        HttpMethods.IsPost(context.Request.Method)
+            && string.Equals(
+                context.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName,
+                BrowserSessionLoginRateLimitPolicy,
+                StringComparison.Ordinal)
+            ? RateLimitPartition.GetFixedWindowLimiter(
+                "browser-session-global",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 100,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    AutoReplenishment = true,
+                })
+            : RateLimitPartition.GetNoLimiter("not-browser-session"));
     options.AddPolicy(
         ProtectedRateLimitPolicy,
         context =>
@@ -139,6 +160,21 @@ builder.Services.AddRateLimiter(options =>
                 _ => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit = 60,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    AutoReplenishment = true,
+                }
+            )
+    );
+    options.AddPolicy(
+        BrowserSessionLoginRateLimitPolicy,
+        context =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 10,
                     Window = TimeSpan.FromMinutes(1),
                     QueueLimit = 0,
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
@@ -176,6 +212,13 @@ builder.Services.AddOpenApi(options =>
                 Scheme = "bearer",
                 BearerFormat = "JWT",
             };
+            document.Components.SecuritySchemes[BrowserBffAuthenticationExtensions.CookieScheme] =
+                new OpenApiSecurityScheme
+                {
+                    Type = SecuritySchemeType.ApiKey,
+                    In = ParameterLocation.Cookie,
+                    Name = BrowserBffAuthenticationExtensions.GetSessionCookieName(builder.Environment),
+                };
             return Task.CompletedTask;
         }
     );
@@ -183,18 +226,81 @@ builder.Services.AddOpenApi(options =>
         (operation, context, _) =>
         {
             var metadata = context.Description.ActionDescriptor.EndpointMetadata;
+            if (metadata?.OfType<BrowserBffSessionSignInOpenApiMetadata>().Any() == true)
+            {
+                operation.RequestBody = new OpenApiRequestBody
+                {
+                    Required = true,
+                    Content = new Dictionary<string, OpenApiMediaType>
+                    {
+                        ["application/json"] = new OpenApiMediaType
+                        {
+                            Schema = new OpenApiSchema
+                            {
+                                Type = JsonSchemaType.Object,
+                                Required = new HashSet<string> { "email", "password" },
+                                Properties = new Dictionary<string, IOpenApiSchema>
+                                {
+                                    ["email"] = new OpenApiSchema { Type = JsonSchemaType.String },
+                                    ["password"] = new OpenApiSchema { Type = JsonSchemaType.String },
+                                },
+                                AdditionalPropertiesAllowed = false,
+                            },
+                        },
+                    },
+                };
+            }
+
+            if (metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
+                || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true)
+            {
+                operation.Parameters ??= [];
+                operation.Parameters.Add(
+                    new OpenApiParameter
+                    {
+                        Name = BrowserBffAuthenticationExtensions.AntiforgeryHeaderName,
+                        In = ParameterLocation.Header,
+                        Required = true,
+                        Schema = new OpenApiSchema { Type = JsonSchemaType.String },
+                    });
+            }
+
             if (
                 metadata?.OfType<IAllowAnonymous>().Any() != true
                 && metadata?.OfType<IAuthorizeData>().Any() == true
             )
             {
                 operation.Security ??= [];
-                operation.Security.Add(
-                    new OpenApiSecurityRequirement
-                    {
-                        [new OpenApiSecuritySchemeReference("Bearer", context.Document, null)] = [],
-                    }
-                );
+                if (metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true)
+                {
+                    operation.Security.Add(
+                        new OpenApiSecurityRequirement
+                        {
+                            [new OpenApiSecuritySchemeReference(
+                                BrowserBffAuthenticationExtensions.CookieScheme,
+                                context.Document,
+                                null)] = [],
+                        }
+                    );
+                }
+                else
+                {
+                    operation.Security.Add(
+                        new OpenApiSecurityRequirement
+                        {
+                            [new OpenApiSecuritySchemeReference("Bearer", context.Document, null)] = [],
+                        }
+                    );
+                    operation.Security.Add(
+                        new OpenApiSecurityRequirement
+                        {
+                            [new OpenApiSecuritySchemeReference(
+                                BrowserBffAuthenticationExtensions.CookieScheme,
+                                context.Document,
+                                null)] = [],
+                        }
+                    );
+                }
             }
 
             return Task.CompletedTask;
@@ -213,8 +319,10 @@ app.UseExceptionHandler(
     }
 );
 app.UseRouting();
+app.UseMiddleware<BrowserBffNoStoreMiddleware>();
 app.UseAuthentication();
 app.UseRateLimiter();
+app.UseMiddleware<BrowserBffAntiforgeryMiddleware>();
 app.UseMiddleware<InternalSessionGateMiddleware>();
 app.UseAuthorization();
 app.MapHealthChecks("/health");
@@ -222,6 +330,7 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+app.MapBrowserBffSessionEndpoints();
 var foundation = app.MapGroup("/foundation")
     .RequireAuthorization()
     .RequireRateLimiting(ProtectedRateLimitPolicy);

@@ -2,10 +2,30 @@
 
 Contratos HTTP são publicados pelo `ApiHost` e documentados por módulo. O
 documento OpenAPI descreve comportamento observável, mas não substitui
-autorização nem proteções do banco. Em Development, `GET /foundation/bootstrap`
-está publicado em `/openapi/v1.json`: declara bearer HTTP na operação e as
-respostas `200`, `401`, `429` e `503`. O `401` não tem corpo e o `503` declara
-somente `{ code: string }`. O documento não é publicado em Production.
+autorização nem proteções do banco. Em Development, `/openapi/v1.json` não é
+publicado em Production. Operações protegidas comuns de Foundation, incluindo
+`GET /foundation/bootstrap`, declaram bearer HTTP **ou** cookie de sessão BFF e
+as respostas aplicáveis (`200`, `401`, `429` e `503`). O `401` não tem corpo e
+o `503` declara somente `{ code: string }`.
+
+As operações BFF de mesma origem são públicas apenas onde indicado:
+
+- `GET /foundation/identity/browser-session/antiforgery`: anônima, `200` com
+  `requestToken` ou `503` seguro;
+- `POST /foundation/identity/browser-session`: anônima, CSRF obrigatório,
+  header obrigatório `X-CSRF-TOKEN`, corpo obrigatório `application/json` com
+  somente `email` e `password`, JSON de no máximo 8 KiB contado nos bytes
+  efetivamente recebidos, `204`, `400`, `401`, `429` ou `503` seguro; corpo
+  maior retorna `400 {"code":"invalid_request"}`;
+- `DELETE /foundation/identity/browser-session`: somente cookie BFF e CSRF,
+  header obrigatório `X-CSRF-TOKEN`, `204`, `400`, `401`, `403` vazio ou `503`
+  seguro.
+
+O logout não declara bearer como alternativa. `Authorization` presente sempre
+seleciona bearer; bearer válido no logout somente-cookie recebe `403` vazio sem
+revogar sessão ou remover cookie, e valor inválido não pode cair no cookie. O
+documento descreve o cookie como mecanismo de segurança, nunca como token de
+acesso nem contrato para chamar Supabase pelo browser.
 
 `GET /foundation/platform/bootstrap` segue a mesma publicação bearer e
 declara `200`, `401`, `403`, `429` e `503`. A resposta de sucesso contém apenas

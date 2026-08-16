@@ -71,21 +71,34 @@ endereços e credenciais geradas apenas para uso local.
 | `PLATFORM_OPERATOR_DISPLAY_NAME` | Bootstrap de operador C# | Nome de apresentação validado no deployment; não participa da autorização. |
 | `SUPABASE_AUTH_ISSUER` | API e MCP C# | Emissor JWT do Supabase Auth. |
 | `SUPABASE_AUTH_AUDIENCE` | API e MCP C# | Audiência JWT aceita. |
+| `SUPABASE_AUTH_PUBLISHABLE_KEY` | API C# | Configuração de host somente servidor para login BFF; nunca expor como `VITE_*` nem usar para chamada direta do browser ao Supabase. |
 | `SUPABASE_STORAGE_URL` | API C# | URL do adapter de Storage. |
 | `SUPABASE_STORAGE_SERVICE_ROLE_KEY` | API C# | Credencial de serviço exclusiva do servidor. |
+| `BROWSER_SESSION_DATA_PROTECTION_KEY_DIRECTORY` | API C# em produção | Diretório persistente, durável e compartilhado por todas as réplicas do host; acesso restrito ao processo. |
+| `BROWSER_SESSION_DATA_PROTECTION_APPLICATION_NAME` | API C# em produção | Nome estável, isolado por aplicação e ambiente; não compartilhar com outro sistema. |
+| `BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PATH` | API C# em produção | Certificado disponível ao host para criptografar o key ring durável. |
+| `BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PASSWORD` | API C# em produção | Senha do certificado, mantida em configuração secreta e criptografada no store de deployment. |
 | `AllowedHosts` | MCP C# | Hostnames aceitos; a configuração versionada permite somente loopback e o deployment deve sobrescrever pelo hostname exato. |
 | `ASPNETCORE_URLS` | API ou MCP C# | Binding HTTP local; use `http://127.0.0.1:5080` para API e `http://127.0.0.1:5081` para MCP. |
 
 O frontend V1 não define variável de provider. Quando #16 introduzir uma base
 URL da API, ela será documentada junto do cliente tipado; nenhum `VITE_*` deve
 conter URL ou chave do Supabase, conexão PostgreSQL ou credencial de serviço.
+Em particular, não crie `VITE_SUPABASE_*`: o browser usa apenas rotas BFF da
+mesma origem e nunca chama Supabase diretamente.
 Se uma variável, contrato ou serviço necessário não estiver confirmado, registre
 o bloqueio na issue correspondente. Não invente valor, crie segredo de produção
 ou libere acesso direto como atalho.
 
+Em produção, as quatro configurações de Data Protection acima são obrigatórias
+para sessão BFF. O key ring deve sobreviver a restart e deployment, ser comum
+às réplicas do mesmo host, permanecer isolado de outras aplicações e ser
+criptografado pelo certificado. Não copie valores para arquivo versionado,
+browser ou log.
+
 ## Executar a API C#
 
-Com as cinco variáveis de runtime da API já configuradas no processo pelo
+Com as variáveis de runtime da API já configuradas no processo pelo
 fluxo seguro do time, inicie a API de domínio em outro terminal:
 
 ```bash

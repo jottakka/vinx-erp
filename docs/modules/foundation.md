@@ -78,6 +78,43 @@ Não há resposta parcial e cancelamento propaga. As flags são validadas no
 startup e materializadas para o processo: mudança de configuração exige novo
 deploy ou restart.
 
+## Sessão Browser BFF
+
+A mesma origem usa `GET /foundation/identity/browser-session/antiforgery`,
+`POST /foundation/identity/browser-session` e
+`DELETE /foundation/identity/browser-session`. O login recebe credenciais e
+emite somente a prova `HttpOnly`, `SameSite=Strict`, de caminho `/` e sem
+persistência; fora de Development também exige `Secure`. O cookie é
+`vinx.session` em Development e
+`__Host-vinx.session` nos demais ambientes. Access token, refresh token,
+e-mail e resposta bruta do provedor nunca chegam ao browser. O browser não
+chama Supabase, Storage ou PostgreSQL diretamente.
+
+O login exige `X-CSRF-TOKEN` e corpo `application/json` contendo somente
+`email` e `password`. O JSON tem no máximo 8 KiB, incluindo espaços em branco
+e contando os bytes efetivamente recebidos, sem confiar em `Content-Length`.
+Excesso retorna `400 {"code":"invalid_request"}` antes de chamar o provedor
+ou emitir cookie de sessão.
+
+Operações protegidas comuns aceitam bearer válido ou essa prova de cookie. A
+presença de `Authorization`, inclusive malformado, seleciona bearer e nunca
+faz fallback para cookie. O logout aceita somente cookie: `DELETE` exige CSRF
+válido e revoga globalmente as sessões da própria pessoa. Após CSRF válido, a
+prova local é removida uma única vez também quando o gate encerra a requisição
+com `503 {"code":"identity_gate_unavailable"}`; isso não autoriza ator nem
+transforma indisponibilidade em sucesso. CSRF ausente ou inválido, pedido
+anônimo e `Authorization` inválido não removem cookie. Bearer válido no logout
+somente-cookie retorna `403` vazio, sem remover a prova local nem revogar
+sessões.
+
+As rotas BFF usam `Cache-Control: private, no-store`. CSRF e login público
+compartilham a origem, mas somente o endpoint `POST` de login entra nos
+limites: 100 requisições por minuto globais e 10 por minuto por IP; aliases
+aceitos pelo roteamento compartilham o mesmo limite global. A emissão de token
+antiforgery não consome esses limites. A entrega não amplia #44 com JIT por
+e-mail, MFA, recuperação ou fluxos adicionais de provedor, nem entrega #79:
+listagem ou revogação individual de sessões continuam adiadas.
+
 O operador de plataforma é um registro global singleton em
 `foundation.platform_operators`, separado de company, membership, role e
 capability de tenant. A policy `platform.operator` consulta somente a função
@@ -227,7 +264,7 @@ auditoria; a purga física continua fora desta fatia, na issue #201.
 
 ## Contract version
 
-`1.2`
+`1.3`
 
 ## Modelo de entidades e dados
 

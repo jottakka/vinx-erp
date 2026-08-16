@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -19,6 +21,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class ApiHostPlatformTests
 {
     private const string StorageCredential = "test-service-role-key";
+    private const string DataProtectionCredential = "test-data-protection-password";
     private const string SensitiveFailure = "sensitive-platform-failure";
 
     [Theory]
@@ -29,6 +32,7 @@ public sealed class ApiHostPlatformTests
     [InlineData("SUPABASE_AUTH_ISSUER", "not-a-uri")]
     [InlineData("SUPABASE_AUTH_ISSUER", "http://identity.example.test/auth/v1")]
     [InlineData("SUPABASE_AUTH_AUDIENCE", "")]
+    [InlineData("SUPABASE_AUTH_PUBLISHABLE_KEY", "")]
     public void Invalid_required_option_fails_host_startup_without_disclosing_credentials(
         string key,
         string value
@@ -42,6 +46,23 @@ public sealed class ApiHostPlatformTests
 
         Assert.NotNull(FindException<OptionsValidationException>(failure));
         Assert.DoesNotContain(StorageCredential, failure.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Production_missing_browser_session_data_protection_setting_fails_without_disclosing_credentials()
+    {
+        using var factory = new ApiHostPlatformFactory(
+            new Dictionary<string, string>
+            {
+                ["BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PASSWORD"] = "",
+            },
+            environment: "Production"
+        );
+
+        var failure = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.NotNull(FindException<OptionsValidationException>(failure));
+        Assert.DoesNotContain(DataProtectionCredential, failure.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -181,14 +202,11 @@ public sealed class ApiHostPlatformTests
         Assert.True(get.TryGetProperty("security", out var security));
         Assert.Contains(
             security.EnumerateArray(),
-            requirement =>
-            {
-                var schemes = requirement.EnumerateObject().ToArray();
-                return schemes.Length == 1
-                    && schemes[0].Name == "Bearer"
-                    && schemes[0].Value.ValueKind == JsonValueKind.Array
-                    && !schemes[0].Value.EnumerateArray().Any();
-            }
+            requirement => IsEmptySecurityRequirement(requirement, "Bearer")
+        );
+        Assert.Contains(
+            security.EnumerateArray(),
+            requirement => IsEmptySecurityRequirement(requirement, "BrowserSessionCookie")
         );
         var bearer = document
             .RootElement.GetProperty("components")
@@ -196,6 +214,95 @@ public sealed class ApiHostPlatformTests
             .GetProperty("Bearer");
         Assert.Equal("http", bearer.GetProperty("type").GetString());
         Assert.Equal("bearer", bearer.GetProperty("scheme").GetString());
+    }
+
+    [Fact]
+    public async Task Browser_session_openapi_keeps_login_anonymous_and_sign_out_cookie_only()
+    {
+        using var factory = new ApiHostPlatformFactory();
+        using var response = await factory.CreateClient().GetAsync("/openapi/v1.json");
+
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var paths = document.RootElement.GetProperty("paths");
+        var session = paths.GetProperty("/foundation/identity/browser-session");
+        var antiforgery = paths
+            .GetProperty("/foundation/identity/browser-session/antiforgery")
+            .GetProperty("get");
+        var signIn = session.GetProperty("post");
+        var signOut = session.GetProperty("delete");
+
+        Assert.False(antiforgery.TryGetProperty("security", out _));
+        Assert.False(signIn.TryGetProperty("security", out _));
+        foreach (var status in new[] { "200", "503" })
+        {
+            Assert.True(antiforgery.GetProperty("responses").TryGetProperty(status, out _));
+        }
+
+        foreach (var status in new[] { "204", "400", "401", "429", "503" })
+        {
+            Assert.True(signIn.GetProperty("responses").TryGetProperty(status, out _));
+        }
+
+        var signOutSecurity = signOut.GetProperty("security");
+        Assert.Single(signOutSecurity.EnumerateArray());
+        Assert.True(IsEmptySecurityRequirement(
+            signOutSecurity.EnumerateArray().Single(),
+            "BrowserSessionCookie"));
+        var browserCookie = document
+            .RootElement.GetProperty("components")
+            .GetProperty("securitySchemes")
+            .GetProperty("BrowserSessionCookie");
+        Assert.Equal("apiKey", browserCookie.GetProperty("type").GetString());
+        Assert.Equal("cookie", browserCookie.GetProperty("in").GetString());
+        Assert.Equal("vinx.session", browserCookie.GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task Browser_session_openapi_declares_strict_login_body_and_csrf_headers()
+    {
+        using var factory = new ApiHostPlatformFactory();
+        using var response = await factory.CreateClient().GetAsync("/openapi/v1.json");
+
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var session = document.RootElement
+            .GetProperty("paths")
+            .GetProperty("/foundation/identity/browser-session");
+        var signIn = session.GetProperty("post");
+        var signOut = session.GetProperty("delete");
+
+        var requestBody = signIn.GetProperty("requestBody");
+        Assert.True(requestBody.GetProperty("required").GetBoolean());
+        var schema = ResolveSchema(
+            document.RootElement,
+            requestBody.GetProperty("content").GetProperty("application/json").GetProperty("schema"));
+        Assert.Equal(
+            new[] { "email", "password" },
+            schema.GetProperty("required").EnumerateArray().Select(value => value.GetString()).ToArray());
+        Assert.Equal(
+            new[] { "email", "password" },
+            schema.GetProperty("properties").EnumerateObject().Select(property => property.Name).ToArray());
+        Assert.All(
+            schema.GetProperty("properties").EnumerateObject(),
+            property => Assert.Equal("string", property.Value.GetProperty("type").GetString()));
+
+    }
+
+    [Fact]
+    public async Task Browser_session_openapi_declares_required_csrf_headers_for_mutations()
+    {
+        using var factory = new ApiHostPlatformFactory();
+        using var response = await factory.CreateClient().GetAsync("/openapi/v1.json");
+
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var session = document.RootElement
+            .GetProperty("paths")
+            .GetProperty("/foundation/identity/browser-session");
+
+        AssertRequiredCsrfHeader(session.GetProperty("post"));
+        AssertRequiredCsrfHeader(session.GetProperty("delete"));
     }
 
     [Fact]
@@ -407,6 +514,35 @@ public sealed class ApiHostPlatformTests
         return document.GetProperty("components").GetProperty("schemas").GetProperty(schemaName);
     }
 
+    private static JsonElement ResolveSchema(JsonElement document, JsonElement schema)
+    {
+        if (!schema.TryGetProperty("$ref", out var reference))
+        {
+            return schema;
+        }
+
+        var schemaName = reference.GetString()?.Split('/').Last()
+            ?? throw new InvalidOperationException("The request schema reference was empty.");
+        return document.GetProperty("components").GetProperty("schemas").GetProperty(schemaName);
+    }
+
+    private static void AssertRequiredCsrfHeader(JsonElement operation)
+    {
+        var parameter = Assert.Single(operation.GetProperty("parameters").EnumerateArray());
+        Assert.Equal("X-CSRF-TOKEN", parameter.GetProperty("name").GetString());
+        Assert.Equal("header", parameter.GetProperty("in").GetString());
+        Assert.True(parameter.GetProperty("required").GetBoolean());
+    }
+
+    private static bool IsEmptySecurityRequirement(JsonElement requirement, string schemeName)
+    {
+        var schemes = requirement.EnumerateObject().ToArray();
+        return schemes.Length == 1
+            && schemes[0].Name == schemeName
+            && schemes[0].Value.ValueKind == JsonValueKind.Array
+            && !schemes[0].Value.EnumerateArray().Any();
+    }
+
     private static TException? FindException<TException>(Exception failure)
         where TException : Exception
     {
@@ -427,6 +563,8 @@ public sealed class ApiHostPlatformTests
         private readonly string _environment;
         private readonly bool _exposeFailureEndpoint;
         private readonly bool _exposeRateLimitedEndpoint;
+        private string? _dataProtectionKeyDirectory;
+        private string? _dataProtectionCertificatePath;
 
         public ApiHostPlatformFactory(
             IReadOnlyDictionary<string, string>? overrides = null,
@@ -457,6 +595,11 @@ public sealed class ApiHostPlatformTests
             builder.UseSetting("SUPABASE_STORAGE_SERVICE_ROLE_KEY", StorageCredential);
             builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.co/auth/v1");
             builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
+            builder.UseSetting("SUPABASE_AUTH_PUBLISHABLE_KEY", "test-publishable-key");
+            if (string.Equals(_environment, "Production", StringComparison.Ordinal))
+            {
+                ConfigureProductionDataProtection(builder);
+            }
 
             foreach (var setting in _overrides)
             {
@@ -476,6 +619,71 @@ public sealed class ApiHostPlatformTests
                     services.AddTransient<IStartupFilter, PlatformRateLimitStartupFilter>()
                 );
             }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                if (_dataProtectionCertificatePath is not null)
+                {
+                    if (File.Exists(_dataProtectionCertificatePath))
+                    {
+                        File.Delete(_dataProtectionCertificatePath);
+                    }
+
+                    _dataProtectionCertificatePath = null;
+                }
+
+                if (_dataProtectionKeyDirectory is not null)
+                {
+                    if (Directory.Exists(_dataProtectionKeyDirectory))
+                    {
+                        Directory.Delete(_dataProtectionKeyDirectory, recursive: true);
+                    }
+
+                    _dataProtectionKeyDirectory = null;
+                }
+            }
+
+            base.Dispose(disposing);
+        }
+
+        private void ConfigureProductionDataProtection(IWebHostBuilder builder)
+        {
+            _dataProtectionKeyDirectory = Path.Combine(
+                Path.GetTempPath(),
+                $"vinx-erp-data-protection-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(_dataProtectionKeyDirectory);
+
+            _dataProtectionCertificatePath = Path.Combine(
+                _dataProtectionKeyDirectory,
+                "certificate.pfx");
+            using var rsa = RSA.Create(2048);
+            var request = new CertificateRequest(
+                "CN=Vinx ERP integration test",
+                rsa,
+                HashAlgorithmName.SHA256,
+                RSASignaturePadding.Pkcs1);
+            using var certificate = request.CreateSelfSigned(
+                DateTimeOffset.UtcNow.AddMinutes(-1),
+                DateTimeOffset.UtcNow.AddHours(1));
+            File.WriteAllBytes(
+                _dataProtectionCertificatePath,
+                certificate.Export(X509ContentType.Pfx, DataProtectionCredential));
+
+            builder.UseSetting(
+                "BROWSER_SESSION_DATA_PROTECTION_KEY_DIRECTORY",
+                _dataProtectionKeyDirectory);
+            builder.UseSetting(
+                "BROWSER_SESSION_DATA_PROTECTION_APPLICATION_NAME",
+                "vinx-erp-integration-tests");
+            builder.UseSetting(
+                "BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PATH",
+                _dataProtectionCertificatePath);
+            builder.UseSetting(
+                "BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PASSWORD",
+                DataProtectionCredential);
         }
     }
 

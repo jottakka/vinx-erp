@@ -55,6 +55,7 @@ public static class SupabaseAuthenticationExtensions
                 options.TokenValidationParameters.ValidateAudience = true;
                 options.TokenValidationParameters.ValidateIssuerSigningKey = true;
                 options.TokenValidationParameters.ValidateLifetime = true;
+                options.TokenValidationParameters.ClockSkew = TimeSpan.FromMinutes(1);
             });
         services.AddAuthorization();
         return services;

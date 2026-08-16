@@ -1,26 +1,14 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Authorization;
-using Vinx.Erp.Foundation.Domain;
 
 namespace Vinx.Erp.Foundation.Identity;
 
-public sealed class InternalSessionGateMiddleware(
-    RequestDelegate next,
-    ILogger<InternalSessionGateMiddleware> logger
-)
+public sealed class InternalSessionGateMiddleware(RequestDelegate next)
 {
-    private const string Operation = "identity_gate";
-    private const string Module = "identity";
-    private const string UnavailableReason = "database_resolution_unavailable";
-    private const string EventTemplate = "Identity gate {Operation} {Module} {Result} {Reason}";
-
     public async Task InvokeAsync(
         HttpContext context,
-        IIdentityProvider identityProvider,
-        InternalIdentityResolver identityResolver,
-        InternalSessionAdmissionService admissionService
+        InternalSessionAuthenticator authenticator
     )
     {
         var endpoint = context.GetEndpoint();
@@ -34,66 +22,22 @@ public sealed class InternalSessionGateMiddleware(
             return;
         }
 
-        if (
-            context.User.Identity?.IsAuthenticated != true
-            || !identityProvider.TryGetExternalIdentityProof(context.User, out var proof)
-        )
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            return;
-        }
-
-        ResolvedInternalIdentity? identity;
-        try
-        {
-            identity = await identityResolver.ResolveAsync(proof.Key, context.RequestAborted);
-        }
-        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            logger.LogError(
-                exception,
-                EventTemplate,
-                Operation,
-                Module,
-                "unavailable",
-                UnavailableReason
-            );
-            await WriteUnavailableAsync(context);
-            return;
-        }
-
-        if (identity is null)
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            return;
-        }
-
-        var admission = await admissionService.AdmitAsync(
-            identity.UserId,
-            proof,
-            AuditSource.Web,
+        var authentication = await authenticator.AuthenticateAsync(
+            context.User,
             ServerCorrelationContext.Get(context).CorrelationId,
-            context.RequestAborted
-        );
-        if (admission.State is SessionAdmissionState.Admitted or SessionAdmissionState.Active)
+            context.RequestAborted);
+        if (authentication is
+            {
+                State: InternalSessionAuthenticationState.Authenticated,
+                Actor: { } actor,
+            })
         {
-            context.SetActorContext(
-                new ActorContext(
-                    identity.UserId,
-                    ServerCorrelationContext.Get(context).CorrelationId,
-                    identity.ExternalIdentityId,
-                    proof.AssuranceLevel
-                )
-            );
+            context.SetActorContext(actor);
             await next(context);
             return;
         }
 
-        if (admission.State == SessionAdmissionState.Denied)
+        if (authentication.State == InternalSessionAuthenticationState.Unauthenticated)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return;
