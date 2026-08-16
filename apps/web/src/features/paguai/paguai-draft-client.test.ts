@@ -63,4 +63,16 @@ describe("Paguai draft client", () => {
       createPaguaiDraftClient(fetchImplementation).list(companyId),
     ).resolves.toEqual({ ok: false, error: 429 });
   });
+
+  it.each([401, 429])(
+    "preserves a bodyless %i response for the page to handle",
+    async (status) => {
+      const fetchImplementation: typeof fetch = async () =>
+        new Response(null, { status });
+
+      await expect(
+        createPaguaiDraftClient(fetchImplementation).list(companyId),
+      ).resolves.toEqual({ ok: false, error: status });
+    },
+  );
 });

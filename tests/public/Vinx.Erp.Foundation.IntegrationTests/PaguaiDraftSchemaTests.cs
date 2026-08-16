@@ -13,6 +13,7 @@ public sealed class PaguaiDraftSchemaTests
         await fixture.StartAsync();
         await fixture.MigrateAsync();
         var companyId = Guid.NewGuid();
+        var secondCompanyId = Guid.NewGuid();
         var requesterId = Guid.NewGuid();
         var otherRequesterId = Guid.NewGuid();
         var requestId = Guid.NewGuid();
@@ -28,19 +29,26 @@ public sealed class PaguaiDraftSchemaTests
                 VALUES (@group_id, 'Group', @requester_id, @requester_id, @request_id, clock_timestamp(), clock_timestamp(), 1);
                 INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at, row_version)
                 VALUES (@company_id, @group_id, 'Company', @requester_id, @requester_id, @request_id, clock_timestamp(), clock_timestamp(), 1);
+                INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at, row_version)
+                VALUES (@second_company_id, @group_id, 'Second company', @requester_id, @requester_id, @request_id, clock_timestamp(), clock_timestamp(), 1);
                 INSERT INTO paguai.requests (id, company_id, requester_user_id, request_id, title, description)
                 VALUES (@draft_id, @company_id, @requester_id, @request_id, 'Office supplies', 'Paper');
+                INSERT INTO paguai.requests (id, company_id, requester_user_id, request_id, title, description)
+                VALUES (@second_draft_id, @second_company_id, @requester_id, @second_request_id, 'Second office supplies', 'Second paper');
                 """,
                 administrator
             )
         )
         {
             setup.Parameters.AddWithValue("company_id", companyId);
+            setup.Parameters.AddWithValue("second_company_id", secondCompanyId);
             setup.Parameters.AddWithValue("group_id", Guid.NewGuid());
             setup.Parameters.AddWithValue("requester_id", requesterId);
             setup.Parameters.AddWithValue("other_requester_id", otherRequesterId);
             setup.Parameters.AddWithValue("request_id", requestId);
             setup.Parameters.AddWithValue("draft_id", Guid.NewGuid());
+            setup.Parameters.AddWithValue("second_request_id", Guid.NewGuid());
+            setup.Parameters.AddWithValue("second_draft_id", Guid.NewGuid());
             await setup.ExecuteNonQueryAsync();
         }
 
@@ -53,6 +61,10 @@ public sealed class PaguaiDraftSchemaTests
         Assert.Equal(0L, await CountRequestsAsync(runtime, transaction));
         await SetContextAsync(runtime, transaction, companyId, requesterId);
         Assert.Equal(1L, await CountRequestsAsync(runtime, transaction));
+        Assert.Equal([companyId], await ReadRequestCompanyIdsAsync(runtime, transaction));
+        await SetContextAsync(runtime, transaction, secondCompanyId, requesterId);
+        Assert.Equal(1L, await CountRequestsAsync(runtime, transaction));
+        Assert.Equal([secondCompanyId], await ReadRequestCompanyIdsAsync(runtime, transaction));
         await transaction.RollbackAsync();
     }
 
@@ -136,5 +148,22 @@ public sealed class PaguaiDraftSchemaTests
             await command.ExecuteScalarAsync()
             ?? throw new Xunit.Sdk.XunitException("Paguai count returned no value.")
         );
+    }
+
+    private static async Task<IReadOnlyList<Guid>> ReadRequestCompanyIdsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction
+    )
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT company_id FROM paguai.requests ORDER BY company_id",
+            connection,
+            transaction
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        var companyIds = new List<Guid>();
+        while (await reader.ReadAsync())
+            companyIds.Add(reader.GetGuid(0));
+        return companyIds;
     }
 }

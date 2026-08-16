@@ -12,6 +12,7 @@ import {
 } from "@mui/material";
 import {
   type FormEvent,
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -89,9 +90,22 @@ export function PaguaiPage({
     companyIdRef.current = companyId;
   }, [companyId]);
 
+  const selectCompany = useCallback(
+    (nextCompanyId: string) => {
+      if (nextCompanyId === companyId) return;
+      companyIdRef.current = nextCompanyId;
+      setCompanyId(nextCompanyId);
+      setDrafts([]);
+      setSelected(null);
+      setError(null);
+      setStatus(nextCompanyId ? "loading" : "idle");
+    },
+    [companyId],
+  );
+
   useEffect(() => {
-    if (!companyId && companies[0]) setCompanyId(companies[0].companyId);
-  }, [companies, companyId]);
+    if (!companyId && companies[0]) selectCompany(companies[0].companyId);
+  }, [companies, companyId, selectCompany]);
   useEffect(() => {
     if (
       !companyId ||
@@ -103,17 +117,25 @@ export function PaguaiPage({
       )
     ) {
       setDrafts([]);
+      setSelected(null);
+      setError(null);
+      setStatus("idle");
       return;
     }
     let current = true;
+    const requestedCompanyId = companyId;
+    setDrafts([]);
     setStatus("loading");
     setError(null);
     setSelected(null);
     void draftClient.list(companyId).then((result) => {
-      if (!current) return;
+      if (!current || companyIdRef.current !== requestedCompanyId) return;
       setStatus("idle");
       if (result.ok) setDrafts(result.value);
-      else setError(result.error);
+      else {
+        setDrafts([]);
+        setError(result.error);
+      }
     });
     return () => {
       current = false;
@@ -123,8 +145,9 @@ export function PaguaiPage({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!companyId || status === "submitting") return;
+    const form = event.currentTarget;
     const submittedCompanyId = companyId;
-    const data = new FormData(event.currentTarget);
+    const data = new FormData(form);
     setStatus("submitting");
     setError(null);
     const result = await draftClient.create({
@@ -145,7 +168,7 @@ export function PaguaiPage({
       ...current.filter((draft) => draft.id !== result.value.id),
     ]);
     setSelected(result.value);
-    event.currentTarget.reset();
+    form.reset();
     setRequestId(crypto.randomUUID());
     resultRef.current?.focus();
   }
@@ -172,7 +195,7 @@ export function PaguaiPage({
             select
             label="Empresa"
             disabled={status === "submitting"}
-            onChange={(event) => setCompanyId(event.target.value)}
+            onChange={(event) => selectCompany(event.target.value)}
             value={companyId}
           >
             {companies.map((company) => (

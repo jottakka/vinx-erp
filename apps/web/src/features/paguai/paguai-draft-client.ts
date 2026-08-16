@@ -50,7 +50,8 @@ function request(
 }
 
 async function readError(response: Response): Promise<PaguaiDraftError> {
-  if ([400, 401, 403, 404, 409, 429, 503].includes(response.status)) {
+  if ([401, 429].includes(response.status)) return response.status as 401 | 429;
+  if ([400, 403, 404, 409, 503].includes(response.status)) {
     try {
       if (errorSchema.safeParse(await response.json()).success)
         return response.status as PaguaiDraftError;
