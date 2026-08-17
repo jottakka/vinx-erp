@@ -13,6 +13,8 @@
 | Resultado potencialmente confirmado preserva o comando exato para retry explícito | `apps/web/src/features/people/people-page.test.tsx` — `preserves the exact command for explicit retry after a potentially committed 201 result` e `preserves the exact command for explicit retry after a potentially committed 500 result` |
 | Durante ambiguidade, o envio normal é bloqueado e a mudança de empresa limpa a tentativa | `apps/web/src/features/people/people-page.test.tsx` — `blocks normal submit after ambiguity and clears both fields on company change` |
 | Concorrência não cria reservas duplicadas | `apps/web/src/features/people/people-page.test.tsx` — `disables duplicate reservation while the mutation is pending` e `synchronously ignores a second submit before React publishes pending state` |
+| Resposta atrasada da listagem de uma empresa anterior nunca substitui o estado da empresa atual | `apps/web/src/features/people/people-page.test.tsx` — `does not render a delayed directory response from a previous company` |
+| Novo envio é bloqueado enquanto a reconciliação pós-criação está pendente | `apps/web/src/features/people/people-page.test.tsx` — `blocks a new submit while creation reconciliation is pending` |
 
 Não há teste E2E nesta fatia. Paguai, Atendimento e Kanban permanecem fora do
 comportamento do diretório; a asserção do manifesto protege suas rotas de
