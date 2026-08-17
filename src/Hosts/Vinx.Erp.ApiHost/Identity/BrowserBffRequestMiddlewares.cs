@@ -8,23 +8,39 @@ internal sealed class BrowserBffNoStoreMiddleware(RequestDelegate next)
 {
     public Task InvokeAsync(HttpContext context)
     {
-        if (context.Request.Path.Equals("/foundation/bootstrap", StringComparison.Ordinal)
-            || context.Request.Path.StartsWithSegments("/foundation/identity/browser-session"))
-        {
-            // Antiforgery pode definir sua diretiva de cache ao emitir token.
-            // Aplica antes dos headers saírem para manter a sessão browser não cacheável.
-            context.Response.OnStarting(
-                static state =>
+        // Antiforgery pode definir sua diretiva de cache ao emitir token.
+        // Aplica antes dos headers saírem para manter a sessão browser não cacheável.
+        // A decisão roda no OnStarting: a identidade da sessão cookie só está
+        // disponível depois da autenticação, e respostas autenticadas por
+        // BrowserSessionCookie nunca podem ser cacheadas, em nenhuma rota.
+        context.Response.OnStarting(
+            static state =>
+            {
+                var context = (HttpContext)state;
+                var browserSessionRoute =
+                    context.Request.Path.Equals("/foundation/bootstrap", StringComparison.Ordinal)
+                    || context.Request.Path.StartsWithSegments("/foundation/identity/browser-session");
+                if (browserSessionRoute || IsBrowserCookieAuthenticated(context))
                 {
-                    var response = (HttpResponse)state;
-                    response.Headers[HeaderNames.CacheControl] = "private, no-store";
-                    return Task.CompletedTask;
-                },
-                context.Response);
-        }
+                    context.Response.Headers[HeaderNames.CacheControl] = "private, no-store";
+                }
+
+                return Task.CompletedTask;
+            },
+            context);
 
         return next(context);
     }
+
+    private static bool IsBrowserCookieAuthenticated(HttpContext context) =>
+        context.User.Identities.Any(identity =>
+            identity.IsAuthenticated
+            && string.Equals(
+                identity.AuthenticationType,
+                BrowserBffAuthenticationExtensions.CookieScheme,
+                StringComparison.Ordinal
+            )
+        );
 }
 
 internal sealed class BrowserBffAntiforgeryMiddleware(RequestDelegate next)

@@ -42,6 +42,24 @@ public sealed class BrowserBffCookieSecurityTests
     }
 
     [Fact]
+    public async Task Cookie_authenticated_responses_are_private_no_store_on_every_route()
+    {
+        var provider = new ProviderHandler();
+        await using var factory = await FoundationApiFactory
+            .CreateWithJwtBearerAndBrowserSessionProviderAsync(provider);
+        provider.ResponseFactory = _ => ProviderResponse(
+            factory.CreateJwtToken(JwtTokenVariation.Valid), null);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using var signIn = await SignInAsync(client);
+        signIn.EnsureSuccessStatusCode();
+
+        using var response = await client.GetAsync("/foundation/capabilities");
+
+        Assert.True(response.Headers.CacheControl?.Private);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+    }
+
+    [Fact]
     public async Task Sign_out_clears_the_browser_cookie_with_private_no_store()
     {
         var provider = new ProviderHandler();
