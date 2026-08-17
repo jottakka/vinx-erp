@@ -56,9 +56,10 @@ As guardas obrigatórias dessa adoção são:
 - Storage e envelopes técnicos do Wolverine são separados do schema
   VINX/Foundation e só podem ser provisionados ou alterados no deploy
   explícito, nunca em startup ou runtime. O storage relacional do Wolverine é
-  aplicado por `db-apply` (ou `resources setup` estritamente equivalente,
-  aprovado caso a caso) executado somente com identidade migradora/deploy; pode
-  usar Weasel somente para o schema técnico Wolverine. O mesmo deploy revisa o
+  aplicado por `db-apply`, executado somente com identidade migradora/deploy;
+  pode usar Weasel somente para o schema técnico Wolverine. `resources setup`
+  não é substituto: pode provisionar recursos além do storage relacional
+  configurado e fica fora desta adoção. O mesmo deploy revisa o
   ownership e concede os grants mínimos por identidade de runtime: produtor e
   worker recebem somente os privilégios de DML, USAGE e EXECUTE de que
   precisam. A liberação exige provas positivas desses privilégios, provas
