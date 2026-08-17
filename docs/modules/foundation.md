@@ -205,6 +205,21 @@ Foundation: as funções estreitas são sua única fronteira de negócio. Aceite
 login da identidade reservada e reconciliação de estado ambíguo permanecem
 fatias posteriores.
 
+`provider_in_flight` sem finalização — por queda do worker entre a
+reivindicação e a chamada, ou por falha transitória após o provider aceitar —
+permanece seguro: não há segunda chamada e o replay encerra sem mutação. A
+recuperação operacional fica para a reconciliação da #211B; até lá, o runbook
+é auditar `owner_invitation.delivery.provider` e `provider_attempt_id` da
+tentativa, confirmar com o provider se o convite foi criado e, se necessário,
+emitir nova intenção de provisionamento — nunca reabrir o estado manualmente.
+
+O destino do convite (`SUPABASE_INVITE_REDIRECT_URL`) é validado no startup
+como URI HTTPS absoluta sem fragmento e, quando
+`SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS` está definido (lista de origens
+absolutas separadas por `;`), a origem do redirect precisa pertencer à lista.
+O cliente HTTP não segue redirects, então a service-role key nunca é
+reenviada a outra origem.
+
 O startup falha fechado se a conexão não for efetivamente `vinx_worker`; não
 cria DDL em runtime e descobre somente esse handler. Erros transitórios de
 PostgreSQL têm tentativas agendadas finitas. Erro permanente, inesperado ou

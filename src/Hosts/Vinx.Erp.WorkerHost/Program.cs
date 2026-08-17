@@ -36,6 +36,18 @@ builder
         "Supabase Auth audience must be configured."
     )
     .ValidateOnStart();
+var inviteRedirectAllowedOrigins = builder
+    .Configuration["SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS"]
+    ?.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    .Select(candidate =>
+        Uri.TryCreate(candidate, UriKind.Absolute, out var candidateUri)
+        && string.IsNullOrEmpty(candidateUri.UserInfo)
+            ? candidateUri.GetLeftPart(UriPartial.Authority)
+            : null
+    )
+    .Where(origin => origin is not null)
+    .ToArray() ?? [];
+
 builder
     .Services.AddOptions<SupabaseAdminOptions>()
     .Bind(builder.Configuration)
@@ -46,6 +58,17 @@ builder
     .Validate(
         options => IsAllowedSupabaseUri(options.InviteRedirectUrl, builder.Environment),
         "Supabase invitation redirect URL is invalid."
+    )
+    .Validate(
+        options =>
+            inviteRedirectAllowedOrigins.Length == 0
+            || (
+                Uri.TryCreate(options.InviteRedirectUrl, UriKind.Absolute, out var redirectUri)
+                && inviteRedirectAllowedOrigins.Contains(
+                    redirectUri.GetLeftPart(UriPartial.Authority)
+                )
+            ),
+        "Supabase invitation redirect URL origin is not allowed."
     )
     .ValidateOnStart();
 builder.Services.AddSingleton(serviceProvider =>

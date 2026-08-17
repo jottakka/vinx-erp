@@ -87,8 +87,10 @@ duas vezes a transição interna. Ela não faz chamada real a provider de convit
 
 A #211B é a única dona do adapter Supabase Admin de convite. Ela reivindica a
 tentativa interna antes da chamada, vincula apenas `issuer+subject` confirmado,
-nunca email, e marca timeout, 5xx, redirect, corpo inválido ou tentativa já em
-andamento como `provider_ambiguous`, sem retry cego. A reconciliação desse
+nunca email, e marca timeout, 5xx, redirect ou corpo inválido como
+`provider_ambiguous`, sem retry cego. Tentativa já em andamento preserva
+`provider_in_flight` sem segunda chamada; a recuperação desse estado pertence
+à reconciliação da própria #211B. A reconciliação desse
 estado e o aceite continuam fora desta fatia. A #28, posterior à infraestrutura
 genérica da #48, é dona do adapter Meta/WhatsApp, opt-in, templates e da
 integração específica do webhook de canal assinado. Ela também reconcilia

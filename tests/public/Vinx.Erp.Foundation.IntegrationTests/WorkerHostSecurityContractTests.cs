@@ -197,6 +197,39 @@ public sealed class WorkerHostSecurityContractTests
     }
 
     [Fact]
+    public async Task Worker_host_startup_fails_closed_without_a_service_role_key()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        await WolverineStorageDeployment.ApplyAsync(fixture);
+
+        await using var worker = new WorkerHostFactory(
+            fixture.WorkerConnectionString,
+            new Dictionary<string, string?> { ["SUPABASE_AUTH_SERVICE_ROLE_KEY"] = null }
+        );
+        Assert.ThrowsAny<Exception>(() => worker.CreateClient());
+    }
+
+    [Fact]
+    public async Task Worker_host_startup_fails_closed_when_redirect_origin_is_not_allowlisted()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        await WolverineStorageDeployment.ApplyAsync(fixture);
+
+        await using var worker = new WorkerHostFactory(
+            fixture.WorkerConnectionString,
+            new Dictionary<string, string?>
+            {
+                ["SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS"] = "https://other.example.test",
+            }
+        );
+        Assert.ThrowsAny<Exception>(() => worker.CreateClient());
+    }
+
+    [Fact]
     public async Task Two_worker_hosts_process_duplicate_delivery_with_one_audit()
     {
         await using var api = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
@@ -633,8 +666,10 @@ public sealed class WorkerHostSecurityContractTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private sealed class WorkerHostFactory(string? connectionString)
-        : WebApplicationFactory<WorkerProgram>
+    private sealed class WorkerHostFactory(
+        string? connectionString,
+        IReadOnlyDictionary<string, string?>? settings = null
+    ) : WebApplicationFactory<WorkerProgram>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -643,6 +678,11 @@ public sealed class WorkerHostSecurityContractTests
             builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
             builder.UseSetting("SUPABASE_AUTH_SERVICE_ROLE_KEY", "test-service-role-key");
             builder.UseSetting("SUPABASE_INVITE_REDIRECT_URL", "https://app.example.test/convite");
+            var overrides = settings ?? new Dictionary<string, string?>();
+            foreach (var (key, value) in overrides)
+            {
+                builder.UseSetting(key, value);
+            }
             builder.ConfigureTestServices(services =>
                 services
                     .AddHttpClient(SupabaseAdminOwnerInvitationClient.HttpClientName)
