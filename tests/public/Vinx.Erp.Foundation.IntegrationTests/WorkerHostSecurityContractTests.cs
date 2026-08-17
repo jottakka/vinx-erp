@@ -229,6 +229,26 @@ public sealed class WorkerHostSecurityContractTests
     }
 
     [Fact]
+    public async Task Worker_host_starts_with_an_allowlisted_redirect_origin()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        await WolverineStorageDeployment.ApplyAsync(fixture);
+
+        await using var worker = new WorkerHostFactory(
+            fixture.WorkerConnectionString,
+            new Dictionary<string, string?>
+            {
+                ["SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS"] = "https://app.example.test",
+            }
+        );
+        using var client = worker.CreateClient();
+        using var response = await client.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Worker_host_startup_fails_closed_with_a_malformed_allowlist()
     {
         await using var fixture = new FoundationPostgresFixture();

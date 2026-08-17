@@ -73,6 +73,7 @@ endereços e credenciais geradas apenas para uso local.
 | `SUPABASE_AUTH_ISSUER` | API, MCP e Worker C# | Emissor JWT do Supabase Auth. |
 | `SUPABASE_AUTH_AUDIENCE` | API, MCP e Worker C# | Audiência JWT aceita. |
 | `SUPABASE_INVITE_REDIRECT_URL` | Worker C# | URL HTTPS permitida pelo Supabase para o convite inicial; o aceite ainda não é publicado nesta fatia. |
+| `SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS` | Worker C# (opcional) | Lista de origens absolutas separadas por `;` que restringe a origem do redirect; ausente mantém a validação de formato; malformada rejeita o startup. |
 | `SUPABASE_AUTH_PUBLISHABLE_KEY` | API C# | Configuração de host somente servidor para login BFF; nunca expor como `VITE_*` nem usar para chamada direta do browser ao Supabase. |
 | `SUPABASE_STORAGE_URL` | API C# | URL do adapter de Storage. |
 | `SUPABASE_STORAGE_SERVICE_ROLE_KEY` | API C# | Credencial de serviço exclusiva do servidor. |
