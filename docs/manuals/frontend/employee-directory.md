@@ -14,9 +14,11 @@ Não existe retry automático nem inclusão otimista. Depois de resultado ambíg
 o usuário pode tentar novamente de forma explícita com o mesmo `requestId` e o
 mesmo payload, preservando a idempotência do servidor.
 
-A lista exibe somente nomes. E-mail é mantido apenas no formulário em memória;
-identificadores opacos, papel, convite, provider e respostas brutas não são
-expostos. Em `401` ou `403`, a consulta da empresa é removida e o bootstrap é
+A lista exibe somente nomes. E-mail permanece somente em memória: no
+formulário e, após resultado ambíguo, na tentativa preservada para retry
+explícito com o mesmo `requestId`, descartada na reconciliação ou na
+supersessão de sessão; identificadores opacos, papel, convite, provider e
+respostas brutas não são expostos. Em `401` ou `403`, a consulta da empresa é removida e o bootstrap é
 revalidado antes de a interface continuar.
 
 Ficam para uma fatia posterior: provisionamento de organização, MFA/AAL2,

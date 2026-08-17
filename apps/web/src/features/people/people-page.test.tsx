@@ -544,6 +544,35 @@ describe("PeoplePage", () => {
     await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(1));
   });
 
+  it("blocks a new submit while creation reconciliation is pending", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway();
+    const getBootstrap = vi.fn().mockResolvedValue(snapshot());
+    renderPage({
+      gateway,
+      sessionGateway: createSessionGateway(getBootstrap),
+    });
+
+    await selectCompany(user);
+    await fillValidForm(user);
+    await user.click(
+      screen.getByRole("button", { name: "Reservar funcionário" }),
+    );
+    await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getBootstrap).toHaveBeenCalledTimes(2));
+
+    const form = screen.getByLabelText("Nome").closest("form");
+    if (!form) throw new Error("Expected reservation form");
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(gateway.create).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.getByText("Funcionário reservado.")).toBeVisible(),
+    );
+    expect(gateway.create).toHaveBeenCalledTimes(1);
+  });
+
   it("does not publish an old ambiguous attempt after company or form changes", async () => {
     const user = userEvent.setup();
     let resolveCreate:

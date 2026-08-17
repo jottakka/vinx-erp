@@ -364,7 +364,7 @@ export function PeoplePage({
       !userId ||
       knownCreatedOperation ||
       attemptRef.current ||
-      pendingRefresh?.purpose === "authorization" ||
+      pendingRefresh ||
       mutation.isPending ||
       inFlight.current
     ) {
@@ -510,7 +510,10 @@ export function PeoplePage({
             />
             <Button
               disabled={
-                !selectedCompany || Boolean(attempt) || mutation.isPending
+                !selectedCompany ||
+                Boolean(attempt) ||
+                Boolean(pendingRefresh) ||
+                mutation.isPending
               }
               type="submit"
               variant="contained"
