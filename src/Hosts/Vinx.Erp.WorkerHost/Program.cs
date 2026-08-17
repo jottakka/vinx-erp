@@ -10,6 +10,7 @@ using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.WorkerHost;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
+using Wolverine.Persistence.Durability;
 using Wolverine.Postgresql;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -37,6 +38,9 @@ builder.Services.AddDbContext<FoundationDbContext>(
 );
 builder.Services.AddScoped<OwnerInvitationDeliveryIngressService>();
 builder.Services.AddSingleton<WorkerDeadLetterRedactionInterceptor>();
+builder.Services.AddSingleton<IDeadLetterInterceptor>(serviceProvider =>
+    serviceProvider.GetRequiredService<WorkerDeadLetterRedactionInterceptor>()
+);
 builder.Services.AddSingleton<IHostedService, WorkerDatabasePreflight>();
 builder.Host.UseWolverine(options =>
 {

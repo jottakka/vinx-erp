@@ -5,9 +5,11 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Serialization;
 using Xunit;
 using WorkerProgram = workerhost::Program;
@@ -172,6 +174,23 @@ public sealed class WorkerHostSecurityContractTests
 
         await using var worker = new WorkerHostFactory(connectionString);
         Assert.ThrowsAny<Exception>(() => worker.CreateClient());
+    }
+
+    [Fact]
+    public async Task Worker_host_registers_redaction_as_a_dead_letter_interceptor()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        await WolverineStorageDeployment.ApplyAsync(fixture);
+
+        await using var worker = new WorkerHostFactory(fixture.WorkerConnectionString);
+        using var client = worker.CreateClient();
+        Assert.Contains(
+            worker.Services.GetRequiredService<IEnumerable<IDeadLetterInterceptor>>(),
+            interceptor =>
+                interceptor.GetType().Name == "WorkerDeadLetterRedactionInterceptor"
+        );
     }
 
     [Fact]
