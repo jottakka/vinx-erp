@@ -49,6 +49,50 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
     }
 
     [Fact]
+    public async Task Concurrent_requests_with_the_same_request_id_produce_one_creation_and_replays()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2"
+        );
+        await SeedPlatformOperatorAsync(factory);
+        var requestId = Guid.NewGuid();
+        using var client = factory.CreateClient();
+
+        var responses = await Task.WhenAll(
+            Enumerable
+                .Range(0, 4)
+                .Select(_ =>
+                    client.PostAsJsonAsync(
+                        "/foundation/platform/organizations",
+                        NewRequest(requestId)
+                    )
+                )
+        );
+
+        var createdCount = responses.Count(
+            result => result.StatusCode == HttpStatusCode.Created
+        );
+        Assert.True(createdCount is 0 or 1, $"Expected at most one creation, saw statuses: {string.Join(",", responses.Select(result => (int)result.StatusCode).Order())}");
+        Assert.All(
+            responses.Where(result => result.StatusCode != HttpStatusCode.Created),
+            result =>
+                Assert.Contains(
+                    (int)result.StatusCode,
+                    new[] { 200, 409, 503 }
+                )
+        );
+        Assert.Equal(createdCount, await CountDurableInvitationMessagesAsync(factory));
+        Array.ForEach(responses, result => result.Dispose());
+
+        using var replay = await client.PostAsJsonAsync(
+            "/foundation/platform/organizations",
+            NewRequest(requestId)
+        );
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(1L, await CountDurableInvitationMessagesAsync(factory));
+    }
+
+    [Fact]
     public async Task Runtime_startup_does_not_create_wolverine_owner_invitation_storage()
     {
         await using var factory = await FoundationApiFactory.CreateWithoutWolverineStorageAsync(
@@ -98,6 +142,13 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
             .PostAsJsonAsync("/foundation/platform/organizations", NewRequest(Guid.NewGuid()));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        using var createdDocument = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync()
+        );
+        Assert.Equal(
+            "pending_delivery",
+            createdDocument.RootElement.GetProperty("invitationStatus").GetString()
+        );
         Assert.Equal(1L, await CountOutgoingEnvelopesAsync(factory));
     }
 
@@ -371,6 +422,19 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
             administrator
         );
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<long> CountDurableInvitationMessagesAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT (SELECT count(*) FROM vinx_wolverine.wolverine_outgoing_envelopes) "
+                + "+ (SELECT count(*) FROM vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery)",
+            administrator
+        );
+        return (long)(await command.ExecuteScalarAsync())!;
     }
 
     private static async Task<long> CountOutgoingEnvelopesAsync(FoundationApiFactory factory)
