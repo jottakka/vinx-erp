@@ -207,11 +207,13 @@ fatias posteriores.
 
 `provider_in_flight` sem finalização — por queda do worker entre a
 reivindicação e a chamada, ou por falha transitória após o provider aceitar —
-permanece seguro: não há segunda chamada e o replay encerra sem mutação. A
-recuperação operacional fica para a reconciliação da #211B; até lá, o runbook
-é auditar `owner_invitation.delivery.provider` e `provider_attempt_id` da
-tentativa, confirmar com o provider se o convite foi criado e, se necessário,
-emitir nova intenção de provisionamento — nunca reabrir o estado manualmente.
+permanece seguro: não há segunda chamada e o replay encerra sem mutação, porque
+nova tentativa para o mesmo convite retorna `Claimed=false` sem chamar o
+provider. A recuperação fica para a reconciliação da #211B; até lá, o convite
+permanece retido em `provider_in_flight` e o runbook é apenas investigativo:
+auditar `provider_attempt_id`, confirmar com o provider se o convite foi criado
+e escalonar — nunca reabrir o estado manualmente nem emitir nova intenção, que
+não reexecuta a entrega neste head.
 
 O destino do convite (`SUPABASE_INVITE_REDIRECT_URL`) é validado no startup
 como URI HTTPS absoluta sem fragmento e, quando

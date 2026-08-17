@@ -8,7 +8,6 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
-using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Platform;
@@ -224,6 +223,24 @@ public sealed class WorkerHostSecurityContractTests
             new Dictionary<string, string?>
             {
                 ["SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS"] = "https://other.example.test",
+            }
+        );
+        Assert.ThrowsAny<Exception>(() => worker.CreateClient());
+    }
+
+    [Fact]
+    public async Task Worker_host_startup_fails_closed_with_a_malformed_allowlist()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        await WolverineStorageDeployment.ApplyAsync(fixture);
+
+        await using var worker = new WorkerHostFactory(
+            fixture.WorkerConnectionString,
+            new Dictionary<string, string?>
+            {
+                ["SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS"] = "not-an-origin",
             }
         );
         Assert.ThrowsAny<Exception>(() => worker.CreateClient());

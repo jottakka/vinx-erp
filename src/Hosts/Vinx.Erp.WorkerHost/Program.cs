@@ -36,17 +36,28 @@ builder
         "Supabase Auth audience must be configured."
     )
     .ValidateOnStart();
-var inviteRedirectAllowedOrigins = builder
-    .Configuration["SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS"]
-    ?.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-    .Select(candidate =>
-        Uri.TryCreate(candidate, UriKind.Absolute, out var candidateUri)
-        && string.IsNullOrEmpty(candidateUri.UserInfo)
-            ? candidateUri.GetLeftPart(UriPartial.Authority)
-            : null
-    )
-    .Where(origin => origin is not null)
-    .ToArray() ?? [];
+// An absent allowlist keeps format-only validation; a configured one must be
+// fully valid (absolute origins only) or startup fails closed.
+var inviteRedirectAllowedOriginsRaw = builder.Configuration[
+    "SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS"
+];
+var inviteRedirectAllowListConfigured = !string.IsNullOrWhiteSpace(
+    inviteRedirectAllowedOriginsRaw
+);
+var inviteRedirectAllowedOrigins = (
+    inviteRedirectAllowListConfigured
+        ? inviteRedirectAllowedOriginsRaw!.Split(
+            ';',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+        )
+        : []
+).Select(candidate =>
+    Uri.TryCreate(candidate, UriKind.Absolute, out var candidateUri)
+    && string.IsNullOrEmpty(candidateUri.UserInfo)
+    && candidateUri.GetLeftPart(UriPartial.Authority) == candidate
+        ? candidate
+        : null
+).ToArray();
 
 builder
     .Services.AddOptions<SupabaseAdminOptions>()
@@ -60,10 +71,20 @@ builder
         "Supabase invitation redirect URL is invalid."
     )
     .Validate(
-        options =>
-            inviteRedirectAllowedOrigins.Length == 0
+        _ =>
+            !inviteRedirectAllowListConfigured
             || (
-                Uri.TryCreate(options.InviteRedirectUrl, UriKind.Absolute, out var redirectUri)
+                inviteRedirectAllowedOrigins.Length > 0
+                && inviteRedirectAllowedOrigins.All(origin => origin is not null)
+            ),
+        "Supabase invitation redirect allowed origins are invalid."
+    )
+    .Validate(
+        options =>
+            !inviteRedirectAllowListConfigured
+            || (
+                inviteRedirectAllowedOrigins.All(origin => origin is not null)
+                && Uri.TryCreate(options.InviteRedirectUrl, UriKind.Absolute, out var redirectUri)
                 && inviteRedirectAllowedOrigins.Contains(
                     redirectUri.GetLeftPart(UriPartial.Authority)
                 )
