@@ -39,9 +39,13 @@ e outbox transacionais.
 As guardas obrigatórias dessa adoção são:
 
 - #26 e #48 devem provar, conforme sua responsabilidade, que
-  `AutoBuildMessageStorageOnStartup = AutoCreate.None` e
-  `OverrideAutoCreateResources(AutoCreate.None)` impedem criação ou alteração
-  automática de recursos no startup.
+  `AutoBuildMessageStorageOnStartup = AutoCreate.None` (bloqueia a construção
+  automática do storage de mensagens no startup) e
+  `OverrideAutoCreateResources(AutoCreate.None)` (bloqueia o provisionamento
+  automático dos recursos do persistence PostgreSQL retornado por
+  `PersistMessagesWithPostgresql`) impedem criação ou alteração automática de
+  recursos no startup. As guardas têm escopos distintos e ambas são
+  intencionais.
 - EF é exclusivo do schema de negócio VINX/Foundation e de qualquer intenção
   própria. Esses recursos são criados ou alterados somente por migrations EF
   revisadas. `FoundationDbContext`, suas migrations e seu histórico EF
@@ -51,12 +55,17 @@ As guardas obrigatórias dessa adoção são:
   nesse contexto.
 - Storage e envelopes técnicos do Wolverine são separados do schema
   VINX/Foundation e só podem ser provisionados ou alterados no deploy
-  explícito, nunca em startup ou runtime. `resources setup` (ou equivalente
-  aprovado) roda somente com identidade migradora/deploy; pode usar Weasel
-  somente para o schema técnico Wolverine. `db-assert` deve validar esse
-  storage antes da liberação.
+  explícito, nunca em startup ou runtime. O storage relacional do Wolverine é
+  aplicado por `db-apply` (ou `resources setup` estritamente equivalente,
+  aprovado caso a caso) executado somente com identidade migradora/deploy; pode
+  usar Weasel somente para o schema técnico Wolverine. O mesmo deploy revisa o
+  ownership e concede os grants mínimos por identidade de runtime: produtor e
+  worker recebem somente os privilégios de DML, USAGE e EXECUTE de que
+  precisam. A liberação exige provas positivas desses privilégios, provas
+  negativas de DDL e ownership e `db-assert` validando o storage.
 - Runtime e worker não possuem DDL nem ownership dos schemas técnicos
-  Wolverine. #26 e #48 devem produzir a prova correspondente antes de uso.
+  Wolverine. #26 prova os grants mínimos do produtor e #48 os do worker, cada
+  qual com provas positivas e negativas, antes de uso.
 - A outbox contém somente identificadores internos opacos, tipo de evento e
   correlação mínima. O worker consulta dados necessários em fronteira estreita
   e autorizada.
