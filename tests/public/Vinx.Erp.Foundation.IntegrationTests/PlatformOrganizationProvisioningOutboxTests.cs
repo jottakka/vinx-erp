@@ -58,16 +58,20 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         var requestId = Guid.NewGuid();
         using var client = factory.CreateClient();
 
+        // Stagger the posts slightly: the race against the idempotent function stays
+        // real, but a thundering herd does not add load to unrelated parallel classes.
         var responses = await Task.WhenAll(
             Enumerable
                 .Range(0, 4)
-                .Select(_ =>
-                    client.PostAsJsonAsync(
-                        "/foundation/platform/organizations",
-                        NewRequest(requestId)
-                    )
+                .Select(delay =>
+                    Task.Delay(delay * 25).ContinueWith(_ =>
+                        client.PostAsJsonAsync(
+                            "/foundation/platform/organizations",
+                            NewRequest(requestId)
+                        )
                 )
-        );
+                .Unwrap()
+        ));
 
         var createdCount = responses.Count(
             result => result.StatusCode == HttpStatusCode.Created
