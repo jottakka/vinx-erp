@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -15,6 +16,11 @@ internal static class PlatformBootstrapCommand
 {
     public static async Task<int> RunAsync(string[] arguments)
     {
+        if (arguments is ["wolverine-grants"])
+        {
+            return await RunWolverineGrantsAsync();
+        }
+
         if (arguments.Length != 0)
         {
             return await WriteOutcomeAsync("configuration_invalid", exitCode: 1);
@@ -120,6 +126,56 @@ internal static class PlatformBootstrapCommand
         {
             return await WriteOutcomeAsync("unavailable", exitCode: 1);
         }
+    }
+
+    /// <summary>
+    /// Aplica os grants técnicos do Wolverine por Npgsql, sem expor a connection
+    /// string (nem a senha) em argumentos de processo.
+    /// </summary>
+    private static async Task<int> RunWolverineGrantsAsync()
+    {
+        var connectionString = Environment.GetEnvironmentVariable(
+            "FOUNDATION_MIGRATOR_CONNECTION"
+        );
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return await WriteOutcomeAsync("configuration_invalid", exitCode: 1);
+        }
+
+        var repositoryRoot = FindRepositoryRoot();
+        var grantsSql = await File.ReadAllTextAsync(
+            Path.Combine(repositoryRoot, "infra", "database", "grant-wolverine-runtime.sql")
+        );
+
+        try
+        {
+            await using var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand(grantsSql, connection);
+            await command.ExecuteNonQueryAsync();
+            return await WriteOutcomeAsync("wolverine_grants_applied", exitCode: 0);
+        }
+        catch
+        {
+            return await WriteOutcomeAsync("unavailable", exitCode: 1);
+        }
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        for (
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            directory is not null;
+            directory = directory.Parent
+        )
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Vinx.Erp.sln")))
+            {
+                return directory.FullName;
+            }
+        }
+
+        throw new InvalidOperationException("The VINX repository root was not found.");
     }
 
     private static bool IsAllowedIssuer(string value, IHostEnvironment environment) =>

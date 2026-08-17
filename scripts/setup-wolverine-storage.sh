@@ -6,20 +6,10 @@ set -euo pipefail
 FOUNDATION_RUNTIME_CONNECTION="$FOUNDATION_MIGRATOR_CONNECTION" \
   dotnet run --project src/Hosts/Vinx.Erp.ApiHost --no-launch-profile -- db-apply
 
-# Keep the migration credential out of process arguments: extract the password
-# into PGPASSWORD and strip it from the connection string passed to psql.
-migrator_password="$(
-  printf '%s' "$FOUNDATION_MIGRATOR_CONNECTION" | sed -n -E 's/^.*[Pp]assword=([^;]*).*/\1/p'
-)"
-migrator_connection_without_password="$(
-  printf '%s' "$FOUNDATION_MIGRATOR_CONNECTION" | sed -E 's/[Pp]assword=[^;]*;?//'
-)"
-
-if [[ -n "$migrator_password" ]]; then
-  export PGPASSWORD="$migrator_password"
-fi
-psql "$migrator_connection_without_password" --set ON_ERROR_STOP=1 \
-  --file infra/database/grant-wolverine-runtime.sql
+# Grants flow through Npgsql inside the deploy tool: neither the connection
+# string nor its password ever reaches a process argument list, and no psql
+# connection-string dialect conversion is needed.
+dotnet run --project src/Tools/Vinx.Erp.PlatformBootstrap --no-launch-profile -- wolverine-grants
 
 FOUNDATION_RUNTIME_CONNECTION="$FOUNDATION_MIGRATOR_CONNECTION" \
   dotnet run --project src/Hosts/Vinx.Erp.ApiHost --no-launch-profile -- db-assert

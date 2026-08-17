@@ -104,7 +104,7 @@ internal static class WolverineStorageDeployment
         }
     }
 
-    private static string FindRepositoryRoot()
+    internal static string FindRepositoryRoot()
     {
         for (
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
