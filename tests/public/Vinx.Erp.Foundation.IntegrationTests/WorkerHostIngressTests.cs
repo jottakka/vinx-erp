@@ -5,8 +5,11 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Platform;
 using Xunit;
 using WorkerProgram = workerhost::Program;
 
@@ -15,7 +18,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class WorkerHostIngressTests
 {
     [Fact]
-    public async Task Worker_host_consumes_owner_invitation_delivery_and_transitions_once()
+    public async Task Worker_host_sends_the_owner_invitation_once_and_preserves_the_provider_subject()
     {
         await using var api = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
             aal: "aal2"
@@ -27,12 +30,17 @@ public sealed class WorkerHostIngressTests
         using var health = worker.CreateClient();
         Assert.Equal(HttpStatusCode.OK, (await health.GetAsync("/health")).StatusCode);
 
-        await WaitForProviderPendingAsync(api.Fixture, invitation);
+        await WaitForPendingAcceptanceAsync(api.Fixture, invitation);
         Assert.Equal(1, await CountIngressAuditsAsync(api.Fixture, invitation));
+        Assert.Equal(1, await CountProviderAuditsAsync(api.Fixture, invitation));
+        Assert.Equal(1, worker.InviteCalls);
+        await AssertProviderBindingAsync(api.Fixture, invitation);
 
-        // The durable message remains replay-safe: the state transition and audit are one-shot.
-        await WaitForProviderPendingAsync(api.Fixture, invitation);
+        // The durable message remains replay-safe: provider delivery and audit are one-shot.
+        await WaitForPendingAcceptanceAsync(api.Fixture, invitation);
         Assert.Equal(1, await CountIngressAuditsAsync(api.Fixture, invitation));
+        Assert.Equal(1, await CountProviderAuditsAsync(api.Fixture, invitation));
+        Assert.Equal(1, worker.InviteCalls);
     }
 
     [Fact]
@@ -67,35 +75,37 @@ public sealed class WorkerHostIngressTests
         return Guid.Parse(document.RootElement.GetProperty("ownerInvitationId").GetString()!);
     }
 
-    private static async Task WaitForProviderPendingAsync(
+    private static async Task WaitForPendingAcceptanceAsync(
         FoundationPostgresFixture fixture,
         Guid invitationId
     )
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        while (!timeout.IsCancellationRequested)
+        string? lastStatus = null;
+        try
         {
-            await using var administrator = await fixture.OpenAdministratorConnectionAsync();
-            await using var command = new NpgsqlCommand(
-                "SELECT status FROM foundation.pending_owner_invitations WHERE id = @invitation_id",
-                administrator
-            );
-            command.Parameters.AddWithValue("invitation_id", invitationId);
-            if (
-                string.Equals(
-                    (string?)await command.ExecuteScalarAsync(timeout.Token),
-                    "pending_provider",
-                    StringComparison.Ordinal
-                )
-            )
+            while (!timeout.IsCancellationRequested)
             {
-                return;
+                await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+                await using var command = new NpgsqlCommand(
+                    "SELECT status FROM foundation.pending_owner_invitations WHERE id = @invitation_id",
+                    administrator
+                );
+                command.Parameters.AddWithValue("invitation_id", invitationId);
+                lastStatus = (string?)await command.ExecuteScalarAsync(timeout.Token);
+                if (string.Equals(lastStatus, "pending_acceptance", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token);
             }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token);
         }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested) { }
 
-        Assert.Fail("Worker did not transition the owner invitation to pending_provider.");
+        Assert.Fail(
+            $"Worker did not transition the owner invitation to pending_acceptance; last status was {lastStatus ?? "missing"}."
+        );
     }
 
     private static async Task<int> CountIngressAuditsAsync(
@@ -110,6 +120,37 @@ public sealed class WorkerHostIngressTests
         );
         command.Parameters.AddWithValue("invitation_id", invitationId);
         return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task<int> CountProviderAuditsAsync(
+        FoundationPostgresFixture fixture,
+        Guid invitationId
+    )
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM audit.audit_events WHERE resource_id = @invitation_id AND action = 'owner_invitation.delivery.provider'",
+            administrator
+        );
+        command.Parameters.AddWithValue("invitation_id", invitationId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task AssertProviderBindingAsync(
+        FoundationPostgresFixture fixture,
+        Guid invitationId
+    )
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT provider_issuer, provider_subject FROM foundation.pending_owner_invitations WHERE id = @invitation_id",
+            administrator
+        );
+        command.Parameters.AddWithValue("invitation_id", invitationId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("https://project.supabase.test/auth/v1", reader.GetString(0));
+        Assert.Equal(Guid.Parse("2a0399f0-a602-4d1f-8f79-22f4bf75f190"), reader.GetGuid(1));
     }
 
     private static async Task SeedPlatformOperatorAsync(FoundationApiFactory factory)
@@ -131,9 +172,55 @@ public sealed class WorkerHostIngressTests
     private sealed class WorkerHostFactory(string? connectionString)
         : WebApplicationFactory<WorkerProgram>
     {
+        private readonly SupabaseInviteHandler _inviteHandler = new();
+
+        public int InviteCalls => _inviteHandler.Calls;
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseSetting("FOUNDATION_WORKER_CONNECTION", connectionString ?? string.Empty);
+            builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.test/auth/v1");
+            builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
+            builder.UseSetting("SUPABASE_AUTH_SERVICE_ROLE_KEY", "test-service-role-key");
+            builder.UseSetting("SUPABASE_INVITE_REDIRECT_URL", "https://app.example.test/convite");
+            builder.ConfigureTestServices(services =>
+                services
+                    .AddHttpClient(SupabaseAdminOwnerInvitationClient.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() => _inviteHandler)
+            );
+        }
+    }
+
+    private sealed class SupabaseInviteHandler : HttpMessageHandler
+    {
+        private int _calls;
+
+        public int Calls => _calls;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            Interlocked.Increment(ref _calls);
+            using var document = JsonDocument.Parse(
+                await request.Content!.ReadAsStreamAsync(cancellationToken)
+            );
+            var email = document.RootElement.GetProperty("email").GetString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(
+                    new
+                    {
+                        id = "2a0399f0-a602-4d1f-8f79-22f4bf75f190",
+                        aud = "authenticated",
+                        email,
+                        is_anonymous = false,
+                        banned_until = (string?)null,
+                        deleted_at = (string?)null,
+                    }
+                ),
+            };
         }
     }
 }

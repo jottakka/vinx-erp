@@ -2,10 +2,11 @@
 
 ## Escopo
 
-Esta matriz cobre somente o consumo interno de
-`OwnerInvitationDeliveryRequested`. O worker não chama provider, não envia
-e-mail, não cria token e não aceita convite. O evento e a DLQ nunca retêm nome,
-e-mail, segredo ou corpo HTTP.
+Esta matriz cobre somente o ingresso interno de
+`OwnerInvitationDeliveryRequested` e sua DLQ. A entrega pelo provider é
+verificada separadamente em `owner-invitation-provider-delivery-test-cases.md`;
+nenhuma das duas fatias cria token próprio ou aceita convite. O evento e a DLQ
+nunca retêm nome, e-mail, segredo ou corpo HTTP.
 
 | Classe BDD | Dado / quando / então | Resultado exigido |
 |---|---|---|
@@ -19,7 +20,9 @@ e-mail, segredo ou corpo HTTP.
 
 ## Limites adiados
 
-- Adapter e reconciliação do Supabase Admin pertencem à #211B.
+- O adapter Supabase Admin pertence à #211B e é verificado em
+  `owner-invitation-provider-delivery-test-cases.md`; reconciliação e aceite
+  permanecem adiados.
 - Entrega de WhatsApp, Meta, opt-in, template e webhook pertencem à #28.
 - O estado `pending_provider` significa apenas ingresso interno confirmado; não
   declara envio ou aceitação externa.

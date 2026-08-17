@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
@@ -23,6 +24,36 @@ builder
         "Worker database connection must be configured."
     )
     .ValidateOnStart();
+builder
+    .Services.AddOptions<SupabaseAuthOptions>()
+    .Bind(builder.Configuration)
+    .Validate(
+        options => IsAllowedSupabaseUri(options.Issuer, builder.Environment),
+        "Supabase Auth issuer is invalid."
+    )
+    .Validate(
+        options => !string.IsNullOrWhiteSpace(options.Audience),
+        "Supabase Auth audience must be configured."
+    )
+    .ValidateOnStart();
+builder
+    .Services.AddOptions<SupabaseAdminOptions>()
+    .Bind(builder.Configuration)
+    .Validate(
+        options => !string.IsNullOrWhiteSpace(options.ServiceRoleKey),
+        "Supabase Admin service role key must be configured."
+    )
+    .Validate(
+        options => IsAllowedSupabaseUri(options.InviteRedirectUrl, builder.Environment),
+        "Supabase invitation redirect URL is invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<SupabaseAuthOptions>>().Value
+);
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<SupabaseAdminOptions>>().Value
+);
 
 var workerConnectionString = builder.Configuration[
     WorkerDatabaseOptions.ConnectionStringConfigurationKey
@@ -37,6 +68,15 @@ builder.Services.AddDbContext<FoundationDbContext>(
             .AddInterceptors(new RowVersionInterceptor())
 );
 builder.Services.AddScoped<OwnerInvitationDeliveryIngressService>();
+builder.Services.AddScoped<OwnerInvitationProviderDeliveryService>();
+builder
+    .Services.AddHttpClient(
+        SupabaseAdminOwnerInvitationClient.HttpClientName,
+        client => client.Timeout = TimeSpan.FromSeconds(10)
+    )
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
+    );
 builder.Services.AddSingleton<WorkerDeadLetterRedactionInterceptor>();
 builder.Services.AddSingleton<IDeadLetterInterceptor>(serviceProvider =>
     serviceProvider.GetRequiredService<WorkerDeadLetterRedactionInterceptor>()
@@ -68,6 +108,15 @@ if (args.FirstOrDefault() is "db-apply" or "db-assert")
 
 app.Run();
 return 0;
+
+static bool IsAllowedSupabaseUri(string value, IHostEnvironment environment) =>
+    Uri.TryCreate(value, UriKind.Absolute, out var uri)
+    && string.IsNullOrEmpty(uri.UserInfo)
+    && string.IsNullOrEmpty(uri.Fragment)
+    && (
+        uri.Scheme == Uri.UriSchemeHttps
+        || (environment.IsDevelopment() && uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)
+    );
 
 public partial class Program;
 

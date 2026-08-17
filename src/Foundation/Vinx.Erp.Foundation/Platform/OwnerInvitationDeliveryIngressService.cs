@@ -22,45 +22,41 @@ public sealed class OwnerInvitationDeliveryIngressService(FoundationDbContext da
             throw new OwnerInvitationIngressPermanentException();
         }
 
-        var transaction = database.Database.CurrentTransaction;
-        if (transaction is null)
-        {
-            throw new InvalidOperationException(
-                "Owner invitation delivery ingress requires the Wolverine transaction."
-            );
-        }
-
-        var connection = database.Database.GetDbConnection();
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction.GetDbTransaction();
-        command.CommandText =
-            "SELECT status, provider_pending_at, transitioned FROM foundation.accept_owner_invitation_delivery(@invitation_id, @correlation_id)";
-        AddParameter(command, "invitation_id", invitationId);
-        AddParameter(command, "correlation_id", correlationId);
-
         try
         {
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
-            {
-                throw new OwnerInvitationIngressPermanentException();
-            }
-
-            var status = reader.GetString(0);
-            if (string.Equals(status, "not_found", StringComparison.Ordinal))
-            {
-                throw new OwnerInvitationIngressPermanentException();
-            }
-
-            if (!string.Equals(status, "pending_provider", StringComparison.Ordinal))
-            {
-                throw new OwnerInvitationIngressPermanentException();
-            }
-
-            return new OwnerInvitationDeliveryIngressResult(
-                reader.IsDBNull(1) ? null : reader.GetFieldValue<DateTimeOffset>(1),
-                reader.GetBoolean(2)
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                cancellationToken
             );
+            var connection = database.Database.GetDbConnection();
+            await using var command = connection.CreateCommand();
+            command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
+            command.CommandText =
+                "SELECT status, provider_pending_at, transitioned FROM foundation.accept_owner_invitation_delivery(@invitation_id, @correlation_id)";
+            AddParameter(command, "invitation_id", invitationId);
+            AddParameter(command, "correlation_id", correlationId);
+
+            OwnerInvitationDeliveryIngressResult result;
+            await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+            {
+                if (!await reader.ReadAsync(cancellationToken))
+                {
+                    throw new OwnerInvitationIngressPermanentException();
+                }
+
+                var status = reader.GetString(0);
+                if (string.Equals(status, "not_found", StringComparison.Ordinal))
+                {
+                    throw new OwnerInvitationIngressPermanentException();
+                }
+
+                result = new OwnerInvitationDeliveryIngressResult(
+                    status,
+                    reader.IsDBNull(1) ? null : reader.GetFieldValue<DateTimeOffset>(1),
+                    reader.GetBoolean(2)
+                );
+            }
+            await transaction.CommitAsync(cancellationToken);
+            return result;
         }
         catch (PostgresException exception)
             when (exception.SqlState
@@ -82,6 +78,7 @@ public sealed class OwnerInvitationDeliveryIngressService(FoundationDbContext da
 }
 
 public sealed record OwnerInvitationDeliveryIngressResult(
+    string Status,
     DateTimeOffset? ProviderPendingAt,
     bool Transitioned
 );

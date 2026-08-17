@@ -161,8 +161,8 @@ transação. Antes do commit, o serviço acrescenta ao papel `owner` a capabilit
 `foundation.employees.create` pela função estreita do diretório, vinculada ao
 recibo exato daquele operador, request, empresa e membership; o operador
 continua sem membership ou acesso ao tenant criado. Não há envio ou aceite no
-provedor, employee criado para o owner, interface ou fluxo de convite nesta
-fatia.
+provedor durante essa criação HTTP, employee criado para o owner, interface ou
+fluxo de aceite nesta fatia.
 
 ### Outbox transacional do convite inicial
 
@@ -191,9 +191,19 @@ separada `FOUNDATION_WORKER_CONNECTION`, o envelope próprio em
 O único handler explícito do Worker chama a função SQL estreita de ingresso e
 altera o convite de `pending_delivery` para `pending_provider`, com uma única
 auditoria `owner_invitation.delivery.ingress`; replay não duplica a transição
-nem a auditoria. Não há chamada ao provedor, token, e-mail, envio externo ou
-aceite de convite nesta etapa. O worker não recebe DML direto em Foundation:
-a função `SECURITY DEFINER` é sua única fronteira de negócio.
+nem a auditoria. A #211B então reivindica uma tentativa sob lock: somente o
+vencedor lê o e-mail em memória, chama `POST /invite` do Supabase e grava
+o resultado por outra função `SECURITY DEFINER`, fora de transação aberta no
+provedor. Sucesso validado pelo `issuer` e `subject` retorna
+`pending_acceptance`; rejeição definitiva do provider retorna `provider_failed`;
+timeout, erro de autenticação/rate limit, 5xx, redirect ou corpo inválido
+retornam `provider_ambiguous`, sem retry cego. Repetição enquanto a tentativa
+está em curso preserva `provider_in_flight`, sem nova chamada. Token, e-mail,
+corpo HTTP e segredo não
+persistem em envelope, log ou auditoria. O worker não recebe DML direto em
+Foundation: as funções estreitas são sua única fronteira de negócio. Aceite,
+login da identidade reservada e reconciliação de estado ambíguo permanecem
+fatias posteriores.
 
 O startup falha fechado se a conexão não for efetivamente `vinx_worker`; não
 cria DDL em runtime e descobre somente esse handler. Erros transitórios de

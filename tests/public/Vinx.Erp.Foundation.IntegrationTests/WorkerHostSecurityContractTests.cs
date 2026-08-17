@@ -7,8 +7,11 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Platform;
 using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Serialization;
 using Xunit;
@@ -636,6 +639,43 @@ public sealed class WorkerHostSecurityContractTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseSetting("FOUNDATION_WORKER_CONNECTION", connectionString ?? string.Empty);
+            builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.test/auth/v1");
+            builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
+            builder.UseSetting("SUPABASE_AUTH_SERVICE_ROLE_KEY", "test-service-role-key");
+            builder.UseSetting("SUPABASE_INVITE_REDIRECT_URL", "https://app.example.test/convite");
+            builder.ConfigureTestServices(services =>
+                services
+                    .AddHttpClient(SupabaseAdminOwnerInvitationClient.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() => new SupabaseInviteHandler())
+            );
+        }
+    }
+
+    private sealed class SupabaseInviteHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            using var document = JsonDocument.Parse(
+                await request.Content!.ReadAsStreamAsync(cancellationToken)
+            );
+            var email = document.RootElement.GetProperty("email").GetString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(
+                    new
+                    {
+                        id = "2a0399f0-a602-4d1f-8f79-22f4bf75f190",
+                        aud = "authenticated",
+                        email,
+                        is_anonymous = false,
+                        banned_until = (string?)null,
+                        deleted_at = (string?)null,
+                    }
+                ),
+            };
         }
     }
 }

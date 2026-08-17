@@ -50,7 +50,8 @@ public sealed class PlatformOrganizationProvisioningPrivilegeTests
                 NOT has_table_privilege('vinx_provisioning_owner', 'foundation.capabilities', 'UPDATE'),
                 NOT has_table_privilege('vinx_provisioning_owner', 'foundation.capabilities', 'DELETE')
             """,
-            administrator);
+            administrator
+        );
 
         await using var reader = await command.ExecuteReaderAsync();
         var mutableTableCount = 0;

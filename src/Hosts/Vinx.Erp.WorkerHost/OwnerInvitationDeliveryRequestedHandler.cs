@@ -1,7 +1,6 @@
 using JasperFx.CodeGeneration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
-using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Platform;
 using Wolverine;
 using Wolverine.Attributes;
@@ -14,14 +13,13 @@ namespace Vinx.Erp.WorkerHost;
 
 [OwnerInvitationDeliveryFailurePolicy]
 public sealed class OwnerInvitationDeliveryRequestedHandler(
-    OwnerInvitationDeliveryIngressService ingress,
+    OwnerInvitationProviderDeliveryService delivery,
     ILogger<OwnerInvitationDeliveryRequestedHandler> logger
 )
 {
-    private const string Operation = "owner_invitation_delivery_ingress";
+    private const string Operation = "owner_invitation_provider_delivery";
     private const string Module = "foundation";
 
-    [Transactional(typeof(FoundationDbContext))]
     public async Task Handle(
         OwnerInvitationDeliveryRequested message,
         Envelope envelope,
@@ -40,10 +38,10 @@ public sealed class OwnerInvitationDeliveryRequestedHandler(
             );
         }
 
-        OwnerInvitationDeliveryIngressResult result;
+        OwnerInvitationProviderDeliveryResult result;
         try
         {
-            result = await ingress.AcceptAsync(
+            result = await delivery.DeliverAsync(
                 message.InvitationId,
                 correlationId,
                 cancellationToken
@@ -58,10 +56,10 @@ public sealed class OwnerInvitationDeliveryRequestedHandler(
         }
 
         logger.LogInformation(
-            "Worker ingress {Operation} {Module} {Result}",
+            "Worker provider delivery {Operation} {Module} {Result}",
             Operation,
             Module,
-            result.Transitioned ? "transitioned" : "replay"
+            result.Finalized ? result.Status : "replay"
         );
     }
 

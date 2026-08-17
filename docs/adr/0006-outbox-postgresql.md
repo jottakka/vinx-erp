@@ -85,9 +85,11 @@ worker com inbox durável, concorrência, retry finito, DLQ sanitizada e
 correlação para `OwnerInvitationDeliveryRequested`. Dois workers não concluem
 duas vezes a transição interna. Ela não faz chamada real a provider de convite.
 
-A #211B, posterior à #48, é a única dona do adapter Supabase Admin de convite
-e da reconciliação real de `provider_ambiguous`. Ela vincula apenas
-`issuer+subject` confirmado, nunca email. A #28, posterior à infraestrutura
+A #211B é a única dona do adapter Supabase Admin de convite. Ela reivindica a
+tentativa interna antes da chamada, vincula apenas `issuer+subject` confirmado,
+nunca email, e marca timeout, 5xx, redirect, corpo inválido ou tentativa já em
+andamento como `provider_ambiguous`, sem retry cego. A reconciliação desse
+estado e o aceite continuam fora desta fatia. A #28, posterior à infraestrutura
 genérica da #48, é dona do adapter Meta/WhatsApp, opt-in, templates e da
 integração específica do webhook de canal assinado. Ela também reconcilia
 `provider_ambiguous` do Meta de modo idempotente e observável, usando status,
@@ -116,9 +118,9 @@ correlacionável.
   justifique sua topologia e licença. Mudança de licença ou de topologia do
   MassTransit também exige reavaliação explícita antes de adoção.
 - Esta ADR autoriza o storage técnico, WorkerHost, migration Foundation e
-  configuração estritamente necessários ao outbox e ao ingresso local. Não
-  autoriza adapter de provider, token, e-mail, webhook, capability adicional
-  ou UI.
+  configuração estritamente necessários ao outbox e ao ingresso local. A #211B
+  acrescenta somente o adapter Supabase Admin do convite inicial; não autoriza
+  token próprio, aceite, webhook, capability adicional ou UI.
 
 ## Fontes
 

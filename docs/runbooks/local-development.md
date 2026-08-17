@@ -67,11 +67,12 @@ endereços e credenciais geradas apenas para uso local.
 | `FOUNDATION_RUNTIME_CONNECTION` | API C# | Conexão de runtime com privilégios mínimos. |
 | `FOUNDATION_WORKER_CONNECTION` | Worker C# | Conexão de runtime exclusiva da role `vinx_worker`, no mesmo banco físico da API. |
 | `FOUNDATION_MIGRATOR_CONNECTION` | Ferramentas EF, bootstrap de operador e deploy do outbox | Conexão de migração, separada do runtime. |
-| `SUPABASE_AUTH_SERVICE_ROLE_KEY` | Bootstrap de operador C# | Credencial Admin Auth exclusiva do servidor; nunca usar no browser. |
+| `SUPABASE_AUTH_SERVICE_ROLE_KEY` | Bootstrap de operador e Worker C# | Credencial Admin Auth exclusiva do servidor; nunca usar no browser. |
 | `PLATFORM_OPERATOR_SUBJECT` | Bootstrap de operador C# | Subject já confirmado no Supabase Auth para o único operador inicial. |
 | `PLATFORM_OPERATOR_DISPLAY_NAME` | Bootstrap de operador C# | Nome de apresentação validado no deployment; não participa da autorização. |
-| `SUPABASE_AUTH_ISSUER` | API e MCP C# | Emissor JWT do Supabase Auth. |
-| `SUPABASE_AUTH_AUDIENCE` | API e MCP C# | Audiência JWT aceita. |
+| `SUPABASE_AUTH_ISSUER` | API, MCP e Worker C# | Emissor JWT do Supabase Auth. |
+| `SUPABASE_AUTH_AUDIENCE` | API, MCP e Worker C# | Audiência JWT aceita. |
+| `SUPABASE_INVITE_REDIRECT_URL` | Worker C# | URL HTTPS permitida pelo Supabase para o convite inicial; o aceite ainda não é publicado nesta fatia. |
 | `SUPABASE_AUTH_PUBLISHABLE_KEY` | API C# | Configuração de host somente servidor para login BFF; nunca expor como `VITE_*` nem usar para chamada direta do browser ao Supabase. |
 | `SUPABASE_STORAGE_URL` | API C# | URL do adapter de Storage. |
 | `SUPABASE_STORAGE_SERVICE_ROLE_KEY` | API C# | Credencial de serviço exclusiva do servidor. |
@@ -179,10 +180,13 @@ dotnet run --project src/Hosts/Vinx.Erp.WorkerHost
 ```
 
 O preflight confere `session_user` e `current_user` antes de iniciar o
-listener; outra role falha fechada. O worker processa somente o ingresso local
-do convite inicial e nunca chama provider. Falhas permanentes vão para a DLQ
-do schema do worker com corpo e headers sanitizados; investigue pelo ID opaco
-e pela correlação, não por payload bruto.
+listener; outra role falha fechada. O worker ingressa o convite inicial e, no
+vencedor da tentativa, usa o Admin Auth do Supabase exclusivamente no servidor.
+Sucesso fica `pending_acceptance`; rejeição definitiva fica `provider_failed`;
+resultado desconhecido fica `provider_ambiguous` sem novo envio automático.
+Falhas
+permanentes vão para a DLQ do schema do worker com corpo e headers sanitizados;
+investigue pelo ID opaco e pela correlação, não por payload bruto.
 
 ## Executar e testar o web
 
