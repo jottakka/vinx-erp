@@ -17,12 +17,20 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
         CancellationToken cancellation
     )
     {
+        RedactEnvelope(envelope);
+        return ValueTask.FromResult<Exception?>(
+            new WorkerOwnerInvitationDeadLetterException(
+                WorkerOwnerInvitationDeadLetterException.UnexpectedExceptionType,
+                "Worker delivery ingress failed unexpectedly."
+            )
+        );
+    }
+
+    internal void RedactEnvelope(Envelope envelope)
+    {
         var redactedMessage = new OwnerInvitationDeliveryRequested(Guid.Empty);
         envelope.Message = redactedMessage;
         envelope.Data = JsonSerializer.SerializeToUtf8Bytes(redactedMessage, SerializerOptions);
         envelope.Headers.Clear();
-        return ValueTask.FromResult<Exception?>(
-            new WorkerOwnerInvitationDeliveryPermanentException()
-        );
     }
 }

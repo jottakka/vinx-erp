@@ -34,7 +34,10 @@ public sealed class OwnerInvitationDeliveryRequestedHandler(
             || correlationId == Guid.Empty
         )
         {
-            throw new WorkerOwnerInvitationDeliveryPermanentException();
+            throw new WorkerOwnerInvitationDeadLetterException(
+                WorkerOwnerInvitationDeadLetterException.InvalidExceptionType,
+                "Worker delivery ingress rejected the envelope."
+            );
         }
 
         OwnerInvitationDeliveryIngressResult result;
@@ -48,7 +51,10 @@ public sealed class OwnerInvitationDeliveryRequestedHandler(
         }
         catch (OwnerInvitationIngressPermanentException)
         {
-            throw new WorkerOwnerInvitationDeliveryPermanentException();
+            throw new WorkerOwnerInvitationDeadLetterException(
+                WorkerOwnerInvitationDeadLetterException.InvalidExceptionType,
+                "Worker delivery ingress rejected the envelope."
+            );
         }
 
         logger.LogInformation(
@@ -62,7 +68,9 @@ public sealed class OwnerInvitationDeliveryRequestedHandler(
     internal static async ValueTask PersistRedactedWorkerDeadLetterAsync(
         IWolverineRuntime runtime,
         IEnvelopeLifecycle lifecycle,
-        Exception exception
+        Exception exception,
+        string exceptionType,
+        string exceptionMessage
     )
     {
         var envelope =
@@ -71,15 +79,54 @@ public sealed class OwnerInvitationDeliveryRequestedHandler(
 
         // PostgreSQL's durable receiver stamps diagnostic headers after the normal interceptor
         // hook. This Worker has one message store, so persist directly only after redaction.
-        await runtime
+        runtime
             .Services.GetRequiredService<WorkerDeadLetterRedactionInterceptor>()
-            .BeforeStoreAsync(envelope, exception, runtime.Cancellation);
+            .RedactEnvelope(envelope);
         await runtime.Storage.Inbox.MoveToDeadLetterStorageAsync(
             envelope,
-            new WorkerOwnerInvitationDeliveryPermanentException()
+            new WorkerOwnerInvitationDeadLetterException(exceptionType, exceptionMessage)
         );
         await lifecycle.CompleteAsync();
     }
+
+    internal static ValueTask PersistInvalidDeadLetterAsync(
+        IWolverineRuntime runtime,
+        IEnvelopeLifecycle lifecycle,
+        Exception exception
+    ) =>
+        PersistRedactedWorkerDeadLetterAsync(
+            runtime,
+            lifecycle,
+            exception,
+            WorkerOwnerInvitationDeadLetterException.InvalidExceptionType,
+            "Worker delivery ingress rejected the envelope."
+        );
+
+    internal static ValueTask PersistRetryExhaustedDeadLetterAsync(
+        IWolverineRuntime runtime,
+        IEnvelopeLifecycle lifecycle,
+        Exception exception
+    ) =>
+        PersistRedactedWorkerDeadLetterAsync(
+            runtime,
+            lifecycle,
+            exception,
+            WorkerOwnerInvitationDeadLetterException.RetryExhaustedExceptionType,
+            "Worker delivery ingress exhausted transient retries."
+        );
+
+    internal static ValueTask PersistUnexpectedDeadLetterAsync(
+        IWolverineRuntime runtime,
+        IEnvelopeLifecycle lifecycle,
+        Exception exception
+    ) =>
+        PersistRedactedWorkerDeadLetterAsync(
+            runtime,
+            lifecycle,
+            exception,
+            WorkerOwnerInvitationDeadLetterException.UnexpectedExceptionType,
+            "Worker delivery ingress failed unexpectedly."
+        );
 }
 
 /// <summary>Restringe o descarte seguro ao único handler de entrega de convite.</summary>
@@ -89,9 +136,9 @@ internal sealed class OwnerInvitationDeliveryFailurePolicyAttribute : ModifyHand
     public override void Modify(HandlerChain chain, GenerationRules rules)
     {
         chain
-            .OnException<WorkerOwnerInvitationDeliveryPermanentException>()
+            .OnException<WorkerOwnerInvitationDeadLetterException>()
             .CustomActionIndefinitely(
-                OwnerInvitationDeliveryRequestedHandler.PersistRedactedWorkerDeadLetterAsync,
+                OwnerInvitationDeliveryRequestedHandler.PersistInvalidDeadLetterAsync,
                 "Redact and dead-letter invalid owner invitation delivery"
             );
         chain
@@ -102,13 +149,13 @@ internal sealed class OwnerInvitationDeliveryFailurePolicyAttribute : ModifyHand
                 TimeSpan.FromSeconds(30)
             )
             .Then.CustomActionIndefinitely(
-                OwnerInvitationDeliveryRequestedHandler.PersistRedactedWorkerDeadLetterAsync,
+                OwnerInvitationDeliveryRequestedHandler.PersistRetryExhaustedDeadLetterAsync,
                 "Redact and dead-letter exhausted owner invitation delivery"
             );
         chain
             .OnAnyException()
             .CustomActionIndefinitely(
-                OwnerInvitationDeliveryRequestedHandler.PersistRedactedWorkerDeadLetterAsync,
+                OwnerInvitationDeliveryRequestedHandler.PersistUnexpectedDeadLetterAsync,
                 "Redact and dead-letter unexpected owner invitation delivery"
             );
     }

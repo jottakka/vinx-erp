@@ -266,7 +266,12 @@ public sealed class WorkerHostSecurityContractTests
         await SetQueuedEnvelopeAttemptsAsync(api.Fixture, envelopeId, attempts: 3);
         await using var worker = new WorkerHostFactory(api.Fixture.WorkerConnectionString);
         using var client = worker.CreateClient();
-        await WaitForRedactedWorkerDeadLetterAsync(api.Fixture, invitationId);
+        await WaitForRedactedWorkerDeadLetterAsync(
+            api.Fixture,
+            invitationId,
+            expectedExceptionType: "owner_invitation_delivery_invalid",
+            expectedExceptionMessage: "Worker delivery ingress rejected the envelope."
+        );
     }
 
     [Fact]
@@ -296,7 +301,12 @@ public sealed class WorkerHostSecurityContractTests
         await SetQueuedEnvelopeAttemptsAsync(api.Fixture, envelopeId, attempts: 3);
         await using var worker = new WorkerHostFactory(api.Fixture.WorkerConnectionString);
         using var client = worker.CreateClient();
-        await WaitForRedactedWorkerDeadLetterAsync(api.Fixture, invitationId);
+        await WaitForRedactedWorkerDeadLetterAsync(
+            api.Fixture,
+            invitationId,
+            expectedExceptionType: "owner_invitation_delivery_unexpected",
+            expectedExceptionMessage: "Worker delivery ingress failed unexpectedly."
+        );
     }
 
     [Fact]
@@ -319,6 +329,8 @@ public sealed class WorkerHostSecurityContractTests
         await WaitForRedactedWorkerDeadLetterAsync(
             api.Fixture,
             invitationId,
+            "owner_invitation_delivery_retry_exhausted",
+            "Worker delivery ingress exhausted transient retries.",
             TimeSpan.FromSeconds(20)
         );
     }
@@ -493,6 +505,8 @@ public sealed class WorkerHostSecurityContractTests
     private static async Task WaitForRedactedWorkerDeadLetterAsync(
         FoundationPostgresFixture fixture,
         Guid originalInvitationId,
+        string expectedExceptionType,
+        string expectedExceptionMessage,
         TimeSpan? timeoutDuration = null
     )
     {
@@ -511,8 +525,8 @@ public sealed class WorkerHostSecurityContractTests
             {
                 var body = reader.GetFieldValue<byte[]>(0);
                 var envelope = EnvelopeSerializer.Deserialize(body);
-                Assert.Equal("owner_invitation_delivery_failed", reader.GetString(1));
-                Assert.Equal("Worker delivery ingress failed.", reader.GetString(2));
+                Assert.Equal(expectedExceptionType, reader.GetString(1));
+                Assert.Equal(expectedExceptionMessage, reader.GetString(2));
                 var bodyText = Encoding.UTF8.GetString(body);
                 Assert.DoesNotContain(
                     originalInvitationId.ToString("D"),
