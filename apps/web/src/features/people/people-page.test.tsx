@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
@@ -603,6 +609,63 @@ describe("PeoplePage", () => {
     await waitFor(() => expect(gateway.list).toHaveBeenCalledTimes(2));
     expect(screen.getByLabelText("Nome")).toHaveValue("Pessoa atual");
     expect(screen.queryByText("Funcionário reservado.")).toBeNull();
+  });
+
+  it("does not render a delayed directory response from a previous company", async () => {
+    const user = userEvent.setup();
+    type DirectoryListResult = Awaited<
+      ReturnType<EmployeeDirectoryGateway["list"]>
+    >;
+    let resolveFirstList: ((value: DirectoryListResult) => void) | undefined;
+    const gateway = createGateway({
+      list: vi.fn((requestedCompanyId: string) => {
+        if (requestedCompanyId === companyId) {
+          return new Promise<DirectoryListResult>((resolve) => {
+            resolveFirstList = resolve;
+          });
+        }
+        return Promise.resolve<DirectoryListResult>({
+          items: [
+            {
+              displayName: "Bia",
+              employeeId: "77777777-7777-4777-8777-777777777777",
+              membershipId: "88888888-8888-4888-8888-888888888888",
+            },
+          ],
+          ok: true,
+        });
+      }),
+    });
+    renderPage({ gateway });
+
+    await selectCompany(user);
+    await waitFor(() =>
+      expect(gateway.list).toHaveBeenCalledWith(companyId, expect.anything()),
+    );
+
+    await selectSecondCompany(user);
+    expect(await screen.findByText("Bia")).toBeVisible();
+
+    await act(async () => {
+      resolveFirstList?.({
+        items: [
+          {
+            displayName: "Ana",
+            employeeId: "33333333-3333-4333-8333-333333333333",
+            membershipId: "44444444-4444-4444-8444-444444444444",
+          },
+        ],
+        ok: true,
+      });
+    });
+
+    expect(screen.queryByText("Ana")).toBeNull();
+    expect(screen.getByText("Bia")).toBeVisible();
+    expect(gateway.list).toHaveBeenCalledTimes(2);
+    expect(gateway.list).toHaveBeenLastCalledWith(
+      secondCompanyId,
+      expect.anything(),
+    );
   });
 
   it("does not query a company removed by bootstrap refresh", async () => {
