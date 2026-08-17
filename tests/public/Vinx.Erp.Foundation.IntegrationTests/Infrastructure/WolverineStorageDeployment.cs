@@ -48,6 +48,14 @@ internal static class WolverineStorageDeployment
 
         await Task.WhenAll(standardOutput, standardError);
 
+        await RunDeploymentCommandAsync(
+            root,
+            fixture,
+            "src/Hosts/Vinx.Erp.WorkerHost",
+            "FOUNDATION_WORKER_CONNECTION",
+            "db-apply"
+        );
+
         await using var migrator = new NpgsqlConnection(fixture.MigratorConnectionString);
         await migrator.OpenAsync();
         var grants = await File.ReadAllTextAsync(
@@ -56,12 +64,27 @@ internal static class WolverineStorageDeployment
         await using var command = new NpgsqlCommand(grants, migrator);
         await command.ExecuteNonQueryAsync();
 
-        await RunDeploymentCommandAsync(root, fixture, "db-assert");
+        await RunDeploymentCommandAsync(
+            root,
+            fixture,
+            "src/Hosts/Vinx.Erp.WorkerHost",
+            "FOUNDATION_WORKER_CONNECTION",
+            "db-assert"
+        );
+        await RunDeploymentCommandAsync(
+            root,
+            fixture,
+            "src/Hosts/Vinx.Erp.ApiHost",
+            "FOUNDATION_RUNTIME_CONNECTION",
+            "db-assert"
+        );
     }
 
     private static async Task RunDeploymentCommandAsync(
         string root,
         FoundationPostgresFixture fixture,
+        string projectPath,
+        string connectionEnvironmentKey,
         string commandName
     )
     {
@@ -77,13 +100,12 @@ internal static class WolverineStorageDeployment
         };
         process.StartInfo.ArgumentList.Add("run");
         process.StartInfo.ArgumentList.Add("--project");
-        process.StartInfo.ArgumentList.Add("src/Hosts/Vinx.Erp.ApiHost");
+        process.StartInfo.ArgumentList.Add(projectPath);
         process.StartInfo.ArgumentList.Add("--no-build");
         process.StartInfo.ArgumentList.Add("--no-launch-profile");
         process.StartInfo.ArgumentList.Add("--");
         process.StartInfo.ArgumentList.Add(commandName);
-        process.StartInfo.Environment["FOUNDATION_RUNTIME_CONNECTION"] =
-            fixture.MigratorConnectionString;
+        process.StartInfo.Environment[connectionEnvironmentKey] = fixture.MigratorConnectionString;
         process.StartInfo.Environment["SUPABASE_STORAGE_URL"] = "http://127.0.0.1:54321";
         process.StartInfo.Environment["SUPABASE_STORAGE_SERVICE_ROLE_KEY"] =
             "test-service-role-key";

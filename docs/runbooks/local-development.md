@@ -65,6 +65,7 @@ endereços e credenciais geradas apenas para uso local.
 | Variável | Processo que a usa | Uso |
 |---|---|---|
 | `FOUNDATION_RUNTIME_CONNECTION` | API C# | Conexão de runtime com privilégios mínimos. |
+| `FOUNDATION_WORKER_CONNECTION` | Worker C# | Conexão de runtime exclusiva da role `vinx_worker`, no mesmo banco físico da API. |
 | `FOUNDATION_MIGRATOR_CONNECTION` | Ferramentas EF, bootstrap de operador e deploy do outbox | Conexão de migração, separada do runtime. |
 | `SUPABASE_AUTH_SERVICE_ROLE_KEY` | Bootstrap de operador C# | Credencial Admin Auth exclusiva do servidor; nunca usar no browser. |
 | `PLATFORM_OPERATOR_SUBJECT` | Bootstrap de operador C# | Subject já confirmado no Supabase Auth para o único operador inicial. |
@@ -149,7 +150,7 @@ categoria estável: `created`, `already_configured`, `conflict`,
 do mesmo subject é segura; outro subject exige investigação operacional, sem
 alterar dados diretamente no banco.
 
-## Provisionar o storage técnico do outbox
+## Provisionar o storage técnico do outbox e worker
 
 Depois das migrations Foundation e antes de iniciar o ApiHost produtor com a
 role de runtime, execute no diretório raiz:
@@ -159,13 +160,29 @@ role de runtime, execute no diretório raiz:
 ```
 
 O comando exige `FOUNDATION_MIGRATOR_CONNECTION`, sem imprimi-la, e executa na
-ordem `db-apply`, grants mínimos e `db-assert`. Durante os comandos de deploy,
-essa conexão é fornecida como `FOUNDATION_RUNTIME_CONNECTION` somente ao
-processo para apontar Foundation e Wolverine para o mesmo banco físico. Isso
-não concede ownership ao runtime: os schemas técnicos são `vinx_wolverine` e
-`vinx_wolverine_queues`, e o ApiHost produtor não pode criar ou alterar seus
-recursos em startup. O WorkerHost atual não participa desta fatia nem
-provisiona esses schemas.
+ordem: `db-apply` do ApiHost, `db-apply` do WorkerHost, grants mínimos e
+`db-assert` dos dois hosts. Durante o deploy, a conexão migradora é fornecida
+somente aos comandos como conexão de cada host para que Foundation, produtor e
+worker apontem ao mesmo banco físico.
+
+Isso não concede ownership ao runtime: o produtor usa `vinx_wolverine`, o
+worker usa `vinx_wolverine_worker` e ambos compartilham somente
+`vinx_wolverine_queues`. Nenhum host cria ou altera esses recursos no startup.
+
+## Executar o WorkerHost
+
+Após provisionar o storage, inicie o worker com uma conexão de runtime da role
+`vinx_worker`:
+
+```bash
+dotnet run --project src/Hosts/Vinx.Erp.WorkerHost
+```
+
+O preflight confere `session_user` e `current_user` antes de iniciar o
+listener; outra role falha fechada. O worker processa somente o ingresso local
+do convite inicial e nunca chama provider. Falhas permanentes vão para a DLQ
+do schema do worker com corpo e headers sanitizados; investigue pelo ID opaco
+e pela correlação, não por payload bruto.
 
 ## Executar e testar o web
 

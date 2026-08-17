@@ -69,6 +69,100 @@ END;
 $$;
 
 
+-- Name: accept_owner_invitation_delivery(uuid, uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.accept_owner_invitation_delivery(p_invitation_id uuid, p_correlation_id uuid) RETURNS TABLE(status text, provider_pending_at timestamp with time zone, transitioned boolean)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_company_id uuid;
+    v_invitation_user_id uuid;
+    v_receipt_company_id uuid;
+    v_receipt_owner_user_id uuid;
+    v_actor_user_id uuid;
+    v_status text;
+    v_provider_pending_at timestamp with time zone;
+BEGIN
+    IF p_invitation_id IS NULL OR p_correlation_id IS NULL THEN
+        RAISE EXCEPTION 'owner invitation delivery parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    SELECT invitation.company_id,
+        invitation.user_id,
+        invitation.status,
+        invitation.provider_pending_at
+    INTO v_company_id,
+        v_invitation_user_id,
+        v_status,
+        v_provider_pending_at
+    FROM foundation.pending_owner_invitations AS invitation
+    WHERE invitation.id = p_invitation_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'not_found'::text, NULL::timestamp with time zone, false;
+        RETURN;
+    END IF;
+
+    SELECT receipt.company_id,
+        receipt.owner_user_id,
+        receipt.actor_user_id
+    INTO v_receipt_company_id,
+        v_receipt_owner_user_id,
+        v_actor_user_id
+    FROM foundation.organization_provisioning_receipts AS receipt
+    WHERE receipt.owner_invitation_id = p_invitation_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'owner invitation provisioning receipt is missing'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF v_company_id IS DISTINCT FROM v_receipt_company_id THEN
+        RAISE EXCEPTION 'owner invitation receipt company is inconsistent'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF v_invitation_user_id IS DISTINCT FROM v_receipt_owner_user_id THEN
+        RAISE EXCEPTION 'owner invitation receipt owner is inconsistent'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF v_status = 'pending_delivery' THEN
+        v_provider_pending_at := pg_catalog.clock_timestamp();
+        UPDATE foundation.pending_owner_invitations AS invitation
+        SET status = 'pending_provider',
+            provider_pending_at = v_provider_pending_at
+        WHERE invitation.id = p_invitation_id
+          AND invitation.status = 'pending_delivery';
+
+        IF FOUND THEN
+            PERFORM audit.append_event(
+                v_actor_user_id,
+                'company',
+                v_company_id,
+                'worker',
+                'owner_invitation.delivery.ingress',
+                'owner_invitation',
+                p_invitation_id,
+                'success',
+                p_correlation_id,
+                NULL,
+                '{}'::jsonb);
+            RETURN QUERY SELECT 'pending_provider'::text, v_provider_pending_at, true;
+        ELSE
+            RETURN QUERY SELECT v_status, v_provider_pending_at, false;
+        END IF;
+        RETURN;
+    END IF;
+
+    RETURN QUERY SELECT v_status, v_provider_pending_at, false;
+END;
+$$;
+
+
 -- Name: bootstrap_platform_operator(text, text, text, text, uuid); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.bootstrap_platform_operator(p_subject text, p_issuer text, p_display_name text, p_provider_email text, p_correlation_id uuid) RETURNS TABLE(status text, user_id uuid)
@@ -857,7 +951,8 @@ CREATE TABLE foundation.pending_owner_invitations (
     company_id uuid NOT NULL,
     status character varying(30) NOT NULL,
     created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
-    CONSTRAINT pending_owner_invitations_status_check CHECK (((status)::text = 'pending_delivery'::text))
+    provider_pending_at timestamp with time zone,
+    CONSTRAINT ck_pending_owner_invitations_status CHECK (((((status)::text = 'pending_delivery'::text) AND (provider_pending_at IS NULL)) OR (((status)::text = 'pending_provider'::text) AND (provider_pending_at IS NOT NULL))))
 );
 
 ALTER TABLE ONLY foundation.pending_owner_invitations FORCE ROW LEVEL SECURITY;
@@ -1197,6 +1292,12 @@ ALTER TABLE ONLY foundation.organization_provisioning_receipts
     ADD CONSTRAINT uq_organization_provisioning_receipts_actor_request UNIQUE (actor_user_id, request_id);
 
 
+-- Name: organization_provisioning_receipts uq_organization_provisioning_receipts_owner_invitation_id; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT uq_organization_provisioning_receipts_owner_invitation_id UNIQUE (owner_invitation_id);
+
+
 -- Name: pending_owner_invitations uq_pending_owner_invitations_user_id; Type: CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.pending_owner_invitations
@@ -1297,6 +1398,11 @@ CREATE UNIQUE INDEX ix_memberships_company_id_user_id ON foundation.memberships 
 -- Name: ix_memberships_user_id; Type: INDEX; Schema: foundation; Owner: -
 
 CREATE INDEX ix_memberships_user_id ON foundation.memberships USING btree (user_id);
+
+
+-- Name: ix_pending_owner_invitations_provider_backlog; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE INDEX ix_pending_owner_invitations_provider_backlog ON foundation.pending_owner_invitations USING btree (provider_pending_at, id) WHERE ((status)::text = 'pending_provider'::text);
 
 
 -- Name: ix_role_assignments_company_id_membership_id; Type: INDEX; Schema: foundation; Owner: -
@@ -1737,6 +1843,11 @@ CREATE POLICY organization_provisioning_receipts_provisioning_owner_insert ON fo
 CREATE POLICY organization_provisioning_receipts_provisioning_owner_select ON foundation.organization_provisioning_receipts FOR SELECT TO vinx_provisioning_owner USING (true);
 
 
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_worker_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY organization_provisioning_receipts_worker_owner_read ON foundation.organization_provisioning_receipts FOR SELECT TO vinx_worker_owner USING (true);
+
+
 -- Name: pending_owner_invitations; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.pending_owner_invitations ENABLE ROW LEVEL SECURITY;
@@ -1744,6 +1855,16 @@ ALTER TABLE foundation.pending_owner_invitations ENABLE ROW LEVEL SECURITY;
 -- Name: pending_owner_invitations pending_owner_invitations_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY pending_owner_invitations_provisioning_owner ON foundation.pending_owner_invitations FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_worker_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY pending_owner_invitations_worker_owner_read ON foundation.pending_owner_invitations FOR SELECT TO vinx_worker_owner USING (true);
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_worker_owner_update; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY pending_owner_invitations_worker_owner_update ON foundation.pending_owner_invitations FOR UPDATE TO vinx_worker_owner USING (true) WITH CHECK (true);
 
 
 -- Name: platform_operators; Type: ROW SECURITY; Schema: foundation; Owner: -

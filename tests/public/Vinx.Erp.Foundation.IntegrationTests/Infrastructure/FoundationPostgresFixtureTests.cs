@@ -307,6 +307,38 @@ public sealed class FoundationPostgresFixtureTests
     }
 
     [Fact]
+    public async Task ReapplyBootstrapAsync_revokes_all_unexpected_memberships_from_worker()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using (var contaminate = new NpgsqlCommand(
+            "GRANT vinx_worker_owner, vinx_platform_owner TO vinx_worker; GRANT vinx_worker TO vinx_runtime",
+            connection))
+        {
+            await contaminate.ExecuteNonQueryAsync();
+        }
+
+        await fixture.ReapplyBootstrapAsync();
+
+        await using var membership = new NpgsqlCommand(
+            """
+            SELECT count(*)
+            FROM pg_auth_members AS membership
+            INNER JOIN pg_roles AS member ON member.oid = membership.member
+            WHERE member.rolname = 'vinx_worker'
+            """,
+            connection);
+        Assert.Equal(0L, (long)(await membership.ExecuteScalarAsync())!);
+
+        await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+        await using var spoof = new NpgsqlCommand("SET ROLE vinx_worker", runtime);
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => spoof.ExecuteNonQueryAsync());
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+    }
+
+    [Fact]
     public async Task StartAsync_creates_the_four_non_superuser_roles_and_migrator_can_set_isolated_owners()
     {
         await using var fixture = new FoundationPostgresFixture();

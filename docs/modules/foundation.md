@@ -184,7 +184,22 @@ Foundation quanto para Wolverine. O storage técnico fica em
 `vinx_wolverine` e `vinx_wolverine_queues`, sem confundir esses schemas com as
 migrations ou snapshot de Foundation. O ApiHost produtor não cria DDL nem tem
 ownership desses recursos; o provisionamento é etapa explícita de deploy. O
-WorkerHost atual ainda não participa deste fluxo.
+WorkerHost consome a fila durável no mesmo banco físico, mas usa a conexão
+separada `FOUNDATION_WORKER_CONNECTION`, o envelope próprio em
+`vinx_wolverine_worker` e somente a fila compartilhada necessária.
+
+O único handler explícito do Worker chama a função SQL estreita de ingresso e
+altera o convite de `pending_delivery` para `pending_provider`, com uma única
+auditoria `owner_invitation.delivery.ingress`; replay não duplica a transição
+nem a auditoria. Não há chamada ao provedor, token, e-mail, envio externo ou
+aceite de convite nesta etapa. O worker não recebe DML direto em Foundation:
+a função `SECURITY DEFINER` é sua única fronteira de negócio.
+
+O startup falha fechado se a conexão não for efetivamente `vinx_worker`; não
+cria DDL em runtime e descobre somente esse handler. Erros transitórios de
+PostgreSQL têm tentativas agendadas finitas. Erro permanente, inesperado ou
+tentativas esgotadas seguem para a DLQ do worker com UUID zerado, sem headers,
+payload original, dados pessoais ou mensagem interna de exceção.
 
 ## Diretório local de funcionários
 

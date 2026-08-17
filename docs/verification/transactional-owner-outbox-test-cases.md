@@ -16,14 +16,15 @@ metadados do envelope, logs ou manifesto.
 | falha pré-commit | Dada falha ao persistir o envelope antes do commit, quando a criação é executada, então a transação inteira é desfeita. | Retorna indisponibilidade sem grupo, empresa, convite, recibo, auditoria de sucesso ou envelope residual. |
 | commit ambíguo | Dada confirmação de commit perdida após a gravação física, quando a chamada falha, então o serviço não compensa, reenvia ou faz flush. | Retorna indisponibilidade; a repetição segura identifica replay e conserva uma única mensagem. |
 | flush pós-commit | Dada falha ao encaminhar o envelope depois de commit confirmado, quando a criação termina, então não desfaz o negócio. | Retorna criação com convite `pending_delivery` e envelope durável para o relay posterior. |
-| startup sem storage | Dado storage técnico ainda não provisionado, quando o ApiHost produtor inicia, então não executa DDL implícito. | O startup falha fechado e não cria a fila nem schemas/tabelas técnicos. O WorkerHost não participa desta fatia nem provisiona DDL. |
+| startup sem storage | Dado storage técnico ainda não provisionado, quando ApiHost produtor ou WorkerHost iniciam, então não executam DDL implícito. | O startup falha fechado e não cria fila, schemas ou tabelas técnicas. O deploy provisiona os dois hosts antes do runtime. |
 | privilégio de runtime | Dado runtime com grants mínimos, quando tenta criar ou alterar storage Wolverine, então o PostgreSQL nega a operação. | Runtime não recebe ownership nem DDL; deploy executa `db-apply`, grants e `db-assert` com identidade migradora. |
 | privacidade e opacidade | Dado envelope persistido, quando é lido para verificação, então payload e metadados não expõem dados pessoais ou segredos. | Evento e JSON contém somente `invitationId` opaco; metadados identificam o tipo sem request, payload ou dados do owner. |
 | concorrência | Dadas requisições concorrentes com o mesmo ator e request, quando a função serializa a idempotência, então não há duplicação. | Há no máximo um resultado `created`; as concorrentes perdedoras recebem `replay` 200 ou falha fechada 409/503 sem estado parcial, e a repetição posterior do mesmo request converge em `replay` com uma única mensagem. |
 
 ## Limites adiados
 
-- Worker/listener, relay ativo, retry e DLQ pertencem à #48.
+- O ingresso local, listener, retry e DLQ pertencem à primeira fatia da #48 e
+  são verificados em `owner-invitation-worker-ingress-test-cases.md`.
 - Entrega e reconciliação pelo provider Supabase pertencem à #211B.
 - WhatsApp, Meta, opt-in, template e webhook pertencem à #28.
 

@@ -8,6 +8,7 @@ using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
+using Wolverine;
 using Wolverine.EntityFrameworkCore;
 
 namespace Vinx.Erp.Foundation.Platform;
@@ -78,7 +79,8 @@ public sealed class PlatformOrganizationProvisioningService(
             {
                 outbox.Enroll(database);
                 await outbox.PublishAsync(
-                    new OwnerInvitationDeliveryRequested(result.OwnerInvitationId!.Value)
+                    new OwnerInvitationDeliveryRequested(result.OwnerInvitationId!.Value),
+                    new DeliveryOptions { CorrelationId = actor.CorrelationId.ToString("D") }
                 );
             }
 

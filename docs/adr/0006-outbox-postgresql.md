@@ -8,9 +8,9 @@ Accepted
 
 A arquitetura aprovada requer que a alteração de estado de negócio e a intenção
 de trabalho assíncrono sejam persistidas na mesma transação PostgreSQL, sem
-broker na primeira entrega. A recuperação do processo, concorrência entre
+broker na primeira entrega. Recuperação do processo, concorrência entre
 workers, retry, fila de mensagens sem solução (DLQ) e chamada a provedores
-externos são preocupações posteriores; uma confirmação de entrega fora do
+externos precisam de limites explícitos; uma confirmação de entrega fora do
 banco pode se perder ou chegar depois de um timeout.
 
 Em scratch descartável, em 2026-08-16, o restore e o build em .NET 10
@@ -30,11 +30,11 @@ topologia orientada a transporte que ainda não é necessária.
 
 ## Decisão
 
-As futuras entregas #26 e #48 adotarão Wolverine como primeira opção de
-outbox PostgreSQL sem broker. A escolha reduz a superfície inicial para a
-intenção transacional e o worker local, mantendo MassTransit como alternativa
-reavaliável, não como dependência instalada. A #26 é somente dona da intenção
-e outbox transacionais.
+As entregas #26 e #48 adotam Wolverine como primeira opção de outbox
+PostgreSQL sem broker. A escolha reduz a superfície inicial para a intenção
+transacional e o worker local, mantendo MassTransit como alternativa
+reavaliável. A #26 é dona da intenção e outbox transacionais; a primeira fatia
+da #48 é dona apenas do ingresso local do convite inicial.
 
 As guardas obrigatórias dessa adoção são:
 
@@ -71,17 +71,19 @@ As guardas obrigatórias dessa adoção são:
   correlação mínima. O worker consulta dados necessários em fronteira estreita
   e autorizada.
 
-Esta spike não executou nenhuma dessas provas futuras de configuração, deploy,
-`db-assert`, DDL ou ownership.
+O deploy técnico é explícito por `setup-wolverine-storage.sh`: aplica o storage
+do ApiHost e WorkerHost com identidade migradora, concede os grants mínimos e
+executa `db-assert` nos dois hosts. Runtime e worker iniciam com
+`AutoCreate.None`; os testes cobrem ausência de storage, ausência de DDL,
+roles incorretas, isolamento de schemas e convergência dos grants.
 
 ## Limites de entrega e falha externa
 
-A #26 implementará intenção e outbox transacionais e provará rollback sem
-intenção/outbox e commit atômico. A #48 implementará somente infraestrutura
-genérica de worker, lease/concorrência, retry, DLQ e observabilidade, incluindo
-prova por fake ou contrato de provider de que dois workers não concluem duas
-vezes a mesma mensagem internamente. Ela não fará chamada real a provider de
-convite.
+A #26 implementa intenção e outbox transacionais e prova rollback sem
+intenção/outbox e commit atômico. A primeira fatia da #48 implementa um único
+worker com inbox durável, concorrência, retry finito, DLQ sanitizada e
+correlação para `OwnerInvitationDeliveryRequested`. Dois workers não concluem
+duas vezes a transição interna. Ela não faz chamada real a provider de convite.
 
 A #211B, posterior à #48, é a única dona do adapter Supabase Admin de convite
 e da reconciliação real de `provider_ambiguous`. Ela vincula apenas
@@ -113,9 +115,10 @@ correlacionável.
 - MassTransit será reavaliado se surgir broker, saga ou necessidade que
   justifique sua topologia e licença. Mudança de licença ou de topologia do
   MassTransit também exige reavaliação explícita antes de adoção.
-- Esta ADR não autoriza instalar pacote, alterar `WorkerHost`,
-  `FoundationDbContext`, migration, configuração, endpoint, provider,
-  capability ou UI.
+- Esta ADR autoriza o storage técnico, WorkerHost, migration Foundation e
+  configuração estritamente necessários ao outbox e ao ingresso local. Não
+  autoriza adapter de provider, token, e-mail, webhook, capability adicional
+  ou UI.
 
 ## Fontes
 
