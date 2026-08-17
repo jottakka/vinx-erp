@@ -40,6 +40,7 @@ public sealed class PlatformOrganizationProvisioningPrivilegeTests
             FROM pg_policies
             WHERE schemaname = 'foundation'
               AND tablename IN ('pending_owner_invitations', 'organization_provisioning_receipts')
+              AND roles @> ARRAY['vinx_provisioning_owner']::name[]
             GROUP BY tablename
             ORDER BY tablename;
 
