@@ -19,7 +19,9 @@ internal sealed class BrowserBffNoStoreMiddleware(RequestDelegate next)
                 var context = (HttpContext)state;
                 var browserSessionRoute =
                     context.Request.Path.Equals("/foundation/bootstrap", StringComparison.Ordinal)
-                    || context.Request.Path.StartsWithSegments("/foundation/identity/browser-session");
+                    || context.Request.Path.StartsWithSegments("/foundation/identity/browser-session")
+                    || context.Request.Path.StartsWithSegments("/paguai")
+                    || context.Request.Path.StartsWithSegments("/atendimento");
                 var endpointOptedIntoNoStore =
                     context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffNoStoreEndpointMetadata>()
                     is not null;
@@ -110,15 +112,21 @@ internal sealed class BrowserBffAntiforgeryMiddleware(RequestDelegate next)
             return false;
         }
 
-        return context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffAntiforgeryRequiredMetadata>()
-                is not null
-            || context.User.Identities.Any(identity =>
-                string.Equals(
-                    identity.AuthenticationType,
-                    BrowserBffAuthenticationExtensions.CookieScheme,
-                    StringComparison.Ordinal
-                )
-            );
+        var antiforgeryRequirement = context
+            .GetEndpoint()
+            ?.Metadata.GetMetadata<BrowserBffAntiforgeryRequiredMetadata>();
+        if (antiforgeryRequirement is { CookieAuthenticatedOnly: false })
+        {
+            return true;
+        }
+
+        return context.User.Identities.Any(identity =>
+            string.Equals(
+                identity.AuthenticationType,
+                BrowserBffAuthenticationExtensions.CookieScheme,
+                StringComparison.Ordinal
+            )
+        );
     }
 }
 

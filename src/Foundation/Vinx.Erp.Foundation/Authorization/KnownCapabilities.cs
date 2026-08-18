@@ -28,4 +28,34 @@ public static class KnownCapabilities
     public static readonly Guid AiWritesConfirmId = Guid.Parse(
         "9e77f769-2093-55a5-a482-85ed3e83dc88"
     );
+
+    public const string PaguaiDraftRead = "paguai.draft.read";
+    public static readonly Guid PaguaiDraftReadId = Guid.Parse(
+        "766bdb56-80c0-5dee-982f-be7f0d3eaea8"
+    );
+
+    public const string PaguaiDraftCreate = "paguai.draft.create";
+    public static readonly Guid PaguaiDraftCreateId = Guid.Parse(
+        "aecaa296-6a6f-5815-93ac-bd1ccdff3f44"
+    );
+
+    public const string ServiceDeskTicketReadQueue = "service_desk.ticket.read_queue";
+    public static readonly Guid ServiceDeskTicketReadQueueId = Guid.Parse(
+        "f02fa2b2-aa34-50ca-99bd-b17a55d2989f"
+    );
+
+    public const string ServiceDeskTicketCreate = "service_desk.ticket.create";
+    public static readonly Guid ServiceDeskTicketCreateId = Guid.Parse(
+        "e7a53081-b6d9-5509-9300-bff9204eaa8f"
+    );
+
+    public const string ServiceDeskTicketAssign = "service_desk.ticket.assign";
+    public static readonly Guid ServiceDeskTicketAssignId = Guid.Parse(
+        "e5f8c74a-d854-57bb-916f-25b63824cab7"
+    );
+
+    public const string ServiceDeskTicketMove = "service_desk.ticket.move";
+    public static readonly Guid ServiceDeskTicketMoveId = Guid.Parse(
+        "db9f6a71-6da5-5933-8204-6b16cad2af8a"
+    );
 }

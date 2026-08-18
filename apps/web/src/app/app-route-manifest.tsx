@@ -9,6 +9,8 @@ import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
 import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import { Skeleton, Stack } from "@mui/material";
 import { lazy, type ReactElement, Suspense } from "react";
+import { AtendimentoPage } from "../features/atendimento/atendimento-page";
+import { PaguaiPage } from "../features/paguai/paguai-page";
 import { PeoplePage } from "../features/people/people-page";
 import {
   type AppRouteCatalogEntry,
@@ -16,7 +18,6 @@ import {
   appRouteCatalog,
   type AppNavigationLink as CatalogNavigationLink,
 } from "../shared/routing/app-paths";
-import { FeaturePreparationPage } from "./feature-preparation-page";
 import { HelpPage } from "./help-page";
 import { HomePage } from "./home-page";
 
@@ -51,30 +52,15 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
   },
   "/paguai": {
     icon: PaymentsOutlinedIcon,
-    render: () => (
-      <FeaturePreparationPage
-        feature="Paguai"
-        scope="Solicitações, conferência e fluxo financeiro."
-      />
-    ),
+    render: () => <PaguaiPage />,
   },
   "/atendimento": {
     icon: SupportAgentOutlinedIcon,
-    render: () => (
-      <FeaturePreparationPage
-        feature="Atendimento"
-        scope="Fila, tickets e histórico de atendimento."
-      />
-    ),
+    render: () => <AtendimentoPage />,
   },
   "/kanban": {
     icon: ViewKanbanOutlinedIcon,
-    render: () => (
-      <FeaturePreparationPage
-        feature="Kanban"
-        scope="Quadros, cards e acompanhamento do trabalho."
-      />
-    ),
+    render: () => <AtendimentoPage title="Kanban" />,
   },
   "/pessoas": {
     icon: GroupsOutlinedIcon,

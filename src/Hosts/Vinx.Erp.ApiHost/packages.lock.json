@@ -500,6 +500,12 @@
           "WolverineFx": "6.28.2"
         }
       },
+      "vinx.erp.atendimento": {
+        "type": "Project",
+        "dependencies": {
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
       "vinx.erp.foundation": {
         "type": "Project",
         "dependencies": {
@@ -508,6 +514,14 @@
           "Microsoft.EntityFrameworkCore": "[10.0.10, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
           "WolverineFx.EntityFrameworkCore": "[6.28.2, )"
+        }
+      },
+      "vinx.erp.paguai": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql": "[10.0.3, )",
+          "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
       "EFCore.NamingConventions": {

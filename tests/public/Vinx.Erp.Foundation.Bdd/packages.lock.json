@@ -1022,9 +1022,17 @@
         "dependencies": {
           "Microsoft.AspNetCore.OpenApi": "[10.0.10, )",
           "Microsoft.OpenApi": "[2.7.5, )",
+          "Vinx.Erp.Atendimento": "[1.0.0, )",
           "Vinx.Erp.Foundation": "[1.0.0, )",
+          "Vinx.Erp.Paguai": "[1.0.0, )",
           "WolverineFx.Postgresql": "[6.28.2, )",
           "WolverineFx.RuntimeCompilation": "[6.28.2, )"
+        }
+      },
+      "vinx.erp.atendimento": {
+        "type": "Project",
+        "dependencies": {
+          "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
       "vinx.erp.foundation": {
@@ -1045,8 +1053,17 @@
           "Npgsql": "[10.0.3, )",
           "Testcontainers.PostgreSql": "[4.9.0, )",
           "Vinx.Erp.ApiHost": "[1.0.0, )",
+          "Vinx.Erp.Atendimento": "[1.0.0, )",
           "Vinx.Erp.WorkerHost": "[1.0.0, )",
           "xunit": "[2.9.3, )"
+        }
+      },
+      "vinx.erp.paguai": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql": "[10.0.3, )",
+          "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
       "vinx.erp.workerhost": {

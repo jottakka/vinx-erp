@@ -1,6 +1,39 @@
 # Paguai — linguagem e contrato de descoberta V1
 
-> Decisão de produto da issue [#45](https://github.com/jottakka/vinx-erp/issues/45). Este documento não cria entidades, migrations, endpoints ou capabilities.
+> A descoberta da issue [#45](https://github.com/jottakka/vinx-erp/issues/45) continua canônica para o domínio financeiro futuro. A issue #227 entrega apenas o recorte abaixo e substitui, para esse recorte, a antiga afirmação de que este documento não cria contrato técnico.
+
+## MVP #227 — metadados de rascunho
+
+O MVP persiste somente `id`, `companyId`, `requestId`, `title`, `description`,
+`state: "rascunho"`, `version: 1` e `createdAt`. Não representa valor, moeda,
+vencimento, beneficiário, documento, cobrança ou pagamento. Também não oferece
+edição, remoção, envio, conferência, aprovação, devolução, cancelamento,
+integração de provedor, PIX, cartão, WhatsApp, MCP, outbox ou automação.
+Esses comportamentos permanecem bloqueados até as decisões de #45.
+
+O módulo Paguai mantém DTOs, validação, hash e SQL parametrizado fora do
+domínio de negócio Foundation. Ele usa o único `FoundationDbContext` injetado
+como transação/conexão compartilhada, além de `CapabilityEvaluator` e
+`AuditAppender` como contratos transversais. A migration Foundation apenas
+implanta o schema `paguai`; ela não torna Foundation dona do comportamento.
+
+As capabilities de escopo `Company` são `paguai.draft.read`
+(`766bdb56-80c0-5dee-982f-be7f0d3eaea8`) e `paguai.draft.create`
+(`aecaa296-6a6f-5815-93ac-bd1ccdff3f44`). O catálogo é semeado somente por
+migration. A tabela `paguai.requests` tem RLS forçado: runtime só enxerga ou
+insere a própria solicitação quando `app.user_id` e `app.company_id` explícitos
+correspondem; sem contexto, o acesso falha fechado. Runtime recebe somente
+`USAGE` no schema e `SELECT`/`INSERT` na tabela; `PUBLIC` não recebe acesso.
+
+A criação valida a estrutura antes da auditoria, abre uma transação, aplica o
+contexto RLS, exige membership ativo e capability, e só então consulta a
+idempotência. O mesmo `requestId` com o mesmo hash retorna o resultado já
+persistido sem nova auditoria; hash diferente recebe `409` e auditoria de
+negação. Criação bem-sucedida grava solicitação, recibo Foundation e auditoria
+`paguai.draft.create`/`paguai_request` com metadados `{}` no mesmo commit. Não
+se registra título, descrição, corpo ou tokens em logs/auditoria. Leitura exige
+membership e `paguai.draft.read`; lista limita ao solicitante e detalhe fora do
+escopo retorna `resource_not_found`.
 
 Qualquer PR futuro de comportamento Paguai registra `docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
 
