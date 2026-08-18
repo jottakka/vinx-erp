@@ -6,11 +6,15 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.OpenApi;
+using Microsoft.AspNetCore.Mvc;
+using Vinx.Erp.ApiHost.Constants;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
+using Vinx.Erp.ApiHost;
 using Vinx.Erp.ApiHost.Identity;
+using Vinx.Erp.Atendimento;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
@@ -26,9 +30,10 @@ using Vinx.Erp.Foundation.Platform;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
 using Wolverine.Postgresql;
+using Vinx.Erp.Paguai;
 
 var builder = WebApplication.CreateBuilder(args);
-const string ProtectedRateLimitPolicy = "foundation";
+const string ProtectedRateLimitPolicy = ApiConstants.ProtectedRateLimitPolicy;
 const string BrowserSessionLoginRateLimitPolicy = "browser-session-login";
 const int MaximumEmployeeDirectoryRequestBodyBytes = 8 * 1024;
 builder.Logging.AddVinxLogging();
@@ -107,6 +112,22 @@ builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 builder.Services.AddScoped<DocumentUploadService>();
+builder.Services.AddScoped<PaguaiDraftService>();
+builder.Services.AddScoped<AtendimentoCardService>();
+builder
+    .Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false)
+    .AddJsonOptions(options =>
+    {
+        // Contrato estrito: campos desconhecidos no corpo são rejeitados com ModelState inválido.
+        options.JsonSerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+    })
+    .ConfigureApiBehaviorOptions(options =>
+        options.InvalidModelStateResponseFactory = _ =>
+            new ObjectResult(new { code = "invalid_request" })
+            {
+                StatusCode = StatusCodes.Status400BadRequest,
+            }
+    );
 builder.Services.AddSupabaseJwtAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddBrowserBffSession(builder.Configuration, builder.Environment);
 builder.Services.AddAuthorization(options =>
@@ -191,7 +212,11 @@ builder.Services.AddRateLimiter(options =>
         ProtectedRateLimitPolicy,
         context =>
             RateLimitPartition.GetFixedWindowLimiter(
-                context.User.Identity?.IsAuthenticated == true ? "authenticated" : "anonymous",
+                context.User.Identity?.IsAuthenticated == true
+                    ? context.User.FindFirst("sub")?.Value is { Length: > 0 } subject
+                        ? $"authenticated:{subject}"
+                        : "authenticated-without-sub"
+                    : "anonymous",
                 _ => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit = 60,
@@ -429,8 +454,58 @@ builder.Services.AddOpenApi(options =>
                 }
             }
 
+            if (metadata?.OfType<PaguaiJsonRequestBodyMetadata>().Any() == true)
+            {
+                operation.RequestBody = new OpenApiRequestBody
+                {
+                    Required = true,
+                    Content = new Dictionary<string, OpenApiMediaType>
+                    {
+                        ["application/json"] = new OpenApiMediaType
+                        {
+                            Schema = new OpenApiSchema
+                            {
+                                Type = JsonSchemaType.Object,
+                                Required = new HashSet<string>
+                                {
+                                    "companyId",
+                                    "requestId",
+                                    "title",
+                                    "description",
+                                },
+                                Properties = new Dictionary<string, IOpenApiSchema>
+                                {
+                                    ["companyId"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        Format = "uuid",
+                                    },
+                                    ["requestId"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        Format = "uuid",
+                                    },
+                                    ["title"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        MaxLength = 200,
+                                    },
+                                    ["description"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        MaxLength = 4000,
+                                    },
+                                },
+                                AdditionalPropertiesAllowed = false,
+                            },
+                        },
+                    },
+                };
+            }
+
             if (
                 metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
+                || metadata?.OfType<PaguaiAntiforgeryRequiredMetadata>().Any() == true
                 || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true
             )
             {
@@ -440,7 +515,13 @@ builder.Services.AddOpenApi(options =>
                     {
                         Name = BrowserBffAuthenticationExtensions.AntiforgeryHeaderName,
                         In = ParameterLocation.Header,
-                        Required = true,
+                        Required =
+                            metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true
+                            || metadata
+                                ?.OfType<BrowserBffAntiforgeryRequiredMetadata>()
+                                .Any(requirement => !requirement.CookieAuthenticatedOnly) == true,
+                        Description =
+                            "Obrigatório quando a operação autenticada usa o cookie de sessão BFF.",
                         Schema = new OpenApiSchema { Type = JsonSchemaType.String },
                     }
                 );
@@ -520,6 +601,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 app.MapBrowserBffSessionEndpoints();
+app.MapControllers();
 var foundation = app.MapGroup("/foundation")
     .RequireAuthorization()
     .RequireRateLimiting(ProtectedRateLimitPolicy);
