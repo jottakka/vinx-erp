@@ -65,24 +65,48 @@ endereços e credenciais geradas apenas para uso local.
 | Variável | Processo que a usa | Uso |
 |---|---|---|
 | `FOUNDATION_RUNTIME_CONNECTION` | API C# | Conexão de runtime com privilégios mínimos. |
-| `FOUNDATION_MIGRATOR_CONNECTION` | Ferramentas EF | Conexão de migração, separada do runtime. |
-| `SUPABASE_AUTH_ISSUER` | API e MCP C# | Emissor JWT do Supabase Auth. |
-| `SUPABASE_AUTH_AUDIENCE` | API e MCP C# | Audiência JWT aceita. |
+| `FOUNDATION_WORKER_CONNECTION` | Worker C# | Conexão de runtime exclusiva da role `vinx_worker`, no mesmo banco físico da API. |
+| `FOUNDATION_MIGRATOR_CONNECTION` | Ferramentas EF, bootstrap de operador e deploy do outbox | Conexão de migração, separada do runtime. |
+| `SUPABASE_AUTH_SERVICE_ROLE_KEY` | Bootstrap de operador e Worker C# | Credencial Admin Auth exclusiva do servidor; nunca usar no browser. |
+| `PLATFORM_OPERATOR_SUBJECT` | Bootstrap de operador C# | Subject já confirmado no Supabase Auth para o único operador inicial. |
+| `PLATFORM_OPERATOR_DISPLAY_NAME` | Bootstrap de operador C# | Nome de apresentação validado no deployment; não participa da autorização. |
+| `SUPABASE_AUTH_ISSUER` | API, MCP e Worker C# | Emissor JWT do Supabase Auth. |
+| `SUPABASE_AUTH_AUDIENCE` | API, MCP e Worker C# | Audiência JWT aceita. |
+| `SUPABASE_INVITE_REDIRECT_URL` | Worker C# | URL HTTPS permitida pelo Supabase para o convite inicial; o aceite ainda não é publicado nesta fatia. |
+| `SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS` | Worker C# (opcional) | Lista de origens absolutas separadas por `;` que restringe a origem do redirect; ausente mantém a validação de formato; malformada rejeita o startup. |
+| `SUPABASE_AUTH_PUBLISHABLE_KEY` | API C# | Configuração de host somente servidor para login BFF; nunca expor como `VITE_*` nem usar para chamada direta do browser ao Supabase. |
 | `SUPABASE_STORAGE_URL` | API C# | URL do adapter de Storage. |
 | `SUPABASE_STORAGE_SERVICE_ROLE_KEY` | API C# | Credencial de serviço exclusiva do servidor. |
+| `VINX_API_ORIGIN` | Processo Vite de desenvolvimento | Origem local exata do ApiHost para o proxy de `/foundation`; aceitar somente `http://127.0.0.1:<porta>`, nunca prefixo `VITE_*` nem URL de provider. |
+| `BROWSER_SESSION_DATA_PROTECTION_KEY_DIRECTORY` | API C# em produção | Diretório persistente, durável e compartilhado por todas as réplicas do host; acesso restrito ao processo. |
+| `BROWSER_SESSION_DATA_PROTECTION_APPLICATION_NAME` | API C# em produção | Nome estável, isolado por aplicação e ambiente; não compartilhar com outro sistema. |
+| `BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PATH` | API C# em produção | Certificado disponível ao host para criptografar o key ring durável. |
+| `BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PASSWORD` | API C# em produção | Senha do certificado, mantida em configuração secreta e criptografada no store de deployment. |
 | `AllowedHosts` | MCP C# | Hostnames aceitos; a configuração versionada permite somente loopback e o deployment deve sobrescrever pelo hostname exato. |
 | `ASPNETCORE_URLS` | API ou MCP C# | Binding HTTP local; use `http://127.0.0.1:5080` para API e `http://127.0.0.1:5081` para MCP. |
 
-O frontend V1 não define variável de provider. Quando #16 introduzir uma base
-URL da API, ela será documentada junto do cliente tipado; nenhum `VITE_*` deve
-conter URL ou chave do Supabase, conexão PostgreSQL ou credencial de serviço.
+O frontend não define variável de provider. Para desenvolvimento local, o
+processo Vite pode receber `VINX_API_ORIGIN=http://127.0.0.1:5080`; ela é lida
+somente por `vite.config.ts` e encaminha apenas `/foundation` sem trocar a
+origem vista pelo browser. Nenhum `VITE_*` deve conter URL ou chave do
+Supabase, conexão PostgreSQL ou credencial de serviço. Em particular, não crie
+`VITE_SUPABASE_*`: o browser usa apenas rotas BFF da mesma origem e nunca chama
+Supabase diretamente. Preview e produção não usam esse proxy; o ingress TLS
+precisa encaminhar `/foundation` ao ApiHost sem redirect, CORS amplo ou perda
+de `Set-Cookie` e `X-Correlation-ID`.
 Se uma variável, contrato ou serviço necessário não estiver confirmado, registre
 o bloqueio na issue correspondente. Não invente valor, crie segredo de produção
 ou libere acesso direto como atalho.
 
+Em produção, as quatro configurações de Data Protection acima são obrigatórias
+para sessão BFF. O key ring deve sobreviver a restart e deployment, ser comum
+às réplicas do mesmo host, permanecer isolado de outras aplicações e ser
+criptografado pelo certificado. Não copie valores para arquivo versionado,
+browser ou log.
+
 ## Executar a API C#
 
-Com as cinco variáveis de runtime da API já configuradas no processo pelo
+Com as variáveis de runtime da API já configuradas no processo pelo
 fluxo seguro do time, inicie a API de domínio em outro terminal:
 
 ```bash
@@ -92,8 +116,10 @@ ASPNETCORE_URLS=http://127.0.0.1:5080 \
 ```
 
 A saúde da API fica em `http://127.0.0.1:5080/health`. A porta `54321` é o
-gateway local do Supabase, não a API C#. Até #16, o web não chama essa API; a
-base URL será configurada somente no cliente HTTP tipado dessa fatia.
+gateway local do Supabase, não a API C#. O web chama caminhos relativos de
+`/foundation`; em desenvolvimento, somente o proxy Vite usa
+`VINX_API_ORIGIN` para alcançar esta porta. Não configure base URL absoluta no
+cliente browser.
 
 ## Executar o MCP C#
 
@@ -111,6 +137,57 @@ A saúde fica em `http://127.0.0.1:5081/health`; o transporte stateless fica em
 discovery OAuth MCP nem cliente browser: todo header `Origin` é rejeitado.
 HTTP para o issuer/storage local só é aceito em loopback com o ambiente
 `Development`; qualquer outro ambiente exige HTTPS.
+
+## Bootstrap do operador de plataforma
+
+Depois de aplicar o bootstrap de roles e as migrações, configure no ambiente
+de deployment a conexão migradora, as variáveis de Auth e o subject do
+operador já existente no Supabase. O comando não aceita argumentos:
+
+    dotnet run --project src/Tools/Vinx.Erp.PlatformBootstrap
+
+Ele consulta o usuário pelo Admin Auth somente no servidor e devolve uma
+categoria estável: `created`, `already_configured`, `conflict`,
+`provider_rejected`, `unavailable` ou `configuration_invalid`. A repetição
+do mesmo subject é segura; outro subject exige investigação operacional, sem
+alterar dados diretamente no banco.
+
+## Provisionar o storage técnico do outbox e worker
+
+Depois das migrations Foundation e antes de iniciar o ApiHost produtor com a
+role de runtime, execute no diretório raiz:
+
+```bash
+./scripts/setup-wolverine-storage.sh
+```
+
+O comando exige `FOUNDATION_MIGRATOR_CONNECTION`, sem imprimi-la, e executa na
+ordem: `db-apply` do ApiHost, `db-apply` do WorkerHost, grants mínimos e
+`db-assert` dos dois hosts. Durante o deploy, a conexão migradora é fornecida
+somente aos comandos como conexão de cada host para que Foundation, produtor e
+worker apontem ao mesmo banco físico.
+
+Isso não concede ownership ao runtime: o produtor usa `vinx_wolverine`, o
+worker usa `vinx_wolverine_worker` e ambos compartilham somente
+`vinx_wolverine_queues`. Nenhum host cria ou altera esses recursos no startup.
+
+## Executar o WorkerHost
+
+Após provisionar o storage, inicie o worker com uma conexão de runtime da role
+`vinx_worker`:
+
+```bash
+dotnet run --project src/Hosts/Vinx.Erp.WorkerHost
+```
+
+O preflight confere `session_user` e `current_user` antes de iniciar o
+listener; outra role falha fechada. O worker ingressa o convite inicial e, no
+vencedor da tentativa, usa o Admin Auth do Supabase exclusivamente no servidor.
+Sucesso fica `pending_acceptance`; rejeição definitiva fica `provider_failed`;
+resultado desconhecido fica `provider_ambiguous` sem novo envio automático.
+Falhas
+permanentes vão para a DLQ do schema do worker com corpo e headers sanitizados;
+investigue pelo ID opaco e pela correlação, não por payload bruto.
 
 ## Executar e testar o web
 

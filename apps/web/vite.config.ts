@@ -1,7 +1,61 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type UserConfig } from "vite";
+
+type FoundationApiProxy = {
+  "/foundation": {
+    changeOrigin: false;
+    target: string;
+  };
+};
+
+/**
+ * Aceita somente o ApiHost local como destino do proxy de desenvolvimento.
+ * O browser continua chamando caminhos relativos da própria origem.
+ */
+export function resolveDevelopmentApiProxy(
+  origin = process.env.VINX_API_ORIGIN,
+): FoundationApiProxy | undefined {
+  if (!origin) {
+    return undefined;
+  }
+
+  try {
+    const target = new URL(origin);
+    if (
+      target.protocol !== "http:" ||
+      target.hostname !== "127.0.0.1" ||
+      target.username ||
+      target.password ||
+      target.pathname !== "/" ||
+      target.search ||
+      target.hash
+    ) {
+      return undefined;
+    }
+
+    return {
+      "/foundation": {
+        changeOrigin: false,
+        target: target.origin,
+      },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function createWebViteConfig(
+  mode: string,
+  origin = process.env.VINX_API_ORIGIN,
+): UserConfig {
+  const proxy =
+    mode === "development" ? resolveDevelopmentApiProxy(origin) : undefined;
+
+  return {
+    plugins: [react()],
+    ...(proxy ? { server: { proxy } } : {}),
+  };
+}
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react()],
-});
+export default defineConfig(({ mode }) => createWebViteConfig(mode));

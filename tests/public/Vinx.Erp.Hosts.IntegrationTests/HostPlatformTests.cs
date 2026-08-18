@@ -24,16 +24,21 @@ public sealed class HostPlatformTests
     private const string TestAuthenticationHeader = "X-Vinx-Test-Authentication";
 
     [Fact]
-    public async Task Mcp_and_worker_hosts_expose_native_uncached_health()
+    public async Task Mcp_host_exposes_native_uncached_health()
     {
         using var mcpFactory = new McpHostFactory();
-        using var workerFactory = new WorkerHostFactory();
 
         using var mcpHealth = await mcpFactory.CreateClient().GetAsync("/health");
-        using var workerHealth = await workerFactory.CreateClient().GetAsync("/health");
 
         await AssertHealthyAsync(mcpHealth);
-        await AssertHealthyAsync(workerHealth);
+    }
+
+    [Fact]
+    public void Worker_host_fails_closed_without_database_configuration()
+    {
+        using var workerFactory = new WorkerHostFactory();
+
+        Assert.Throws<ArgumentNullException>(() => workerFactory.CreateClient());
     }
 
     [Fact]

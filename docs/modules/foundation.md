@@ -50,8 +50,9 @@ autenticação não `token_refresh`; ausência ou malformação falha fechada co
 por função SQL, grava uma sessão EF só quando a autenticação é estritamente
 posterior à barreira e registra auditoria global na mesma transação. Repetição
 ativa não cria auditoria; barreira, revogação e colisão produzem negação
-auditada sem identificador externo. O gate cria o `ActorContext` e decide
-entre `401` e `503` antes do endpoint protegido.
+auditada sem identificador externo. O gate cria o `ActorContext` com o `User`
+interno e o ID da linha de identidade externa resolvida, ambos derivados no
+servidor, e decide entre `401` e `503` antes do endpoint protegido.
 
 `GET /foundation/memberships` usa somente esse `ActorContext`. Em uma única
 transação de leitura, descobre as memberships ativas do ator e projeta as
@@ -61,6 +62,219 @@ sem grant retorna `capabilities: []`. A resposta não expõe papéis, identidade
 externa ou dados de autenticação. Falha de descoberta retorna `503` seguro.
 `GET /foundation/capabilities?companyId=` continua sendo o contrato de uma
 única empresa e preserva suas negações auditáveis.
+
+`GET /foundation/bootstrap` também usa somente o `ActorContext` criado pelo
+gate. Entrega o perfil mínimo da própria pessoa (`id` e `displayName`), suas
+memberships ativas ordenadas com capabilities efetivas e `flags` como mapa
+`string -> bool`. Não recebe corpo, usuário, empresa, capability ou flag do
+cliente; não expõe papel, e-mail, issuer, subject, token, sessão ou empresa
+não autorizada. Pessoa admitida sem membership recebe `companies: []`.
+
+`401` vazio é decidido pelo authentication/session gate antes do handler.
+Indisponibilidade do gate retorna somente
+`503 {"code":"identity_gate_unavailable"}`; indisponibilidade na leitura de
+perfil ou memberships retorna somente `503 {"code":"audit_unavailable"}`.
+Não há resposta parcial e cancelamento propaga. As flags são validadas no
+startup e materializadas para o processo: mudança de configuração exige novo
+deploy ou restart.
+
+## Sessão Browser BFF
+
+A mesma origem usa `GET /foundation/identity/browser-session/antiforgery`,
+`POST /foundation/identity/browser-session` e
+`DELETE /foundation/identity/browser-session`. O login recebe credenciais e
+emite somente a prova `HttpOnly`, `SameSite=Strict`, de caminho `/` e sem
+persistência; fora de Development também exige `Secure`. O cookie é
+`vinx.session` em Development e
+`__Host-vinx.session` nos demais ambientes. Access token, refresh token,
+e-mail e resposta bruta do provedor nunca chegam ao browser. O browser não
+chama Supabase, Storage ou PostgreSQL diretamente.
+
+O login exige `X-CSRF-TOKEN` e corpo `application/json` contendo somente
+`email` e `password`. O JSON tem no máximo 8 KiB, incluindo espaços em branco
+e contando os bytes efetivamente recebidos, sem confiar em `Content-Length`.
+Excesso retorna `400 {"code":"invalid_request"}` antes de chamar o provedor
+ou emitir cookie de sessão.
+
+Operações protegidas comuns aceitam bearer válido ou essa prova de cookie. A
+presença de `Authorization`, inclusive malformado, seleciona bearer e nunca
+faz fallback para cookie. O logout aceita somente cookie: `DELETE` exige CSRF
+válido e revoga globalmente as sessões da própria pessoa. Após CSRF válido, a
+prova local é removida uma única vez também quando o gate encerra a requisição
+com `503 {"code":"identity_gate_unavailable"}`; isso não autoriza ator nem
+transforma indisponibilidade em sucesso. CSRF ausente ou inválido, pedido
+anônimo e `Authorization` inválido não removem cookie. Bearer válido no logout
+somente-cookie retorna `403` vazio, sem remover a prova local nem revogar
+sessões.
+
+As rotas BFF usam `Cache-Control: private, no-store`. CSRF e login público
+compartilham a origem, mas somente o endpoint `POST` de login entra nos
+limites: 100 requisições por minuto globais e 10 por minuto por IP; aliases
+aceitos pelo roteamento compartilham o mesmo limite global. A emissão de token
+antiforgery não consome esses limites. A entrega não amplia #44 com JIT por
+e-mail, MFA, recuperação ou fluxos adicionais de provedor, nem entrega #79:
+listagem ou revogação individual de sessões continuam adiadas.
+
+O operador de plataforma é um registro global singleton em
+`foundation.platform_operators`, separado de company, membership, role e
+capability de tenant. A policy `platform.operator` consulta somente a função
+SQL `current_actor_is_platform_operator()` usando o ID exato de identidade
+externa do `ActorContext`, aplicado como `app.external_identity_id` somente na
+transação do servidor; ausência desse ID nega acesso. Papel de tenant, claim
+JWT, metadado do provedor e outra identidade ligada ao mesmo `User` nunca
+concedem esse acesso. A negação da policy registra
+`platform.operator.required` em auditoria global e retorna somente `403` com
+code `platform_operator_required`. Indisponibilidade da função ou da auditoria
+falha fechada com `503` e code
+`platform_operator_unavailable`.
+
+`GET /foundation/bootstrap` inclui a projeção aditiva
+`platform.isPlatformOperator`, sem e-mail, issuer, subject, papel ou token.
+`GET /foundation/platform/bootstrap` exige a mesma policy e retorna somente
+`isPlatformOperator: true`; ele não lê dados de empresa. A projeção orienta a
+interface, mas toda mutação futura continua reavaliando o operador no banco.
+
+`POST /foundation/platform/organizations` é a única criação inicial de
+organização nesta fatia. Exige primeiro o operador global exato e, somente
+depois, a assurance normalizada `aal2`; quem não é operador recebe
+`platform_operator_required` sem conhecer seu estado de MFA. Um operador
+confirmado com `aal1` recebe `mfa_assurance_required` e a negação é auditada
+globalmente. A assurance é derivada do claim pelo gate, mantida como enum no
+`ActorContext` e aplicada como `app.mfa_assurance`; o claim bruto não é
+persistido nem registrado.
+
+O corpo HTTP contém `requestId`, `groupName`, `companyName`,
+`ownerDisplayName` e `ownerEmail`. O servidor normaliza os campos, calcula o
+hash SHA-256 canônico da representação UTF-8 do array JSON ordenado desses
+cinco valores e passa somente esse hash à função SQL. O recibo de
+idempotência armazena IDs opacos e o hash, nunca dados pessoais. Repetição do
+mesmo ator, request e hash devolve os mesmos IDs; payload diferente devolve
+`idempotency_conflict`. Nomes ativos de grupo e empresa, e e-mail de usuário,
+são únicos globalmente por `lower(btrim(...))`.
+
+A função `SECURITY DEFINER` pertence a `vinx_provisioning_owner`, role
+`NOLOGIN` sem Bypass RLS. Ela serializa o par ator/request, cria grupo,
+empresa, usuário local, membership, role fixa `owner`, quatro grants
+necessários, assignment e convite técnico `pending_delivery`; então grava
+recibo e auditoria global `platform.organization.provision` na mesma
+transação. Antes do commit, o serviço acrescenta ao papel `owner` a capability
+`foundation.employees.create` pela função estreita do diretório, vinculada ao
+recibo exato daquele operador, request, empresa e membership; o operador
+continua sem membership ou acesso ao tenant criado. Não há envio ou aceite no
+provedor durante essa criação HTTP, employee criado para o owner, interface ou
+fluxo de aceite nesta fatia.
+
+### Outbox transacional do convite inicial
+
+Quando o resultado é `created`, a mesma transação persiste uma única mensagem
+durável `OwnerInvitationDeliveryRequested`. O evento contém somente o UUID
+opaco `invitationId`: nome, e-mail, token, corpo HTTP, hash e segredo não
+entram no evento, nos metadados do envelope nem nos logs. `replay`, negações e
+conflitos não criam mensagem.
+
+Negócio, recibo de idempotência, auditoria e envelope pertencem à mesma
+transação, cujo commit é único no serviço. O flush acontece apenas depois de
+confirmação do commit. Falha antes do commit reverte todas essas gravações;
+resultado ambíguo do commit não é compensado nem republicado; falha isolada de
+flush conserva o convite como `pending_delivery` e o envelope durável para
+recuperação posterior pelo relay.
+
+O runtime usa a única conexão `FOUNDATION_RUNTIME_CONNECTION` tanto para
+Foundation quanto para Wolverine. O storage técnico fica em
+`vinx_wolverine` e `vinx_wolverine_queues`, sem confundir esses schemas com as
+migrations ou snapshot de Foundation. O ApiHost produtor não cria DDL nem tem
+ownership desses recursos; o provisionamento é etapa explícita de deploy. O
+WorkerHost consome a fila durável no mesmo banco físico, mas usa a conexão
+separada `FOUNDATION_WORKER_CONNECTION`, o envelope próprio em
+`vinx_wolverine_worker` e somente a fila compartilhada necessária.
+
+O único handler explícito do Worker chama a função SQL estreita de ingresso e
+altera o convite de `pending_delivery` para `pending_provider`, com uma única
+auditoria `owner_invitation.delivery.ingress`; replay não duplica a transição
+nem a auditoria. A #211B então reivindica uma tentativa sob lock: somente o
+vencedor lê o e-mail em memória, chama `POST /invite` do Supabase e grava
+o resultado por outra função `SECURITY DEFINER`, fora de transação aberta no
+provedor. Sucesso validado pelo `issuer` e `subject` retorna
+`pending_acceptance`; rejeição definitiva do provider retorna `provider_failed`;
+timeout, erro de autenticação/rate limit, 5xx, redirect ou corpo inválido
+retornam `provider_ambiguous`, sem retry cego. Repetição enquanto a tentativa
+está em curso preserva `provider_in_flight`, sem nova chamada. Token, e-mail,
+corpo HTTP e segredo não
+persistem em envelope, log ou auditoria. O worker não recebe DML direto em
+Foundation: as funções estreitas são sua única fronteira de negócio. Aceite,
+login da identidade reservada e reconciliação de estado ambíguo permanecem
+fatias posteriores.
+
+`provider_in_flight` sem finalização — por queda do worker entre a
+reivindicação e a chamada, ou por falha transitória após o provider aceitar —
+permanece seguro: não há segunda chamada e o replay encerra sem mutação, porque
+nova tentativa para o mesmo convite retorna `Claimed=false` sem chamar o
+provider. A recuperação fica para a reconciliação da #211B; até lá, o convite
+permanece retido em `provider_in_flight` e o runbook é apenas investigativo:
+auditar `provider_attempt_id`, confirmar com o provider se o convite foi criado
+e escalonar — nunca reabrir o estado manualmente nem emitir nova intenção, que
+não reexecuta a entrega neste head.
+
+O destino do convite (`SUPABASE_INVITE_REDIRECT_URL`) é validado no startup
+como URI HTTPS absoluta sem fragmento e, quando
+`SUPABASE_INVITE_REDIRECT_ALLOWED_ORIGINS` está definido (lista de origens
+absolutas separadas por `;`), a origem do redirect precisa pertencer à lista.
+O cliente HTTP não segue redirects, então a service-role key nunca é
+reenviada a outra origem.
+
+O startup falha fechado se a conexão não for efetivamente `vinx_worker`; não
+cria DDL em runtime e descobre somente esse handler. Erros transitórios de
+PostgreSQL têm tentativas agendadas finitas. Erro permanente, inesperado ou
+tentativas esgotadas seguem para a DLQ do worker com UUID zerado, sem headers,
+payload original, dados pessoais ou mensagem interna de exceção.
+
+## Diretório local de funcionários
+
+`POST /foundation/companies/{companyId}/employees` reserva uma pessoa no
+diretório local. O corpo estrito `application/json` contém somente `requestId`,
+`companyId`, `displayName` e `email`, e o identificador do corpo deve coincidir
+com a empresa da rota. A operação exige identidade interna conhecida,
+membership ativa e a capability `foundation.employees.create` em escopo
+`company`; a função SQL reavalia as três condições antes de consultar a
+idempotência. O corpo é limitado a 8 KiB pelos bytes efetivamente lidos,
+inclusive em transferência chunked; JSON inválido ou e-mail sem sintaxe válida
+retorna `400 {"code":"invalid_request"}` antes da mutação.
+Quando autenticado pelo cookie BFF, o POST exige `X-CSRF-TOKEN`; chamadas
+autenticadas por bearer não exigem esse header.
+
+A criação transacional insere somente um `User` novo, uma `Membership` nova e
+um `Employee` da empresa, além de recibo e auditoria
+`foundation.employee.create`. Ela não cria `ExternalIdentity`, role assignment,
+convite, token, outbox ou chamada ao provedor. E-mail é normalizado apenas para
+a unicidade global do `User`; nunca volta na resposta, no diretório, na
+auditoria ou no log. Colisão de e-mail retorna `employee_conflict` sem revelar
+o cadastro existente.
+
+O mesmo ator, empresa, `requestId` e payload retorna os mesmos IDs opacos sem
+duplicar linhas nem auditoria. Payload divergente retorna
+`idempotency_conflict`. Negação de capability gera auditoria compacta separada;
+se essa evidência não puder ser gravada, a API retorna `503` seguro em vez de
+confirmar uma negação sem rastro. `GET /foundation/companies/{companyId}/employees`
+requer a mesma capability e devolve apenas IDs opacos e `displayName` da própria
+empresa. Ambas as rotas do diretório usam `Cache-Control: private, no-store`,
+inclusive para respostas de erro produzidas pelo pipeline.
+
+Esta etapa é deliberadamente uma reserva sem login. Entrega pelo provedor,
+outbox/worker, token com expiração, vínculo exato de `issuer` + `subject` e
+aceite browser permanecem nas próximas fatias da issue #211; identidade
+desconhecida continua recebendo `401` fora de um futuro fluxo de aceite
+explicitamente limitado.
+
+O único bootstrap inicial é o comando de deployment
+`Vinx.Erp.PlatformBootstrap`, sem argumentos. Ele usa a conexão migradora e
+configuração de deployment para consultar `GET /auth/v1/admin/users/{id}` no
+Supabase com credencial exclusiva de servidor, confirma sujeito, audiência,
+e-mail confirmado, identidade não anônima e estado não banido/removido, e só
+então chama a função SQL exclusiva do migrador. O comando nunca usa
+`user_metadata`, não cria operador por HTTP, não imprime identificador,
+e-mail, chave, conexão ou corpo do provedor; sua saída é uma categoria estável.
+Reexecução do mesmo issuer e subject devolve `already_configured`, enquanto
+outro sujeito falha em conflito sem anexar identidade por e-mail.
 
 O resolver interno de contexto parte somente do `ActorContext` e materializa
 um snapshot sem filtro de memberships ativas, nome legível e capabilities por
@@ -154,7 +368,7 @@ auditoria; a purga física continua fora desta fatia, na issue #201.
 
 ## Contract version
 
-`1.1`
+`1.5`
 
 ## Modelo de entidades e dados
 
@@ -198,6 +412,30 @@ somente leitura necessária para `current_actor_memberships()`. Essas roles são
 distintas das roles legadas do Supabase: `anon`, `authenticated` e
 `service_role`.
 
+O `vinx_platform_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui somente as
+colunas e funções necessárias para manter o singleton de operador de
+plataforma. O runtime não é seu membro, não recebe `SELECT` nem DML direto
+nessa tabela, e só pode executar a função de consulta do ator atual. A função
+de bootstrap permanece exclusiva da conexão migradora. O singleton fixa a
+`external_identity_id` do primeiro par `issuer` + `subject` verificado; outra
+identidade ligada ao mesmo `User` também recebe conflito. As funções de
+segurança usam relações qualificadas e `pg_temp` explícito ao fim do
+`search_path`; o appender de auditoria recebe a mesma proteção para que a
+evidência transacional não possa ser desviada por uma tabela temporária.
+
+`vinx_provisioning_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui somente as
+permissões transitórias e relações necessárias para a função de provisionamento
+de organização. O runtime não recebe leitura nem DML nas tabelas de convite e
+recibo, e executa apenas a função estreita; `PUBLIC` e migrador não a executam.
+
+`vinx_employee_directory_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui somente
+as colunas, policies RLS e funções necessárias para reservar o grafo local de
+funcionário e acrescentar a capability inicial ao papel `owner`. O runtime não
+recebe DML direto em `users`, `memberships`, `employees`, idempotência ou
+grants; executa apenas as duas funções estreitas. O downgrade falha fechado se
+existir recibo de criação de funcionário ou grant ativo da capability, para não
+remover acesso ou estado observado.
+
 A revogação de membership marca somente soft-delete e auditoria técnica da
 membership própria. O runtime recebe `UPDATE` apenas nas colunas de ciclo de
 vida da revogação, auditoria de alteração e `row_version`; `INSERT`, `DELETE`
@@ -214,6 +452,11 @@ Todos os hosts configuram `AddVinxLogging`, que preserva `ILogger<T>` nativo e
 emite console JSON com timestamp UTC ISO 8601. Hosts HTTP usam
 `UseVinxRequestCorrelation` antes dos endpoints; o middleware gera o
 `CorrelationId` no servidor, marca a `Activity` atual e o propaga por scope.
+No `ApiHost`, toda resposta concluída também devolve
+`X-Correlation-ID` com esse UUID em formato canônico, inclusive sucesso,
+negação segura e exceção tratada. O cabeçalho é referência diagnóstica opaca:
+o servidor ignora qualquer valor enviado pelo cliente e ele não concede acesso,
+não é chave de idempotência nem contém dado pessoal.
 Auditoria é append-only, transacional com a mutação e redigida. Logs usam
 templates constantes, operação, módulo, resultado e motivo seguro; nunca
 registram tokens, credenciais, PII, prompts ou payload bruto. O host autentica

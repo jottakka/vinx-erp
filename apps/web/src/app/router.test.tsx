@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RouterProvider } from "react-router-dom";
@@ -13,14 +14,19 @@ import { VinxThemeProvider } from "./theme/vinx-theme-provider";
 function renderRoute(path: string, gateway: MockSessionGateway) {
   window.history.pushState({}, "", path);
   const router = createAppRouter();
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+  });
 
   render(
     <VinxThemeProvider>
-      <SessionProvider gateway={gateway}>
-        <FeedbackProvider>
-          <RouterProvider router={router} />
-        </FeedbackProvider>
-      </SessionProvider>
+      <QueryClientProvider client={queryClient}>
+        <SessionProvider gateway={gateway}>
+          <FeedbackProvider>
+            <RouterProvider router={router} />
+          </FeedbackProvider>
+        </SessionProvider>
+      </QueryClientProvider>
     </VinxThemeProvider>,
   );
 
@@ -29,8 +35,13 @@ function renderRoute(path: string, gateway: MockSessionGateway) {
 
 async function signedInGateway() {
   const gateway = createMockSessionGateway();
-  await gateway.login("maria");
+  await gateway.login("maria@example.test");
   return gateway;
+}
+
+async function fillCredentials(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(screen.getByLabelText("E-mail"), "maria@example.test");
+  await user.type(screen.getByLabelText("Senha"), "test-password");
 }
 
 describe("application routes", () => {
@@ -97,9 +108,10 @@ describe("application routes", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Entrada do ambiente de desenvolvimento",
+        name: "Entrar",
       }),
     ).toBeVisible();
+    await fillCredentials(user);
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(await screen.findByRole("heading", { name: "Ajuda" })).toBeVisible();
@@ -112,9 +124,10 @@ describe("application routes", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Entrada do ambiente de desenvolvimento",
+        name: "Entrar",
       }),
     ).toBeVisible();
+    await fillCredentials(user);
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(
@@ -132,9 +145,10 @@ describe("application routes", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Entrada do ambiente de desenvolvimento",
+        name: "Entrar",
       }),
     ).toBeVisible();
+    await fillCredentials(user);
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(
@@ -152,9 +166,10 @@ describe("application routes", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Entrada do ambiente de desenvolvimento",
+        name: "Entrar",
       }),
     ).toBeVisible();
+    await fillCredentials(user);
     await user.click(screen.getByRole("button", { name: "Entrar" }));
 
     expect(
@@ -172,7 +187,7 @@ describe("application routes", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Entrada do ambiente de desenvolvimento",
+        name: "Entrar",
       }),
     ).toBeVisible();
     expect(router.state.location.pathname).toBe("/login");

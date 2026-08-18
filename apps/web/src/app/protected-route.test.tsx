@@ -43,7 +43,7 @@ describe("ProtectedRoute", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Entrada do ambiente de desenvolvimento",
+        name: "Entrar",
       }),
     ).toBeVisible();
     expect(screen.queryByText("Conteúdo protegido")).not.toBeInTheDocument();
@@ -83,5 +83,46 @@ describe("ProtectedRoute", () => {
       "Carregando aplicativo",
     );
     expect(screen.queryByText("Conteúdo protegido")).not.toBeInTheDocument();
+  });
+
+  it("keeps protected content blocked while bootstrap revalidation is unavailable", async () => {
+    const gateway: MockSessionGateway = {
+      getBootstrap: async () => {
+        throw new Error("internal diagnostic must not be rendered");
+      },
+      login: async () => {
+        throw new Error("not used");
+      },
+      logout: async () => {},
+    };
+    const router = createMemoryRouter(
+      [
+        { element: <LoginPage />, path: "/login" },
+        {
+          element: (
+            <ProtectedRoute>
+              <ProtectedContent />
+            </ProtectedRoute>
+          ),
+          path: "/protected",
+        },
+      ],
+      { initialEntries: ["/protected"] },
+    );
+
+    render(
+      <VinxThemeProvider>
+        <SessionProvider gateway={gateway}>
+          <RouterProvider router={router} />
+        </SessionProvider>
+      </VinxThemeProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Não foi possível validar sua sessão. Tente novamente.",
+    );
+    expect(screen.queryByText("Conteúdo protegido")).not.toBeInTheDocument();
+    expect(screen.queryByText("internal diagnostic")).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/protected");
   });
 });

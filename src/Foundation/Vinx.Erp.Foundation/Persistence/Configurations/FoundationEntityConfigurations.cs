@@ -12,7 +12,6 @@ public sealed class GroupConfiguration : IEntityTypeConfiguration<Group>
         builder.ToTable("groups");
         ConfigureMutable(builder);
         builder.Property(entity => entity.Name).HasMaxLength(200).IsRequired();
-        builder.HasIndex(entity => entity.Name).IsUnique().HasFilter("deleted_at IS NULL");
         builder.HasQueryFilter(entity => entity.DeletedAt == null);
     }
 
@@ -35,7 +34,7 @@ public sealed class CompanyConfiguration : IEntityTypeConfiguration<Company>
         builder.Property(entity => entity.Name).HasMaxLength(200).IsRequired();
         builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasDefaultValue(1L);
         builder.Property(entity => entity.DeletedReason).HasMaxLength(500);
-        builder.HasIndex(entity => new { entity.GroupId, entity.Name }).IsUnique().HasFilter("deleted_at IS NULL");
+        builder.HasIndex(entity => entity.GroupId).HasDatabaseName("ix_companies_group_id");
         builder.HasQueryFilter(entity => entity.DeletedAt == null);
         builder.HasOne(entity => entity.Group)
             .WithMany()
@@ -99,7 +98,6 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(entity => entity.DisplayName).HasMaxLength(200).IsRequired();
         builder.Property(entity => entity.Email).HasMaxLength(320).IsRequired();
         builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasDefaultValue(1L);
-        builder.HasIndex(entity => entity.Email).IsUnique();
     }
 }
 

@@ -1,6 +1,18 @@
 import { render, screen } from "@testing-library/react";
+import { HttpResponse, http } from "msw";
+import { beforeEach } from "vitest";
+import { server } from "../test/msw/server";
 import { AppProviders } from "./providers";
 import { VinxThemeProvider } from "./theme/vinx-theme-provider";
+
+beforeEach(() => {
+  server.use(
+    http.get(
+      "/foundation/bootstrap",
+      () => new HttpResponse(null, { status: 401 }),
+    ),
+  );
+});
 
 it("renders application content within the shell", () => {
   render(

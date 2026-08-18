@@ -1,8 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.OpenApi" />
+    <PackageReference Include="WolverineFx.Postgresql" />
+    <PackageReference Include="WolverineFx.RuntimeCompilation" />
     <ProjectReference Include="../../Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
   </ItemGroup>
 </Project>

@@ -1,79 +1,43 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
-using Vinx.Erp.Foundation.Domain;
+using Vinx.Erp.Foundation.Authorization;
 
 namespace Vinx.Erp.Foundation.Identity;
 
-public sealed class InternalSessionGateMiddleware(
-    RequestDelegate next,
-    ILogger<InternalSessionGateMiddleware> logger)
+public sealed class InternalSessionGateMiddleware(RequestDelegate next)
 {
-    private const string Operation = "identity_gate";
-    private const string Module = "identity";
-    private const string UnavailableReason = "database_resolution_unavailable";
-    private const string EventTemplate = "Identity gate {Operation} {Module} {Result} {Reason}";
-
     public async Task InvokeAsync(
         HttpContext context,
-        IIdentityProvider identityProvider,
-        InternalIdentityResolver identityResolver,
-        InternalSessionAdmissionService admissionService)
+        InternalSessionAuthenticator authenticator
+    )
     {
         var endpoint = context.GetEndpoint();
-        if (endpoint is null
+        if (
+            endpoint is null
             || endpoint.Metadata.GetMetadata<IAllowAnonymous>() is not null
-            || endpoint.Metadata.GetMetadata<IAuthorizeData>() is null)
+            || endpoint.Metadata.GetMetadata<IAuthorizeData>() is null
+        )
         {
             await next(context);
             return;
         }
 
-        if (context.User.Identity?.IsAuthenticated != true
-            || !identityProvider.TryGetExternalIdentityProof(context.User, out var proof))
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            return;
-        }
-
-        Guid? userId;
-        try
-        {
-            userId = await identityResolver.ResolveAsync(proof.Key, context.RequestAborted);
-        }
-        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            logger.LogError(exception, EventTemplate, Operation, Module, "unavailable", UnavailableReason);
-            await WriteUnavailableAsync(context);
-            return;
-        }
-
-        if (userId is null)
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            return;
-        }
-
-        var admission = await admissionService.AdmitAsync(
-            userId.Value,
-            proof,
-            AuditSource.Web,
+        var authentication = await authenticator.AuthenticateAsync(
+            context.User,
             ServerCorrelationContext.Get(context).CorrelationId,
             context.RequestAborted);
-        if (admission.State is SessionAdmissionState.Admitted or SessionAdmissionState.Active)
+        if (authentication is
+            {
+                State: InternalSessionAuthenticationState.Authenticated,
+                Actor: { } actor,
+            })
         {
-            context.SetActorContext(new ActorContext(
-                userId.Value,
-                ServerCorrelationContext.Get(context).CorrelationId));
+            context.SetActorContext(actor);
             await next(context);
             return;
         }
 
-        if (admission.State == SessionAdmissionState.Denied)
+        if (authentication.State == InternalSessionAuthenticationState.Unauthenticated)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return;
@@ -85,6 +49,8 @@ public sealed class InternalSessionGateMiddleware(
     private static async Task WriteUnavailableAsync(HttpContext context)
     {
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        await context.Response.WriteAsJsonAsync(new { code = "identity_gate_unavailable" });
+        await context.Response.WriteAsJsonAsync(
+            new AuthorizationErrorResponse("identity_gate_unavailable")
+        );
     }
 }

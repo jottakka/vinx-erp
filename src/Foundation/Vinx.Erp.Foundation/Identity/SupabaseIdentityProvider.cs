@@ -28,7 +28,8 @@ public sealed class SupabaseIdentityProvider(string issuer) : IIdentityProvider
             || !TryGetUnixTime(issuedAtValue, out var issuedAt)
             || !TryGetUnixTime(expiresAtValue, out var expiresAt)
             || expiresAt <= issuedAt
-            || !TryGetProviderAuthenticatedAt(principal, issuedAt, out var authenticatedAt))
+            || !TryGetProviderAuthenticatedAt(principal, issuedAt, out var authenticatedAt)
+            || !TryGetAssuranceLevel(principal, out var assuranceLevel))
         {
             return false;
         }
@@ -37,7 +38,8 @@ public sealed class SupabaseIdentityProvider(string issuer) : IIdentityProvider
             new ExternalIdentityKey(issuer, subject),
             sessionId,
             authenticatedAt,
-            expiresAt);
+            expiresAt,
+            assuranceLevel);
         return true;
     }
 
@@ -60,6 +62,34 @@ public sealed class SupabaseIdentityProvider(string issuer) : IIdentityProvider
     private static bool IsScalar(Claim claim) =>
         !string.Equals(claim.ValueType, JsonClaimValueType, StringComparison.Ordinal)
         && !string.Equals(claim.ValueType, JsonArrayClaimValueType, StringComparison.Ordinal);
+
+    private static bool TryGetAssuranceLevel(
+        ClaimsPrincipal principal,
+        out AuthenticatorAssuranceLevel assuranceLevel)
+    {
+        assuranceLevel = AuthenticatorAssuranceLevel.Aal1;
+        var claims = principal.Claims
+            .Where(claim => string.Equals(claim.Type, "aal", StringComparison.Ordinal))
+            .ToArray();
+
+        if (claims.Length == 0)
+        {
+            return true;
+        }
+
+        if (claims.Length != 1 || !IsScalar(claims[0]))
+        {
+            return false;
+        }
+
+        assuranceLevel = claims[0].Value switch
+        {
+            "aal1" => AuthenticatorAssuranceLevel.Aal1,
+            "aal2" => AuthenticatorAssuranceLevel.Aal2,
+            _ => default,
+        };
+        return claims[0].Value is "aal1" or "aal2";
+    }
 
     private static bool TryGetUnixTime(string value, out DateTimeOffset unixTime)
     {

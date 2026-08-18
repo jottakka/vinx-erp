@@ -1,10 +1,15 @@
 import { expect, type Page, test } from "@playwright/test";
+import { installBffSession, signIn } from "./support/bff-session";
+
+test.beforeEach(async ({ page }) => {
+  await installBffSession(page);
+});
 
 async function waitForLogin(page: Page) {
   await page.goto("/login");
   await expect(
     page.getByRole("heading", {
-      name: "Entrada do ambiente de desenvolvimento",
+      name: "Entrar",
     }),
   ).toBeVisible();
 }
@@ -104,10 +109,8 @@ test("login renders the decorative ink field behind the content and stays usable
   await waitForLogin(page);
   await expectInkBehindContent(page);
 
-  const profile = page.getByLabel("Perfil de desenvolvimento");
-  await expect(profile).toBeVisible();
-  await profile.fill("maria");
-  await page.getByRole("button", { name: "Entrar" }).click();
+  await expect(page.getByLabel("E-mail")).toBeVisible();
+  await signIn(page);
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
 });
@@ -118,8 +121,7 @@ test("the ambient ink field does not cover the login card", async ({
   await waitForLogin(page);
   await expectInkBehindContent(page);
 
-  const profile = page.getByLabel("Perfil de desenvolvimento");
-  await expect(profile).toBeEditable();
+  await expect(page.getByLabel("E-mail")).toBeEditable();
   await expect(page.getByRole("button", { name: "Entrar" })).toBeEnabled();
 });
 
@@ -158,7 +160,8 @@ test("mobile viewport keeps the ink field without horizontal overflow", async ({
   await waitForLogin(page);
   await expectInkBehindContent(page);
 
-  await expect(page.getByLabel("Perfil de desenvolvimento")).toBeVisible();
+  await expect(page.getByLabel("E-mail")).toBeVisible();
+  await expect(page.getByLabel("Senha")).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(
@@ -175,9 +178,7 @@ test("reduced motion keeps a static ink field and a working login", async ({
   await waitForLogin(page);
   await expectInkBehindContent(page);
 
-  const profile = page.getByLabel("Perfil de desenvolvimento");
-  await profile.fill("maria");
-  await page.getByRole("button", { name: "Entrar" }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
 });
 
@@ -191,9 +192,10 @@ test("forced colors hides the ink field and preserves the login", async ({
   await expect(inkCanvas(page)).toHaveCSS("display", "none");
   await expect(inkFallback(page)).toHaveCSS("display", "none");
 
-  const profile = page.getByLabel("Perfil de desenvolvimento");
-  await profile.fill("maria");
-  await profile.press("Tab");
+  const email = page.getByLabel("E-mail");
+  await email.fill("maria@example.test");
+  await email.press("Tab");
+  await page.getByLabel("Senha").fill("test-password");
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
 });
@@ -324,8 +326,6 @@ test("without webgl2 Canvas2D renders ambient smoke and ignores the pointer", as
     document.dispatchEvent(new Event("visibilitychange"));
   });
 
-  const profile = page.getByLabel("Perfil de desenvolvimento");
-  await profile.fill("maria");
-  await page.getByRole("button", { name: "Entrar" }).click();
+  await signIn(page);
   await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
 });

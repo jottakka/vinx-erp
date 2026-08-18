@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../../Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
+  </ItemGroup>
+</Project>

@@ -17,6 +17,7 @@ public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
     private string? _administratorConnectionString;
     private string? _migratorConnectionString;
     private string? _runtimeConnectionString;
+    private string? _workerConnectionString;
     private FoundationPostgresEndpoint? _endpoint;
     private bool _started;
     private bool _disposed;
@@ -42,6 +43,9 @@ public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
         ?? throw new InvalidOperationException("The fixture has not been started.");
 
     public string RuntimeConnectionString => _runtimeConnectionString
+        ?? throw new InvalidOperationException("The fixture has not been started.");
+
+    public string WorkerConnectionString => _workerConnectionString
         ?? throw new InvalidOperationException("The fixture has not been started.");
 
     internal string AdministratorConnectionString => _administratorConnectionString
@@ -133,11 +137,14 @@ public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
 
             var migratorPassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
             var runtimePassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            var workerPassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
             await SetPasswordAsync(connection, "vinx_migrator", migratorPassword);
             await SetPasswordAsync(connection, "vinx_runtime", runtimePassword);
+            await SetPasswordAsync(connection, "vinx_worker", workerPassword);
 
             _migratorConnectionString = BuildConnectionString("vinx_migrator", migratorPassword);
             _runtimeConnectionString = BuildConnectionString("vinx_runtime", runtimePassword);
+            _workerConnectionString = BuildConnectionString("vinx_worker", workerPassword);
             _started = true;
         }
         catch (Exception primaryFailure)

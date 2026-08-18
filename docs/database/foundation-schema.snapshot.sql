@@ -27,7 +27,7 @@ CREATE SCHEMA foundation;
 
 CREATE FUNCTION audit.append_event(p_actor_user_id uuid, p_scope text, p_requested_company_id uuid, p_source text, p_action text, p_resource_type text, p_resource_id uuid, p_outcome text, p_correlation_id uuid, p_reason text, p_metadata jsonb) RETURNS void
     LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'audit', 'pg_catalog'
+    SET search_path TO 'pg_catalog', 'audit', 'pg_temp'
     AS $$
 BEGIN
     IF p_scope IS NULL OR p_scope NOT IN ('global', 'company') THEN
@@ -69,6 +69,461 @@ END;
 $$;
 
 
+-- Name: accept_owner_invitation_delivery(uuid, uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.accept_owner_invitation_delivery(p_invitation_id uuid, p_correlation_id uuid) RETURNS TABLE(status text, provider_pending_at timestamp with time zone, transitioned boolean)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_company_id uuid;
+    v_invitation_user_id uuid;
+    v_receipt_company_id uuid;
+    v_receipt_owner_user_id uuid;
+    v_actor_user_id uuid;
+    v_status text;
+    v_provider_pending_at timestamp with time zone;
+BEGIN
+    IF p_invitation_id IS NULL OR p_correlation_id IS NULL THEN
+        RAISE EXCEPTION 'owner invitation delivery parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    SELECT invitation.company_id,
+        invitation.user_id,
+        invitation.status,
+        invitation.provider_pending_at
+    INTO v_company_id,
+        v_invitation_user_id,
+        v_status,
+        v_provider_pending_at
+    FROM foundation.pending_owner_invitations AS invitation
+    WHERE invitation.id = p_invitation_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'not_found'::text, NULL::timestamp with time zone, false;
+        RETURN;
+    END IF;
+
+    SELECT receipt.company_id,
+        receipt.owner_user_id,
+        receipt.actor_user_id
+    INTO v_receipt_company_id,
+        v_receipt_owner_user_id,
+        v_actor_user_id
+    FROM foundation.organization_provisioning_receipts AS receipt
+    WHERE receipt.owner_invitation_id = p_invitation_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'owner invitation provisioning receipt is missing'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF v_company_id IS DISTINCT FROM v_receipt_company_id THEN
+        RAISE EXCEPTION 'owner invitation receipt company is inconsistent'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF v_invitation_user_id IS DISTINCT FROM v_receipt_owner_user_id THEN
+        RAISE EXCEPTION 'owner invitation receipt owner is inconsistent'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF v_status = 'pending_delivery' THEN
+        v_provider_pending_at := pg_catalog.clock_timestamp();
+        UPDATE foundation.pending_owner_invitations AS invitation
+        SET status = 'pending_provider',
+            provider_pending_at = v_provider_pending_at
+        WHERE invitation.id = p_invitation_id
+          AND invitation.status = 'pending_delivery';
+
+        IF FOUND THEN
+            PERFORM audit.append_event(
+                v_actor_user_id,
+                'company',
+                v_company_id,
+                'worker',
+                'owner_invitation.delivery.ingress',
+                'owner_invitation',
+                p_invitation_id,
+                'success',
+                p_correlation_id,
+                NULL,
+                '{}'::jsonb);
+            RETURN QUERY SELECT 'pending_provider'::text, v_provider_pending_at, true;
+        ELSE
+            RETURN QUERY SELECT v_status, v_provider_pending_at, false;
+        END IF;
+        RETURN;
+    END IF;
+
+    RETURN QUERY SELECT v_status, v_provider_pending_at, false;
+END;
+$$;
+
+
+-- Name: bootstrap_platform_operator(text, text, text, text, uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.bootstrap_platform_operator(p_subject text, p_issuer text, p_display_name text, p_provider_email text, p_correlation_id uuid) RETURNS TABLE(status text, user_id uuid)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_deployment_actor_id constant uuid := '00000000-0000-0000-0000-000000000001';
+    v_operator_user_id uuid;
+    v_operator_identity_id uuid;
+    v_identity_user_id uuid;
+    v_identity_id uuid;
+    v_email_user_id uuid;
+BEGIN
+    IF p_subject IS NULL
+        OR btrim(p_subject) = ''
+        OR char_length(p_subject) > 400
+        OR p_issuer IS NULL
+        OR btrim(p_issuer) = ''
+        OR char_length(p_issuer) > 200
+        OR p_display_name IS NULL
+        OR btrim(p_display_name) = ''
+        OR char_length(p_display_name) > 200
+        OR p_provider_email IS NULL
+        OR btrim(p_provider_email) = ''
+        OR char_length(p_provider_email) > 320
+        OR p_correlation_id IS NULL THEN
+        RAISE EXCEPTION 'platform operator bootstrap parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    LOCK TABLE foundation.platform_operators IN SHARE ROW EXCLUSIVE MODE;
+
+    SELECT platform_operator.external_identity_id, identity_record.user_id
+    INTO v_operator_identity_id, v_operator_user_id
+    FROM foundation.platform_operators AS platform_operator
+    INNER JOIN foundation.external_identities AS identity_record
+        ON identity_record.id = platform_operator.external_identity_id
+    WHERE platform_operator.singleton = 1;
+
+    IF FOUND THEN
+        SELECT identity_record.id, identity_record.user_id
+        INTO v_identity_id, v_identity_user_id
+        FROM foundation.external_identities AS identity_record
+        WHERE identity_record.issuer = p_issuer
+          AND identity_record.subject = p_subject;
+
+        IF FOUND AND v_identity_id = v_operator_identity_id THEN
+            RETURN QUERY SELECT 'already_configured'::text, v_operator_user_id;
+            RETURN;
+        END IF;
+
+        PERFORM audit.append_event(
+            v_deployment_actor_id,
+            'global',
+            NULL,
+            'worker',
+            'platform.operator.bootstrap',
+            'platform_operator',
+            NULL,
+            'denied',
+            p_correlation_id,
+            'deployment_bootstrap_conflict',
+            '{}'::jsonb);
+        RETURN QUERY SELECT 'conflict'::text, NULL::uuid;
+        RETURN;
+    END IF;
+
+    SELECT identity_record.id, identity_record.user_id
+    INTO v_identity_id, v_identity_user_id
+    FROM foundation.external_identities AS identity_record
+    WHERE identity_record.issuer = p_issuer
+      AND identity_record.subject = p_subject;
+
+    IF FOUND THEN
+        v_operator_user_id := v_identity_user_id;
+    ELSE
+        SELECT user_record.id
+        INTO v_email_user_id
+        FROM foundation.users AS user_record
+        WHERE lower(user_record.email) = lower(p_provider_email);
+
+        IF FOUND THEN
+            PERFORM audit.append_event(
+                v_deployment_actor_id,
+                'global',
+                NULL,
+                'worker',
+                'platform.operator.bootstrap',
+                'platform_operator',
+                NULL,
+                'denied',
+                p_correlation_id,
+                'deployment_bootstrap_conflict',
+                '{}'::jsonb);
+            RETURN QUERY SELECT 'conflict'::text, NULL::uuid;
+            RETURN;
+        END IF;
+
+        v_operator_user_id := gen_random_uuid();
+        v_identity_id := gen_random_uuid();
+        INSERT INTO foundation.users (id, display_name, email, created_at)
+        VALUES (
+            v_operator_user_id,
+            btrim(p_display_name),
+            btrim(p_provider_email),
+            clock_timestamp());
+        INSERT INTO foundation.external_identities (
+            id,
+            user_id,
+            issuer,
+            subject,
+            created_at)
+        VALUES (
+            v_identity_id,
+            v_operator_user_id,
+            p_issuer,
+            p_subject,
+            clock_timestamp());
+    END IF;
+
+    INSERT INTO foundation.platform_operators (singleton, external_identity_id)
+    VALUES (1, v_identity_id);
+
+    PERFORM audit.append_event(
+        v_deployment_actor_id,
+        'global',
+        NULL,
+        'worker',
+        'platform.operator.bootstrap',
+        'user',
+        v_operator_user_id,
+        'success',
+        p_correlation_id,
+        'deployment_bootstrap',
+        '{}'::jsonb);
+    RETURN QUERY SELECT 'created'::text, v_operator_user_id;
+END;
+$$;
+
+
+-- Name: claim_owner_invitation_provider_delivery(uuid, uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.claim_owner_invitation_provider_delivery(p_invitation_id uuid, p_correlation_id uuid) RETURNS TABLE(status text, attempt_id uuid, owner_email text, claimed boolean)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_company_id uuid;
+    v_invitation_user_id uuid;
+    v_receipt_company_id uuid;
+    v_receipt_owner_user_id uuid;
+    v_status text;
+    v_attempt_id uuid;
+    v_owner_email text;
+BEGIN
+    IF p_invitation_id IS NULL OR p_correlation_id IS NULL THEN
+        RAISE EXCEPTION 'owner invitation provider delivery parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    SELECT invitation.company_id,
+        invitation.user_id,
+        invitation.status,
+        invitation.provider_attempt_id
+    INTO v_company_id,
+        v_invitation_user_id,
+        v_status,
+        v_attempt_id
+    FROM foundation.pending_owner_invitations AS invitation
+    WHERE invitation.id = p_invitation_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'not_found'::text, NULL::uuid, NULL::text, false;
+        RETURN;
+    END IF;
+
+    SELECT receipt.company_id, receipt.owner_user_id
+    INTO v_receipt_company_id, v_receipt_owner_user_id
+    FROM foundation.organization_provisioning_receipts AS receipt
+    WHERE receipt.owner_invitation_id = p_invitation_id;
+
+    IF NOT FOUND
+        OR v_company_id IS DISTINCT FROM v_receipt_company_id
+        OR v_invitation_user_id IS DISTINCT FROM v_receipt_owner_user_id THEN
+        RAISE EXCEPTION 'owner invitation provisioning receipt is inconsistent'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF v_status = 'pending_provider' THEN
+        v_attempt_id := gen_random_uuid();
+        UPDATE foundation.pending_owner_invitations AS invitation
+        SET status = 'provider_in_flight',
+            provider_attempt_id = v_attempt_id,
+            provider_started_at = pg_catalog.clock_timestamp()
+        WHERE invitation.id = p_invitation_id
+          AND invitation.status = 'pending_provider';
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'owner invitation provider claim lost its row lock'
+                USING ERRCODE = '40001';
+        END IF;
+
+        SELECT user_record.email
+        INTO v_owner_email
+        FROM foundation.users AS user_record
+        WHERE user_record.id = v_invitation_user_id;
+
+        IF NOT FOUND OR v_owner_email IS NULL OR btrim(v_owner_email) = '' THEN
+            RAISE EXCEPTION 'owner invitation user email is unavailable'
+                USING ERRCODE = '23514';
+        END IF;
+
+        RETURN QUERY SELECT 'provider_in_flight'::text, v_attempt_id, v_owner_email, true;
+        RETURN;
+    END IF;
+
+    RETURN QUERY SELECT v_status, v_attempt_id, NULL::text, false;
+END;
+$$;
+
+
+-- Name: create_employee_directory_entry(uuid, uuid, text, text, text); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.create_employee_directory_entry(p_request_id uuid, p_company_id uuid, p_display_name text, p_email text, p_payload_hash text) RETURNS TABLE(status text, employee_id uuid, membership_id uuid, user_id uuid)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $_$
+DECLARE
+    v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+    v_correlation_id uuid := COALESCE(
+        NULLIF(current_setting('app.correlation_id', true), '')::uuid,
+        gen_random_uuid());
+    v_existing foundation.idempotency_records%ROWTYPE;
+    v_user_id uuid := gen_random_uuid();
+    v_membership_id uuid := gen_random_uuid();
+    v_employee_id uuid := gen_random_uuid();
+    v_now timestamp with time zone := clock_timestamp();
+BEGIN
+    IF p_company_id IS NULL
+        OR p_request_id IS NULL
+        OR p_payload_hash !~ '^[0-9a-f]{64}$'
+        OR p_display_name IS NULL
+        OR btrim(p_display_name) = ''
+        OR char_length(btrim(p_display_name)) > 200
+        OR p_email IS NULL
+        OR btrim(p_email) = ''
+        OR char_length(btrim(p_email)) > 320 THEN
+        RAISE EXCEPTION 'employee directory parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM set_config('app.company_id', p_company_id::text, true);
+
+    IF v_actor_user_id IS NULL
+        OR NOT EXISTS (
+            SELECT 1
+            FROM foundation.memberships AS membership
+            INNER JOIN foundation.role_assignments AS assignment
+                ON assignment.company_id = membership.company_id
+               AND assignment.membership_id = membership.id
+               AND assignment.deleted_at IS NULL
+            INNER JOIN foundation.roles AS role_record
+                ON role_record.company_id = assignment.company_id
+               AND role_record.id = assignment.role_id
+               AND role_record.deleted_at IS NULL
+            INNER JOIN foundation.role_capabilities AS grant_record
+                ON grant_record.company_id = assignment.company_id
+               AND grant_record.role_id = assignment.role_id
+               AND grant_record.scope = 'company'
+               AND grant_record.deleted_at IS NULL
+            INNER JOIN foundation.capabilities AS capability
+                ON capability.id = grant_record.capability_id
+               AND capability.name = 'foundation.employees.create'
+            WHERE membership.company_id = p_company_id
+              AND membership.user_id = v_actor_user_id
+              AND membership.deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'employee directory capability is required'
+            USING ERRCODE = '42501';
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended(
+            v_actor_user_id::text || '|' || p_company_id::text || '|' || p_request_id::text,
+            0));
+    SELECT * INTO v_existing
+    FROM foundation.idempotency_records
+    WHERE company_id = p_company_id
+      AND actor_user_id = v_actor_user_id
+      AND command_name = 'foundation.employee.create'
+      AND request_id = p_request_id;
+    IF FOUND THEN
+        RETURN QUERY
+        SELECT
+            CASE
+                WHEN v_existing.payload_hash = p_payload_hash THEN 'replay'
+                ELSE 'idempotency_conflict'
+            END,
+            (v_existing.result_json ->> 'employeeId')::uuid,
+            (v_existing.result_json ->> 'membershipId')::uuid,
+            (v_existing.result_json ->> 'userId')::uuid;
+        RETURN;
+    END IF;
+
+    INSERT INTO foundation.users (id, display_name, email, created_at)
+    VALUES (v_user_id, btrim(p_display_name), lower(btrim(p_email)), v_now);
+    INSERT INTO foundation.memberships (
+        id, company_id, user_id, created_by_user_id, updated_by_user_id,
+        request_id, created_at, updated_at)
+    VALUES (
+        v_membership_id, p_company_id, v_user_id, v_actor_user_id, v_actor_user_id,
+        p_request_id, v_now, v_now);
+    INSERT INTO foundation.employees (
+        id, company_id, membership_id, display_name, created_by_user_id,
+        updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (
+        v_employee_id, p_company_id, v_membership_id, btrim(p_display_name),
+        v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.idempotency_records (
+        id, company_id, actor_user_id, command_name, request_id,
+        payload_hash, result_json, created_at)
+    VALUES (
+        gen_random_uuid(), p_company_id, v_actor_user_id, 'foundation.employee.create',
+        p_request_id, p_payload_hash,
+        jsonb_build_object(
+            'employeeId', v_employee_id,
+            'membershipId', v_membership_id,
+            'userId', v_user_id),
+        v_now);
+    PERFORM audit.append_event(
+        v_actor_user_id,
+        'company',
+        p_company_id,
+        'web',
+        'foundation.employee.create',
+        'employee',
+        v_employee_id,
+        'success',
+        v_correlation_id,
+        NULL,
+        '{}'::jsonb);
+    RETURN QUERY SELECT 'created'::text, v_employee_id, v_membership_id, v_user_id;
+END;
+$_$;
+
+
+-- Name: current_actor_is_platform_operator(); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.current_actor_is_platform_operator() RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM foundation.platform_operators AS platform_operator
+        WHERE platform_operator.external_identity_id =
+            NULLIF(current_setting('app.external_identity_id', true), '')::uuid);
+$$;
+
+
 -- Name: current_actor_memberships(); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.current_actor_memberships() RETURNS TABLE(membership_id uuid, company_id uuid, company_name text)
@@ -85,6 +540,18 @@ CREATE FUNCTION foundation.current_actor_memberships() RETURNS TABLE(membership_
 $$;
 
 
+-- Name: current_actor_profile(); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.current_actor_profile() RETURNS TABLE(user_id uuid, display_name text)
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'foundation', 'pg_catalog'
+    AS $$
+    SELECT user_record.id, user_record.display_name
+    FROM foundation.users AS user_record
+    WHERE user_record.id = NULLIF(current_setting('app.user_id', true), '')::uuid;
+$$;
+
+
 -- Name: current_authorized_company_ids(); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.current_authorized_company_ids() RETURNS SETOF uuid
@@ -95,6 +562,216 @@ CREATE FUNCTION foundation.current_authorized_company_ids() RETURNS SETOF uuid
     FROM regexp_split_to_table(
         NULLIF(current_setting('app.authorized_company_ids', true), ''), ',') AS value
     WHERE value <> '';
+$$;
+
+
+-- Name: ensure_platform_owner_employee_create(uuid, uuid, uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.ensure_platform_owner_employee_create(p_request_id uuid, p_company_id uuid, p_owner_membership_id uuid) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+    v_has_roles_assign boolean;
+BEGIN
+    IF p_request_id IS NULL OR p_company_id IS NULL OR p_owner_membership_id IS NULL THEN
+        RAISE EXCEPTION 'initial owner employee capability parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM set_config('app.company_id', p_company_id::text, true);
+
+    IF v_actor_user_id IS NULL
+        OR NOT foundation.current_actor_is_platform_operator() THEN
+        RAISE EXCEPTION 'platform operator is required' USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('app.mfa_assurance', true) IS DISTINCT FROM 'aal2' THEN
+        RAISE EXCEPTION 'mfa assurance is required' USING ERRCODE = '42501';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM foundation.organization_provisioning_receipts AS receipt
+        WHERE receipt.actor_user_id = v_actor_user_id
+          AND receipt.request_id = p_request_id
+          AND receipt.company_id = p_company_id
+          AND receipt.owner_membership_id = p_owner_membership_id) THEN
+        RAISE EXCEPTION 'initial owner provisioning receipt is required'
+            USING ERRCODE = '42501';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM foundation.memberships AS membership
+        INNER JOIN foundation.role_assignments AS assignment
+            ON assignment.company_id = membership.company_id
+           AND assignment.membership_id = membership.id
+           AND assignment.deleted_at IS NULL
+        INNER JOIN foundation.roles AS role_record
+            ON role_record.company_id = assignment.company_id
+           AND role_record.id = assignment.role_id
+           AND role_record.deleted_at IS NULL
+        INNER JOIN foundation.role_capabilities AS grant_record
+            ON grant_record.company_id = assignment.company_id
+           AND grant_record.role_id = assignment.role_id
+           AND grant_record.scope = 'company'
+           AND grant_record.deleted_at IS NULL
+        INNER JOIN foundation.capabilities AS capability
+            ON capability.id = grant_record.capability_id
+           AND capability.name = 'foundation.roles.assign'
+        WHERE membership.company_id = p_company_id
+          AND membership.id = p_owner_membership_id
+          AND membership.deleted_at IS NULL)
+    INTO v_has_roles_assign;
+    IF NOT v_has_roles_assign THEN
+        RAISE EXCEPTION 'initial owner employee capability is unavailable'
+            USING ERRCODE = '23514';
+    END IF;
+
+    INSERT INTO foundation.role_capabilities (
+        id, company_id, role_id, capability_id, scope,
+        created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    SELECT
+        gen_random_uuid(),
+        assignment.company_id,
+        assignment.role_id,
+        employee_capability.id,
+        'company',
+        v_actor_user_id,
+        v_actor_user_id,
+        gen_random_uuid(),
+        clock_timestamp(),
+        clock_timestamp()
+    FROM foundation.role_assignments AS assignment
+    INNER JOIN foundation.role_capabilities AS roles_assign
+        ON roles_assign.company_id = assignment.company_id
+       AND roles_assign.role_id = assignment.role_id
+       AND roles_assign.scope = 'company'
+       AND roles_assign.deleted_at IS NULL
+    INNER JOIN foundation.capabilities AS assigned_capability
+        ON assigned_capability.id = roles_assign.capability_id
+       AND assigned_capability.name = 'foundation.roles.assign'
+    INNER JOIN foundation.capabilities AS employee_capability
+        ON employee_capability.name = 'foundation.employees.create'
+    WHERE assignment.company_id = p_company_id
+      AND assignment.membership_id = p_owner_membership_id
+      AND assignment.deleted_at IS NULL
+    ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+        DO NOTHING;
+END;
+$$;
+
+
+-- Name: finalize_owner_invitation_provider_delivery(uuid, uuid, uuid, text, text, uuid, text); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.finalize_owner_invitation_provider_delivery(p_invitation_id uuid, p_attempt_id uuid, p_correlation_id uuid, p_outcome text, p_provider_issuer text, p_provider_subject uuid, p_failure_reason text) RETURNS TABLE(status text, finalized boolean)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_company_id uuid;
+    v_invitation_user_id uuid;
+    v_receipt_company_id uuid;
+    v_receipt_owner_user_id uuid;
+    v_actor_user_id uuid;
+    v_status text;
+    v_current_attempt_id uuid;
+    v_next_status text;
+    v_audit_outcome text;
+BEGIN
+    IF p_invitation_id IS NULL OR p_attempt_id IS NULL OR p_correlation_id IS NULL
+        OR p_outcome NOT IN ('success', 'failed', 'ambiguous') THEN
+        RAISE EXCEPTION 'owner invitation provider finalization parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    SELECT invitation.company_id,
+        invitation.user_id,
+        invitation.status,
+        invitation.provider_attempt_id
+    INTO v_company_id,
+        v_invitation_user_id,
+        v_status,
+        v_current_attempt_id
+    FROM foundation.pending_owner_invitations AS invitation
+    WHERE invitation.id = p_invitation_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'not_found'::text, false;
+        RETURN;
+    END IF;
+
+    IF v_status IS DISTINCT FROM 'provider_in_flight'
+        OR v_current_attempt_id IS DISTINCT FROM p_attempt_id THEN
+        RETURN QUERY SELECT v_status, false;
+        RETURN;
+    END IF;
+
+    SELECT receipt.company_id, receipt.owner_user_id, receipt.actor_user_id
+    INTO v_receipt_company_id, v_receipt_owner_user_id, v_actor_user_id
+    FROM foundation.organization_provisioning_receipts AS receipt
+    WHERE receipt.owner_invitation_id = p_invitation_id;
+
+    IF NOT FOUND
+        OR v_company_id IS DISTINCT FROM v_receipt_company_id
+        OR v_invitation_user_id IS DISTINCT FROM v_receipt_owner_user_id THEN
+        RAISE EXCEPTION 'owner invitation provisioning receipt is inconsistent'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF p_outcome = 'success' THEN
+        IF p_provider_issuer IS NULL OR btrim(p_provider_issuer) = ''
+            OR p_provider_subject IS NULL OR p_failure_reason IS NOT NULL THEN
+            RAISE EXCEPTION 'owner invitation provider success is invalid'
+                USING ERRCODE = '22023';
+        END IF;
+        v_next_status := 'pending_acceptance';
+        v_audit_outcome := 'success';
+        UPDATE foundation.pending_owner_invitations AS invitation
+        SET status = v_next_status,
+            provider_completed_at = pg_catalog.clock_timestamp(),
+            provider_issuer = btrim(p_provider_issuer),
+            provider_subject = p_provider_subject
+        WHERE invitation.id = p_invitation_id;
+    ELSE
+        IF p_provider_issuer IS NOT NULL OR p_provider_subject IS NOT NULL
+            OR (p_failure_reason IS DISTINCT FROM CASE p_outcome
+                    WHEN 'failed' THEN 'provider_rejected'
+                    ELSE 'provider_ambiguous'
+                END) THEN
+            RAISE EXCEPTION 'owner invitation provider failure is invalid'
+                USING ERRCODE = '22023';
+        END IF;
+        v_next_status := CASE p_outcome
+            WHEN 'failed' THEN 'provider_failed'
+            ELSE 'provider_ambiguous'
+        END;
+        v_audit_outcome := CASE p_outcome
+            WHEN 'failed' THEN 'failure'
+            ELSE 'unknown'
+        END;
+        UPDATE foundation.pending_owner_invitations AS invitation
+        SET status = v_next_status,
+            provider_completed_at = pg_catalog.clock_timestamp(),
+            provider_failure_reason = p_failure_reason
+        WHERE invitation.id = p_invitation_id;
+    END IF;
+
+    PERFORM audit.append_event(
+        v_actor_user_id,
+        'company',
+        v_company_id,
+        'worker',
+        'owner_invitation.delivery.provider',
+        'owner_invitation',
+        p_invitation_id,
+        v_audit_outcome,
+        p_correlation_id,
+        p_failure_reason,
+        '{}'::jsonb);
+    RETURN QUERY SELECT v_next_status, true;
+END;
 $$;
 
 
@@ -112,6 +789,81 @@ BEGIN
     FOR UPDATE;
 END;
 $$;
+
+
+-- Name: provision_platform_organization(uuid, text, text, text, text, text); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.provision_platform_organization(p_request_id uuid, p_group_name text, p_company_name text, p_owner_display_name text, p_owner_email text, p_payload_hash text) RETURNS TABLE(status text, group_id uuid, company_id uuid, owner_user_id uuid, owner_membership_id uuid, owner_invitation_id uuid)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $_$
+DECLARE
+    v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+    v_correlation_id uuid := COALESCE(NULLIF(current_setting('app.correlation_id', true), '')::uuid, gen_random_uuid());
+    v_group_id uuid := gen_random_uuid();
+    v_company_id uuid := gen_random_uuid();
+    v_owner_user_id uuid := gen_random_uuid();
+    v_membership_id uuid := gen_random_uuid();
+    v_role_id uuid := gen_random_uuid();
+    v_invitation_id uuid := gen_random_uuid();
+    v_existing foundation.organization_provisioning_receipts%ROWTYPE;
+    v_capability_count integer;
+    v_now timestamp with time zone := clock_timestamp();
+BEGIN
+    IF v_actor_user_id IS NULL OR NOT foundation.current_actor_is_platform_operator() THEN
+        RAISE EXCEPTION 'platform operator is required' USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('app.mfa_assurance', true) IS DISTINCT FROM 'aal2' THEN
+        RAISE EXCEPTION 'mfa assurance is required' USING ERRCODE = '42501';
+    END IF;
+    IF p_request_id IS NULL OR p_payload_hash !~ '^[0-9a-f]{64}$'
+        OR p_group_name IS NULL OR btrim(p_group_name) = '' OR char_length(btrim(p_group_name)) > 200
+        OR p_company_name IS NULL OR btrim(p_company_name) = '' OR char_length(btrim(p_company_name)) > 200
+        OR p_owner_display_name IS NULL OR btrim(p_owner_display_name) = '' OR char_length(btrim(p_owner_display_name)) > 200
+        OR p_owner_email IS NULL OR btrim(p_owner_email) = '' OR char_length(btrim(p_owner_email)) > 320 THEN
+        RAISE EXCEPTION 'organization provisioning parameters are invalid' USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_actor_user_id::text || '|' || p_request_id::text, 0));
+    SELECT * INTO v_existing FROM foundation.organization_provisioning_receipts
+    WHERE actor_user_id = v_actor_user_id AND request_id = p_request_id;
+    IF FOUND THEN
+        IF v_existing.payload_hash = p_payload_hash THEN
+            RETURN QUERY SELECT 'replay'::text, v_existing.group_id, v_existing.company_id, v_existing.owner_user_id, v_existing.owner_membership_id, v_existing.owner_invitation_id;
+        ELSE
+            RETURN QUERY SELECT 'idempotency_conflict'::text, v_existing.group_id, v_existing.company_id, v_existing.owner_user_id, v_existing.owner_membership_id, v_existing.owner_invitation_id;
+        END IF;
+        RETURN;
+    END IF;
+
+    INSERT INTO foundation.groups (id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (v_group_id, btrim(p_group_name), v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (v_company_id, v_group_id, btrim(p_company_name), v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.users (id, display_name, email, created_at)
+    VALUES (v_owner_user_id, btrim(p_owner_display_name), lower(btrim(p_owner_email)), v_now);
+    INSERT INTO foundation.memberships (id, company_id, user_id, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (v_membership_id, v_company_id, v_owner_user_id, v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.roles (id, company_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (v_role_id, v_company_id, 'owner', v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.role_capabilities (id, company_id, role_id, capability_id, scope, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    SELECT gen_random_uuid(), v_company_id, v_role_id, capability.id, 'company', v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now
+    FROM foundation.capabilities AS capability
+    WHERE capability.name IN ('foundation.roles.assign', 'foundation.memberships.revoke', 'foundation.files.upload', 'foundation.files.confirm');
+    GET DIAGNOSTICS v_capability_count = ROW_COUNT;
+    IF v_capability_count <> 4 THEN
+        RAISE EXCEPTION 'owner capability catalog is incomplete' USING ERRCODE = '23514';
+    END IF;
+    INSERT INTO foundation.role_assignments (id, company_id, role_id, membership_id, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+    VALUES (gen_random_uuid(), v_company_id, v_role_id, v_membership_id, v_actor_user_id, v_actor_user_id, p_request_id, v_now, v_now);
+    INSERT INTO foundation.pending_owner_invitations (id, user_id, company_id, status)
+    VALUES (v_invitation_id, v_owner_user_id, v_company_id, 'pending_delivery');
+    INSERT INTO foundation.organization_provisioning_receipts (id, actor_user_id, request_id, payload_hash, group_id, company_id, owner_user_id, owner_membership_id, owner_invitation_id)
+    VALUES (gen_random_uuid(), v_actor_user_id, p_request_id, p_payload_hash, v_group_id, v_company_id, v_owner_user_id, v_membership_id, v_invitation_id);
+    PERFORM audit.append_event(v_actor_user_id, 'global', NULL, 'web', 'platform.organization.provision', 'organization', v_company_id, 'success', v_correlation_id, NULL, '{}'::jsonb);
+    RETURN QUERY SELECT 'created'::text, v_group_id, v_company_id, v_owner_user_id, v_membership_id, v_invitation_id;
+END;
+$_$;
 
 
 -- Name: revoke_all_user_sessions(uuid); Type: FUNCTION; Schema: foundation; Owner: -
@@ -367,6 +1119,59 @@ CREATE TABLE foundation.memberships (
 ALTER TABLE ONLY foundation.memberships FORCE ROW LEVEL SECURITY;
 
 
+-- Name: organization_provisioning_receipts; Type: TABLE; Schema: foundation; Owner: -
+
+CREATE TABLE foundation.organization_provisioning_receipts (
+    id uuid NOT NULL,
+    actor_user_id uuid NOT NULL,
+    request_id uuid NOT NULL,
+    payload_hash character varying(64) NOT NULL,
+    group_id uuid NOT NULL,
+    company_id uuid NOT NULL,
+    owner_user_id uuid NOT NULL,
+    owner_membership_id uuid NOT NULL,
+    owner_invitation_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT organization_provisioning_receipts_payload_hash_check CHECK (((payload_hash)::text ~ '^[0-9a-f]{64}$'::text))
+);
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts FORCE ROW LEVEL SECURITY;
+
+
+-- Name: pending_owner_invitations; Type: TABLE; Schema: foundation; Owner: -
+
+CREATE TABLE foundation.pending_owner_invitations (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    company_id uuid NOT NULL,
+    status character varying(30) NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    provider_pending_at timestamp with time zone,
+    provider_attempt_id uuid,
+    provider_started_at timestamp with time zone,
+    provider_completed_at timestamp with time zone,
+    provider_issuer text,
+    provider_subject uuid,
+    provider_failure_reason character varying(50),
+    CONSTRAINT ck_pending_owner_invitations_provider_subject_not_empty CHECK (((provider_subject IS NULL) OR (provider_subject <> '00000000-0000-0000-0000-000000000000'::uuid))),
+    CONSTRAINT ck_pending_owner_invitations_status CHECK (((((status)::text = 'pending_delivery'::text) AND (provider_pending_at IS NULL) AND (provider_attempt_id IS NULL) AND (provider_started_at IS NULL) AND (provider_completed_at IS NULL) AND (provider_issuer IS NULL) AND (provider_subject IS NULL) AND (provider_failure_reason IS NULL)) OR (((status)::text = 'pending_provider'::text) AND (provider_pending_at IS NOT NULL) AND (provider_attempt_id IS NULL) AND (provider_started_at IS NULL) AND (provider_completed_at IS NULL) AND (provider_issuer IS NULL) AND (provider_subject IS NULL) AND (provider_failure_reason IS NULL)) OR (((status)::text = 'provider_in_flight'::text) AND (provider_pending_at IS NOT NULL) AND (provider_attempt_id IS NOT NULL) AND (provider_started_at IS NOT NULL) AND (provider_completed_at IS NULL) AND (provider_issuer IS NULL) AND (provider_subject IS NULL) AND (provider_failure_reason IS NULL)) OR (((status)::text = 'pending_acceptance'::text) AND (provider_pending_at IS NOT NULL) AND (provider_attempt_id IS NOT NULL) AND (provider_started_at IS NOT NULL) AND (provider_completed_at IS NOT NULL) AND (provider_issuer IS NOT NULL) AND (provider_subject IS NOT NULL) AND (provider_failure_reason IS NULL)) OR (((status)::text = 'provider_failed'::text) AND (provider_pending_at IS NOT NULL) AND (provider_attempt_id IS NOT NULL) AND (provider_started_at IS NOT NULL) AND (provider_completed_at IS NOT NULL) AND (provider_issuer IS NULL) AND (provider_subject IS NULL) AND ((provider_failure_reason)::text = 'provider_rejected'::text)) OR (((status)::text = 'provider_ambiguous'::text) AND (provider_pending_at IS NOT NULL) AND (provider_attempt_id IS NOT NULL) AND (provider_started_at IS NOT NULL) AND (provider_completed_at IS NOT NULL) AND (provider_issuer IS NULL) AND (provider_subject IS NULL) AND ((provider_failure_reason)::text = 'provider_ambiguous'::text))))
+);
+
+ALTER TABLE ONLY foundation.pending_owner_invitations FORCE ROW LEVEL SECURITY;
+
+
+-- Name: platform_operators; Type: TABLE; Schema: foundation; Owner: -
+
+CREATE TABLE foundation.platform_operators (
+    singleton smallint NOT NULL,
+    external_identity_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_platform_operators_singleton CHECK ((singleton = 1))
+);
+
+ALTER TABLE ONLY foundation.platform_operators FORCE ROW LEVEL SECURITY;
+
+
 -- Name: role_assignments; Type: TABLE; Schema: foundation; Owner: -
 
 CREATE TABLE foundation.role_assignments (
@@ -569,6 +1374,18 @@ ALTER TABLE ONLY foundation.units
     ADD CONSTRAINT ak_units_company_id_id UNIQUE (company_id, id);
 
 
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_pkey; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_pkey PRIMARY KEY (id);
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_pkey; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.pending_owner_invitations
+    ADD CONSTRAINT pending_owner_invitations_pkey PRIMARY KEY (id);
+
+
 -- Name: approvals pk_approvals; Type: CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.approvals
@@ -623,6 +1440,12 @@ ALTER TABLE ONLY foundation.memberships
     ADD CONSTRAINT pk_memberships PRIMARY KEY (id);
 
 
+-- Name: platform_operators pk_platform_operators; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.platform_operators
+    ADD CONSTRAINT pk_platform_operators PRIMARY KEY (singleton);
+
+
 -- Name: role_assignments pk_role_assignments; Type: CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.role_assignments
@@ -665,6 +1488,30 @@ ALTER TABLE ONLY foundation.users
     ADD CONSTRAINT pk_users PRIMARY KEY (id);
 
 
+-- Name: organization_provisioning_receipts uq_organization_provisioning_receipts_actor_request; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT uq_organization_provisioning_receipts_actor_request UNIQUE (actor_user_id, request_id);
+
+
+-- Name: organization_provisioning_receipts uq_organization_provisioning_receipts_owner_invitation_id; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT uq_organization_provisioning_receipts_owner_invitation_id UNIQUE (owner_invitation_id);
+
+
+-- Name: pending_owner_invitations uq_pending_owner_invitations_user_id; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.pending_owner_invitations
+    ADD CONSTRAINT uq_pending_owner_invitations_user_id UNIQUE (user_id);
+
+
+-- Name: platform_operators uq_platform_operators_external_identity_id; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.platform_operators
+    ADD CONSTRAINT uq_platform_operators_external_identity_id UNIQUE (external_identity_id);
+
+
 -- Name: ix_audit_events_actor_user_id_occurred_at; Type: INDEX; Schema: audit; Owner: -
 
 CREATE INDEX ix_audit_events_actor_user_id_occurred_at ON audit.audit_events USING btree (actor_user_id, occurred_at);
@@ -700,9 +1547,14 @@ CREATE UNIQUE INDEX ix_approvals_proposal_id ON foundation.approvals USING btree
 CREATE UNIQUE INDEX ix_capabilities_name ON foundation.capabilities USING btree (name);
 
 
--- Name: ix_companies_group_id_name; Type: INDEX; Schema: foundation; Owner: -
+-- Name: ix_companies_group_id; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE UNIQUE INDEX ix_companies_group_id_name ON foundation.companies USING btree (group_id, name) WHERE (deleted_at IS NULL);
+CREATE INDEX ix_companies_group_id ON foundation.companies USING btree (group_id);
+
+
+-- Name: ix_companies_normalized_name; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE UNIQUE INDEX ix_companies_normalized_name ON foundation.companies USING btree (lower(btrim((name)::text))) WHERE (deleted_at IS NULL);
 
 
 -- Name: ix_employees_company_id_membership_id; Type: INDEX; Schema: foundation; Owner: -
@@ -732,7 +1584,7 @@ CREATE INDEX ix_files_company_id_uploader_membership_id ON foundation.files USIN
 
 -- Name: ix_groups_name; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE UNIQUE INDEX ix_groups_name ON foundation.groups USING btree (name) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX ix_groups_name ON foundation.groups USING btree (lower(btrim((name)::text))) WHERE (deleted_at IS NULL);
 
 
 -- Name: ix_idempotency_records_company_id_actor_user_id_command_name_r; Type: INDEX; Schema: foundation; Owner: -
@@ -748,6 +1600,11 @@ CREATE UNIQUE INDEX ix_memberships_company_id_user_id ON foundation.memberships 
 -- Name: ix_memberships_user_id; Type: INDEX; Schema: foundation; Owner: -
 
 CREATE INDEX ix_memberships_user_id ON foundation.memberships USING btree (user_id);
+
+
+-- Name: ix_pending_owner_invitations_provider_backlog; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE INDEX ix_pending_owner_invitations_provider_backlog ON foundation.pending_owner_invitations USING btree (provider_pending_at, id) WHERE ((status)::text = 'pending_provider'::text);
 
 
 -- Name: ix_role_assignments_company_id_membership_id; Type: INDEX; Schema: foundation; Owner: -
@@ -807,7 +1664,7 @@ CREATE INDEX ix_user_sessions_user_id_revoked_at ON foundation.user_sessions USI
 
 -- Name: ix_users_email; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE UNIQUE INDEX ix_users_email ON foundation.users USING btree (email);
+CREATE UNIQUE INDEX ix_users_email ON foundation.users USING btree (lower(btrim((email)::text)));
 
 
 -- Name: audit_events audit_events_reject_mutation; Type: TRIGGER; Schema: audit; Owner: -
@@ -881,6 +1738,12 @@ ALTER TABLE ONLY foundation.memberships
     ADD CONSTRAINT fk_memberships_users_user_id FOREIGN KEY (user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
 
 
+-- Name: platform_operators fk_platform_operators_external_identities_external_identity_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.platform_operators
+    ADD CONSTRAINT fk_platform_operators_external_identities_external_identity_id FOREIGN KEY (external_identity_id) REFERENCES foundation.external_identities(id) ON DELETE RESTRICT;
+
+
 -- Name: role_assignments fk_role_assignments_companies_company_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.role_assignments
@@ -947,6 +1810,54 @@ ALTER TABLE ONLY foundation.user_sessions
     ADD CONSTRAINT fk_user_sessions_users_user_id FOREIGN KEY (user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
 
 
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_company_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_company_id_fkey FOREIGN KEY (company_id) REFERENCES foundation.companies(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_group_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_group_id_fkey FOREIGN KEY (group_id) REFERENCES foundation.groups(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_owner_invitation_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_owner_invitation_id_fkey FOREIGN KEY (owner_invitation_id) REFERENCES foundation.pending_owner_invitations(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_owner_membership_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_owner_membership_id_fkey FOREIGN KEY (owner_membership_id) REFERENCES foundation.memberships(id) ON DELETE RESTRICT;
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_owner_user_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.organization_provisioning_receipts
+    ADD CONSTRAINT organization_provisioning_receipts_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_company_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.pending_owner_invitations
+    ADD CONSTRAINT pending_owner_invitations_company_id_fkey FOREIGN KEY (company_id) REFERENCES foundation.companies(id) ON DELETE RESTRICT;
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_user_id_fkey; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.pending_owner_invitations
+    ADD CONSTRAINT pending_owner_invitations_user_id_fkey FOREIGN KEY (user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
+
+
 -- Name: approvals; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.approvals ENABLE ROW LEVEL SECURITY;
@@ -954,6 +1865,25 @@ ALTER TABLE foundation.approvals ENABLE ROW LEVEL SECURITY;
 -- Name: approvals approvals_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY approvals_company_isolation ON foundation.approvals USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid))) WITH CHECK (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)));
+
+
+-- Name: capabilities; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.capabilities ENABLE ROW LEVEL SECURITY;
+
+-- Name: capabilities capabilities_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_employee_directory_owner_select ON foundation.capabilities FOR SELECT TO vinx_employee_directory_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying])::text[])));
+
+
+-- Name: capabilities capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_provisioning_owner ON foundation.capabilities FOR SELECT TO vinx_provisioning_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.memberships.revoke'::character varying, 'foundation.files.upload'::character varying, 'foundation.files.confirm'::character varying])::text[])));
+
+
+-- Name: capabilities capabilities_runtime_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_runtime_read ON foundation.capabilities FOR SELECT TO vinx_runtime USING (true);
 
 
 -- Name: companies; Type: ROW SECURITY; Schema: foundation; Owner: -
@@ -975,6 +1905,11 @@ CREATE POLICY companies_authorized_company_read ON foundation.companies FOR SELE
 CREATE POLICY companies_company_isolation ON foundation.companies USING ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: companies companies_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY companies_provisioning_owner ON foundation.companies FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
 -- Name: employees; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.employees ENABLE ROW LEVEL SECURITY;
@@ -987,6 +1922,11 @@ CREATE POLICY employees_authorized_company_read ON foundation.employees FOR SELE
 -- Name: employees employees_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY employees_company_isolation ON foundation.employees USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: employees employees_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY employees_employee_directory_owner_insert ON foundation.employees FOR INSERT TO vinx_employee_directory_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
 -- Name: files; Type: ROW SECURITY; Schema: foundation; Owner: -
@@ -1023,6 +1963,21 @@ CREATE POLICY groups_company_isolation ON foundation.groups USING ((id = ( SELEC
   WHERE (company.id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid))));
 
 
+-- Name: groups groups_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY groups_provisioning_owner ON foundation.groups FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
+-- Name: idempotency_records idempotency_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY idempotency_employee_directory_owner_insert ON foundation.idempotency_records FOR INSERT TO vinx_employee_directory_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: idempotency_records idempotency_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY idempotency_employee_directory_owner_select ON foundation.idempotency_records FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
 -- Name: idempotency_records; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.idempotency_records ENABLE ROW LEVEL SECURITY;
@@ -1056,6 +2011,73 @@ CREATE POLICY memberships_authorized_company_read ON foundation.memberships FOR 
 CREATE POLICY memberships_company_isolation ON foundation.memberships USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: memberships memberships_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_employee_directory_owner_insert ON foundation.memberships FOR INSERT TO vinx_employee_directory_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: memberships memberships_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_employee_directory_owner_select ON foundation.memberships FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: memberships memberships_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_provisioning_owner ON foundation.memberships FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
+-- Name: organization_provisioning_receipts; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.organization_provisioning_receipts ENABLE ROW LEVEL SECURITY;
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_employee_directory_owner_sel; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY organization_provisioning_receipts_employee_directory_owner_sel ON foundation.organization_provisioning_receipts FOR SELECT TO vinx_employee_directory_owner USING (((actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid) AND (company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)));
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_provisioning_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY organization_provisioning_receipts_provisioning_owner_insert ON foundation.organization_provisioning_receipts FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_provisioning_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY organization_provisioning_receipts_provisioning_owner_select ON foundation.organization_provisioning_receipts FOR SELECT TO vinx_provisioning_owner USING (true);
+
+
+-- Name: organization_provisioning_receipts organization_provisioning_receipts_worker_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY organization_provisioning_receipts_worker_owner_read ON foundation.organization_provisioning_receipts FOR SELECT TO vinx_worker_owner USING (true);
+
+
+-- Name: pending_owner_invitations; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.pending_owner_invitations ENABLE ROW LEVEL SECURITY;
+
+-- Name: pending_owner_invitations pending_owner_invitations_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY pending_owner_invitations_provisioning_owner ON foundation.pending_owner_invitations FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_worker_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY pending_owner_invitations_worker_owner_read ON foundation.pending_owner_invitations FOR SELECT TO vinx_worker_owner USING (true);
+
+
+-- Name: pending_owner_invitations pending_owner_invitations_worker_owner_update; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY pending_owner_invitations_worker_owner_update ON foundation.pending_owner_invitations FOR UPDATE TO vinx_worker_owner USING (true) WITH CHECK (true);
+
+
+-- Name: platform_operators; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.platform_operators ENABLE ROW LEVEL SECURITY;
+
+-- Name: platform_operators platform_operators_owner_access; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY platform_operators_owner_access ON foundation.platform_operators TO vinx_platform_owner USING (true) WITH CHECK (true);
+
+
 -- Name: role_assignments; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.role_assignments ENABLE ROW LEVEL SECURITY;
@@ -1068,6 +2090,16 @@ CREATE POLICY role_assignments_authorized_company_read ON foundation.role_assign
 -- Name: role_assignments role_assignments_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_assignments_company_isolation ON foundation.role_assignments USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: role_assignments role_assignments_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_assignments_employee_directory_owner_select ON foundation.role_assignments FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: role_assignments role_assignments_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_assignments_provisioning_owner ON foundation.role_assignments FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
 
 
 -- Name: role_capabilities; Type: ROW SECURITY; Schema: foundation; Owner: -
@@ -1084,6 +2116,21 @@ CREATE POLICY role_capabilities_authorized_company_read ON foundation.role_capab
 CREATE POLICY role_capabilities_company_isolation ON foundation.role_capabilities USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: role_capabilities role_capabilities_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_employee_directory_owner_insert ON foundation.role_capabilities FOR INSERT TO vinx_employee_directory_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: role_capabilities role_capabilities_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_employee_directory_owner_select ON foundation.role_capabilities FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: role_capabilities role_capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_provisioning_owner ON foundation.role_capabilities FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
+
+
 -- Name: roles; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.roles ENABLE ROW LEVEL SECURITY;
@@ -1096,6 +2143,16 @@ CREATE POLICY roles_authorized_company_read ON foundation.roles FOR SELECT USING
 -- Name: roles roles_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY roles_company_isolation ON foundation.roles USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: roles roles_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY roles_employee_directory_owner_select ON foundation.roles FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: roles roles_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY roles_provisioning_owner ON foundation.roles FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
 
 
 -- Name: teams; Type: ROW SECURITY; Schema: foundation; Owner: -
