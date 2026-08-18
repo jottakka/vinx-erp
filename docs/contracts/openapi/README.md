@@ -67,3 +67,51 @@ schemas e requisitos de segurança verificáveis antes de entrar no contrato.
 Bytes de arquivo não trafegam pela rota comum da API. O servidor autoriza URL
 privada e curta de upload ou download e registra metadados e evidência de
 auditoria.
+
+## Paguai MVP #227
+
+`GET /paguai/requests?companyId={uuid}` e
+`GET /paguai/requests/{id}?companyId={uuid}` exigem bearer HTTP ou cookie BFF
+de mesma origem. Ambos recebem somente a empresa explícita e devolvem somente
+rascunhos do solicitante autenticado. A lista declara `200`, `400`, `401`,
+`403`, `429` e `503`; o detalhe declara `200`, `401`, `404`, `429` e `503`.
+Detalhe de outro solicitante, outra empresa ou sem permissão é sempre
+`404 {"code":"resource_not_found"}`.
+
+`POST /paguai/requests` usa a mesma segurança; para cookie BFF, CSRF exige
+`X-CSRF-TOKEN`. O corpo JSON estrito contém exatamente `companyId`, `requestId`,
+`title` e `description`; textos são aparados, não vazios, e limitados a 200 e
+4000 caracteres. Aceita somente `Content-Type: application/json` e no máximo
+24 KiB de bytes recebidos; mídia incorreta devolve `415` e corpo excedente
+devolve `400 {"code":"invalid_request"}`, ambos antes de qualquer mutação. Retorna `201` e `Location` na primeira criação, `200` no
+replay idêntico, `400`, `401`, `403`, `409 {"code":"idempotency_conflict"}`,
+`429` ou `503 {"code":"paguai_unavailable"}`. A resposta de sucesso contém
+apenas `id`, `companyId`, `requestId`, `title`, `description`, `state`,
+`version` e `createdAt`; `state` é `rascunho` e `version` é `1`.
+
+O contrato não expõe payload em logs ou auditoria. Todas as respostas privadas
+recebem `Cache-Control: private, no-store` e o header de correlação do host.
+
+## Atendimento / Kanban MVP
+
+`GET /atendimento/cards?companyId={uuid}` aceita bearer ou cookie BFF e exige
+`service_desk.ticket.read_queue` no escopo Company. Retorna `200` com cartões
+da empresa selecionada, ou `400 invalid_request`, `401`, `403
+membership_required|capability_denied`, `429` e `503 atendimento_unavailable`.
+
+`POST /atendimento/cards` exige `service_desk.ticket.create`; o corpo possui
+`companyId`, `requestId`, `title` e `description`. Retorna `201`, ou `200` no
+replay equivalente; `400 invalid_request`, `401`, `403`, `409
+idempotency_conflict`, `429` e `503` são publicados. `POST
+/atendimento/cards/{id}/assign` exige `.assign` e recebe também
+`expectedVersion` e `assigneeMembershipId`. `POST /atendimento/cards/{id}/move`
+exige `.move` e recebe `expectedVersion` e `column` (`novo`, `em_andamento` ou
+`concluido`). As duas retornam `200`, e podem retornar `404 resource_not_found`,
+`409 idempotency_conflict|integrity_conflict`, `400`, `401`, `403`, `429` ou
+`503`. `integrity_conflict` devolve apenas o estado atual já autorizado do
+cartão, nunca dados de outra empresa. As três mutações publicam o header
+`X-CSRF-TOKEN`: ele é obrigatório quando a operação usa cookie de sessão BFF e
+é obtido em `GET /foundation/identity/browser-session/antiforgery`; clientes
+bearer não precisam de antiforgery. Todas as respostas mantêm
+`X-Correlation-ID`, usam `Cache-Control: private, no-store` e as mutações usam
+auditoria transacional.

@@ -5,11 +5,15 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.OpenApi;
+using Microsoft.AspNetCore.Mvc;
+using Vinx.Erp.ApiHost.Constants;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
+using Vinx.Erp.ApiHost;
 using Vinx.Erp.ApiHost.Identity;
+using Vinx.Erp.Atendimento;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
@@ -21,9 +25,10 @@ using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Platform;
+using Vinx.Erp.Paguai;
 
 var builder = WebApplication.CreateBuilder(args);
-const string ProtectedRateLimitPolicy = "foundation";
+const string ProtectedRateLimitPolicy = ApiConstants.ProtectedRateLimitPolicy;
 const string BrowserSessionLoginRateLimitPolicy = "browser-session-login";
 builder.Logging.AddVinxLogging();
 builder
@@ -77,6 +82,22 @@ builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 builder.Services.AddScoped<DocumentUploadService>();
+builder.Services.AddScoped<PaguaiDraftService>();
+builder.Services.AddScoped<AtendimentoCardService>();
+builder
+    .Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false)
+    .AddJsonOptions(options =>
+    {
+        // Contrato estrito: campos desconhecidos no corpo são rejeitados com ModelState inválido.
+        options.JsonSerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+    })
+    .ConfigureApiBehaviorOptions(options =>
+        options.InvalidModelStateResponseFactory = _ =>
+            new ObjectResult(new { code = "invalid_request" })
+            {
+                StatusCode = StatusCodes.Status400BadRequest,
+            }
+    );
 builder.Services.AddSupabaseJwtAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddBrowserBffSession(builder.Configuration, builder.Environment);
 builder.Services.AddAuthorization(options =>
@@ -88,8 +109,10 @@ builder.Services.AddAuthorization(options =>
     );
     options.AddPolicy(
         PlatformOperatorAuthorization.MfaAssurancePolicyName,
-        policy => policy.RequireAuthenticatedUser()
-            .AddRequirements(new PlatformOperatorRequirement(requiresMfaAssurance: true))
+        policy =>
+            policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new PlatformOperatorRequirement(requiresMfaAssurance: true))
     );
 });
 builder.Services.AddScoped<IAuthorizationHandler, PlatformOperatorAuthorizationHandler>();
@@ -137,10 +160,11 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
         HttpMethods.IsPost(context.Request.Method)
-            && string.Equals(
-                context.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName,
-                BrowserSessionLoginRateLimitPolicy,
-                StringComparison.Ordinal)
+        && string.Equals(
+            context.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName,
+            BrowserSessionLoginRateLimitPolicy,
+            StringComparison.Ordinal
+        )
             ? RateLimitPartition.GetFixedWindowLimiter(
                 "browser-session-global",
                 _ => new FixedWindowRateLimiterOptions
@@ -150,13 +174,19 @@ builder.Services.AddRateLimiter(options =>
                     QueueLimit = 0,
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     AutoReplenishment = true,
-                })
-            : RateLimitPartition.GetNoLimiter("not-browser-session"));
+                }
+            )
+            : RateLimitPartition.GetNoLimiter("not-browser-session")
+    );
     options.AddPolicy(
         ProtectedRateLimitPolicy,
         context =>
             RateLimitPartition.GetFixedWindowLimiter(
-                context.User.Identity?.IsAuthenticated == true ? "authenticated" : "anonymous",
+                context.User.Identity?.IsAuthenticated == true
+                    ? context.User.FindFirst("sub")?.Value is { Length: > 0 } subject
+                        ? $"authenticated:{subject}"
+                        : "authenticated-without-sub"
+                    : "anonymous",
                 _ => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit = 60,
@@ -217,7 +247,9 @@ builder.Services.AddOpenApi(options =>
                 {
                     Type = SecuritySchemeType.ApiKey,
                     In = ParameterLocation.Cookie,
-                    Name = BrowserBffAuthenticationExtensions.GetSessionCookieName(builder.Environment),
+                    Name = BrowserBffAuthenticationExtensions.GetSessionCookieName(
+                        builder.Environment
+                    ),
                 };
             return Task.CompletedTask;
         }
@@ -228,7 +260,8 @@ builder.Services.AddOpenApi(options =>
             var metadata = context.Description.ActionDescriptor.EndpointMetadata;
             if (operation.Responses is not null)
             {
-                var document = context.Document
+                var document =
+                    context.Document
                     ?? throw new InvalidOperationException(
                         "OpenAPI response contract requires a document context."
                     );
@@ -253,9 +286,14 @@ builder.Services.AddOpenApi(options =>
                     concreteResponse.Headers[RequestCorrelationMiddleware.ResponseHeaderName] =
                         new OpenApiHeader
                         {
-                            Description = "Referência opaca gerada pelo servidor para suporte da requisição.",
+                            Description =
+                                "Referência opaca gerada pelo servidor para suporte da requisição.",
                             Required = true,
-                            Schema = new OpenApiSchema { Type = JsonSchemaType.String, Format = "uuid" },
+                            Schema = new OpenApiSchema
+                            {
+                                Type = JsonSchemaType.String,
+                                Format = "uuid",
+                            },
                         };
                 }
             }
@@ -276,7 +314,10 @@ builder.Services.AddOpenApi(options =>
                                 Properties = new Dictionary<string, IOpenApiSchema>
                                 {
                                     ["email"] = new OpenApiSchema { Type = JsonSchemaType.String },
-                                    ["password"] = new OpenApiSchema { Type = JsonSchemaType.String },
+                                    ["password"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                    },
                                 },
                                 AdditionalPropertiesAllowed = false,
                             },
@@ -285,8 +326,60 @@ builder.Services.AddOpenApi(options =>
                 };
             }
 
-            if (metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
-                || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true)
+            if (metadata?.OfType<PaguaiJsonRequestBodyMetadata>().Any() == true)
+            {
+                operation.RequestBody = new OpenApiRequestBody
+                {
+                    Required = true,
+                    Content = new Dictionary<string, OpenApiMediaType>
+                    {
+                        ["application/json"] = new OpenApiMediaType
+                        {
+                            Schema = new OpenApiSchema
+                            {
+                                Type = JsonSchemaType.Object,
+                                Required = new HashSet<string>
+                                {
+                                    "companyId",
+                                    "requestId",
+                                    "title",
+                                    "description",
+                                },
+                                Properties = new Dictionary<string, IOpenApiSchema>
+                                {
+                                    ["companyId"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        Format = "uuid",
+                                    },
+                                    ["requestId"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        Format = "uuid",
+                                    },
+                                    ["title"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        MaxLength = 200,
+                                    },
+                                    ["description"] = new OpenApiSchema
+                                    {
+                                        Type = JsonSchemaType.String,
+                                        MaxLength = 4000,
+                                    },
+                                },
+                                AdditionalPropertiesAllowed = false,
+                            },
+                        },
+                    },
+                };
+            }
+
+            if (
+                metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
+                || metadata?.OfType<PaguaiAntiforgeryRequiredMetadata>().Any() == true
+                || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true
+            )
             {
                 operation.Parameters ??= [];
                 operation.Parameters.Add(
@@ -294,9 +387,16 @@ builder.Services.AddOpenApi(options =>
                     {
                         Name = BrowserBffAuthenticationExtensions.AntiforgeryHeaderName,
                         In = ParameterLocation.Header,
-                        Required = true,
+                        Required =
+                            metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true
+                            || metadata
+                                ?.OfType<BrowserBffAntiforgeryRequiredMetadata>()
+                                .Any(requirement => !requirement.CookieAuthenticatedOnly) == true,
+                        Description =
+                            "Obrigatório quando a operação autenticada usa o cookie de sessão BFF.",
                         Schema = new OpenApiSchema { Type = JsonSchemaType.String },
-                    });
+                    }
+                );
             }
 
             if (
@@ -310,10 +410,13 @@ builder.Services.AddOpenApi(options =>
                     operation.Security.Add(
                         new OpenApiSecurityRequirement
                         {
-                            [new OpenApiSecuritySchemeReference(
-                                BrowserBffAuthenticationExtensions.CookieScheme,
-                                context.Document,
-                                null)] = [],
+                            [
+                                new OpenApiSecuritySchemeReference(
+                                    BrowserBffAuthenticationExtensions.CookieScheme,
+                                    context.Document,
+                                    null
+                                )
+                            ] = [],
                         }
                     );
                 }
@@ -322,16 +425,21 @@ builder.Services.AddOpenApi(options =>
                     operation.Security.Add(
                         new OpenApiSecurityRequirement
                         {
-                            [new OpenApiSecuritySchemeReference("Bearer", context.Document, null)] = [],
+                            [
+                                new OpenApiSecuritySchemeReference("Bearer", context.Document, null)
+                            ] = [],
                         }
                     );
                     operation.Security.Add(
                         new OpenApiSecurityRequirement
                         {
-                            [new OpenApiSecuritySchemeReference(
-                                BrowserBffAuthenticationExtensions.CookieScheme,
-                                context.Document,
-                                null)] = [],
+                            [
+                                new OpenApiSecuritySchemeReference(
+                                    BrowserBffAuthenticationExtensions.CookieScheme,
+                                    context.Document,
+                                    null
+                                )
+                            ] = [],
                         }
                     );
                 }
@@ -365,6 +473,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 app.MapBrowserBffSessionEndpoints();
+app.MapControllers();
 var foundation = app.MapGroup("/foundation")
     .RequireAuthorization()
     .RequireRateLimiting(ProtectedRateLimitPolicy);
@@ -398,62 +507,108 @@ foundation
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
     .Produces(StatusCodes.Status429TooManyRequests);
-foundation.MapPost(
-    "/platform/organizations",
-    async (
-        HttpRequest request,
-        HttpContext httpContext,
-        PlatformOrganizationProvisioningService service,
-        CancellationToken cancellationToken
-    ) =>
-    {
-        System.Text.Json.JsonDocument document;
-        try
+foundation
+    .MapPost(
+        "/platform/organizations",
+        async (
+            HttpRequest request,
+            HttpContext httpContext,
+            PlatformOrganizationProvisioningService service,
+            CancellationToken cancellationToken
+        ) =>
         {
-            document = await System.Text.Json.JsonDocument.ParseAsync(
-                request.Body,
-                cancellationToken: cancellationToken);
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
-        }
-        catch (IOException)
-        {
-            return Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
-        }
-
-        using (document)
-        {
-            if (!PlatformOrganizationHttpContract.TryParse(document.RootElement, out var command))
+            System.Text.Json.JsonDocument document;
+            try
             {
-                return Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest);
+                document = await System.Text.Json.JsonDocument.ParseAsync(
+                    request.Body,
+                    cancellationToken: cancellationToken
+                );
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return Results.Json(
+                    new { code = "invalid_request" },
+                    statusCode: StatusCodes.Status400BadRequest
+                );
+            }
+            catch (IOException)
+            {
+                return Results.Json(
+                    new { code = "invalid_request" },
+                    statusCode: StatusCodes.Status400BadRequest
+                );
             }
 
-            var result = await service.ProvisionAsync(
-                httpContext.GetRequiredActorContext(),
-                command,
-                cancellationToken);
-            return result.State switch
+            using (document)
             {
-                PlatformOrganizationProvisioningState.Created => Results.Json(
-                    new { result.GroupId, result.CompanyId, result.OwnerUserId, result.OwnerMembershipId, result.OwnerInvitationId, invitationStatus = "pending_delivery" },
-                    statusCode: StatusCodes.Status201Created),
-                PlatformOrganizationProvisioningState.Replay => Results.Ok(
-                    new { result.GroupId, result.CompanyId, result.OwnerUserId, result.OwnerMembershipId, result.OwnerInvitationId, invitationStatus = "pending_delivery" }),
-                PlatformOrganizationProvisioningState.IdempotencyConflict =>
-                    Results.Json(new { code = "idempotency_conflict" }, statusCode: StatusCodes.Status409Conflict),
-                PlatformOrganizationProvisioningState.Conflict =>
-                    Results.Json(new { code = "organization_conflict" }, statusCode: StatusCodes.Status409Conflict),
-                PlatformOrganizationProvisioningState.Invalid =>
-                    Results.Json(new { code = "invalid_request" }, statusCode: StatusCodes.Status400BadRequest),
-                PlatformOrganizationProvisioningState.Forbidden =>
-                    Results.Json(new { code = "platform_operator_required" }, statusCode: StatusCodes.Status403Forbidden),
-                _ => Results.Json(new { code = "platform_organization_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable),
-            };
+                if (
+                    !PlatformOrganizationHttpContract.TryParse(
+                        document.RootElement,
+                        out var command
+                    )
+                )
+                {
+                    return Results.Json(
+                        new { code = "invalid_request" },
+                        statusCode: StatusCodes.Status400BadRequest
+                    );
+                }
+
+                var result = await service.ProvisionAsync(
+                    httpContext.GetRequiredActorContext(),
+                    command,
+                    cancellationToken
+                );
+                return result.State switch
+                {
+                    PlatformOrganizationProvisioningState.Created => Results.Json(
+                        new
+                        {
+                            result.GroupId,
+                            result.CompanyId,
+                            result.OwnerUserId,
+                            result.OwnerMembershipId,
+                            result.OwnerInvitationId,
+                            invitationStatus = "pending_delivery",
+                        },
+                        statusCode: StatusCodes.Status201Created
+                    ),
+                    PlatformOrganizationProvisioningState.Replay => Results.Ok(
+                        new
+                        {
+                            result.GroupId,
+                            result.CompanyId,
+                            result.OwnerUserId,
+                            result.OwnerMembershipId,
+                            result.OwnerInvitationId,
+                            invitationStatus = "pending_delivery",
+                        }
+                    ),
+                    PlatformOrganizationProvisioningState.IdempotencyConflict => Results.Json(
+                        new { code = "idempotency_conflict" },
+                        statusCode: StatusCodes.Status409Conflict
+                    ),
+                    PlatformOrganizationProvisioningState.Conflict => Results.Json(
+                        new { code = "organization_conflict" },
+                        statusCode: StatusCodes.Status409Conflict
+                    ),
+                    PlatformOrganizationProvisioningState.Invalid => Results.Json(
+                        new { code = "invalid_request" },
+                        statusCode: StatusCodes.Status400BadRequest
+                    ),
+                    PlatformOrganizationProvisioningState.Forbidden => Results.Json(
+                        new { code = "platform_operator_required" },
+                        statusCode: StatusCodes.Status403Forbidden
+                    ),
+                    _ => Results.Json(
+                        new { code = "platform_organization_unavailable" },
+                        statusCode: StatusCodes.Status503ServiceUnavailable
+                    ),
+                };
+            }
         }
-    }
-)
+    )
     .WithName("PlatformOrganizationProvisioning")
     .RequireAuthorization(PlatformOperatorAuthorization.MfaAssurancePolicyName)
     .Produces(StatusCodes.Status201Created)
@@ -569,11 +724,18 @@ public partial class Program;
 internal static class PlatformOrganizationHttpContract
 {
     private static readonly HashSet<string> Fields =
-    ["requestId", "groupName", "companyName", "ownerDisplayName", "ownerEmail"];
+    [
+        "requestId",
+        "groupName",
+        "companyName",
+        "ownerDisplayName",
+        "ownerEmail",
+    ];
 
     public static bool TryParse(
         System.Text.Json.JsonElement body,
-        out PlatformOrganizationProvisioningCommand command)
+        out PlatformOrganizationProvisioningCommand command
+    )
     {
         command = null!;
         if (body.ValueKind is not System.Text.Json.JsonValueKind.Object)
@@ -590,12 +752,14 @@ internal static class PlatformOrganizationHttpContract
             }
         }
 
-        if (values.Count != Fields.Count
+        if (
+            values.Count != Fields.Count
             || !values["requestId"].TryGetGuid(out var requestId)
             || values["groupName"].ValueKind is not System.Text.Json.JsonValueKind.String
             || values["companyName"].ValueKind is not System.Text.Json.JsonValueKind.String
             || values["ownerDisplayName"].ValueKind is not System.Text.Json.JsonValueKind.String
-            || values["ownerEmail"].ValueKind is not System.Text.Json.JsonValueKind.String)
+            || values["ownerEmail"].ValueKind is not System.Text.Json.JsonValueKind.String
+        )
         {
             return false;
         }
@@ -605,7 +769,8 @@ internal static class PlatformOrganizationHttpContract
             values["groupName"].GetString()!,
             values["companyName"].GetString()!,
             values["ownerDisplayName"].GetString()!,
-            values["ownerEmail"].GetString()!);
+            values["ownerEmail"].GetString()!
+        );
         return true;
     }
 }

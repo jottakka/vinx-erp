@@ -15,5 +15,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/Hosts/Vinx.Erp.ApiHost/Vinx.Erp.ApiHost.csproj" />
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.Atendimento/Vinx.Erp.Atendimento.csproj" />
   </ItemGroup>
 </Project>

@@ -1,7 +1,7 @@
 # Transporte Browser BFF
 
-O web chama somente as três operações BFF de mesma origem em `/foundation`:
-antiforgery, login e logout. O módulo
+As operações de sessão do web usam somente os caminhos BFF de mesma origem em
+`/foundation`: antiforgery, login e logout. O módulo
 `apps/web/src/features/auth/browser-session-client.ts` não aceita URL ou header
 do consumidor; usa `fetch` nativo com cookies `same-origin`, sem cache, redirect
 ou repetição automática.
@@ -17,10 +17,17 @@ status, código documentado e `X-Correlation-ID` UUID canônico quando presente.
 Texto bruto, `statusText`, URL, stack e campos desconhecidos do servidor são
 descartados. O cliente não chama Supabase, Storage, PostgreSQL ou provider.
 
+O atendimento usa `/atendimento/cards` na mesma origem. Antes de cada `POST`,
+`apps/web/src/features/atendimento/atendimento-client.ts` obtém um
+`requestToken` transitório em
+`/foundation/identity/browser-session/antiforgery` e o envia apenas na mutação
+como `X-CSRF-TOKEN`. A falha ou resposta inválida do antiforgery interrompe a
+mutação, sem token persistido ou tentativa automática.
+
 O proxy Vite é exclusivo de desenvolvimento: `VINX_API_ORIGIN` aceita apenas
-`http://127.0.0.1:<porta>` e encaminha `/foundation`. Não use `VITE_*` para
-esta origem. Em preview e produção, o reverse proxy/ingress da mesma origem é
-responsabilidade do deployment.
+`http://127.0.0.1:<porta>` e encaminha `/foundation`, `/atendimento` e `/paguai`. Não use
+`VITE_*` para esta origem. Em preview e produção, o reverse proxy/ingress da
+mesma origem é responsabilidade do deployment.
 
 ## Composição de release
 

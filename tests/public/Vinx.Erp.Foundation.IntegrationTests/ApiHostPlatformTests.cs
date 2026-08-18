@@ -1,7 +1,9 @@
 using System.Net;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -11,6 +13,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Vinx.Erp.Foundation.Bootstrap;
 using Vinx.Erp.Foundation.Files;
@@ -23,6 +26,8 @@ public sealed class ApiHostPlatformTests
     private const string StorageCredential = "test-service-role-key";
     private const string DataProtectionCredential = "test-data-protection-password";
     private const string SensitiveFailure = "sensitive-platform-failure";
+    private const string RateLimitTestScheme = "rate-limit-test";
+    private const string RateLimitSubjectHeader = "X-Test-Rate-Limit-Subject";
 
     [Theory]
     [InlineData("FOUNDATION_RUNTIME_CONNECTION", "")]
@@ -169,6 +174,32 @@ public sealed class ApiHostPlatformTests
 
         using var health = await client.GetAsync("/health");
         Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+    }
+
+    [Fact]
+    public async Task Authenticated_rate_limits_are_partitioned_by_subject()
+    {
+        using var factory = new ApiHostPlatformFactory(
+            exposeRateLimitedEndpoint: true,
+            authenticateRateLimitedEndpoint: true
+        );
+        using var firstClient = factory.CreateClient();
+        firstClient.DefaultRequestHeaders.Add(RateLimitSubjectHeader, "first-subject");
+
+        for (var attempt = 0; attempt < 60; attempt++)
+        {
+            using var response = await firstClient.GetAsync("/test/platform/rate-limit");
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        }
+
+        using var firstLimited = await firstClient.GetAsync("/test/platform/rate-limit");
+        Assert.Equal(HttpStatusCode.TooManyRequests, firstLimited.StatusCode);
+
+        using var secondClient = factory.CreateClient();
+        secondClient.DefaultRequestHeaders.Add(RateLimitSubjectHeader, "second-subject");
+        using var secondResponse = await secondClient.GetAsync("/test/platform/rate-limit");
+
+        Assert.Equal(HttpStatusCode.NoContent, secondResponse.StatusCode);
     }
 
     [Fact]
@@ -563,6 +594,7 @@ public sealed class ApiHostPlatformTests
         private readonly string _environment;
         private readonly bool _exposeFailureEndpoint;
         private readonly bool _exposeRateLimitedEndpoint;
+        private readonly bool _authenticateRateLimitedEndpoint;
         private string? _dataProtectionKeyDirectory;
         private string? _dataProtectionCertificatePath;
 
@@ -570,13 +602,15 @@ public sealed class ApiHostPlatformTests
             IReadOnlyDictionary<string, string>? overrides = null,
             string environment = "Development",
             bool exposeFailureEndpoint = false,
-            bool exposeRateLimitedEndpoint = false
+            bool exposeRateLimitedEndpoint = false,
+            bool authenticateRateLimitedEndpoint = false
         )
         {
             _overrides = overrides ?? new Dictionary<string, string>();
             _environment = environment;
             _exposeFailureEndpoint = exposeFailureEndpoint;
             _exposeRateLimitedEndpoint = exposeRateLimitedEndpoint;
+            _authenticateRateLimitedEndpoint = authenticateRateLimitedEndpoint;
         }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -617,6 +651,22 @@ public sealed class ApiHostPlatformTests
             {
                 builder.ConfigureTestServices(services =>
                     services.AddTransient<IStartupFilter, PlatformRateLimitStartupFilter>()
+                );
+            }
+
+            if (_authenticateRateLimitedEndpoint)
+            {
+                builder.ConfigureTestServices(services =>
+                    services
+                        .AddAuthentication(options =>
+                        {
+                            options.DefaultAuthenticateScheme = RateLimitTestScheme;
+                            options.DefaultChallengeScheme = RateLimitTestScheme;
+                        })
+                        .AddScheme<AuthenticationSchemeOptions, SubjectHeaderAuthenticationHandler>(
+                            RateLimitTestScheme,
+                            _ => { }
+                        )
                 );
             }
         }
@@ -741,5 +791,31 @@ public sealed class ApiHostPlatformTests
                 );
                 next(app);
             };
+    }
+
+    private sealed class SubjectHeaderAuthenticationHandler(
+        IOptionsMonitor<AuthenticationSchemeOptions> options,
+        ILoggerFactory logger,
+        System.Text.Encodings.Web.UrlEncoder encoder
+    ) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+    {
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+        {
+            if (!Request.Headers.TryGetValue(RateLimitSubjectHeader, out var subject)
+                || string.IsNullOrWhiteSpace(subject))
+            {
+                return Task.FromResult(AuthenticateResult.NoResult());
+            }
+
+            var identity = new ClaimsIdentity(
+                [new Claim("sub", subject.ToString())],
+                Scheme.Name
+            );
+            return Task.FromResult(
+                AuthenticateResult.Success(
+                    new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name)
+                )
+            );
+        }
     }
 }

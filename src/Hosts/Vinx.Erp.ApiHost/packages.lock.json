@@ -251,6 +251,12 @@
           "Microsoft.IdentityModel.Tokens": "8.19.2"
         }
       },
+      "vinx.erp.atendimento": {
+        "type": "Project",
+        "dependencies": {
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
       "vinx.erp.foundation": {
         "type": "Project",
         "dependencies": {
@@ -258,6 +264,14 @@
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.10, )",
           "Microsoft.EntityFrameworkCore": "[10.0.10, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )"
+        }
+      },
+      "vinx.erp.paguai": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql": "[10.0.3, )",
+          "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
       "EFCore.NamingConventions": {

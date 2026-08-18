@@ -16,7 +16,8 @@ limite unitário do transporte.
 | acesso | Dado módulo web, quando chama BFF, então não transporta autorização, correlação ou provider | `browser-session-client.test.ts` — headers; `npm run test:no-direct-supabase` | somente headers BFF permitidos e nenhuma importação/provider direto |
 | estado/exceção | Dado CSRF falho, `204`, cancelamento ou rede indisponível, quando a operação termina, então não há parse/replay indevido | `browser-session-client.test.ts` — falha/abort/retry | nenhuma mutação após CSRF falho ou abort já solicitado; uma tentativa por chamada |
 | concorrência | Dados logins paralelos, quando tokens são emitidos, então cada mutação usa seu próprio token | `browser-session-client.test.ts` — concorrência | nenhum token ou resultado compartilhado |
-| proxy local | Dada configuração Vite, quando `VINX_API_ORIGIN` é loopback permitido, então só `/foundation` recebe proxy de desenvolvimento | `vite-api-proxy.test.ts` | destino `127.0.0.1` exato; preview/produção sem proxy |
+| transporte Atendimento | Dada mutação de cartão, quando há sessão BFF, então antiforgery antecede cada `POST` | `atendimento-client.test.ts` | token transitório em `X-CSRF-TOKEN`; falha do token não envia mutação |
+| proxy local | Dada configuração Vite, quando `VINX_API_ORIGIN` é loopback permitido, então `/foundation` e `/atendimento` recebem proxy de desenvolvimento | `vite-api-proxy.test.ts` | destino `127.0.0.1` exato; preview/produção sem proxy |
 
 ## Limites mantidos
 

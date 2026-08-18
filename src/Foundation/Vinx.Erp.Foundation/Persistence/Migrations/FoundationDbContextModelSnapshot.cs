@@ -104,6 +104,86 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCard", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("AssigneeMembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("assignee_membership_id");
+
+                    b.Property<string>("Column")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("column_name");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by_user_id");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("description");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("row_version");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("title");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_atendimento_cards");
+
+                    b.HasIndex("CompanyId", "Id")
+                        .IsUnique()
+                        .HasDatabaseName("ix_atendimento_cards_company_id_id");
+
+                    b.ToTable("atendimento_cards", "service_desk");
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Capability", b =>
                 {
                     b.Property<Guid>("Id")
@@ -562,15 +642,15 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.ToTable("approvals", "foundation", t =>
                         {
+                            t.HasCheckConstraint("ck_approvals_consumption_complete", "(consumed_at IS NULL AND confirmation_request_id IS NULL AND result_json IS NULL) OR (consumed_at IS NOT NULL AND confirmation_request_id IS NOT NULL AND result_json IS NOT NULL)");
+
                             t.HasCheckConstraint("ck_approvals_expires_after_creation", "expires_at > created_at");
 
                             t.HasCheckConstraint("ck_approvals_payload_hash_format", "payload_hash ~ '^[0-9a-f]{64}$'");
 
-                            t.HasCheckConstraint("ck_approvals_veto_complete", "(deleted_at IS NULL AND deleted_by_user_id IS NULL AND deleted_reason IS NULL) OR (deleted_at IS NOT NULL AND deleted_by_user_id IS NOT NULL AND deleted_reason IN ('approval_vetoed', 'approval_expired'))");
-
-                            t.HasCheckConstraint("ck_approvals_consumption_complete", "(consumed_at IS NULL AND confirmation_request_id IS NULL AND result_json IS NULL) OR (consumed_at IS NOT NULL AND confirmation_request_id IS NOT NULL AND result_json IS NOT NULL)");
-
                             t.HasCheckConstraint("ck_approvals_terminal_exclusive", "NOT (consumed_at IS NOT NULL AND deleted_at IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_approvals_veto_complete", "(deleted_at IS NULL AND deleted_by_user_id IS NULL AND deleted_reason IS NULL) OR (deleted_at IS NOT NULL AND deleted_by_user_id IS NOT NULL AND deleted_reason IN ('approval_vetoed', 'approval_expired'))");
                         });
                 });
 
@@ -753,6 +833,56 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasFilter("deleted_at IS NULL");
 
                     b.ToTable("memberships", "foundation");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("description");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<Guid>("RequesterUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("requester_user_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("title");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id")
+                        .HasName("pk_requests");
+
+                    b.ToTable("requests", "paguai");
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Role", b =>
