@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.AspNetCore.Mvc;
+using Vinx.Erp.ApiHost.Constants;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -25,7 +26,7 @@ using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Paguai;
 
 var builder = WebApplication.CreateBuilder(args);
-const string ProtectedRateLimitPolicy = "foundation";
+const string ProtectedRateLimitPolicy = ApiConstants.ProtectedRateLimitPolicy;
 const string BrowserSessionLoginRateLimitPolicy = "browser-session-login";
 builder.Logging.AddVinxLogging();
 builder
