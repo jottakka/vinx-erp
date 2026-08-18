@@ -1,9 +1,7 @@
-using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Vinx.Erp.Foundation.Audit;
@@ -613,32 +611,33 @@ public sealed class AtendimentoCardService(
             cancellationToken
         );
 
-    private Task<List<AtendimentoCardResponse>> QueryCardsAsync(
+    private async Task<List<AtendimentoCardResponse>> QueryCardsAsync(
         Guid companyId,
         CancellationToken cancellationToken
-    ) =>
-        database
-            .Database.SqlQuery<AtendimentoCardResponse>(
-                $"""
-                SELECT id, company_id, title, description, column_name AS column, row_version AS version, assignee_membership_id
-                FROM service_desk.atendimento_cards WHERE company_id = {companyId} AND deleted_at IS NULL ORDER BY created_at
-                """
-            )
+    )
+    {
+        var cards = await database
+            .AtendimentoCards.AsNoTracking()
+            .Where(card => card.CompanyId == companyId)
+            .OrderBy(card => card.CreatedAt)
             .ToListAsync(cancellationToken);
+        return cards.Select(ToResponse).ToList();
+    }
 
-    private Task<AtendimentoCardResponse?> FindCardAsync(
+    private async Task<AtendimentoCardResponse?> FindCardAsync(
         Guid companyId,
         Guid cardId,
         CancellationToken cancellationToken
-    ) =>
-        database
-            .Database.SqlQuery<AtendimentoCardResponse>(
-                $"""
-                SELECT id, company_id, title, description, column_name AS column, row_version AS version, assignee_membership_id
-                FROM service_desk.atendimento_cards WHERE company_id = {companyId} AND id = {cardId} AND deleted_at IS NULL
-                """
-            )
-            .SingleOrDefaultAsync(cancellationToken);
+    )
+    {
+        var card = await database
+            .AtendimentoCards.AsNoTracking()
+            .SingleOrDefaultAsync(
+                card => card.CompanyId == companyId && card.Id == cardId,
+                cancellationToken
+            );
+        return card is null ? null : ToResponse(card);
+    }
 
     private async Task<AtendimentoCardResponse> InsertCardAsync(
         ActorContext actor,
@@ -646,16 +645,24 @@ public sealed class AtendimentoCardService(
         CancellationToken cancellationToken
     )
     {
-        var cardId = Guid.NewGuid();
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"""
-            INSERT INTO service_desk.atendimento_cards
-                (id, company_id, title, description, column_name, created_by_user_id, updated_by_user_id, request_id)
-            VALUES ({cardId}, {command.CompanyId}, {command.Title.Trim()}, {command.Description.Trim()}, 'novo', {actor.UserId}, {actor.UserId}, {command.RequestId})
-            """,
-            cancellationToken
-        );
-        return (await FindCardAsync(command.CompanyId, cardId, cancellationToken))!;
+        var now = DateTimeOffset.UtcNow;
+        var card = new AtendimentoCard
+        {
+            Id = Guid.NewGuid(),
+            CompanyId = command.CompanyId,
+            Title = command.Title.Trim(),
+            Description = command.Description.Trim(),
+            Column = "novo",
+            CreatedByUserId = actor.UserId,
+            UpdatedByUserId = actor.UserId,
+            RequestId = command.RequestId,
+            CreatedAt = now,
+            UpdatedAt = now,
+            RowVersion = 1,
+        };
+        database.AtendimentoCards.Add(card);
+        await database.SaveChangesAsync(cancellationToken);
+        return ToResponse(card);
     }
 
     private async Task<AtendimentoCardResponse?> UpdateAssigneeAsync(
@@ -663,106 +670,87 @@ public sealed class AtendimentoCardService(
         Guid cardId,
         AssignAtendimentoCardCommand command,
         CancellationToken cancellationToken
-    )
-    {
-        await using var dbCommand = CreateDatabaseCommand(
-            """
-            UPDATE service_desk.atendimento_cards
-            SET assignee_membership_id = @assignee_membership_id,
-                updated_by_user_id = @actor_user_id,
-                updated_at = clock_timestamp(),
-                request_id = @request_id,
-                row_version = row_version + 1
-            WHERE company_id = @company_id
-              AND id = @card_id
-              AND row_version = @expected_version
-              AND deleted_at IS NULL
-              AND EXISTS (
-                  SELECT 1
-                  FROM foundation.memberships
-                  WHERE company_id = @company_id
-                    AND id = @assignee_membership_id
-                    AND deleted_at IS NULL)
-            RETURNING id, company_id, title, description, column_name, row_version, assignee_membership_id;
-            """
+    ) =>
+        await UpdateCardAsync(
+            cardId,
+            command.CompanyId,
+            command.ExpectedVersion,
+            card =>
+            {
+                card.AssigneeMembershipId = command.AssigneeMembershipId;
+                card.UpdatedByUserId = actor.UserId;
+                card.UpdatedAt = DateTimeOffset.UtcNow;
+                card.RequestId = command.RequestId;
+            },
+            cancellationToken
         );
-        AddParameter(dbCommand, "company_id", command.CompanyId);
-        AddParameter(dbCommand, "card_id", cardId);
-        AddParameter(dbCommand, "expected_version", command.ExpectedVersion);
-        AddParameter(dbCommand, "assignee_membership_id", command.AssigneeMembershipId);
-        AddParameter(dbCommand, "actor_user_id", actor.UserId);
-        AddParameter(dbCommand, "request_id", command.RequestId);
-        return await ExecuteReturningCardAsync(dbCommand, cancellationToken);
-    }
 
     private async Task<AtendimentoCardResponse?> MoveCardAsync(
         ActorContext actor,
         Guid cardId,
         MoveAtendimentoCardCommand command,
         CancellationToken cancellationToken
-    )
-    {
-        await using var dbCommand = CreateDatabaseCommand(
-            """
-            UPDATE service_desk.atendimento_cards
-            SET column_name = @column_name,
-                updated_by_user_id = @actor_user_id,
-                updated_at = clock_timestamp(),
-                request_id = @request_id,
-                row_version = row_version + 1
-            WHERE company_id = @company_id
-              AND id = @card_id
-              AND row_version = @expected_version
-              AND deleted_at IS NULL
-            RETURNING id, company_id, title, description, column_name, row_version, assignee_membership_id;
-            """
+    ) =>
+        await UpdateCardAsync(
+            cardId,
+            command.CompanyId,
+            command.ExpectedVersion,
+            card =>
+            {
+                card.Column = command.Column.Trim();
+                card.UpdatedByUserId = actor.UserId;
+                card.UpdatedAt = DateTimeOffset.UtcNow;
+                card.RequestId = command.RequestId;
+            },
+            cancellationToken
         );
-        AddParameter(dbCommand, "company_id", command.CompanyId);
-        AddParameter(dbCommand, "card_id", cardId);
-        AddParameter(dbCommand, "expected_version", command.ExpectedVersion);
-        AddParameter(dbCommand, "column_name", command.Column.Trim());
-        AddParameter(dbCommand, "actor_user_id", actor.UserId);
-        AddParameter(dbCommand, "request_id", command.RequestId);
-        return await ExecuteReturningCardAsync(dbCommand, cancellationToken);
-    }
 
-    private DbCommand CreateDatabaseCommand(string commandText)
-    {
-        var command = database.Database.GetDbConnection().CreateCommand();
-        command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
-        command.CommandText = commandText;
-        return command;
-    }
-
-    private static void AddParameter(DbCommand command, string name, object value)
-    {
-        var parameter = command.CreateParameter();
-        parameter.ParameterName = name;
-        parameter.Value = value;
-        command.Parameters.Add(parameter);
-    }
-
-    private static async Task<AtendimentoCardResponse?> ExecuteReturningCardAsync(
-        DbCommand command,
+    /// <summary>
+    /// Atualização otimista: row_version é token de concorrência do EF; zero linhas afetadas
+    /// devolve null e o chamador reconcilia (não encontrado x conflito de versão).
+    /// </summary>
+    private async Task<AtendimentoCardResponse?> UpdateCardAsync(
+        Guid cardId,
+        Guid companyId,
+        long expectedVersion,
+        Action<AtendimentoCard> apply,
         CancellationToken cancellationToken
     )
     {
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        var card = await database.AtendimentoCards.SingleOrDefaultAsync(
+            candidate => candidate.CompanyId == companyId && candidate.Id == cardId,
+            cancellationToken
+        );
+        if (card is null || card.RowVersion != expectedVersion)
         {
             return null;
         }
 
-        return new AtendimentoCardResponse(
-            reader.GetGuid(0),
-            reader.GetGuid(1),
-            reader.GetString(2),
-            reader.GetString(3),
-            reader.GetString(4),
-            reader.GetInt64(5),
-            reader.IsDBNull(6) ? null : reader.GetGuid(6)
-        );
+        apply(card);
+        card.RowVersion += 1;
+        try
+        {
+            await database.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            database.ChangeTracker.Clear();
+            return null;
+        }
+
+        return ToResponse(card);
     }
+
+    private static AtendimentoCardResponse ToResponse(AtendimentoCard card) =>
+        new(
+            card.Id,
+            card.CompanyId,
+            card.Title,
+            card.Description,
+            card.Column,
+            card.RowVersion,
+            card.AssigneeMembershipId
+        );
 
     private static bool IsIdempotencyKeyConflict(DbUpdateException exception)
     {
