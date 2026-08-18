@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.OpenApi;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -79,6 +80,20 @@ builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddScoped<PaguaiDraftService>();
+builder
+    .Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false)
+    .AddJsonOptions(options =>
+    {
+        // Contrato estrito: campos desconhecidos no corpo são rejeitados com ModelState inválido.
+        options.JsonSerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+    })
+    .ConfigureApiBehaviorOptions(options =>
+        options.InvalidModelStateResponseFactory = _ =>
+            new ObjectResult(new { code = "invalid_request" })
+            {
+                StatusCode = StatusCodes.Status400BadRequest,
+            }
+    );
 builder.Services.AddSupabaseJwtAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddBrowserBffSession(builder.Configuration, builder.Environment);
 builder.Services.AddAuthorization(options =>
@@ -453,7 +468,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 app.MapBrowserBffSessionEndpoints();
-app.MapPaguaiEndpoints(ProtectedRateLimitPolicy);
+app.MapControllers();
 var foundation = app.MapGroup("/foundation")
     .RequireAuthorization()
     .RequireRateLimiting(ProtectedRateLimitPolicy);

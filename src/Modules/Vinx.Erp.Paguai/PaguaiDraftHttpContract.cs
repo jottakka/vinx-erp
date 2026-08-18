@@ -2,6 +2,12 @@ using System.Text.Json;
 
 namespace Vinx.Erp.Paguai;
 
+/// <summary>Marcador de antiforgery exigido na operação (mantém o contrato OpenAPI e o middleware).</summary>
+public sealed class PaguaiAntiforgeryRequiredMetadata : Attribute;
+
+/// <summary>Marcador de corpo JSON estrito (o transformer OpenAPI injeta o schema canônico).</summary>
+public sealed class PaguaiJsonRequestBodyMetadata : Attribute;
+
 public static class PaguaiDraftHttpContract
 {
     private static readonly HashSet<string> Fields =

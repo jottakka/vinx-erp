@@ -23,6 +23,7 @@ public sealed class FoundationDbContext(DbContextOptions<FoundationDbContext> op
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
     public DbSet<FoundationApproval> Approvals => Set<FoundationApproval>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<PaguaiRequest> PaguaiRequests => Set<PaguaiRequest>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

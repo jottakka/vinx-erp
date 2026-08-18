@@ -1,9 +1,7 @@
-using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Vinx.Erp.Foundation.Audit;
@@ -73,7 +71,20 @@ public sealed class PaguaiDraftService(
                 return DeserializeReplay(existing.ResultJson);
             }
 
-            var draft = await InsertAsync(actor, command, cancellationToken);
+            var request = new PaguaiRequest
+            {
+                Id = Guid.NewGuid(),
+                CompanyId = command.CompanyId,
+                RequesterUserId = actor.UserId,
+                RequestId = command.RequestId,
+                Title = command.Title,
+                Description = command.Description,
+                State = "rascunho",
+                Version = 1,
+            };
+            database.PaguaiRequests.Add(request);
+            await database.SaveChangesAsync(cancellationToken);
+            var draft = ToDraft(request);
             database.IdempotencyRecords.Add(
                 new IdempotencyRecord(
                     Guid.NewGuid(),
@@ -212,11 +223,11 @@ public sealed class PaguaiDraftService(
                 return PaguaiDraftResult.Of(PaguaiDraftState.NotFound);
             }
 
-            var draft = await ReadAsync(companyId, actor.UserId, id, cancellationToken);
+            var request = await FindRequestAsync(companyId, actor.UserId, id, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return draft is null
+            return request is null
                 ? PaguaiDraftResult.Of(PaguaiDraftState.NotFound)
-                : new PaguaiDraftResult(PaguaiDraftState.Created, draft);
+                : new PaguaiDraftResult(PaguaiDraftState.Created, ToDraft(request));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -382,63 +393,19 @@ public sealed class PaguaiDraftService(
             cancellationToken
         );
 
-    private async Task<PaguaiDraft> InsertAsync(
-        ActorContext actor,
-        CreateDraftCommand command,
-        CancellationToken cancellationToken
-    )
-    {
-        var connection = database.Database.GetDbConnection();
-        if (connection.State != ConnectionState.Open)
-        {
-            await connection.OpenAsync(cancellationToken);
-        }
-
-        await using var sql = connection.CreateCommand();
-        sql.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
-        sql.CommandText = """
-            INSERT INTO paguai.requests (id, company_id, requester_user_id, request_id, title, description)
-            VALUES (@id, @companyId, @requesterUserId, @requestId, @title, @description)
-            RETURNING id, company_id, request_id, title, description, state, version, created_at;
-            """;
-        AddParameter(sql, "id", Guid.NewGuid());
-        AddParameter(sql, "companyId", command.CompanyId);
-        AddParameter(sql, "requesterUserId", actor.UserId);
-        AddParameter(sql, "requestId", command.RequestId);
-        AddParameter(sql, "title", command.Title);
-        AddParameter(sql, "description", command.Description);
-        await using var reader = await sql.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-        {
-            throw new InvalidOperationException("Paguai insert returned no row.");
-        }
-
-        return ReadDraft(reader);
-    }
-
-    private async Task<PaguaiDraft?> ReadAsync(
+    private Task<PaguaiRequest?> FindRequestAsync(
         Guid companyId,
         Guid userId,
         Guid id,
         CancellationToken cancellationToken
-    )
-    {
-        var connection = database.Database.GetDbConnection();
-        await using var sql = connection.CreateCommand();
-        sql.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
-        sql.CommandText = """
-            SELECT id, company_id, request_id, title, description, state, version, created_at
-            FROM paguai.requests
-            WHERE company_id = @companyId AND requester_user_id = @userId AND id = @id
-            """;
-        AddParameter(sql, "companyId", companyId);
-        AddParameter(sql, "userId", userId);
-        AddParameter(sql, "id", id);
-        await using var reader = await sql.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-            return null;
-        return ReadDraft(reader);
-    }
+    ) =>
+        database.PaguaiRequests.AsNoTracking().SingleOrDefaultAsync(
+            request =>
+                request.CompanyId == companyId
+                && request.RequesterUserId == userId
+                && request.Id == id,
+            cancellationToken
+        );
 
     private async Task<IReadOnlyList<PaguaiDraft>> ReadListAsync(
         Guid companyId,
@@ -446,47 +413,28 @@ public sealed class PaguaiDraftService(
         CancellationToken cancellationToken
     )
     {
-        var connection = database.Database.GetDbConnection();
-        await using var sql = connection.CreateCommand();
-        sql.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
-        sql.CommandText = """
-            SELECT id, company_id, request_id, title, description, state, version, created_at
-            FROM paguai.requests
-            WHERE company_id = @companyId AND requester_user_id = @userId
-            ORDER BY created_at DESC, id DESC
-            """;
-        AddParameter(sql, "companyId", companyId);
-        AddParameter(sql, "userId", userId);
-        await using var reader = await sql.ExecuteReaderAsync(cancellationToken);
-        var drafts = new List<PaguaiDraft>();
-        while (await reader.ReadAsync(cancellationToken))
-            drafts.Add(ReadDraft(reader));
-        return drafts;
+        var requests = await database
+            .PaguaiRequests.AsNoTracking()
+            .Where(request =>
+                request.CompanyId == companyId && request.RequesterUserId == userId
+            )
+            .OrderByDescending(request => request.CreatedAt)
+            .ThenByDescending(request => request.Id)
+            .ToListAsync(cancellationToken);
+        return requests.Select(ToDraft).ToList();
     }
 
-    private static PaguaiDraft ReadDraft(System.Data.Common.DbDataReader reader) =>
+    private static PaguaiDraft ToDraft(PaguaiRequest request) =>
         new(
-            reader.GetGuid(0),
-            reader.GetGuid(1),
-            reader.GetGuid(2),
-            reader.GetString(3),
-            reader.GetString(4),
-            reader.GetString(5),
-            reader.GetInt32(6),
-            reader.GetFieldValue<DateTimeOffset>(7)
+            request.Id,
+            request.CompanyId,
+            request.RequestId,
+            request.Title,
+            request.Description,
+            request.State,
+            request.Version,
+            request.CreatedAt
         );
-
-    private static void AddParameter(
-        System.Data.Common.DbCommand command,
-        string name,
-        object value
-    )
-    {
-        var parameter = command.CreateParameter();
-        parameter.ParameterName = name;
-        parameter.Value = value;
-        command.Parameters.Add(parameter);
-    }
 
     private static PaguaiDraftResult DeserializeReplay(string resultJson) =>
         JsonSerializer.Deserialize<PaguaiDraft>(resultJson) is { } draft
