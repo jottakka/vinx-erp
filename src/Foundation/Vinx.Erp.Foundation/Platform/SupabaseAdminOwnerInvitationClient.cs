@@ -125,6 +125,7 @@ public sealed class SupabaseAdminOwnerInvitationClient
             user.ValueKind is not JsonValueKind.Object
             || !TryGetRequiredString(user, "id", out var subjectText)
             || !Guid.TryParse(subjectText, out subject)
+            || subject == Guid.Empty
             || !TryGetRequiredString(user, "aud", out var audience)
             || !string.Equals(audience, _audience, StringComparison.Ordinal)
             || !TryGetRequiredString(user, "email", out var returnedEmail)

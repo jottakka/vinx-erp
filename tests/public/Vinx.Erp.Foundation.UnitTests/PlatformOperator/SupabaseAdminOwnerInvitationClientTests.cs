@@ -93,6 +93,19 @@ public sealed class SupabaseAdminOwnerInvitationClientTests
     }
 
     [Fact]
+    public async Task Invite_async_marks_an_empty_provider_subject_as_ambiguous()
+    {
+        var client = Client(
+            new StubHttpMessageHandler(_ => Json(HttpStatusCode.OK, UserJsonWithEmptySubject()))
+        );
+
+        var result = await client.InviteAsync("owner@example.test", CancellationToken.None);
+
+        Assert.Equal(SupabaseOwnerInvitationResultKind.Ambiguous, result.Kind);
+        Assert.Null(result.Subject);
+    }
+
+    [Fact]
     public async Task Invite_async_marks_an_oversized_success_body_as_ambiguous_without_parsing_it()
     {
         var client = Client(
@@ -136,6 +149,18 @@ public sealed class SupabaseAdminOwnerInvitationClientTests
         """
             {
               "id": "2a0399f0-a602-4d1f-8f79-22f4bf75f190",
+              "aud": "authenticated",
+              "email": "owner@example.test",
+              "is_anonymous": false,
+              "banned_until": null,
+              "deleted_at": null
+            }
+            """;
+
+    private static string UserJsonWithEmptySubject() =>
+        """
+            {
+              "id": "00000000-0000-0000-0000-000000000000",
               "aud": "authenticated",
               "email": "owner@example.test",
               "is_anonymous": false,

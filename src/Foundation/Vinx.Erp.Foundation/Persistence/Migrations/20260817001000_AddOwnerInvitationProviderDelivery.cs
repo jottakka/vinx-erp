@@ -74,6 +74,11 @@ public partial class AddOwnerInvitationProviderDelivery : Migration
                         AND provider_issuer IS NULL
                         AND provider_subject IS NULL
                         AND provider_failure_reason = 'provider_ambiguous'));
+            ALTER TABLE foundation.pending_owner_invitations
+                ADD CONSTRAINT ck_pending_owner_invitations_provider_subject_not_empty
+                CHECK (
+                    provider_subject IS NULL
+                    OR provider_subject <> '00000000-0000-0000-0000-000000000000'::uuid);
             GRANT UPDATE (provider_attempt_id, provider_started_at,
                 provider_completed_at, provider_issuer, provider_subject, provider_failure_reason)
                 ON TABLE foundation.pending_owner_invitations TO vinx_worker_owner;
@@ -343,6 +348,8 @@ public partial class AddOwnerInvitationProviderDelivery : Migration
                 ON TABLE foundation.pending_owner_invitations FROM vinx_worker_owner;
             ALTER TABLE foundation.pending_owner_invitations
                 DROP CONSTRAINT ck_pending_owner_invitations_status;
+            ALTER TABLE foundation.pending_owner_invitations
+                DROP CONSTRAINT ck_pending_owner_invitations_provider_subject_not_empty;
             ALTER TABLE foundation.pending_owner_invitations
                 DROP COLUMN provider_attempt_id,
                 DROP COLUMN provider_started_at,

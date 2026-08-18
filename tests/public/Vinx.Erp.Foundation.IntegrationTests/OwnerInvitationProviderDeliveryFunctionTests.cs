@@ -253,6 +253,35 @@ public sealed class OwnerInvitationProviderDeliveryFunctionTests
         await AssertInFlightWithoutProviderAuditAsync(factory.Fixture, invitationId);
     }
 
+    [Fact]
+    public async Task Provider_finalization_rejects_an_empty_provider_subject()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            aal: "aal2"
+        );
+        await SeedPlatformOperatorAsync(factory);
+        var (invitationId, _) = await ProvisionInvitationAsync(factory);
+        var correlationId = Guid.NewGuid();
+        await MoveToPendingProviderAsync(factory.Fixture, invitationId, correlationId);
+        var claim = await ClaimAsync(factory.Fixture, invitationId, correlationId);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+            FinalizeAsync(
+                factory.Fixture,
+                invitationId,
+                claim.AttemptId,
+                correlationId,
+                "success",
+                "https://project.supabase.test/auth/v1",
+                Guid.Empty,
+                null
+            )
+        );
+
+        Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+        await AssertInFlightWithoutProviderAuditAsync(factory.Fixture, invitationId);
+    }
+
     private static async Task<(Guid InvitationId, string OwnerEmail)> ProvisionInvitationAsync(
         FoundationApiFactory factory
     )
