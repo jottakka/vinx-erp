@@ -1,6 +1,5 @@
-using System.ClientModel;
-using System.Text.Json;
 using Microsoft.Extensions.AI;
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
 
 namespace Vinx.Erp.AI.Providers.DeepSeek;
 
@@ -15,14 +14,13 @@ public enum DeepSeekFailureKind
 }
 
 /// <summary>
-/// Falha classificada do provider. A mensagem é fixa e redacted: nunca contém
-/// body, prompt, header, chave ou resposta bruta; a exceção original segue
-/// preservada como inner para o ponto que decide a falha.
+/// Falha classificada do provider. A mensagem é fixa e redacted e a cadeia
+/// pública não carrega causa bruta: somente kind e status HTTP.
 /// </summary>
 public sealed class DeepSeekProviderException : Exception
 {
-    public DeepSeekProviderException(DeepSeekFailureKind kind, int? httpStatusCode = null, Exception? innerException = null)
-        : base(FormatMessage(kind, httpStatusCode), innerException)
+    public DeepSeekProviderException(DeepSeekFailureKind kind, int? httpStatusCode = null)
+        : base(FormatMessage(kind, httpStatusCode))
     {
         Kind = kind;
         HttpStatusCode = httpStatusCode;
@@ -62,41 +60,34 @@ public sealed record DeepSeekChatResult(
 }
 
 /// <summary>
-/// Converte a resposta do provider no contrato normalizado e classifica falhas
-/// externas. Campos desconhecidos são ignorados; schema inválido de tool vira
-/// falha provider_invalid, nunca resultado inventado.
+/// Fachada do perfil DeepSeek sobre o mapper do núcleo OpenAI-compatible:
+/// converte a resposta do provider no contrato normalizado e classifica
+/// falhas externas. Campos desconhecidos são ignorados; schema inválido de
+/// tool vira falha provider_invalid, nunca resultado inventado.
 /// </summary>
 public static class DeepSeekResponseMapper
 {
     public static DeepSeekChatResult ToResult(ChatResponse? response, string correlationId)
     {
-        ArgumentNullException.ThrowIfNull(response);
-        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
-
-        var proposals = new List<DeepSeekToolProposal>();
-        foreach (var functionCall in response.Messages.SelectMany(message => message.Contents)
-                     .OfType<FunctionCallContent>())
+        try
         {
-            if (functionCall.Exception is not null)
-            {
-                throw new DeepSeekProviderException(
-                    DeepSeekFailureKind.ProviderInvalid, null, functionCall.Exception);
-            }
-
-            proposals.Add(new DeepSeekToolProposal(
-                functionCall.CallId,
-                functionCall.Name,
-                (IDictionary<string, object?>?)functionCall.Arguments ?? new Dictionary<string, object?>()));
+            var result = OpenAiCompatibleResponseMapper.ToResult(response, correlationId);
+            return new DeepSeekChatResult(
+                result.CorrelationId,
+                result.FinalText,
+                result.ToolProposals
+                    .Select(proposal => new DeepSeekToolProposal(
+                        proposal.CallId, proposal.Name, proposal.Arguments))
+                    .ToList(),
+                result.FinishReason,
+                new DeepSeekUsage(result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.TotalTokens));
         }
-
-        var text = response.Text;
-        var usage = response.Usage;
-        return new DeepSeekChatResult(
-            correlationId,
-            string.IsNullOrEmpty(text) ? null : text,
-            proposals,
-            response.FinishReason?.ToString(),
-            new DeepSeekUsage(usage?.InputTokenCount, usage?.OutputTokenCount, usage?.TotalTokenCount));
+        catch (OpenAiCompatibleProviderException exception)
+        {
+            // Sem inner: a cadeia pública nunca carrega a causa bruta do provider.
+            throw new DeepSeekProviderException(
+                DeepSeekChatClient.Translate(exception.Kind), exception.HttpStatusCode);
+        }
     }
 
     /// <summary>
@@ -104,34 +95,7 @@ public static class DeepSeekResponseMapper
     /// chamador vira <see cref="DeepSeekFailureKind.Cancelled"/>; cancelamento
     /// interno vira timeout.
     /// </summary>
-    public static DeepSeekFailureKind ClassifyFailure(Exception exception, CancellationToken callerToken)
-    {
-        ArgumentNullException.ThrowIfNull(exception);
-
-        if (exception is OperationCanceledException)
-        {
-            return callerToken.IsCancellationRequested
-                ? DeepSeekFailureKind.Cancelled
-                : DeepSeekFailureKind.Timeout;
-        }
-
-        if (exception is ClientResultException providerFailure)
-        {
-            return providerFailure.Status switch
-            {
-                408 => DeepSeekFailureKind.Timeout,
-                429 => DeepSeekFailureKind.RateLimited,
-                400 or 401 or 403 or 404 or 422 => DeepSeekFailureKind.ProviderInvalid,
-                >= 500 => DeepSeekFailureKind.ProviderUnavailable,
-                _ => DeepSeekFailureKind.ProviderUnavailable,
-            };
-        }
-
-        if (exception is JsonException or InvalidOperationException)
-        {
-            return DeepSeekFailureKind.ProviderInvalid;
-        }
-
-        return DeepSeekFailureKind.ProviderUnavailable;
-    }
+    public static DeepSeekFailureKind ClassifyFailure(Exception exception, CancellationToken callerToken) =>
+        DeepSeekChatClient.Translate(
+            OpenAiCompatibleResponseMapper.ClassifyFailure(exception, callerToken));
 }

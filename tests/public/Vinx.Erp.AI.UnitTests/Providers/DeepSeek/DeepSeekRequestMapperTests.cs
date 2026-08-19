@@ -120,32 +120,39 @@ public sealed class DeepSeekRequestMapperTests
     }
 
     [Fact]
-    public void Allowed_image_media_types_survive_sanitization()
+    public void Image_content_is_rejected_because_the_hosted_profile_is_text_only()
     {
-        var png = new byte[] { 1, 2, 3 };
+        // Contrato 2.2: a API hospedada é text-only; imagem nunca chega à wire.
         var message = new ChatMessage(
             ChatRole.User,
-            [new TextContent("o que há na imagem?"), new DataContent(png, "image/png")]);
+            [new TextContent("o que há na imagem?"), new DataContent(new byte[] { 1, 2, 3 }, "image/png")]);
 
-        var mapped = DeepSeekRequestMapper.Map(Approved(), [message], null);
-
-        var contents = Assert.Single(mapped.Messages).Contents;
-        Assert.Contains(contents, c => c is DataContent data && data.MediaType == "image/png");
+        Assert.Throws<DeepSeekRequestValidationException>(
+            () => DeepSeekRequestMapper.Map(Approved(), [message], null));
     }
 
     [Fact]
-    public void Disallowed_media_types_and_unknown_roles_are_dropped()
+    public void Unsupported_media_types_are_rejected_instead_of_dropped()
     {
+        // Contrato 2.2: conteúdo de dados fora do perfil é rejeitado
+        // deterministicamente, nunca descartado em silêncio.
         var message = new ChatMessage(
             ChatRole.User,
             [new TextContent("anexo"), new DataContent(new byte[] { 4, 5, 6 }, "application/pdf")]);
+
+        Assert.Throws<DeepSeekRequestValidationException>(
+            () => DeepSeekRequestMapper.Map(Approved(), [message], null));
+    }
+
+    [Fact]
+    public void Unknown_roles_are_dropped()
+    {
         var unknownRole = new ChatMessage(new ChatRole("developer"), [new TextContent("interno")]);
 
-        var mapped = DeepSeekRequestMapper.Map(Approved(), [message, unknownRole], null);
+        var mapped = DeepSeekRequestMapper.Map(Approved(), [UserMessage("válido"), unknownRole], null);
 
         var sanitized = Assert.Single(mapped.Messages);
         Assert.Single(sanitized.Contents.OfType<TextContent>());
-        Assert.Empty(sanitized.Contents.OfType<DataContent>());
     }
 
     [Fact]
