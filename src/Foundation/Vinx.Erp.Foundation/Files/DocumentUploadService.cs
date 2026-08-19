@@ -17,6 +17,7 @@ namespace Vinx.Erp.Foundation.Files;
 public sealed class DocumentUploadService(
     FoundationDbContext database,
     FileStorage storage,
+    IMalwareScanner malwareScanner,
     AuditAppender auditAppender,
     ILogger<DocumentUploadService> logger,
     CapabilityEvaluator capabilityEvaluator)
@@ -162,8 +163,14 @@ public sealed class DocumentUploadService(
                     inspectionFailure = "storage_read_failed";
                 }
 
+                MalwareScanVerdict? verdict = null;
+                if (inspectionFailure is null)
+                {
+                    verdict = await ScanForConfirmationAsync(preparation.ProviderKey!, cancellationToken);
+                }
+
                 return await FinalizeConfirmationAsync(
-                    actor, command, payloadHash, inspection, inspectionFailure, cancellationToken);
+                    actor, command, payloadHash, inspection, inspectionFailure, verdict, cancellationToken);
             }
             finally
             {
@@ -252,12 +259,18 @@ public sealed class DocumentUploadService(
         return ConfirmationPreparation.ForInspection(providerKey);
     }
 
+    private async Task<MalwareScanVerdict> ScanForConfirmationAsync(
+        string providerKey,
+        CancellationToken cancellationToken) =>
+        await malwareScanner.ScanAsync(new MalwareScanRequest(providerKey, null), cancellationToken);
+
     private async Task<DocumentUploadResult<DocumentUploadConfirmationResult>> FinalizeConfirmationAsync(
         ActorContext actor,
         ConfirmDocumentUploadCommand command,
         string payloadHash,
         StorageObjectInspection inspection,
         string? inspectionFailure,
+        MalwareScanVerdict? verdict,
         CancellationToken cancellationToken)
     {
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
@@ -303,7 +316,11 @@ public sealed class DocumentUploadService(
             return await ReturnConcurrentConfirmationReplayAsync(actor, command, payloadHash, cancellationToken);
         }
 
-        var verificationError = inspectionFailure ?? DocumentVerificationPolicy.Validate(file, inspection);
+        // Fail-closed: sem veredito do scanner a confirmação nunca libera.
+        var verificationError = inspectionFailure
+            ?? (verdict is null
+                ? "malware_scan_unavailable"
+                : DocumentVerificationPolicy.Validate(file, inspection, verdict));
         if (verificationError is not null)
         {
             return await CompleteVerificationFailureAsync(

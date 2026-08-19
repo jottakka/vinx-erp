@@ -109,7 +109,7 @@ public sealed class DocumentUploadEndpointTests
     public async Task Valid_confirmation_rechecks_private_storage_and_confirms_the_file()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -129,7 +129,8 @@ public sealed class DocumentUploadEndpointTests
     public async Task Malware_detection_marks_the_file_failed_without_returning_a_read_url()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.MalwareDetected });
         var scenario = await SeedScenarioAsync(factory);
         var malwareIntent = NewIntent(scenario.CompanyId) with
         {
@@ -157,8 +158,9 @@ public sealed class DocumentUploadEndpointTests
     [Fact]
     public async Task Unavailable_malware_scan_marks_the_file_failed_and_records_a_failure_without_a_download_url()
     {
-        var storage = new ControlledFileStorage { ConfiguredMalwareScanStatus = MalwareScanStatus.Unavailable };
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.Unavailable });
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -370,7 +372,7 @@ public sealed class DocumentUploadEndpointTests
     public async Task Intent_replay_after_confirmation_does_not_issue_an_upload_url()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var request = NewIntent(scenario.CompanyId);
         var intent = await PostIntentAsync(factory, request);
@@ -391,7 +393,8 @@ public sealed class DocumentUploadEndpointTests
     public async Task Intent_replay_after_verification_failure_does_not_issue_an_upload_url()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.MalwareDetected });
         var scenario = await SeedScenarioAsync(factory);
         var request = NewIntent(scenario.CompanyId) with { SizeBytes = EicarPayload.Length, Checksum = ComputeChecksum(EicarPayload) };
         var intent = await PostIntentAsync(factory, request);
@@ -462,7 +465,7 @@ public sealed class DocumentUploadEndpointTests
     public async Task Repeated_confirmation_replays_confirmed_state_without_a_second_audit_or_exposure()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -489,7 +492,7 @@ public sealed class DocumentUploadEndpointTests
             BlockInspection = true,
             InspectionsToBlock = 1
         };
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -518,7 +521,7 @@ public sealed class DocumentUploadEndpointTests
             BlockInspection = true,
             InspectionsToBlock = 1
         };
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -557,6 +560,11 @@ public sealed class DocumentUploadEndpointTests
 
     private static string ComputeChecksum(byte[] content) =>
         $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}";
+
+    private static Task<FoundationApiFactory> CreateFactoryAsync(
+        ControlledFileStorage storage,
+        IMalwareScanner? scanner = null) =>
+        FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage, malwareScanner: scanner);
 
     private static async Task<UploadIntentResponse> CreateIntentAsync(FoundationApiFactory factory, Guid companyId)
     {
@@ -656,7 +664,6 @@ public sealed class DocumentUploadEndpointTests
         public bool FailReads { get; init; }
         public bool BlockInspection { get; init; }
         public int InspectionsToBlock { get; init; } = 1;
-        public MalwareScanStatus ConfiguredMalwareScanStatus { get; init; } = MalwareScanStatus.Clean;
         public int InspectionCount => Volatile.Read(ref inspectionCount);
 
         public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -676,7 +683,7 @@ public sealed class DocumentUploadEndpointTests
                 providerKey,
                 stored.Content.LongLength,
                 stored.ContentType,
-                ComputeChecksum(stored.Content)));
+                GetChecksum(providerKey)));
         }
 
         public async Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken)
@@ -701,14 +708,10 @@ public sealed class DocumentUploadEndpointTests
                 providerKey,
                 stored.Content.LongLength,
                 stored.ContentType,
-                ComputeChecksum(stored.Content));
-            return new StorageObjectInspection(
-                metadata,
-                ConfiguredMalwareScanStatus == MalwareScanStatus.Unavailable
-                    ? MalwareScanStatus.Unavailable
-                    : stored.Content.AsSpan().IndexOf(EicarPayload) >= 0
-                        ? MalwareScanStatus.MalwareDetected
-                        : MalwareScanStatus.Clean);
+                GetChecksum(providerKey));
+            // Inspeção determinística espelha o adapter real: nunca é o gate antimalware
+            // (o veredito server-side do scanner decide).
+            return new StorageObjectInspection(metadata, MalwareScanStatus.Unavailable);
         }
 
         public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(string providerKey, TimeSpan lifetime, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -718,11 +721,29 @@ public sealed class DocumentUploadEndpointTests
         public void Put(string providerKey, byte[] content, string contentType) =>
             _objects[providerKey] = new StoredObject(content, contentType);
 
+        public string GetChecksum(string providerKey) => ComputeChecksum(_objects[providerKey].Content);
+
         public Task WaitForInspectionAsync() => inspectionStarted.Task;
 
         public void ReleaseInspection() => inspectionRelease.TrySetResult();
 
         private sealed record StoredObject(byte[] Content, string ContentType);
+    }
+
+    private sealed class ControlledMalwareScanner(ControlledFileStorage storage) : IMalwareScanner
+    {
+        public MalwareScanStatus Status { get; init; } = MalwareScanStatus.Clean;
+        public string? OverrideContentChecksum { get; init; }
+
+        public Task<MalwareScanVerdict> ScanAsync(MalwareScanRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(new MalwareScanVerdict(
+                Status,
+                "vinx-test-engine",
+                "1.0.0",
+                "1.2026.08",
+                DateTimeOffset.UtcNow,
+                OverrideContentChecksum ?? storage.GetChecksum(request.ProviderKey),
+                null));
     }
 
     private sealed record CapturedUploadLog(

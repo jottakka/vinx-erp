@@ -111,6 +111,8 @@ builder.Services.AddScoped<EmployeeDirectoryService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
+// Engine fail-closed até a aprovação da engine real: todo scan retorna indisponível.
+builder.Services.AddSingleton<IMalwareScanner, BlockedMalwareScanner>();
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddScoped<PaguaiDraftService>();
 builder.Services.AddScoped<AtendimentoCardService>();

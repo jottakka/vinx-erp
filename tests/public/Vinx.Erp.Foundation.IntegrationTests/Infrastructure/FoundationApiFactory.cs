@@ -42,6 +42,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly CountingIdentityProvider? _countingIdentityProvider;
     private readonly GateDatabaseFailurePoint? _databaseFailurePoint;
     private readonly FileStorage? _testFileStorage;
+    private readonly IMalwareScanner? _testMalwareScanner;
     private readonly HttpMessageHandler? _browserSessionProviderHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
     private readonly Func<ValueTask>? _disposeJwtAsync;
@@ -56,6 +57,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         CountingIdentityProvider? countingIdentityProvider = null,
         GateDatabaseFailurePoint? databaseFailurePoint = null,
         FileStorage? testFileStorage = null,
+        IMalwareScanner? testMalwareScanner = null,
         HttpMessageHandler? browserSessionProviderHandler = null,
         IFoundationFixtureLifecycle? fixture = null,
         Func<ValueTask>? disposeHostAsync = null,
@@ -69,6 +71,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _countingIdentityProvider = countingIdentityProvider;
         _databaseFailurePoint = databaseFailurePoint;
         _testFileStorage = testFileStorage;
+        _testMalwareScanner = testMalwareScanner;
         _browserSessionProviderHandler = browserSessionProviderHandler;
         _fixture = fixture ?? new FoundationPostgresFixture();
         _disposeHostAsync = disposeHostAsync;
@@ -93,9 +96,11 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Guid? actorUserId = null,
         Guid? correlationId = null,
         FileStorage? fileStorage = null,
+        IMalwareScanner? malwareScanner = null,
         string? aal = null)
     {
-        return await CreateAsync(actorUserId, correlationId, fileStorage, aal, provisionWolverineStorage: true);
+        return await CreateAsync(
+            actorUserId, correlationId, fileStorage, malwareScanner, aal, provisionWolverineStorage: true);
     }
 
     internal static async Task<FoundationApiFactory> CreateWithoutWolverineStorageAsync(string? aal = null)
@@ -107,6 +112,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Guid? actorUserId = null,
         Guid? correlationId = null,
         FileStorage? fileStorage = null,
+        IMalwareScanner? malwareScanner = null,
         string? aal = null,
         bool provisionWolverineStorage = true)
     {
@@ -122,6 +128,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 resolvedCorrelationId.ToString(),
                 aal),
             testFileStorage: fileStorage,
+            testMalwareScanner: malwareScanner,
             provisionWolverineStorage: provisionWolverineStorage);
         return await PrepareAsync(factory);
     }
@@ -130,9 +137,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Guid? actorUserId = null,
         Guid? correlationId = null,
         FileStorage? fileStorage = null,
+        IMalwareScanner? malwareScanner = null,
         string? aal = null)
     {
-        var factory = await CreateAsync(actorUserId, correlationId, fileStorage, aal);
+        var factory = await CreateAsync(actorUserId, correlationId, fileStorage, malwareScanner, aal);
         return await SeedAuthenticatedActorAndReturnAsync(factory);
     }
 
@@ -270,6 +278,11 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             {
                 services.RemoveAll<FileStorage>();
                 services.AddSingleton(_testFileStorage);
+            }
+            if (_testMalwareScanner is not null)
+            {
+                services.RemoveAll<IMalwareScanner>();
+                services.AddSingleton(_testMalwareScanner);
             }
             if (_useJwtBearer)
             {
