@@ -43,6 +43,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Vinx.Erp.AI", "src\Modules\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Vinx.Erp.AI.UnitTests", "tests\public\Vinx.Erp.AI.UnitTests\Vinx.Erp.AI.UnitTests.csproj", "{9E4D10E9-8988-4358-BA7A-A975D222AB40}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Vinx.Erp.Notifications", "src\Modules\Vinx.Erp.Notifications\Vinx.Erp.Notifications.csproj", "{151E36C1-8278-4A80-AB14-E547452E0310}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -209,6 +211,18 @@ Global
 		{9E4D10E9-8988-4358-BA7A-A975D222AB40}.Release|x64.Build.0 = Release|Any CPU
 		{9E4D10E9-8988-4358-BA7A-A975D222AB40}.Release|x86.ActiveCfg = Release|Any CPU
 		{9E4D10E9-8988-4358-BA7A-A975D222AB40}.Release|x86.Build.0 = Release|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Debug|x64.Build.0 = Debug|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Debug|x86.Build.0 = Debug|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Release|Any CPU.Build.0 = Release|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Release|x64.ActiveCfg = Release|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Release|x64.Build.0 = Release|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Release|x86.ActiveCfg = Release|Any CPU
+		{151E36C1-8278-4A80-AB14-E547452E0310}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -232,5 +246,6 @@ Global
 		{5BCB428E-1D59-4370-A8BC-1780C025DF0E} = {DCB6FCB8-FF92-AC57-0842-1F72A354D6B1}
 		{8A06FF1A-68BB-4C5E-B715-9A02BFE3A0EC} = {6CFB3EE9-0B1A-4CCF-8121-84CE7C8A26DD}
 		{9E4D10E9-8988-4358-BA7A-A975D222AB40} = {A1BF52EB-F069-5C26-852D-088BB6F41C0A}
+		{151E36C1-8278-4A80-AB14-E547452E0310} = {6CFB3EE9-0B1A-4CCF-8121-84CE7C8A26DD}
 	EndGlobalSection
 EndGlobal

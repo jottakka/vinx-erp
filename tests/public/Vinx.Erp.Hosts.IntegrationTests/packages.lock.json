@@ -947,11 +947,20 @@
           "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
+      "vinx.erp.notifications": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql": "[10.0.3, )",
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
       "vinx.erp.workerhost": {
         "type": "Project",
         "dependencies": {
           "OpenTelemetry.Extensions.Hosting": "[1.17.0, )",
           "Vinx.Erp.Foundation": "[1.0.0, )",
+          "Vinx.Erp.Notifications": "[1.0.0, )",
           "WolverineFx.Postgresql": "[6.28.2, )",
           "WolverineFx.RuntimeCompilation": "[6.28.2, )"
         }

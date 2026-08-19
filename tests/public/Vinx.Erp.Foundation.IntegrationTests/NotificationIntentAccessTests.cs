@@ -104,7 +104,9 @@ public sealed class NotificationIntentAccessTests
         Assert.False(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
-        Assert.False(reader.GetBoolean(4));
+        // Desde o worker de entregas (#48) o vinx_worker tem USAGE no schema
+        // para executar as funções de claim/finalize; continua sem DML direto.
+        Assert.True(reader.GetBoolean(4));
         Assert.False(reader.GetBoolean(5));
     }
 
