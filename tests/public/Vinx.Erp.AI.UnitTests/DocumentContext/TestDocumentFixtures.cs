@@ -24,8 +24,11 @@ internal static class TestDocumentFixtures
         return builder.Build();
     }
 
-    public static byte[] PdfWithoutText(int pages) =>
-        MinimalPdf(Enumerable.Repeat<string?>(null, pages).ToArray());
+    public static byte[] PdfWithoutText(int pages, double width = 595, double height = 842) =>
+        BuildPdf(width, height, Enumerable.Repeat<string?>(null, pages).ToArray());
+
+    public static byte[] MinimalPdf(params string?[] pageTexts) =>
+        BuildPdf(595, 842, pageTexts);
 
     /// <summary>
     /// PDF mínimo canônico (xref computado em código): carregável tanto pelo
@@ -34,7 +37,7 @@ internal static class TestDocumentFixtures
     /// página nula fica em branco (sem camada de texto). Texto ASCII simples
     /// sem parênteses.
     /// </summary>
-    public static byte[] MinimalPdf(params string?[] pageTexts)
+    private static byte[] BuildPdf(double width, double height, params string?[] pageTexts)
     {
         var pageCount = pageTexts.Length;
         var hasFont = pageTexts.Any(text => text is not null);
@@ -65,7 +68,7 @@ internal static class TestDocumentFixtures
             offsets[3 + i] = buffer.Position;
             var resources = hasFont ? $"/Resources<</Font<</F1 {fontId} 0 R>>>>" : "/Resources<<>>";
             var contents = contentIds[i] is int id ? $"/Contents {id} 0 R" : string.Empty;
-            Write(buffer, $"{3 + i} 0 obj\n<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]{resources}{contents}>>\nendobj\n");
+            Write(buffer, $"{3 + i} 0 obj\n<</Type/Page/Parent 2 0 R/MediaBox[0 0 {width.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} {height.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}]{resources}{contents}>>\nendobj\n");
         }
 
         if (hasFont)

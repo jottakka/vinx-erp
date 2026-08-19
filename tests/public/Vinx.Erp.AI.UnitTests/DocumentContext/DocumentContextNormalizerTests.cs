@@ -257,6 +257,46 @@ public sealed class DocumentContextNormalizerTests
     }
 
     [Fact]
+    public async Task Failing_content_stream_is_needs_clarification_with_zero_provider_calls()
+    {
+        var id = Guid.NewGuid();
+        var source = new FakeAuthorizedDocumentSource(
+            _ => new AuthorizedDocument(
+                id, Guid.NewGuid(), "image/png", "fiscal", new ThrowingStream()));
+        var handler = TestProviderHandler.RespondsWith("{}");
+        var normalizer = CreateNormalizer(source, handler);
+
+        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+
+        Assert.Equal(DocumentContextStatus.NeedsClarification, result.Status);
+        Assert.Contains("could not be produced safely", result.ClarificationReason, StringComparison.Ordinal);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    private sealed class ThrowingStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override void Flush() => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new IOException("stream falhou");
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public void Constructor_rejects_limits_that_fail_validation()
     {
         var source = new FakeAuthorizedDocumentSource(_ => null);

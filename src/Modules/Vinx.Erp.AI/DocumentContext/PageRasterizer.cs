@@ -19,6 +19,8 @@ public static class PageRasterizer
     public static async Task<byte[]> RasterizePageAsync(
         Stream pdf,
         int page,
+        double widthPoints,
+        double heightPoints,
         DocumentContextLimits limits,
         CancellationToken cancellationToken)
     {
@@ -27,6 +29,17 @@ public static class PageRasterizer
         if (page < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(page), "page must be 1-based");
+        }
+
+        // Preflight de pixels por DPI ANTES de qualquer render: uma página com
+        // media box enorme e JPEG de baixa entropia passaria no teto de bytes
+        // violando o teto de pixels.
+        var safeDpis = DpiLadder(limits.RasterDpi)
+            .Where(dpi => PixelsForDpi(widthPoints, heightPoints, dpi) <= limits.MaxPixelsPerPage)
+            .ToArray();
+        if (safeDpis.Length == 0)
+        {
+            throw new DocumentContextValidationException("page raster exceeds the approved pixel limit");
         }
 
         await PdfiumGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -46,7 +59,7 @@ public static class PageRasterizer
                     throw new DocumentContextValidationException("rasterization is not supported on this platform");
                 }
 
-                foreach (var dpi in DpiLadder(limits.RasterDpi))
+                foreach (var dpi in safeDpis)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
@@ -81,6 +94,14 @@ public static class PageRasterizer
         {
             PdfiumGate.Release();
         }
+    }
+
+    // Pixels resultantes de uma página de w×h pontos renderizada em dpi.
+    private static long PixelsForDpi(double widthPoints, double heightPoints, int dpi)
+    {
+        var widthPixels = (long)Math.Ceiling(widthPoints * dpi / 72.0);
+        var heightPixels = (long)Math.Ceiling(heightPoints * dpi / 72.0);
+        return widthPixels * heightPixels;
     }
 
     // Degraus determinísticos de DPI: aprovado, metade, mínimo. Sem silent

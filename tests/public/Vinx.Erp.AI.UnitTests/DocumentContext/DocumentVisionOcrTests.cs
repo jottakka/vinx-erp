@@ -25,9 +25,13 @@ public sealed class DocumentVisionOcrTests
 
     [Theory]
     [InlineData("""{"confidence":0.5,"language":"pt"}""")]                       // sem text
+    [InlineData("""{"text":"x","confidence":0.5}""")]                            // sem language
+    [InlineData("""{"text":"x","confidence":0.5,"language":"pt","extra":1}""")]  // campo extra
+    [InlineData("""{"text":"x","text":"y","confidence":0.5,"language":"pt"}""")] // propriedade duplicada
     [InlineData("""{"text":"x","confidence":1.5,"language":"pt"}""")]            // confidence > 1
     [InlineData("""{"text":"x","confidence":-0.1,"language":"pt"}""")]           // confidence < 0
     [InlineData("""{"text":1,"confidence":0.5,"language":"pt"}""")]              // text não-string
+    [InlineData("""{"text":"x","confidence":0.5,"language":7}""")]               // language não-string
     [InlineData("""["text"]""")]                                                  // não-objeto
     [InlineData("""{"text":"x","confidence":0.5,}""")]                            // trailing comma
     [InlineData("")]

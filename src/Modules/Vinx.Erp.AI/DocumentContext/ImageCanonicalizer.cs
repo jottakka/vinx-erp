@@ -22,10 +22,10 @@ public static class ImageCanonicalizer
         ArgumentNullException.ThrowIfNull(image);
         ArgumentNullException.ThrowIfNull(limits);
 
-        SKBitmap? bitmap;
+        SKBitmap? decoded;
         try
         {
-            bitmap = SKBitmap.Decode(image);
+            decoded = SKBitmap.Decode(image);
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
@@ -33,6 +33,8 @@ public static class ImageCanonicalizer
             throw new DocumentContextValidationException("image could not be decoded");
         }
 
+        // Recurso nativo: descarte determinístico.
+        using var bitmap = decoded;
         if (bitmap is null)
         {
             throw new DocumentContextValidationException("image could not be decoded");

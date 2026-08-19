@@ -97,9 +97,11 @@ existe leitura de stream autorizada nem capability de leitura/OCR. Portanto:
   (PDFs/PNGs sintéticos gerados em código; vision OCR com fake
   HttpMessageHandler do perfil; fontes `Clean` fake).
 - Criar `tests/public/Vinx.Erp.AI.IntegrationTests/` (novo projeto com
-  referência a Foundation e AI; Postgres real via Testcontainers) com
-  `DocumentContextAccessTests.cs` (tenant negativo com o source fake sobre
-  RLS real onde aplicável; membership revogada; fail-closed sem engine).
+  referência a Foundation e AI) com `DocumentContextAccessTests.cs`: provas
+  de CONTRATO DE FRONTEIRA (empresa errada, membership revogada, motivo
+  interno não vazado — via fake), sem Postgres. As provas RLS-backed com
+  Testcontainers pertencem à #134-A junto com a fonte real; o PR declara
+  explicitamente esse escopo.
 - Criar `docs/verification/issue-134-ocr-context-test-cases.md`.
 - Atualizar `docs/modules/ai.md` com o contrato de contexto.
 

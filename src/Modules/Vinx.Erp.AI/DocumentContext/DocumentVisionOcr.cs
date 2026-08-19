@@ -43,7 +43,11 @@ public sealed class DocumentVisionOcr
             ?? throw new DocumentContextValidationException("vision OCR response is not valid JSON");
     }
 
-    /// <summary>Parse estrito: schema exato, confidence em [0,1], texto obrigatório.</summary>
+    /// <summary>
+    /// Parse estrito: exatamente as propriedades text (string), confidence
+    /// (número em [0,1]) e language (string) — sem ausentes, extras ou
+    /// duplicatas.
+    /// </summary>
     public static VisionOcrPageResult? ParseStrict(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -57,28 +61,35 @@ public sealed class DocumentVisionOcr
                 json,
                 new JsonDocumentOptions { AllowTrailingCommas = false, CommentHandling = JsonCommentHandling.Disallow });
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("text", out var textElement)
-                || textElement.ValueKind != JsonValueKind.String
-                || !root.TryGetProperty("confidence", out var confidenceElement)
-                || confidenceElement.ValueKind != JsonValueKind.Number
-                || !confidenceElement.TryGetDouble(out var confidence)
-                || confidence is < 0 or > 1)
+            if (root.ValueKind != JsonValueKind.Object)
             {
                 return null;
             }
 
-            string? language = null;
-            if (root.TryGetProperty("language", out var languageElement)
-                && languageElement.ValueKind == JsonValueKind.String)
+            var properties = root.EnumerateObject().ToList();
+            if (properties.Count != 3
+                || properties.Any(property => property.Name is not ("text" or "confidence" or "language"))
+                || properties.Select(property => property.Name).Distinct(StringComparer.Ordinal).Count() != 3)
             {
-                language = languageElement.GetString();
+                return null;
+            }
+
+            var textElement = root.GetProperty("text");
+            var confidenceElement = root.GetProperty("confidence");
+            var languageElement = root.GetProperty("language");
+            if (textElement.ValueKind != JsonValueKind.String
+                || confidenceElement.ValueKind != JsonValueKind.Number
+                || !confidenceElement.TryGetDouble(out var confidence)
+                || confidence is < 0 or > 1
+                || languageElement.ValueKind != JsonValueKind.String)
+            {
+                return null;
             }
 
             return new VisionOcrPageResult(
                 textElement.GetString() ?? string.Empty,
                 confidence,
-                language);
+                languageElement.GetString());
         }
         catch (JsonException)
         {

@@ -2,8 +2,13 @@ using UglyToad.PdfPig;
 
 namespace Vinx.Erp.AI.DocumentContext;
 
-/// <summary>Página com a camada de texto extraída localmente.</summary>
-public sealed record ExtractedPdfPage(int Page, string Text, bool HasTextLayer);
+/// <summary>Página com a camada de texto extraída localmente (dimensões em pontos PDF).</summary>
+public sealed record ExtractedPdfPage(
+    int Page,
+    string Text,
+    bool HasTextLayer,
+    double WidthPoints,
+    double HeightPoints);
 
 /// <summary>
 /// Extração local e determinística da camada de texto de PDFs via PdfPig.
@@ -36,7 +41,12 @@ public static class DocumentTextExtractor
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var text = (page.Text ?? string.Empty).Trim();
-                pages.Add(new ExtractedPdfPage(page.Number, text, text.Length > 0));
+                pages.Add(new ExtractedPdfPage(
+                    page.Number,
+                    text,
+                    text.Length > 0,
+                    page.MediaBox.Bounds.Width,
+                    page.MediaBox.Bounds.Height));
             }
 
             return pages;

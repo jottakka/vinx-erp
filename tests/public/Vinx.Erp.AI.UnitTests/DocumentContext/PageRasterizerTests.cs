@@ -25,10 +25,24 @@ public sealed class PageRasterizerTests
         using var pdf = new MemoryStream(TestDocumentFixtures.PdfWithoutText(1));
         var limits = Approved();
 
-        var jpeg = await PageRasterizer.RasterizePageAsync(pdf, 1, limits, CancellationToken.None);
+        var jpeg = await PageRasterizer.RasterizePageAsync(pdf, 1, 595, 842, limits, CancellationToken.None);
 
         Assert.True(jpeg.Length > 0);
         Assert.True(jpeg.Length <= limits.MaxEncodedBytesPerPage);
+    }
+
+    [Fact]
+    public async Task Huge_page_is_rejected_by_the_pixel_preflight_before_any_render()
+    {
+        // Sem guarda de PDFium: o preflight de pixels rejeita ANTES do nativo.
+        using var pdf = new MemoryStream(
+            TestDocumentFixtures.PdfWithoutText(1, width: 20_000, height: 20_000));
+
+        var exception = await Assert.ThrowsAsync<DocumentContextValidationException>(
+            () => PageRasterizer.RasterizePageAsync(
+                pdf, 1, 20_000, 20_000, Approved(), CancellationToken.None));
+
+        Assert.Contains("pixel limit", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -43,7 +57,7 @@ public sealed class PageRasterizerTests
 
         var exception = await Assert.ThrowsAsync<DocumentContextValidationException>(
             () => PageRasterizer.RasterizePageAsync(
-                pdf, 1, Approved(l => l.MaxEncodedBytesPerPage = 1_024), CancellationToken.None));
+                pdf, 1, 595, 842, Approved(l => l.MaxEncodedBytesPerPage = 1_024), CancellationToken.None));
 
         Assert.Contains("encoded byte limit", exception.Message, StringComparison.Ordinal);
     }
@@ -54,7 +68,7 @@ public sealed class PageRasterizerTests
         using var pdf = new MemoryStream(TestDocumentFixtures.PdfWithoutText(1));
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => PageRasterizer.RasterizePageAsync(pdf, 0, Approved(), CancellationToken.None));
+            () => PageRasterizer.RasterizePageAsync(pdf, 0, 595, 842, Approved(), CancellationToken.None));
     }
 
     [Fact]
@@ -65,6 +79,6 @@ public sealed class PageRasterizerTests
         cancelled.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => PageRasterizer.RasterizePageAsync(pdf, 1, Approved(), cancelled.Token));
+            () => PageRasterizer.RasterizePageAsync(pdf, 1, 595, 842, Approved(), cancelled.Token));
     }
 }

@@ -18,8 +18,7 @@ internal static class PdfiumEnvironment
     {
         try
         {
-            using var pdf = new MemoryStream(TestDocumentFixtures.MinimalPdf([null]));
-            using var output = new MemoryStream();
+            using var pdf = new MemoryStream(TestDocumentFixtures.MinimalPdf([null])); using var output = new MemoryStream();
 #pragma warning disable CA1416 // Canário de ambiente: PDFium cobre Linux/macOS/Windows.
             Conversion.SaveJpeg(pdf, output, 0, false, null, new RenderOptions { Dpi = 72 });
 #pragma warning restore CA1416

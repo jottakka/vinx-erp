@@ -79,11 +79,11 @@ public sealed class DocumentContextNormalizer
             {
                 return NeedsClarification(fileRecordId, "document context extraction timed out");
             }
-            catch (Exception exception) when (
-                exception is DocumentContextValidationException
-                or OpenAiCompatibleProviderException
-                or OpenAiCompatibleRequestValidationException)
+            catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                // Qualquer falha de preparação (I/O, stream descartado, decode,
+                // provider, schema) vira resultado seguro/redigido; somente o
+                // cancelamento explícito do chamador propaga.
                 return NeedsClarification(fileRecordId, "document context could not be produced safely");
             }
         }
@@ -105,7 +105,7 @@ public sealed class DocumentContextNormalizer
 
             // Página escaneada: uma rasterização e uma chamada de visão por página.
             var raster = await PageRasterizer.RasterizePageAsync(
-                document.Content, page.Page, _limits, cancellationToken).ConfigureAwait(false);
+                document.Content, page.Page, page.WidthPoints, page.HeightPoints, _limits, cancellationToken).ConfigureAwait(false);
             var ocr = await _visionOcr.TranscribePageAsync(raster, "image/jpeg", cancellationToken).ConfigureAwait(false);
             segments.Add(Segment(document.FileRecordId, page.Page, null, ocr.Confidence, DocumentSegmentSource.VisionOcr, ocr.Text));
         }
