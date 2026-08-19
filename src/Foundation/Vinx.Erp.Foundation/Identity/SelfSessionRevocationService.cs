@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Domain;
@@ -27,7 +26,7 @@ public sealed class SelfSessionRevocationService(
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-            var revokedSessionCount = await RevokeSessionsAsync(actor.UserId, transaction, cancellationToken);
+            var revokedSessionCount = await database.RevokeAllUserSessionsAsync(actor.UserId, cancellationToken);
             if (revokedSessionCount == 0)
             {
                 await transaction.CommitAsync(cancellationToken);
@@ -68,23 +67,5 @@ public sealed class SelfSessionRevocationService(
                 UnavailableReason);
             return SelfSessionRevocationResult.Unavailable();
         }
-    }
-
-    private async Task<int> RevokeSessionsAsync(
-        Guid userId,
-        IDbContextTransaction transaction,
-        CancellationToken cancellationToken)
-    {
-        var connection = database.Database.GetDbConnection();
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction.GetDbTransaction();
-        command.CommandText = "SELECT foundation.revoke_all_user_sessions(@user_id)";
-        var parameter = command.CreateParameter();
-        parameter.ParameterName = "user_id";
-        parameter.Value = userId;
-        command.Parameters.Add(parameter);
-
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt32(result, System.Globalization.CultureInfo.InvariantCulture);
     }
 }
