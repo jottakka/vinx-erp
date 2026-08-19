@@ -427,11 +427,18 @@ public sealed class DocumentUploadService(
         CancellationToken cancellationToken)
     {
         file.MarkVerificationFailed(reason, actor.UserId, command.RequestId);
-        if (string.Equals(reason, MalwareDetectedFailureReason, StringComparison.Ordinal) && verdict is not null)
+        // O adapter real mantém detecções com fetch de VERSION falho (veredito Detectado sem
+        // versões): o terminal nunca pode degradar para 503. Metadados só são gravados quando
+        // o veredito está completo; incompletos deixam as colunas NULL e a transição procede.
+        var hasCompleteScanMetadata =
+            verdict is not null
+            && !string.IsNullOrWhiteSpace(verdict.Engine)
+            && !string.IsNullOrWhiteSpace(verdict.EngineVersion)
+            && !string.IsNullOrWhiteSpace(verdict.SignatureVersion)
+            && verdict.ScannedAtUtc != default;
+        if (string.Equals(reason, MalwareDetectedFailureReason, StringComparison.Ordinal) && hasCompleteScanMetadata)
         {
-            // Terminal de detecção: houve scan e o veredito da engine é durável.
-            // Mismatches de metadados não gravam (não houve veredito durável de engine).
-            file.RecordScan(verdict.Engine!, verdict.EngineVersion!, verdict.SignatureVersion!, verdict.ScannedAtUtc);
+            file.RecordScan(verdict!.Engine!, verdict!.EngineVersion!, verdict!.SignatureVersion!, verdict!.ScannedAtUtc);
         }
 
         var result = new DocumentUploadConfirmationResult(file.Id, file.ProcessingState);

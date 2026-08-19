@@ -242,6 +242,47 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
+    public async Task Detected_without_version_metadata_stays_terminal_with_empty_scan_metadata()
+    {
+        var storage = new ControlledFileStorage();
+        // Detecção com fetch de VERSION falho: o adapter real mantém o veredito Detectado sem
+        // versões. O terminal NÃO pode degradar para 503 — os metadados de scan apenas ficam NULL.
+        await using var factory = await CreateFactoryAsync(
+            storage,
+            new ControlledMalwareScanner(storage)
+            {
+                Status = MalwareScanStatus.MalwareDetected,
+                OmitVersionMetadata = true
+            });
+        var scenario = await SeedScenarioAsync(factory);
+        var malwareIntent = NewIntent(scenario.CompanyId) with
+        {
+            SizeBytes = EicarPayload.Length,
+            Checksum = ComputeChecksum(EicarPayload)
+        };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", malwareIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, EicarPayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var failed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("verification_failed", failed.ProcessingState);
+        Assert.Equal("malware_detected", failed.FailureReason);
+        AssertScanMetadataEmpty(failed);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var audit = await administrator.AuditEvents.SingleAsync(candidate =>
+            candidate.Action == "foundation.files.upload.confirm" && candidate.Outcome == AuditOutcome.Failure);
+        Assert.Equal("malware_detected", audit.Reason);
+    }
+
+    [Fact]
     public async Task Transient_unavailable_keeps_scan_metadata_empty()
     {
         var storage = new ControlledFileStorage();
@@ -1132,6 +1173,7 @@ public sealed class DocumentUploadEndpointTests
 
         public MalwareScanStatus Status { get; set; } = MalwareScanStatus.Clean;
         public string? OverrideContentChecksum { get; init; }
+        public bool OmitVersionMetadata { get; init; }
         public TimeSpan? Delay { get; set; }
         public Exception? FailWith { get; init; }
         public int ScanCount => Volatile.Read(ref scanCount);
@@ -1151,6 +1193,13 @@ public sealed class DocumentUploadEndpointTests
             if (FailWith is { } failure)
             {
                 throw failure;
+            }
+
+            if (OmitVersionMetadata)
+            {
+                // Detecção sem versões: espelha o adapter real, que nunca rebaixa uma detecção
+                // quando o fetch de VERSION falha (engine/versões ficam incompletas).
+                return new MalwareScanVerdict(Status, "ClamAV", null, null, DateTimeOffset.UtcNow, null, null);
             }
 
             return new MalwareScanVerdict(
