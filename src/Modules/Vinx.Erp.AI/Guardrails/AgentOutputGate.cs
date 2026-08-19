@@ -39,9 +39,9 @@ public sealed record AgentOutputGateRequest(
 /// <summary>
 /// Gate determinístico de saída com ordem fixa: primeiro o contrato
 /// estruturado — schema inválido reprova sem expor texto —, depois a
-/// autorização de fontes (violação cross-tenant nega), o grounding (fonte
-/// exigida ausente, sem evidência) e a confiança mínima, sempre por
-/// abstenção. A injeção de prompt entra na próxima fatia mantendo esta ordem.
+/// detecção de injeção de prompt (passo 2, antes das fontes), a autorização
+/// de fontes (violação cross-tenant nega), o grounding (fonte exigida
+/// ausente, sem evidência) e a confiança mínima, sempre por abstenção.
 /// </summary>
 public sealed class AgentOutputGate(SourceAuthorizationGate sources, SensitiveOutputRedactor redactor)
 {
@@ -58,6 +58,31 @@ public sealed class AgentOutputGate(SourceAuthorizationGate sources, SensitiveOu
     /// <summary>Confiança mínima para liberar a resposta; abaixo disso o gate se abstém.</summary>
     public const double MinimumConfidence = 0.5;
 
+    /// <summary>
+    /// Lista FECHADA de marcadores de injeção de prompt (PT/EN) comparados por
+    /// match ordinal ignore-case sobre o texto; termos novos só entram por
+    /// mudança de política versionada. A heurística é determinística e uma
+    /// defesa-em-profundidade: serve para NEGAR conteúdo suspeito, nunca para
+    /// autorizar nada. Texto de documento ou usuário é lido aqui apenas como
+    /// DADOS — o gate nunca promove esse texto a instrução e não possui
+    /// caminho de execução.
+    /// </summary>
+    public static readonly IReadOnlyList<string> InjectionMarkers =
+    [
+        "ignore as instruções",
+        "ignore todas as instruções",
+        "ignore all instructions",
+        "ignore previous instructions",
+        "disregard previous instructions",
+        "system prompt",
+        "reveal your prompt",
+        "mostre seu prompt",
+        "mostre o prompt do sistema",
+        "you are now",
+        "a partir de agora você é",
+        "a partir de agora voce é",
+    ];
+
     /// <summary>Avalia a resposta do modelo contra a política de saída vigente.</summary>
     public AgentOutputGateResult Evaluate(AgentOutputGateRequest request)
     {
@@ -67,6 +92,13 @@ public sealed class AgentOutputGate(SourceAuthorizationGate sources, SensitiveOu
         if (!validation.IsValid)
         {
             return Withheld(request, AgentOutputGateStatus.ValidationError, SchemaInvalid);
+        }
+
+        // Injeção de prompt (passo 2, antes das fontes): texto é lido só como
+        // dados; marcador da lista fechada nega sem expor o texto em nenhum campo.
+        if (ContainsInjectionMarker(request.Response.Text))
+        {
+            return Withheld(request, AgentOutputGateStatus.Denied, PromptInjectionDetected);
         }
 
         // Fonte de outra empresa nega sem expor a intrusa em nenhum campo.
@@ -103,6 +135,24 @@ public sealed class AgentOutputGate(SourceAuthorizationGate sources, SensitiveOu
             authorization.AuthorizedSources,
             AgentPolicyVersion.Current,
             request.Response.HasToolProposal);
+    }
+
+    private static bool ContainsInjectionMarker(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        foreach (var marker in InjectionMarkers)
+        {
+            if (text.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static AgentOutputGateResult Withheld(
