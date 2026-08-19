@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
@@ -526,21 +527,22 @@ public sealed class AgentEndpointTests
     /// <summary>
     /// Fake de <see cref="IAgentModel"/> no padrão do ControlledMalwareScanner:
     /// respostas programáveis em sequência, atraso sensível ao token (timeout do
-    /// perfil aprovado) e registro das selections recebidas. Nenhum HTTP.
+    /// perfil aprovado) e registro das selections recebidas — seguro para
+    /// chamadas concorrentes (fila e registro thread-safe). Nenhum HTTP.
     /// </summary>
     private sealed class ControlledAgentModel : IAgentModel
     {
-        private readonly Queue<ChatResponse> responses;
+        private readonly ConcurrentQueue<ChatResponse> responses;
         private int callCount;
 
         public ControlledAgentModel(params ChatResponse[] responses) =>
-            this.responses = new Queue<ChatResponse>(responses);
+            this.responses = new ConcurrentQueue<ChatResponse>(responses);
 
         public TimeSpan? Delay { get; init; }
 
         public int CallCount => Volatile.Read(ref callCount);
 
-        public List<AgentModelSelection> ReceivedSelections { get; } = [];
+        public ConcurrentBag<AgentModelSelection> ReceivedSelections { get; } = [];
 
         public static ControlledAgentModel Text(string text) => new(TextResponse(text));
 
@@ -565,12 +567,14 @@ public sealed class AgentEndpointTests
                 await Task.Delay(delay, cancellationToken);
             }
 
-            if (responses.Count == 0)
+            // Esgotar as respostas é erro de programação do teste: falha
+            // explicitamente em vez de fabricar silenciosamente um retorno.
+            if (!responses.TryDequeue(out var response))
             {
                 throw new InvalidOperationException("The fake agent model has no response left.");
             }
 
-            return responses.Dequeue();
+            return response;
         }
     }
 }
