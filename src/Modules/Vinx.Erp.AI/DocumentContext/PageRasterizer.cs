@@ -35,7 +35,7 @@ public static class PageRasterizer
         // media box enorme e JPEG de baixa entropia passaria no teto de bytes
         // violando o teto de pixels.
         var safeDpis = DpiLadder(limits.RasterDpi)
-            .Where(dpi => PixelsForDpi(widthPoints, heightPoints, dpi) <= limits.MaxPixelsPerPage)
+            .Where(dpi => FitsPixelBudget(widthPoints, heightPoints, dpi, limits.MaxPixelsPerPage))
             .ToArray();
         if (safeDpis.Length == 0)
         {
@@ -96,12 +96,28 @@ public static class PageRasterizer
         }
     }
 
-    // Pixels resultantes de uma página de w×h pontos renderizada em dpi.
-    private static long PixelsForDpi(double widthPoints, double heightPoints, int dpi)
+    // Pixels da página cabem no orçamento? Aritmética em double finito com
+    // comparação por divisão: multiplicação long×long pode sofrer overflow
+    // com media box extrema e contornar o teto.
+    private static bool FitsPixelBudget(double widthPoints, double heightPoints, int dpi, long maxPixels)
     {
-        var widthPixels = (long)Math.Ceiling(widthPoints * dpi / 72.0);
-        var heightPixels = (long)Math.Ceiling(heightPoints * dpi / 72.0);
-        return widthPixels * heightPixels;
+        if (!double.IsFinite(widthPoints) || !double.IsFinite(heightPoints)
+            || widthPoints <= 0 || heightPoints <= 0)
+        {
+            return false;
+        }
+
+        var widthPixels = Math.Ceiling(widthPoints * dpi / 72.0);
+        var heightPixels = Math.Ceiling(heightPoints * dpi / 72.0);
+        if (!double.IsFinite(widthPixels) || !double.IsFinite(heightPixels)
+            || widthPixels < 1 || heightPixels < 1
+            || widthPixels > long.MaxValue || heightPixels > long.MaxValue)
+        {
+            return false;
+        }
+
+        // Divisão antes da multiplicação: sem overflow.
+        return widthPixels <= maxPixels / heightPixels;
     }
 
     // Degraus determinísticos de DPI: aprovado, metade, mínimo. Sem silent
