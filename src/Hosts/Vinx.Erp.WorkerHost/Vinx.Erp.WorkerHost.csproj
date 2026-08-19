@@ -4,5 +4,6 @@
     <PackageReference Include="WolverineFx.Postgresql" />
     <PackageReference Include="WolverineFx.RuntimeCompilation" />
     <ProjectReference Include="../../Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
+    <ProjectReference Include="../../Modules/Vinx.Erp.Notifications/Vinx.Erp.Notifications.csproj" />
   </ItemGroup>
 </Project>

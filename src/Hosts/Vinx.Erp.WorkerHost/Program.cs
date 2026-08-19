@@ -8,6 +8,7 @@ using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Platform;
+using Vinx.Erp.Notifications;
 using Vinx.Erp.WorkerHost;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
@@ -113,6 +114,10 @@ builder.Services.AddDbContext<FoundationDbContext>(
 );
 builder.Services.AddScoped<OwnerInvitationDeliveryIngressService>();
 builder.Services.AddScoped<OwnerInvitationProviderDeliveryService>();
+builder.Services.AddSingleton<NotificationDeliveryMetrics>();
+builder.Services.AddScoped<NotificationProviderResolver>();
+builder.Services.AddScoped<INotificationProvider, InAppNotificationProvider>();
+builder.Services.AddScoped<NotificationDeliveryWorkerService>();
 builder
     .Services.AddHttpClient(
         SupabaseAdminOwnerInvitationClient.HttpClientName,
@@ -131,6 +136,7 @@ builder.Host.UseWolverine(options =>
     options.UseEntityFrameworkCoreTransactions();
     options.Discovery.DisableConventionalDiscovery(true);
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();
+    options.Discovery.IncludeType<NotificationDeliveryRequestedHandler>();
     options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
     options
         .PersistMessagesWithPostgresql(workerDataSource, schemaName: "vinx_wolverine_worker")
@@ -139,6 +145,7 @@ builder.Host.UseWolverine(options =>
             transport.TransportSchemaName("vinx_wolverine_queues")
         );
     options.ListenToPostgresqlQueue("owner-invitation-delivery").UseDurableInbox();
+    options.ListenToPostgresqlQueue("notification-delivery").UseDurableInbox();
 });
 builder.Services.AddOpenTelemetry();
 builder.Services.AddHealthChecks();

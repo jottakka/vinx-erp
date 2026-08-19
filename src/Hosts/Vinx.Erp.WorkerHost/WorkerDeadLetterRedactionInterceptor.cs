@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Platform;
 using Wolverine;
 using Wolverine.Persistence.Durability;
@@ -26,11 +27,32 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
         );
     }
 
+    /// <summary>
+    /// Redige por tipo de mensagem: o corpo vira o registro vazio do próprio
+    /// tipo e os headers diagnósticos são descartados antes da DLQ.
+    /// </summary>
     internal void RedactEnvelope(Envelope envelope)
     {
-        var redactedMessage = new OwnerInvitationDeliveryRequested(Guid.Empty);
-        envelope.Message = redactedMessage;
-        envelope.Data = JsonSerializer.SerializeToUtf8Bytes(redactedMessage, SerializerOptions);
-        envelope.Headers.Clear();
+        switch (envelope.Message)
+        {
+            case NotificationDeliveryRequested:
+                var redactedNotification = new NotificationDeliveryRequested(Guid.Empty);
+                envelope.Message = redactedNotification;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
+                    redactedNotification,
+                    SerializerOptions
+                );
+                envelope.Headers.Clear();
+                break;
+            default:
+                var redactedMessage = new OwnerInvitationDeliveryRequested(Guid.Empty);
+                envelope.Message = redactedMessage;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
+                    redactedMessage,
+                    SerializerOptions
+                );
+                envelope.Headers.Clear();
+                break;
+        }
     }
 }
