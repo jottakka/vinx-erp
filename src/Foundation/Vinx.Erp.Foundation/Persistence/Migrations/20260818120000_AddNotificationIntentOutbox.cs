@@ -1,9 +1,12 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace Vinx.Erp.Foundation.Persistence.Migrations;
 
+[DbContext(typeof(FoundationDbContext))]
+[Migration("20260818120000_AddNotificationIntentOutbox")]
 public partial class AddNotificationIntentOutbox : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder) =>
@@ -18,9 +21,13 @@ public partial class AddNotificationIntentOutbox : Migration
                 uuid, text, uuid, text, text, text, uuid, text, uuid, text, jsonb)
                 TO vinx_notifications_owner;
             RESET ROLE;
+            GRANT USAGE ON SCHEMA audit TO vinx_notifications_owner;
+            GRANT EXECUTE ON FUNCTION foundation.current_authorized_company_ids()
+                TO vinx_notifications_owner;
 
-            CREATE SCHEMA notifications AUTHORIZATION vinx_notifications_owner;
+            CREATE SCHEMA notifications;
             GRANT USAGE ON SCHEMA notifications TO vinx_runtime;
+            GRANT USAGE, CREATE ON SCHEMA notifications TO vinx_notifications_owner;
 
             SET ROLE vinx_notifications_owner;
             CREATE TABLE notifications.notification_preferences (
@@ -113,6 +120,10 @@ public partial class AddNotificationIntentOutbox : Migration
                     RAISE EXCEPTION 'notification intent parameters are invalid' USING ERRCODE = '22023';
                 END IF;
 
+                -- Contexto transacional de empresa para as policies RLS de leitura,
+                -- no mesmo padrão das funções de provisionamento e diretório.
+                PERFORM set_config('app.company_id', p_company_id::text, true);
+
                 IF NOT EXISTS (
                     SELECT 1 FROM foundation.memberships AS membership
                     WHERE membership.company_id = p_company_id
@@ -199,6 +210,7 @@ public partial class AddNotificationIntentOutbox : Migration
                 IF v_actor_user_id <> p_user_id THEN
                     RAISE EXCEPTION 'notification preference changes are self-service' USING ERRCODE = '42501';
                 END IF;
+                PERFORM set_config('app.company_id', p_company_id::text, true);
                 IF NOT EXISTS (
                     SELECT 1 FROM foundation.memberships AS membership
                     WHERE membership.company_id = p_company_id
@@ -263,6 +275,9 @@ public partial class AddNotificationIntentOutbox : Migration
                 FROM vinx_notifications_owner;
             RESET ROLE;
             REVOKE SELECT (company_id, user_id, deleted_at) ON foundation.memberships FROM vinx_notifications_owner;
+            REVOKE EXECUTE ON FUNCTION foundation.current_authorized_company_ids()
+                FROM vinx_notifications_owner;
+            REVOKE USAGE ON SCHEMA audit FROM vinx_notifications_owner;
             REVOKE REFERENCES (id) ON foundation.users FROM vinx_notifications_owner;
             REVOKE REFERENCES (id) ON foundation.companies FROM vinx_notifications_owner;
             REVOKE USAGE ON SCHEMA foundation FROM vinx_notifications_owner;
