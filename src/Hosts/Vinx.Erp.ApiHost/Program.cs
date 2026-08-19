@@ -53,9 +53,18 @@ builder
     .Bind(builder.Configuration)
     .Validate(
         options =>
-            !string.IsNullOrWhiteSpace(options.AppSecret)
-            && !string.IsNullOrWhiteSpace(options.WebhookVerifyToken)
-            && MetaWhatsAppOptions.IsAllowedHttpsUrl(options.WebAppBaseUrl),
+            // Tudo ou nada: ausência total deixa o host subir e o webhook
+            // responde 503; configurado exige o conjunto completo e válido.
+            (
+                string.IsNullOrWhiteSpace(options.AppSecret)
+                && string.IsNullOrWhiteSpace(options.WebhookVerifyToken)
+                && string.IsNullOrWhiteSpace(options.WebAppBaseUrl)
+            )
+            || (
+                !string.IsNullOrWhiteSpace(options.AppSecret)
+                && !string.IsNullOrWhiteSpace(options.WebhookVerifyToken)
+                && MetaWhatsAppOptions.IsAllowedHttpsUrl(options.WebAppBaseUrl)
+            ),
         "Meta WhatsApp webhook options are invalid."
     )
     .ValidateOnStart();

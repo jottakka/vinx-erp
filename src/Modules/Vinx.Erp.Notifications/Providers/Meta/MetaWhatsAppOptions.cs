@@ -27,6 +27,15 @@ public sealed class MetaWhatsAppOptions
     public string SendEndpoint =>
         $"{ApiBaseUrl.TrimEnd('/')}/v22.0/{PhoneNumberId.TrimEnd('/')}/messages";
 
+    /// <summary>
+    /// O webhook é opcional no ApiHost: sem o conjunto completo de segredos o
+    /// host sobe e o endpoint responde 503; nunca aceita sem validação.
+    /// </summary>
+    public bool WebhookIsConfigured =>
+        !string.IsNullOrWhiteSpace(AppSecret)
+        && !string.IsNullOrWhiteSpace(WebhookVerifyToken)
+        && !string.IsNullOrWhiteSpace(WebAppBaseUrl);
+
     public static bool IsAllowedHttpsUrl(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri)
         && string.IsNullOrEmpty(uri.UserInfo)

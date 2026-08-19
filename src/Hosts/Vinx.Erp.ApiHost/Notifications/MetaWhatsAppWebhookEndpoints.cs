@@ -32,10 +32,15 @@ public static class MetaWhatsAppWebhookEndpoints
 
     private static async Task<IResult> VerifyWebhookAsync(HttpRequest request)
     {
+        var options = request.HttpContext.RequestServices.GetRequiredService<MetaWhatsAppOptions>();
+        if (!options.WebhookIsConfigured)
+        {
+            return Unconfigured();
+        }
+
         var mode = request.Query["hub.mode"].ToString();
         var token = request.Query["hub.verify_token"].ToString();
         var challenge = request.Query["hub.challenge"].ToString();
-        var options = request.HttpContext.RequestServices.GetRequiredService<MetaWhatsAppOptions>();
         if (
             !string.Equals(mode, "subscribe", StringComparison.Ordinal)
             || string.IsNullOrEmpty(challenge)
@@ -48,8 +53,20 @@ public static class MetaWhatsAppWebhookEndpoints
         return Results.Text(challenge, "text/plain");
     }
 
+    private static IResult Unconfigured() =>
+        Results.Json(
+            new { code = "whatsapp_unconfigured" },
+            statusCode: StatusCodes.Status503ServiceUnavailable
+        );
+
     private static async Task<IResult> ReceiveWebhookAsync(HttpRequest request)
     {
+        var earlyOptions = request.HttpContext.RequestServices.GetRequiredService<MetaWhatsAppOptions>();
+        if (!earlyOptions.WebhookIsConfigured)
+        {
+            return Unconfigured();
+        }
+
         byte[] rawBody;
         using (var buffer = new MemoryStream())
         {
