@@ -97,6 +97,51 @@ public sealed class NotificationInboxConcurrencyTests
         }
     }
 
+    [Fact]
+    public async Task Membership_revoked_while_the_mark_waits_results_in_not_found_without_side_effects()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var companyId = await NotificationInboxSeed.CreateCompanyForActorAsync(factory);
+        var deliveryId = await NotificationInboxSeed.CreateDeliveredInAppIntentAsync(factory, companyId);
+        var actorId = factory.ActorUserId.ToString();
+
+        await using var lockHolder = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var lockTransaction = await lockHolder.BeginTransactionAsync();
+        await using (var lockCommand = new NpgsqlCommand(
+            "SELECT id FROM notifications.notification_intents WHERE id = @delivery_id FOR UPDATE",
+            lockHolder,
+            lockTransaction
+        ))
+        {
+            lockCommand.Parameters.AddWithValue("delivery_id", deliveryId);
+            await lockCommand.ExecuteNonQueryAsync();
+        }
+
+        await using var marker = await NotificationInboxSeed.OpenRuntimeConnectionAsync(factory);
+        var markerPid = (int)
+            await NotificationInboxSeed.ExecuteScalarAsync(marker, "SELECT pg_backend_pid()")!;
+        var markTask = Task.Run(async () =>
+        {
+            await using var transaction = await marker.BeginTransactionAsync();
+            await SetActorAsync(marker, transaction, actorId);
+            var status = await ExecuteMarkReadAsync(marker, transaction, deliveryId);
+            await transaction.RollbackAsync();
+            return status;
+        });
+
+        await AssertConnectionBWaitsForLockAsync(factory, markerPid);
+
+        await NotificationInboxSeed.RevokeMembershipAsync(factory, companyId, factory.ActorUserId);
+
+        await lockTransaction.RollbackAsync();
+        var statusResult = await markTask;
+
+        Assert.Equal("not_found", statusResult);
+        var readState = await NotificationInboxSeed.ReadInboxStateAsync(factory, deliveryId);
+        Assert.Null(readState.ReadAt);
+        Assert.Equal(0, await NotificationInboxSeed.CountReadAuditsAsync(factory, deliveryId));
+    }
+
     private static async Task<NotificationMarkReadResult> MarkReadThroughNewScopeAsync(
         FoundationApiFactory factory,
         ActorContext actor,

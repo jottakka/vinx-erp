@@ -48,8 +48,8 @@ public sealed class NotificationsController(NotificationInboxService service)
             NotificationInboxState.Invalid => ApiControllerError.InvalidRequest(
                 StatusCodes.Status400BadRequest
             ),
-            NotificationInboxState.Unauthorized => ApiControllerError.Error(
-                "invalid_request",
+            // 401 é corpo vazio por contrato, inclusive no caminho defensivo.
+            NotificationInboxState.Unauthorized => StatusCode(
                 StatusCodes.Status401Unauthorized
             ),
             _ => ApiControllerError.Error(
@@ -73,8 +73,7 @@ public sealed class NotificationsController(NotificationInboxService service)
             NotificationUnreadCountState.Counted => Ok(
                 new NotificationUnreadCountResponse(result.UnreadCount)
             ),
-            NotificationUnreadCountState.Unauthorized => ApiControllerError.Error(
-                "invalid_request",
+            NotificationUnreadCountState.Unauthorized => StatusCode(
                 StatusCodes.Status401Unauthorized
             ),
             _ => ApiControllerError.Error(
@@ -114,8 +113,7 @@ public sealed class NotificationsController(NotificationInboxService service)
             NotificationMarkReadState.Invalid => ApiControllerError.InvalidRequest(
                 StatusCodes.Status400BadRequest
             ),
-            NotificationMarkReadState.Unauthorized => ApiControllerError.Error(
-                "invalid_request",
+            NotificationMarkReadState.Unauthorized => StatusCode(
                 StatusCodes.Status401Unauthorized
             ),
             _ => ApiControllerError.Error(

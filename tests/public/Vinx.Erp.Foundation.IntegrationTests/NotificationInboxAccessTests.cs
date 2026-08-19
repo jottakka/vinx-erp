@@ -160,6 +160,27 @@ public sealed class NotificationInboxAccessTests
                 has_function_privilege('vinx_worker', 'notifications.list_inbox_notifications(integer, timestamp with time zone, uuid)', 'EXECUTE') AS worker_list,
                 has_function_privilege('vinx_worker', 'notifications.count_unread_inbox_notifications()', 'EXECUTE') AS worker_count,
                 has_function_privilege('vinx_worker', 'notifications.mark_inbox_notification_read(uuid)', 'EXECUTE') AS worker_mark,
+                NOT EXISTS (
+                    SELECT 1
+                    FROM pg_proc AS f,
+                        aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) AS privilege
+                    WHERE f.oid = 'notifications.list_inbox_notifications(integer, timestamp with time zone, uuid)'::regprocedure
+                      AND privilege.grantee = 0 AND privilege.privilege_type = 'EXECUTE') AS public_list,
+                NOT EXISTS (
+                    SELECT 1
+                    FROM pg_proc AS f,
+                        aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) AS privilege
+                    WHERE f.oid = 'notifications.count_unread_inbox_notifications()'::regprocedure
+                      AND privilege.grantee = 0 AND privilege.privilege_type = 'EXECUTE') AS public_count,
+                NOT EXISTS (
+                    SELECT 1
+                    FROM pg_proc AS f,
+                        aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) AS privilege
+                    WHERE f.oid = 'notifications.mark_inbox_notification_read(uuid)'::regprocedure
+                      AND privilege.grantee = 0 AND privilege.privilege_type = 'EXECUTE') AS public_mark,
+                has_function_privilege('vinx_migrator', 'notifications.list_inbox_notifications(integer, timestamp with time zone, uuid)', 'EXECUTE') AS migrator_list,
+                has_function_privilege('vinx_migrator', 'notifications.count_unread_inbox_notifications()', 'EXECUTE') AS migrator_count,
+                has_function_privilege('vinx_migrator', 'notifications.mark_inbox_notification_read(uuid)', 'EXECUTE') AS migrator_mark,
                 has_function_privilege('vinx_notifications_owner', 'foundation.current_actor_memberships()', 'EXECUTE') AS owner_memberships
             """,
             administrator
@@ -175,7 +196,44 @@ public sealed class NotificationInboxAccessTests
         Assert.False(reader.GetBoolean(5));
         Assert.False(reader.GetBoolean(6));
         Assert.False(reader.GetBoolean(7));
+        // Colunas PUBLIC são "NOT EXISTS grant para grantee 0": ausência = true.
         Assert.True(reader.GetBoolean(8));
+        Assert.True(reader.GetBoolean(9));
+        Assert.True(reader.GetBoolean(10));
+        Assert.False(reader.GetBoolean(11));
+        Assert.False(reader.GetBoolean(12));
+        Assert.False(reader.GetBoolean(13));
+        Assert.True(reader.GetBoolean(14));
+    }
+
+    [Fact]
+    public async Task Empty_guid_is_rejected_at_the_sql_boundary_with_invalid_parameter()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var companyId = await NotificationInboxSeed.CreateCompanyForActorAsync(factory);
+        await NotificationInboxSeed.CreateDeliveredInAppIntentAsync(factory, companyId);
+        await using var connection = await NotificationInboxSeed.OpenRuntimeConnectionAsync(factory);
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using var setActor = new NpgsqlCommand(
+            "SELECT set_config('app.user_id', @user_id, true)",
+            connection,
+            transaction
+        );
+        setActor.Parameters.AddWithValue("user_id", factory.ActorUserId.ToString());
+        await setActor.ExecuteNonQueryAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT status FROM notifications.mark_inbox_notification_read(@delivery_id)",
+            connection,
+            transaction
+        );
+        command.Parameters.AddWithValue("delivery_id", Guid.Empty);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(
+            () => command.ExecuteScalarAsync()!
+        );
+
+        Assert.Equal("22023", exception.SqlState);
+        Assert.Equal("inbox parameters are invalid", exception.MessageText);
     }
 
     /// <summary>

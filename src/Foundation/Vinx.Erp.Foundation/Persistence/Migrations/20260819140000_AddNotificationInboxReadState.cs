@@ -127,7 +127,7 @@ public partial class AddNotificationInboxReadState : Migration
                 IF v_actor_user_id IS NULL THEN
                     RAISE EXCEPTION 'notification actor is required' USING ERRCODE = '42501';
                 END IF;
-                IF p_delivery_id IS NULL THEN
+                IF p_delivery_id IS NULL OR p_delivery_id = '00000000-0000-0000-0000-000000000000'::uuid THEN
                     RAISE EXCEPTION 'inbox parameters are invalid' USING ERRCODE = '22023';
                 END IF;
 
@@ -153,15 +153,24 @@ public partial class AddNotificationInboxReadState : Migration
                     RETURN;
                 END IF;
 
+                -- Repete o predicado de visibilidade na mutação: em READ
+                -- COMMITTED, membership revogada entre o SELECT e o UPDATE
+                -- precisa derrubar a marcação (not_found), nunca gravar.
                 UPDATE notifications.notification_intents AS intent
                 SET read_at = clock_timestamp(),
                     read_by_user_id = v_actor_user_id,
                     updated_at = clock_timestamp()
                 WHERE intent.id = p_delivery_id
-                    AND intent.read_at IS NULL;
+                    AND intent.channel = 'in_app'
+                    AND intent.status = 'delivered'
+                    AND intent.recipient_user_id = v_actor_user_id
+                    AND intent.read_at IS NULL
+                    AND intent.company_id IN (
+                        SELECT membership.company_id
+                        FROM foundation.current_actor_memberships() AS membership);
                 GET DIAGNOSTICS v_changed = ROW_COUNT;
                 IF v_changed = 0 THEN
-                    RETURN QUERY SELECT 'already_read'::text, false;
+                    RETURN QUERY SELECT 'not_found'::text, false;
                     RETURN;
                 END IF;
 

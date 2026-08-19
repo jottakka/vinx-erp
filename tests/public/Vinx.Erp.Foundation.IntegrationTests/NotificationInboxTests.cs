@@ -71,6 +71,38 @@ public sealed class NotificationInboxTests
     }
 
     [Fact]
+    public async Task Equal_timestamps_are_tie_broken_by_id_desc()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var companyId = await NotificationInboxSeed.CreateCompanyForActorAsync(factory);
+        var deliveryIds = new List<Guid>();
+        for (var index = 0; index < 3; index++)
+        {
+            deliveryIds.Add(
+                await NotificationInboxSeed.CreateDeliveredInAppIntentAsync(factory, companyId)
+            );
+        }
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var pin = administrator.CreateCommand();
+        pin.CommandText =
+            """
+            UPDATE notifications.notification_intents
+            SET created_at = '2026-08-19T12:00:00.000000+00:00'::timestamptz
+            WHERE id = ANY(@ids)
+            """;
+        pin.Parameters.AddWithValue("ids", deliveryIds.ToArray());
+        await pin.ExecuteNonQueryAsync();
+
+        var firstPage = await ListAsync(factory, cursor: null, limit: 2);
+        var secondPage = await ListAsync(factory, firstPage.Page!.NextCursor, 2);
+
+        var ordered = deliveryIds.OrderDescending().ToList();
+        var listedIds = firstPage.Page!.Items.Concat(secondPage.Page!.Items).Select(i => i.Id).ToList();
+        Assert.Equal(ordered, listedIds);
+        Assert.Equal(3, listedIds.Distinct().Count());
+    }
+
+    [Fact]
     public async Task Insert_ahead_of_the_cursor_is_visible_only_after_refresh()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -120,7 +152,7 @@ public sealed class NotificationInboxTests
     [InlineData("djEuOTMyMy4wMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMDA=")] // non-canonical uuid
     [InlineData("djIuMTIzLjA=")] // wrong version
     [InlineData("djEuYWJjLjA=")] // non-numeric micros
-    [InlineData("dmVyeSBsb25nIGN1cnNvciB0b2tlbiB0aGF0IGV4Y2VlZHMgdGhlIG1heGltdW0gb2YgMTI4IGJ5dGVzIGZvciBjdXJzb3JzIGluIHRoaXMgc3lzdGVt")] // > 128 bytes decoded form of long token
+    [InlineData("QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB")] // 136 > 128 bytes recebidos
     public async Task Invalid_cursors_are_rejected_without_side_effects(string cursor)
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
