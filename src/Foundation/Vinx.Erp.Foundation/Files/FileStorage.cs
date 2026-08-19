@@ -17,10 +17,6 @@ public enum MalwareScanStatus
     MalwareDetected = 2
 }
 
-public sealed record StorageObjectInspection(
-    StorageObjectMetadata Metadata,
-    MalwareScanStatus MalwareScanStatus);
-
 public sealed record StorageObjectSummary(string Key, DateTimeOffset? CreatedAt);
 
 public interface FileStorage

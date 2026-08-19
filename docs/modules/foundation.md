@@ -232,6 +232,49 @@ PostgreSQL têm tentativas agendadas finitas. Erro permanente, inesperado ou
 tentativas esgotadas seguem para a DLQ do worker com UUID zerado, sem headers,
 payload original, dados pessoais ou mensagem interna de exceção.
 
+### Intenções de notificação e outbox transacional genérico
+
+A fatia #26 cria a infraestrutura de notificações reutilizável por módulos de
+negócio: schema `notifications` com intenções, preferências por canal e
+templates aprovados. `NotificationIntentService` grava as intenções e a
+mensagem durável `NotificationDeliveryRequested` na mesma transação do
+produtor, replicando o contrato do convite inicial: envelope com somente o
+UUID opaco `deliveryId`, flush após commit único e sem mensagem em `replay`,
+negação ou supressão.
+
+O canal in-app é obrigatório e não é controlável por preferência; o canal
+WhatsApp exige opt-in por `(empresa, destinatário)`, revalidado dentro da
+função `notifications.enqueue_notification_intent` no momento do enfileiramento,
+e sua ausência suprime somente o WhatsApp mantendo o alerta in-app. A
+deduplicação é a chave `(event_key, destinatário, canal, template)` com
+constraint UNIQUE: replays retornam a entrega existente sem segunda mensagem,
+sem auditoria extra e sem regressão de `pending_delivery`. A função valida
+membership ativa do destinatário na empresa (empresa cruzada nega fechado) e
+template aprovado para o canal; grava auditoria `notification.intent.enqueue`
+na mesma transação. A mudança de preferência é self-service por
+`notifications.set_channel_preference` (somente WhatsApp), com auditoria
+somente na transição efetiva.
+
+Nenhuma coluna ou envelope guarda telefone, e-mail, corpo de mensagem, payload
+de negócio ou segredo; o deep-link é um selector relativo opcional. Não há
+produtor de evento de negócio nesta fatia: Paguai permanece rascunho e nenhum
+evento é fabricado. O worker de entrega (#48) e o adapter Meta (#28) consomem
+a fila `notification-delivery` em fatias posteriores; o WorkerHost não é
+alterado aqui.
+
+A fatia #48 estende a máquina de estados do worker
+(`pending_provider → provider_in_flight →
+delivered|provider_failed|provider_ambiguous`, com `attempt_count`,
+`provider_attempt_id` como lease e `failure_reason` estável) e adiciona as
+funções `accept/claim/finalize/release_notification_delivery`, executáveis
+somente por `vinx_worker`. O claim usa `FOR UPDATE` com token de tentativa; o
+finalize é monotônico por token; transitivas liberam o lease
+(`provider_in_flight → pending_provider`) para o retry finito do worker
+(1s/5s/30s, depois DLQ redigida com tipo estável); timeout do provider é
+`provider_ambiguous` terminal sem retry cego, aguardando reconciliação da
+fatia Meta. A fronteira de providers vive no módulo `Vinx.Erp.Notifications`
+(ver `docs/modules/notifications.md`).
+
 ## Diretório local de funcionários
 
 `POST /foundation/companies/{companyId}/employees` reserva uma pessoa no
@@ -312,6 +355,33 @@ revoga todas as sessões da própria pessoa pela função transacional existente
 `identity_gate_unavailable`. Listagem e revogação individual (#79), interfaces
 de sessão (#80), administração de sessão (#81), MFA/AAL (#18), recuperação
 (#19) e logout/banimento no provedor (#20) continuam adiados.
+
+## Arquivos e antimalware
+
+O upload documental preserva o ciclo da #52: a intenção persiste `FileRecord`
+em `quarantined` antes de emitir URL assinada de upload, e a confirmação
+reinspeciona o objeto no storage privado server-side antes de qualquer
+liberação. A confirmação exige, além da inspeção determinística de metadados,
+um veredito antimalware produzido no servidor por `IMalwareScanner`; o cliente
+nunca envia ou escolhe veredito, engine ou versão. `DocumentVerificationPolicy`
+libera somente veredito `Clean` atual: engine, versão e assinatura preenchidas,
+timestamp não-default e checksum do veredito igual ao checksum do objeto
+inspecionado agora. Qualquer outro resultado falha fechado.
+
+Engine aprovada: nenhuma até o momento — a escolha é pendência registrada do
+responsável (comparativo em
+`docs/superpowers/specs/2026-08-18-issue-104-antimalware-engine-comparison.md`).
+Sem engine, a implementação de produção é `BlockedMalwareScanner`, fail-closed:
+todo scan devolve indisponível com motivo seguro `scanner_not_configured` e
+nenhum documento sai da quarentena. Detecção de malware e divergências duras de
+metadados são terminais (`verification_failed`); indisponibilidade, timeout,
+veredito malformado/antigo e falha de leitura do storage são transitórias e
+mantêm o documento em quarentena, retentável sem reabri-lo. O scan tem timeout
+próprio por chamada; cancelamento externo propaga.
+
+Operação segura: logs do scan registram somente operação, módulo, resultado,
+motivo seguro e duração. Payload, bytes, checksum e conteúdo de arquivo nunca
+aparecem em log, auditoria ou documentação.
 
 ## Aprovações duráveis
 
@@ -439,6 +509,14 @@ recebe DML direto em `users`, `memberships`, `employees`, idempotência ou
 grants; executa apenas as duas funções estreitas. O downgrade falha fechado se
 existir recibo de criação de funcionário ou grant ativo da capability, para não
 remover acesso ou estado observado.
+
+`vinx_notifications_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui o schema
+`notifications` (intenções, preferências e templates), com RLS forçado e
+policies restritas ao próprio owner, e as duas funções
+`SECURITY DEFINER` de enfileiramento e preferência. O runtime recebe somente
+`USAGE` no schema e `EXECUTE` nas funções — nenhum DML direto nas tabelas — e
+o worker não recebe qualquer privilégio em `notifications`. O downgrade falha
+fechado enquanto existir qualquer estado nas tabelas do schema.
 
 A revogação de membership marca somente soft-delete e auditoria técnica da
 membership própria. O runtime recebe `UPDATE` apenas nas colunas de ciclo de

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -5,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
@@ -17,6 +19,8 @@ namespace Vinx.Erp.Foundation.Files;
 public sealed class DocumentUploadService(
     FoundationDbContext database,
     FileStorage storage,
+    IMalwareScanner malwareScanner,
+    IOptions<MalwareScannerOptions> malwareScannerOptions,
     AuditAppender auditAppender,
     ILogger<DocumentUploadService> logger,
     CapabilityEvaluator capabilityEvaluator)
@@ -24,11 +28,26 @@ public sealed class DocumentUploadService(
     private const string IntentCommandName = "foundation.files.upload.intent";
     private const string ConfirmationCommandName = "foundation.files.upload.confirm";
     private const string InspectionOperationName = "foundation.files.upload.inspect";
+    private const string ScanOperationName = "foundation.files.upload.scan";
     private const string AuditOperationName = "foundation.files.upload.audit";
+    private const string ScanModuleName = "files";
+    private const string ScanEventTemplate =
+        "Document malware scan {Operation} {Module} {Result} {Reason} after {ElapsedMs}ms";
     private static readonly CapabilityRequirement UploadCapability =
         new(KnownCapabilities.FilesUpload, CapabilityScope.Company);
     private static readonly CapabilityRequirement ConfirmCapability =
         new(KnownCapabilities.FilesConfirm, CapabilityScope.Company);
+
+    // Somente falhas determinísticas são terminais; qualquer outra (scanner indisponível, timeout,
+    // veredito malformado/antigo ou storage ilegível) é transitória e mantém a quarentena (retryable).
+    private static readonly HashSet<string> TerminalVerificationFailures = new(StringComparer.Ordinal)
+    {
+        "malware_detected",
+        "object_key_mismatch",
+        "size_mismatch",
+        "checksum_mismatch",
+        "content_type_mismatch"
+    };
 
     public async Task<DocumentUploadResult<DocumentUploadIntentResult>> CreateIntentAsync(
         ActorContext actor,
@@ -162,8 +181,14 @@ public sealed class DocumentUploadService(
                     inspectionFailure = "storage_read_failed";
                 }
 
+                MalwareScanVerdict? verdict = null;
+                if (inspectionFailure is null)
+                {
+                    verdict = await ScanForConfirmationAsync(preparation.ProviderKey!, cancellationToken);
+                }
+
                 return await FinalizeConfirmationAsync(
-                    actor, command, payloadHash, inspection, inspectionFailure, cancellationToken);
+                    actor, command, payloadHash, inspection, inspectionFailure, verdict, cancellationToken);
             }
             finally
             {
@@ -252,12 +277,60 @@ public sealed class DocumentUploadService(
         return ConfirmationPreparation.ForInspection(providerKey);
     }
 
+    /// <summary>
+    /// Scan server-side com timeout próprio: falha ou timeout da engine nunca derruba a confirmação —
+    /// produzem veredito indisponível (fail-closed) com motivo seguro. Cancelamento externo propaga.
+    /// </summary>
+    private async Task<MalwareScanVerdict> ScanForConfirmationAsync(
+        string providerKey,
+        CancellationToken cancellationToken)
+    {
+        using var scanScope = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        scanScope.CancelAfter(malwareScannerOptions.Value.Timeout);
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            return await malwareScanner.ScanAsync(new MalwareScanRequest(providerKey, null), scanScope.Token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return LogScanUnavailable(null, "scan_timeout", stopwatch.Elapsed);
+        }
+        catch (Exception exception)
+        {
+            return LogScanUnavailable(exception, "scan_failed", stopwatch.Elapsed);
+        }
+    }
+
+    private MalwareScanVerdict LogScanUnavailable(Exception? exception, string reason, TimeSpan elapsed)
+    {
+        var elapsedMs = (long)elapsed.TotalMilliseconds;
+        if (exception is null)
+        {
+            logger.LogWarning(
+                ScanEventTemplate, ScanOperationName, ScanModuleName, "unavailable", reason, elapsedMs);
+        }
+        else
+        {
+            logger.LogWarning(
+                exception, ScanEventTemplate, ScanOperationName, ScanModuleName, "unavailable", reason, elapsedMs);
+        }
+
+        return new MalwareScanVerdict(
+            MalwareScanStatus.Unavailable, null, null, null, DateTimeOffset.UtcNow, null, reason);
+    }
+
     private async Task<DocumentUploadResult<DocumentUploadConfirmationResult>> FinalizeConfirmationAsync(
         ActorContext actor,
         ConfirmDocumentUploadCommand command,
         string payloadHash,
         StorageObjectInspection inspection,
         string? inspectionFailure,
+        MalwareScanVerdict? verdict,
         CancellationToken cancellationToken)
     {
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
@@ -303,9 +376,22 @@ public sealed class DocumentUploadService(
             return await ReturnConcurrentConfirmationReplayAsync(actor, command, payloadHash, cancellationToken);
         }
 
-        var verificationError = inspectionFailure ?? DocumentVerificationPolicy.Validate(file, inspection);
+        // Fail-closed: sem veredito do scanner a confirmação nunca libera.
+        var verificationError = inspectionFailure
+            ?? (verdict is null
+                ? "malware_scan_unavailable"
+                : DocumentVerificationPolicy.Validate(file, inspection, verdict));
         if (verificationError is not null)
         {
+            if (!TerminalVerificationFailures.Contains(verificationError))
+            {
+                // Transitório (scanner/storage): nenhuma transição de estado — o documento
+                // permanece em quarentena e a confirmação pode ser retentada sem reabri-lo.
+                await transaction.RollbackAsync(cancellationToken);
+                return await ReturnRetryableVerificationFailureAsync(
+                    actor, command, file.Id, verificationError, cancellationToken);
+            }
+
             return await CompleteVerificationFailureAsync(
                 transaction, actor, command, payloadHash, file, verificationError, cancellationToken);
         }
@@ -340,6 +426,39 @@ public sealed class DocumentUploadService(
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return DocumentUploadResult<DocumentUploadConfirmationResult>.Success(result);
+    }
+
+    /// <summary>
+    /// Falha transitória de verificação (scanner/storage): o registro do documento não é tocado —
+    /// sem transição de estado, sem idempotência — e a confirmação pode ser retentada.
+    /// </summary>
+    private async Task<DocumentUploadResult<DocumentUploadConfirmationResult>> ReturnRetryableVerificationFailureAsync(
+        ActorContext actor,
+        ConfirmDocumentUploadCommand command,
+        Guid fileId,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+            await AppendAuditAsync(
+                actor, command.CompanyId, ConfirmationCommandName, "file", fileId, AuditOutcome.Failure, reason, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return DocumentUploadResult<DocumentUploadConfirmationResult>.Failure(
+                reason, StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogUnexpectedFailure(exception, AuditOperationName, "audit_unavailable");
+            return DocumentUploadResult<DocumentUploadConfirmationResult>.Failure(
+                "upload_confirmation_unavailable", StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     private async Task<DocumentUploadResult<DocumentUploadIntentResult>> ReturnConcurrentIntentReplayAsync(

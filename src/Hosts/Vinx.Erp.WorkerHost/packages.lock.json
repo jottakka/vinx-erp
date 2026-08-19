@@ -508,6 +508,14 @@
           "WolverineFx.EntityFrameworkCore": "[6.28.2, )"
         }
       },
+      "vinx.erp.notifications": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.10, )",
+          "Npgsql": "[10.0.3, )",
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
       "EFCore.NamingConventions": {
         "type": "CentralTransitive",
         "requested": "[10.0.1, )",
