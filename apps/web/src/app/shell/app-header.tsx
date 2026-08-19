@@ -1,8 +1,10 @@
 import HelpOutlinedIcon from "@mui/icons-material/HelpOutlined";
 import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
+import NotificationsOutlinedIcon from "@mui/icons-material/NotificationsOutlined";
 import {
   AppBar,
   Avatar,
+  Badge,
   Box,
   Button,
   Chip,
@@ -13,6 +15,7 @@ import {
 import { Link as RouterLink } from "react-router-dom";
 import { isAgentWorkspaceEnabled } from "../../features/agent/agent-conversation-provider";
 import { AgentTrigger } from "../../features/agent/agent-trigger";
+import { useNotifications } from "../../features/notifications/notifications-provider";
 import { AppLogo } from "../../shared/ui/app-logo";
 import { AppearanceMenu } from "../../shared/ui/appearance-menu";
 
@@ -41,6 +44,13 @@ export function AppHeader({
   userName,
 }: AppHeaderProps) {
   const elevated = useScrollTrigger({ disableHysteresis: true, threshold: 8 });
+  const { unreadCount } = useNotifications();
+  const unreadLabel =
+    unreadCount === null
+      ? "Notificações"
+      : unreadCount === 0
+        ? "Notificações: nenhuma não lida"
+        : `Notificações: ${unreadCount} não lidas`;
 
   return (
     <AppBar
@@ -75,6 +85,20 @@ export function AppHeader({
           <AppLogo compact />
         </Box>
         <Box sx={{ flexGrow: 1 }} />
+        <IconButton
+          aria-label={unreadLabel}
+          component={RouterLink}
+          sx={{ mr: 0.5 }}
+          to="/notificacoes"
+        >
+          <Badge
+            badgeContent={unreadCount ?? 0}
+            color="error"
+            invisible={!(unreadCount && unreadCount > 0)}
+          >
+            <NotificationsOutlinedIcon />
+          </Badge>
+        </IconButton>
         {userName ? (
           <Chip
             aria-label={`Sessão ativa: ${userName}`}
