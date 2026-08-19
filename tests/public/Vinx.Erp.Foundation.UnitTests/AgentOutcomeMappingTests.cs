@@ -95,11 +95,22 @@ public sealed class AgentOutcomeMappingTests
         Assert.Equal(CorrelationId, result.Response.CorrelationId);
     }
 
+    [Fact]
+    public void Unavailable_with_provider_not_configured_maps_to_503_boundary_code()
+    {
+        var result = AgentExecutionApplicationService.MapOutcome(Outcome(
+            AgentOutcomeStatus.Unavailable,
+            AgentOutcomeReason.ProviderNotConfigured));
+
+        Assert.Null(result.Response);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, result.HttpStatusCode);
+        Assert.Equal(AgentOutcomeReason.ProviderNotConfigured, result.ErrorCode);
+    }
+
     [Theory]
-    [InlineData(AgentOutcomeReason.ProviderNotConfigured)]
     [InlineData(AgentOutcomeReason.ModelUnavailable)]
     [InlineData(AgentOutcomeReason.ContextUnavailable)]
-    public void Unavailable_maps_to_503_error_envelope_with_outcome_reason(string reasonCode)
+    public void Unavailable_with_other_causes_maps_to_503_agent_unavailable(string reasonCode)
     {
         var result = AgentExecutionApplicationService.MapOutcome(Outcome(
             AgentOutcomeStatus.Unavailable,
@@ -107,7 +118,9 @@ public sealed class AgentOutcomeMappingTests
 
         Assert.Null(result.Response);
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, result.HttpStatusCode);
-        Assert.Equal(reasonCode, result.ErrorCode);
+        // Somente provider_not_configured passa direto; demais causas viram o
+        // código estável da fronteira.
+        Assert.Equal("agent_unavailable", result.ErrorCode);
     }
 
     [Fact]

@@ -105,8 +105,9 @@ public sealed class AgentExecutionApplicationService(
     /// Mapeamento puro desfecho do runner → resposta tipada + status HTTP. O
     /// texto viaja somente o redigido; requires_confirmation não expõe texto
     /// nem a ação proposta (opaca em v1); fontes estruturadas não existem em v1
-    /// e seguem nulas. 5xx viram envelope de erro; timeout expõe o código
-    /// estável agent_timeout, não o reason interno do modelo.
+    /// e seguem nulas. 5xx viram envelope com código estável da fronteira: 503
+    /// expõe provider_not_configured quando é exatamente esse reason, senão
+    /// agent_unavailable; 504 expõe agent_timeout, nunca model_timeout.
     /// </summary>
     public static AgentRunResult MapOutcome(AgentOutcome outcome) =>
         outcome.Status switch
@@ -126,7 +127,10 @@ public sealed class AgentExecutionApplicationService(
             AgentOutcomeStatus.Invalid => Typed(
                 AgentRunStatus.ValidationError, outcome, StatusCodes.Status400BadRequest),
             AgentOutcomeStatus.Unavailable => AgentRunResult.Failure(
-                outcome.ReasonCode, StatusCodes.Status503ServiceUnavailable),
+                string.Equals(outcome.ReasonCode, AgentOutcomeReason.ProviderNotConfigured, StringComparison.Ordinal)
+                    ? AgentOutcomeReason.ProviderNotConfigured
+                    : AgentUnavailableReason,
+                StatusCodes.Status503ServiceUnavailable),
             AgentOutcomeStatus.TimedOut => AgentRunResult.Failure(
                 AgentTimeoutReason, StatusCodes.Status504GatewayTimeout),
             _ => throw new ArgumentOutOfRangeException(
