@@ -275,6 +275,18 @@ finalize é monotônico por token; transitivas liberam o lease
 fatia Meta. A fronteira de providers vive no módulo `Vinx.Erp.Notifications`
 (ver `docs/modules/notifications.md`).
 
+A fatia #28 (Meta outbound) acrescenta `notification_recipient_contacts`
+(número E.164 por destinatário, self-service pela função
+`notifications.set_recipient_contact`, RLS e sem PII em envelope/log),
+colunas `meta_template_name/meta_language` em `notification_templates`
+(mapeamento somente para template WhatsApp aprovado),
+`notification_provider_events` (eventos do webhook insert-only por
+`(message_id, event_type)`, sem correlação com negócio) e as funções
+`get_notification_delivery_target` (telefone e template somente para a
+tentativa em curso, `vinx_worker`) e `record_provider_event`
+(`vinx_runtime`, usada pelo webhook do ApiHost após verificação de
+assinatura).
+
 ## Diretório local de funcionários
 
 `POST /foundation/companies/{companyId}/employees` reserva uma pessoa no
