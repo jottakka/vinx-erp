@@ -1,15 +1,14 @@
 using System.Text;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using Vinx.Erp.AI.Providers.DeepSeek;
 
-namespace Vinx.Erp.AI.UnitTests.Providers.DeepSeek;
+namespace Vinx.Erp.AI.UnitTests.Providers;
 
 /// <summary>
-/// Logger de captura para provar redaction: acumula nível, mensagem formatada,
-/// escopos e mensagem de exceção sem reproduzir conteúdo sensível.
+/// Logger de captura compartilhado pelos testes de provider para provar
+/// redaction: acumula nível, mensagem formatada, escopos e mensagem de
+/// exceção sem reproduzir conteúdo sensível.
 /// </summary>
-internal sealed class RecordingLogger : ILogger<DeepSeekChatClient>
+internal sealed class RecordingLogger : ILogger
 {
     private readonly Lock _lock = new();
     private readonly StringBuilder _text = new();

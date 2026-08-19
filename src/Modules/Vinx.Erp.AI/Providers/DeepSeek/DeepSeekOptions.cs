@@ -1,11 +1,14 @@
 using Microsoft.Extensions.Options;
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
 
 namespace Vinx.Erp.AI.Providers.DeepSeek;
 
 /// <summary>
-/// Perfil server-side aprovado para chamadas DeepSeek v4 Flash. Endpoint,
-/// modelo, timeout, orçamento e limites vêm sempre da configuração aprovada;
-/// o request do chamador nunca escolhe esses valores.
+/// Perfil server-side aprovado para chamadas DeepSeek v4 Flash: um perfil
+/// nomeado do núcleo OpenAI-compatible. Endpoint, modelo, timeout, orçamento
+/// e limites vêm sempre da configuração aprovada; o request do chamador
+/// nunca escolhe esses valores. A API hospedada é text-only (contrato 2.2):
+/// o perfil não aceita imagem.
 /// </summary>
 public sealed class DeepSeekOptions
 {
@@ -32,8 +35,27 @@ public sealed class DeepSeekOptions
     public int MaxTotalTokensPerCall { get; set; } = 16_384;
 
     /// <summary>
-    /// Valida o perfil no startup (options pattern + ValidateOnStart). As
-    /// mensagens de falha nunca ecoam o valor da chave.
+    /// Converte o perfil nomeado no perfil do núcleo genérico. A API hospedada
+    /// do DeepSeek é text-only: imagem é sempre rejeitada antes de HTTP.
+    /// </summary>
+    internal OpenAiCompatibleOptions ToOpenAiCompatibleProfile() => new()
+    {
+        Endpoint = Endpoint,
+        ApiKey = ApiKey,
+        Model = Model,
+        Timeout = Timeout,
+        MaxMessages = MaxMessages,
+        MaxInputCharacters = MaxInputCharacters,
+        MaxOutputTokens = MaxOutputTokens,
+        MaxTotalTokensPerCall = MaxTotalTokensPerCall,
+        AllowImageInputs = false,
+        ModuleTag = "ai/deepseek",
+    };
+
+    /// <summary>
+    /// Valida o perfil (options pattern). Declarado para o host registrar com
+    /// `ValidateOnStart` na fatia da API (#138); o client valida na
+    /// construção. As mensagens de falha nunca ecoam o valor da chave.
     /// </summary>
     public sealed class Validator : IValidateOptions<DeepSeekOptions>
     {

@@ -17,21 +17,21 @@ public sealed class DeepSeekChatClientContractTests
     }
 
     private static DeepSeekChatClient CreateClient(
-        TestDeepSeekHandler handler,
+        TestProviderHandler handler,
         DeepSeekOptions? profile = null,
         ILogger? logger = null) =>
         new(profile ?? Approved(), new HttpClient(handler), logger);
 
     private static ChatMessage UserMessage(string text) => new(ChatRole.User, [new TextContent(text)]);
 
-    private static JsonDocument RequestBody(TestDeepSeekHandler handler) =>
+    private static JsonDocument RequestBody(TestProviderHandler handler) =>
         JsonDocument.Parse(handler.RequestBodies[^1]);
 
     [Fact]
     public async Task Approved_profile_produces_a_typed_final_decision_with_correlation_id()
     {
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson("resumo final"));
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson("resumo final"));
         using var client = CreateClient(handler);
 
         var response = await client.GetResponseAsync([UserMessage("resuma")]);
@@ -45,8 +45,8 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Request_cannot_choose_another_model_or_provider()
     {
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson("ok"));
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson("ok"));
         var profile = Approved();
         using var client = CreateClient(handler, profile);
 
@@ -62,8 +62,8 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Runtime_mutation_of_the_options_object_is_rejected()
     {
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson("ok"));
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson("ok"));
         var profile = Approved(o => o.MaxOutputTokens = 64);
         using var client = CreateClient(handler, profile);
 
@@ -82,8 +82,8 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Output_token_cap_is_enforced_from_the_profile()
     {
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson("ok"));
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson("ok"));
         var profile = Approved(o => o.MaxOutputTokens = 128);
         using var client = CreateClient(handler, profile);
 
@@ -97,27 +97,28 @@ public sealed class DeepSeekChatClientContractTests
     }
 
     [Fact]
-    public async Task Allowed_multimodal_content_reaches_the_provider_as_image_url()
+    public async Task Image_content_is_rejected_before_any_http_call()
     {
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson("descrição"));
+        // Contrato 2.2: a API hospedada do DeepSeek é text-only; imagem é
+        // falha determinística antes de HTTP, não erro 400 do provider.
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson("descrição"));
         using var client = CreateClient(handler);
         var message = new ChatMessage(
             ChatRole.User,
             [new TextContent("o que é isto?"), new DataContent(new byte[] { 1, 2, 3 }, "image/png")]);
 
-        await client.GetResponseAsync([message]);
+        await Assert.ThrowsAsync<DeepSeekRequestValidationException>(
+            () => client.GetResponseAsync([message]));
 
-        var wire = handler.RequestBodies[^1];
-        Assert.Contains("image_url", wire, StringComparison.Ordinal);
-        Assert.Contains("data:image/png", wire, StringComparison.Ordinal);
+        Assert.Equal(0, handler.CallCount);
     }
 
     [Fact]
     public async Task Trusted_context_metadata_never_reaches_the_wire()
     {
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson("ok"));
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson("ok"));
         using var client = CreateClient(handler);
         var message = new ChatMessage(ChatRole.User, [new TextContent("resuma")])
         {
@@ -138,8 +139,8 @@ public sealed class DeepSeekChatClientContractTests
     {
         var invoked = false;
         var tool = AIFunctionFactory.Create(() => { invoked = true; }, "leitura", "Lê dados autorizados");
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson(
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson(
                 string.Empty,
                 finishReason: "tool_calls",
                 toolCallId: "call-1",
@@ -165,8 +166,8 @@ public sealed class DeepSeekChatClientContractTests
     {
         var invoked = false;
         var tool = AIFunctionFactory.Create(() => { invoked = true; }, "leitura", "Lê dados autorizados");
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson(
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson(
                 string.Empty,
                 finishReason: "tool_calls",
                 toolCallId: "call-2",
@@ -185,8 +186,8 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Unknown_response_fields_do_not_break_the_normalized_contract()
     {
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson(
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson(
                 "com campo novo",
                 extraTopLevelFields: ",\"deepseek_novo_campo\":{\"x\":1}"));
         using var client = CreateClient(handler);
@@ -199,11 +200,12 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Timeout_is_classified_once_without_retry()
     {
-        var profile = Approved(o => o.Timeout = TimeSpan.FromMilliseconds(150));
-        var handler = new TestDeepSeekHandler(async (_, cancellation) =>
+        // 1s é o mínimo do perfil aprovado; o validador roda na construção.
+        var profile = Approved(o => o.Timeout = TimeSpan.FromSeconds(1));
+        var handler = new TestProviderHandler(async (_, cancellation) =>
         {
             await Task.Delay(TimeSpan.FromSeconds(10), cancellation);
-            return TestDeepSeekHandler.JsonResponse("nunca");
+            return TestProviderHandler.JsonResponse("nunca");
         });
         using var client = CreateClient(handler, profile);
 
@@ -217,10 +219,10 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Caller_cancellation_is_classified_as_cancelled_without_retry()
     {
-        var handler = new TestDeepSeekHandler(async (_, cancellation) =>
+        var handler = new TestProviderHandler(async (_, cancellation) =>
         {
             await Task.Delay(TimeSpan.FromSeconds(10), cancellation);
-            return TestDeepSeekHandler.JsonResponse("nunca");
+            return TestProviderHandler.JsonResponse("nunca");
         });
         using var client = CreateClient(handler, Approved(o => o.Timeout = TimeSpan.FromSeconds(30)));
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
@@ -235,7 +237,7 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Rate_limited_and_unavailable_responses_are_classified_and_never_retried()
     {
-        var rateLimited = TestDeepSeekHandler.RespondsWith(
+        var rateLimited = TestProviderHandler.RespondsWith(
             """{"error":{"message":"rate limit","type":"rate_limit_exceeded"}}""",
             statusCode: 429);
         using (var client = CreateClient(rateLimited))
@@ -247,7 +249,7 @@ public sealed class DeepSeekChatClientContractTests
             Assert.Equal(1, rateLimited.CallCount);
         }
 
-        var unavailable = TestDeepSeekHandler.RespondsWith("{}", statusCode: 503);
+        var unavailable = TestProviderHandler.RespondsWith("{}", statusCode: 503);
         using (var client = CreateClient(unavailable))
         {
             var exception = await Assert.ThrowsAsync<DeepSeekProviderException>(
@@ -256,7 +258,7 @@ public sealed class DeepSeekChatClientContractTests
             Assert.Equal(1, unavailable.CallCount);
         }
 
-        var invalidCredentials = TestDeepSeekHandler.RespondsWith("{}", statusCode: 401);
+        var invalidCredentials = TestProviderHandler.RespondsWith("{}", statusCode: 401);
         using (var client = CreateClient(invalidCredentials))
         {
             var exception = await Assert.ThrowsAsync<DeepSeekProviderException>(
@@ -272,7 +274,7 @@ public sealed class DeepSeekChatClientContractTests
     {
         var secretBody = " corpo-secreto-com-dados-do-cliente ";
         var errorBody = "{\"error\":{\"message\":\"" + secretBody + "\",\"type\":\"server_error\"}}";
-        var handler = TestDeepSeekHandler.RespondsWith(errorBody, statusCode: 500);
+        var handler = TestProviderHandler.RespondsWith(errorBody, statusCode: 500);
         using var client = CreateClient(handler);
 
         var exception = await Assert.ThrowsAsync<DeepSeekProviderException>(
@@ -288,7 +290,7 @@ public sealed class DeepSeekChatClientContractTests
         var logger = new RecordingLogger();
         var apiKey = Guid.NewGuid().ToString("N");
         var profile = Approved(o => o.ApiKey = apiKey);
-        var handler = TestDeepSeekHandler.RespondsWith(
+        var handler = TestProviderHandler.RespondsWith(
             """{"error":{"message":"conteudo interno do provider"}}""",
             statusCode: 500);
         using var client = CreateClient(handler, profile, logger);
@@ -307,8 +309,8 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Input_above_profile_limits_fails_before_any_provider_call()
     {
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson("ok"));
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson("ok"));
         var profile = Approved(o => o.MaxMessages = 1);
         using var client = CreateClient(handler, profile);
 
@@ -321,13 +323,13 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Parallel_runs_isolate_responses_budget_and_correlation()
     {
-        var handler = new TestDeepSeekHandler((request, _) =>
+        var handler = new TestProviderHandler((request, _) =>
         {
             var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().Result).RootElement;
             var messages = body.GetProperty("messages");
             var prompt = messages[messages.GetArrayLength() - 1].GetProperty("content").GetString();
-            return Task.FromResult(TestDeepSeekHandler.JsonResponse(
-                TestDeepSeekHandler.ChatCompletionJson($"eco:{prompt}")));
+            return Task.FromResult(TestProviderHandler.JsonResponse(
+                TestProviderHandler.ChatCompletionJson($"eco:{prompt}")));
         });
         using var client = CreateClient(handler);
 
@@ -347,8 +349,8 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public async Task Usage_is_reported_for_budget_accounting()
     {
-        var handler = TestDeepSeekHandler.RespondsWith(
-            TestDeepSeekHandler.ChatCompletionJson("ok", promptTokens: 40, completionTokens: 8));
+        var handler = TestProviderHandler.RespondsWith(
+            TestProviderHandler.ChatCompletionJson("ok", promptTokens: 40, completionTokens: 8));
         using var client = CreateClient(handler);
 
         var response = await client.GetResponseAsync([UserMessage("leia")]);
@@ -361,7 +363,7 @@ public sealed class DeepSeekChatClientContractTests
     [Fact]
     public void Streaming_is_outside_the_approved_profile()
     {
-        using var client = CreateClient(TestDeepSeekHandler.RespondsWith("{}"));
+        using var client = CreateClient(TestProviderHandler.RespondsWith("{}"));
 
         Assert.Throws<NotSupportedException>(
             () => client.GetStreamingResponseAsync([UserMessage("leia")]));
