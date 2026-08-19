@@ -109,7 +109,7 @@ public sealed class DocumentUploadEndpointTests
     public async Task Valid_confirmation_rechecks_private_storage_and_confirms_the_file()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -129,7 +129,8 @@ public sealed class DocumentUploadEndpointTests
     public async Task Malware_detection_marks_the_file_failed_without_returning_a_read_url()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.MalwareDetected });
         var scenario = await SeedScenarioAsync(factory);
         var malwareIntent = NewIntent(scenario.CompanyId) with
         {
@@ -155,10 +156,11 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
-    public async Task Unavailable_malware_scan_marks_the_file_failed_and_records_a_failure_without_a_download_url()
+    public async Task Unavailable_malware_scan_keeps_the_file_quarantined_and_records_a_failure_without_a_download_url()
     {
-        var storage = new ControlledFileStorage { ConfiguredMalwareScanStatus = MalwareScanStatus.Unavailable };
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.Unavailable });
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -168,11 +170,12 @@ public sealed class DocumentUploadEndpointTests
             "/foundation/files/confirmations",
             new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
 
-        response.EnsureSuccessStatusCode();
-        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var failed = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
-        Assert.Equal("malware_scan_unavailable", failed.FailureReason);
+        var quarantined = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantined.ProcessingState);
+        Assert.Null(quarantined.FailureReason);
         var audit = await administrator.AuditEvents.SingleAsync(candidate => candidate.Action == "foundation.files.upload.confirm");
         Assert.Equal(AuditOutcome.Failure, audit.Outcome);
         Assert.Equal("malware_scan_unavailable", audit.Reason);
@@ -181,7 +184,236 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
-    public async Task Storage_read_failure_after_upload_marks_the_file_failed_without_a_download_endpoint()
+    public async Task Blocked_scanner_keeps_document_quarantined_without_releasing_a_url()
+    {
+        // Caminho de produção: sem override, o DI registra BlockedMalwareScanner (fail-closed).
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantined = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantined.ProcessingState);
+        Assert.Null(quarantined.FailureReason);
+        var audit = await administrator.AuditEvents.SingleAsync(candidate => candidate.Action == "foundation.files.upload.confirm");
+        Assert.Equal(AuditOutcome.Failure, audit.Outcome);
+        Assert.Equal("malware_scan_unavailable", audit.Reason);
+        Assert.Null(typeof(ConfirmationResponse).GetProperty("DownloadUrl"));
+        Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Scanner_timeout_keeps_quarantine_with_a_safe_reason()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { Delay = TimeSpan.FromSeconds(30) };
+        await using var factory = await CreateFactoryAsync(
+            storage, scanner, malwareScanTimeout: TimeSpan.FromMilliseconds(50));
+        using var logs = new UploadLogProvider();
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logs);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantinedAfterTimeout = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterTimeout.ProcessingState);
+        Assert.Null(quarantinedAfterTimeout.FailureReason);
+        var warning = Assert.Single(logs.Entries, entry =>
+            entry.CategoryName == typeof(DocumentUploadService).FullName
+            && Equals(entry.Properties.GetValueOrDefault("Operation"), "foundation.files.upload.scan"));
+        Assert.Equal(LogLevel.Warning, warning.Level);
+        Assert.Null(warning.Exception);
+        Assert.Equal("unavailable", warning.Properties["Result"]);
+        Assert.Equal("scan_timeout", warning.Properties["Reason"]);
+        Assert.Equal(["ElapsedMs", "Module", "Operation", "Reason", "Result"], warning.Properties.Keys.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Scanner_failure_keeps_quarantine_with_a_safe_reason()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { FailWith = new InvalidOperationException("engine offline") };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        using var logs = new UploadLogProvider();
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logs);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantinedAfterFailure = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterFailure.ProcessingState);
+        Assert.Null(quarantinedAfterFailure.FailureReason);
+        var warning = Assert.Single(logs.Entries, entry =>
+            entry.CategoryName == typeof(DocumentUploadService).FullName
+            && Equals(entry.Properties.GetValueOrDefault("Operation"), "foundation.files.upload.scan"));
+        Assert.Equal(LogLevel.Warning, warning.Level);
+        Assert.IsType<InvalidOperationException>(warning.Exception);
+        Assert.Equal("scan_failed", warning.Properties["Reason"]);
+    }
+
+    [Fact]
+    public async Task Stale_clean_verdict_keeps_document_quarantined()
+    {
+        var storage = new ControlledFileStorage();
+        // Veredito Clean, porém vinculado ao checksum de outra versão do objeto.
+        var scanner = new ControlledMalwareScanner(storage) { OverrideContentChecksum = ComputeChecksum(EicarPayload) };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantinedAfterStaleVerdict = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterStaleVerdict.ProcessingState);
+        Assert.Null(quarantinedAfterStaleVerdict.FailureReason);
+        Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
+    }
+
+    [Fact]
+    public async Task External_cancellation_during_scan_propagates_without_releasing()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { Delay = TimeSpan.FromMinutes(2) };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        using var cancellation = new CancellationTokenSource();
+
+        var confirmationTask = factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId),
+            cancellation.Token);
+        await scanner.ScanStarted.WaitAsync(TimeSpan.FromSeconds(30));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => confirmationTask);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var fileAfterCancellation = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", fileAfterCancellation.ProcessingState);
+        Assert.Null(fileAfterCancellation.FailureReason);
+        Assert.Equal(1, scanner.ScanCount);
+    }
+
+    [Fact]
+    public async Task Retry_with_a_fresh_clean_verdict_succeeds_after_a_transient_confirmation_failure()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { Delay = TimeSpan.FromMinutes(2) };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        using var cancellation = new CancellationTokenSource();
+
+        // 1ª confirmação abortada durante o scan: falha transitória mantém o documento em quarentena.
+        var abortedConfirmation = factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId),
+            cancellation.Token);
+        await scanner.ScanStarted.WaitAsync(TimeSpan.FromSeconds(30));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => abortedConfirmation);
+
+        // 2ª confirmação exige um veredito NOVO do scanner; o scan abortado nunca é reaproveitado.
+        scanner.Delay = null;
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var confirmed = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("confirmed", confirmed.ProcessingState);
+        Assert.Null(confirmed.FailureReason);
+        Assert.Equal(2, scanner.ScanCount);
+        Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.confirm").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Unavailable_confirmation_keeps_quarantine_and_a_retry_with_a_fresh_clean_verdict_confirms()
+    {
+        // Caso 5 do brief, literal: a 1ª confirmação COMPLETA com veredito indisponível mantém o
+        // documento em quarentena (sem reabrir documento obsoleto); a 2ª, com veredito Clean novo,
+        // confirma — inclusive reutilizando o mesmo RequestId (nada ficou registrado na 1ª).
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.Unavailable };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var request = new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId);
+
+        var firstConfirmation = await factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, firstConfirmation.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await firstConfirmation.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var quarantinedAfterUnavailable = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+            Assert.Equal("quarantined", quarantinedAfterUnavailable.ProcessingState);
+            Assert.Null(quarantinedAfterUnavailable.FailureReason);
+            Assert.Empty(await administrator.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+        }
+
+        scanner.Status = MalwareScanStatus.Clean;
+        var retryConfirmation = await factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request);
+
+        retryConfirmation.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await retryConfirmation.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        await using var verification = factory.Fixture.CreateAdministratorDbContext();
+        var confirmedDocument = await verification.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("confirmed", confirmedDocument.ProcessingState);
+        Assert.Null(confirmedDocument.FailureReason);
+        Assert.Equal(2, scanner.ScanCount);
+        Assert.Single(await verification.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+        var confirmAudits = await verification.AuditEvents
+            .Where(audit => audit.Action == "foundation.files.upload.confirm")
+            .OrderBy(audit => audit.OccurredAt)
+            .ToListAsync();
+        Assert.Equal([AuditOutcome.Failure, AuditOutcome.Success], confirmAudits.Select(audit => audit.Outcome).ToList());
+        Assert.Equal("malware_scan_unavailable", confirmAudits[0].Reason);
+        Assert.Null(confirmAudits[1].Reason);
+    }
+
+    [Fact]
+    public async Task Storage_read_failure_keeps_the_file_quarantined_without_a_download_endpoint()
     {
         var storage = new ControlledFileStorage { FailReads = true };
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
@@ -194,8 +426,12 @@ public sealed class DocumentUploadEndpointTests
             "/foundation/files/confirmations",
             new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
 
-        response.EnsureSuccessStatusCode();
-        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("storage_read_failed", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantinedAfterStorageFailure = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterStorageFailure.ProcessingState);
+        Assert.Null(quarantinedAfterStorageFailure.FailureReason);
         Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
         var failure = Assert.Single(logs.Entries, entry =>
             entry.CategoryName == typeof(DocumentUploadService).FullName
@@ -370,7 +606,7 @@ public sealed class DocumentUploadEndpointTests
     public async Task Intent_replay_after_confirmation_does_not_issue_an_upload_url()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var request = NewIntent(scenario.CompanyId);
         var intent = await PostIntentAsync(factory, request);
@@ -391,7 +627,8 @@ public sealed class DocumentUploadEndpointTests
     public async Task Intent_replay_after_verification_failure_does_not_issue_an_upload_url()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.MalwareDetected });
         var scenario = await SeedScenarioAsync(factory);
         var request = NewIntent(scenario.CompanyId) with { SizeBytes = EicarPayload.Length, Checksum = ComputeChecksum(EicarPayload) };
         var intent = await PostIntentAsync(factory, request);
@@ -462,7 +699,7 @@ public sealed class DocumentUploadEndpointTests
     public async Task Repeated_confirmation_replays_confirmed_state_without_a_second_audit_or_exposure()
     {
         var storage = new ControlledFileStorage();
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -489,7 +726,7 @@ public sealed class DocumentUploadEndpointTests
             BlockInspection = true,
             InspectionsToBlock = 1
         };
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -518,7 +755,7 @@ public sealed class DocumentUploadEndpointTests
             BlockInspection = true,
             InspectionsToBlock = 1
         };
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
         var scenario = await SeedScenarioAsync(factory);
         var intent = await CreateIntentAsync(factory, scenario.CompanyId);
         var file = await GetFileAsync(factory, intent.FileId);
@@ -557,6 +794,15 @@ public sealed class DocumentUploadEndpointTests
 
     private static string ComputeChecksum(byte[] content) =>
         $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}";
+
+    private static Task<FoundationApiFactory> CreateFactoryAsync(
+        ControlledFileStorage storage,
+        IMalwareScanner? scanner = null,
+        TimeSpan? malwareScanTimeout = null) =>
+        FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            fileStorage: storage,
+            malwareScanner: scanner,
+            malwareScanTimeout: malwareScanTimeout);
 
     private static async Task<UploadIntentResponse> CreateIntentAsync(FoundationApiFactory factory, Guid companyId)
     {
@@ -656,7 +902,6 @@ public sealed class DocumentUploadEndpointTests
         public bool FailReads { get; init; }
         public bool BlockInspection { get; init; }
         public int InspectionsToBlock { get; init; } = 1;
-        public MalwareScanStatus ConfiguredMalwareScanStatus { get; init; } = MalwareScanStatus.Clean;
         public int InspectionCount => Volatile.Read(ref inspectionCount);
 
         public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -676,7 +921,7 @@ public sealed class DocumentUploadEndpointTests
                 providerKey,
                 stored.Content.LongLength,
                 stored.ContentType,
-                ComputeChecksum(stored.Content)));
+                GetChecksum(providerKey)));
         }
 
         public async Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken)
@@ -701,14 +946,10 @@ public sealed class DocumentUploadEndpointTests
                 providerKey,
                 stored.Content.LongLength,
                 stored.ContentType,
-                ComputeChecksum(stored.Content));
-            return new StorageObjectInspection(
-                metadata,
-                ConfiguredMalwareScanStatus == MalwareScanStatus.Unavailable
-                    ? MalwareScanStatus.Unavailable
-                    : stored.Content.AsSpan().IndexOf(EicarPayload) >= 0
-                        ? MalwareScanStatus.MalwareDetected
-                        : MalwareScanStatus.Clean);
+                GetChecksum(providerKey));
+            // Inspeção determinística espelha o adapter real: nunca é o gate antimalware
+            // (o veredito server-side do scanner decide).
+            return new StorageObjectInspection(metadata, MalwareScanStatus.Unavailable);
         }
 
         public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(string providerKey, TimeSpan lifetime, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -718,11 +959,50 @@ public sealed class DocumentUploadEndpointTests
         public void Put(string providerKey, byte[] content, string contentType) =>
             _objects[providerKey] = new StoredObject(content, contentType);
 
+        public string GetChecksum(string providerKey) => ComputeChecksum(_objects[providerKey].Content);
+
         public Task WaitForInspectionAsync() => inspectionStarted.Task;
 
         public void ReleaseInspection() => inspectionRelease.TrySetResult();
 
         private sealed record StoredObject(byte[] Content, string ContentType);
+    }
+
+    private sealed class ControlledMalwareScanner(ControlledFileStorage storage) : IMalwareScanner
+    {
+        private readonly TaskCompletionSource scanStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int scanCount;
+
+        public MalwareScanStatus Status { get; set; } = MalwareScanStatus.Clean;
+        public string? OverrideContentChecksum { get; init; }
+        public TimeSpan? Delay { get; set; }
+        public Exception? FailWith { get; init; }
+        public int ScanCount => Volatile.Read(ref scanCount);
+        public Task ScanStarted => scanStarted.Task;
+
+        public async Task<MalwareScanVerdict> ScanAsync(MalwareScanRequest request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref scanCount);
+            scanStarted.TrySetResult();
+            if (Delay is { } delay)
+            {
+                await Task.Delay(delay, cancellationToken);
+            }
+
+            if (FailWith is { } failure)
+            {
+                throw failure;
+            }
+
+            return new MalwareScanVerdict(
+                Status,
+                "vinx-test-engine",
+                "1.0.0",
+                "1.2026.08",
+                DateTimeOffset.UtcNow,
+                OverrideContentChecksum ?? storage.GetChecksum(request.ProviderKey),
+                null);
+        }
     }
 
     private sealed record CapturedUploadLog(
