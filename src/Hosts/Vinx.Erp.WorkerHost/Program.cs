@@ -125,10 +125,15 @@ builder
     .Bind(builder.Configuration)
     .Validate(
         options =>
-            !string.IsNullOrWhiteSpace(options.PhoneNumberId)
-            && !string.IsNullOrWhiteSpace(options.AccessToken)
-            && !string.IsNullOrWhiteSpace(options.WebAppBaseUrl)
-            && MetaWhatsAppOptions.IsAllowedHttpsUrl(options.WebAppBaseUrl),
+            // Tudo ou nada: o worker atende filas independentes e sobe sem
+            // WhatsApp; configurado exige o conjunto completo e válido, e o
+            // provider falha fechado por entrega quando ausente.
+            (
+                string.IsNullOrWhiteSpace(options.PhoneNumberId)
+                && string.IsNullOrWhiteSpace(options.AccessToken)
+                && string.IsNullOrWhiteSpace(options.WebAppBaseUrl)
+            )
+            || options.OutboundIsConfigured,
         "Meta WhatsApp outbound options are invalid."
     )
     .ValidateOnStart();

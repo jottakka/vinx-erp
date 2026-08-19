@@ -36,6 +36,17 @@ public sealed class MetaWhatsAppOptions
         && !string.IsNullOrWhiteSpace(WebhookVerifyToken)
         && !string.IsNullOrWhiteSpace(WebAppBaseUrl);
 
+    /// <summary>
+    /// O envio é opcional no boot do worker (que atende filas independentes):
+    /// sem o conjunto completo o provider falha fechado por entrega, sem
+    /// chamada externa e sem confirmação falsa.
+    /// </summary>
+    public bool OutboundIsConfigured =>
+        !string.IsNullOrWhiteSpace(PhoneNumberId)
+        && !string.IsNullOrWhiteSpace(AccessToken)
+        && !string.IsNullOrWhiteSpace(WebAppBaseUrl)
+        && IsAllowedHttpsUrl(WebAppBaseUrl);
+
     public static bool IsAllowedHttpsUrl(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri)
         && string.IsNullOrEmpty(uri.UserInfo)

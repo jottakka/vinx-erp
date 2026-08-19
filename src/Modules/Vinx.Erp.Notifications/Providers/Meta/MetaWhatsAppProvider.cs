@@ -32,6 +32,17 @@ public sealed class MetaWhatsAppProvider(
             return new NotificationProviderResult(NotificationProviderResultKind.Rejected);
         }
 
+        if (!options.OutboundIsConfigured)
+        {
+            logger.LogWarning(
+                "Meta WhatsApp delivery {Operation} {Result} {Reason}",
+                "meta_whatsapp_delivery",
+                "rejected",
+                "provider_unconfigured"
+            );
+            return new NotificationProviderResult(NotificationProviderResultKind.Rejected);
+        }
+
         var target = await ReadTargetAsync(request, cancellationToken);
         if (target is null)
         {
