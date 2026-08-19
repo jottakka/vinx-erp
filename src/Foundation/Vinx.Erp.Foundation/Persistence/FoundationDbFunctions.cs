@@ -14,6 +14,10 @@ namespace Vinx.Erp.Foundation.Persistence;
 /// </summary>
 internal static class FoundationDbFunctions
 {
+    /// <summary>
+    /// Adquire o lock <c>FOR UPDATE</c> do usuário e lê o corte
+    /// <c>sessions_valid_after</c> (linha ausente quando o usuário não existe).
+    /// </summary>
     internal static async Task<LockedUser> LockUserForSessionAdmissionAsync(
         this FoundationDbContext database,
         Guid userId,
@@ -28,6 +32,7 @@ internal static class FoundationDbFunctions
             : new LockedUser(true, row.SessionsValidAfter);
     }
 
+    /// <summary>Revoga todas as sessões ativas do usuário e retorna a quantidade revogada.</summary>
     internal static async Task<int> RevokeAllUserSessionsAsync(
         this FoundationDbContext database,
         Guid userId,
@@ -37,6 +42,7 @@ internal static class FoundationDbFunctions
                 $"SELECT foundation.revoke_all_user_sessions({userId}) AS \"Value\"")
             .SingleAsync(cancellationToken);
 
+    /// <summary>Registra o aceite do convite de owner e a transição para entrega via provedor.</summary>
     internal static async Task<OwnerInvitationDeliveryIngressResult> AcceptOwnerInvitationDeliveryAsync(
         this FoundationDbContext database,
         Guid invitationId,
@@ -53,6 +59,7 @@ internal static class FoundationDbFunctions
         return ToIngressResult(row);
     }
 
+    /// <summary>Reivindicação single-flight da entrega do convite pelo provedor externo.</summary>
     internal static async Task<OwnerInvitationProviderClaim> ClaimOwnerInvitationProviderDeliveryAsync(
         this FoundationDbContext database,
         Guid invitationId,
@@ -69,6 +76,7 @@ internal static class FoundationDbFunctions
         return ToProviderClaim(row);
     }
 
+    /// <summary>Registra o desfecho da tentativa de entrega pelo provedor.</summary>
     internal static async Task<OwnerInvitationProviderFinalization> FinalizeOwnerInvitationProviderDeliveryAsync(
         this FoundationDbContext database,
         Guid invitationId,
@@ -90,6 +98,10 @@ internal static class FoundationDbFunctions
         return ToProviderFinalization(row);
     }
 
+    /// <summary>
+    /// Provisiona grupo, empresa e owner do zero ou repete o provisionamento
+    /// anterior (created / replay / idempotency_conflict).
+    /// </summary>
     internal static async Task<ProvisionedOrganization> ProvisionPlatformOrganizationAsync(
         this FoundationDbContext database,
         Guid requestId,
@@ -121,6 +133,10 @@ internal static class FoundationDbFunctions
             row.OwnerInvitationId);
     }
 
+    /// <summary>
+    /// Mantém a reserva local de funcionário disponível para o dono inicial
+    /// sem conceder qualquer acesso de tenant ao operador global.
+    /// </summary>
     internal static async Task EnsurePlatformOwnerEmployeeCreateAsync(
         this FoundationDbContext database,
         Guid requestId,
@@ -131,6 +147,10 @@ internal static class FoundationDbFunctions
             $"SELECT foundation.ensure_platform_owner_employee_create({requestId}, {companyId}, {ownerMembershipId})",
             cancellationToken);
 
+    /// <summary>
+    /// Cria a entrada idempotente de funcionário no diretório da empresa
+    /// (created / replay / idempotency_conflict).
+    /// </summary>
     internal static async Task<EmployeeDirectoryEntry> CreateEmployeeDirectoryEntryAsync(
         this FoundationDbContext database,
         Guid requestId,
