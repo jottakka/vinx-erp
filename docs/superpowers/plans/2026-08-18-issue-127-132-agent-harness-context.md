@@ -6,7 +6,7 @@
 
 **Architecture:** módulo AI consumível por API, Worker e futuros canais. `ActorContext`, membership, empresa explícita e capabilities vêm da Foundation (`AuthorizedCompanySetResolver` já existente — não duplicar RLS). O agente recebe apenas um snapshot mínimo; mensagem, modelo, canal e argumento do cliente nunca escolhem autorização, empresa ou provider. A política VINX roda inteira antes de qualquer chamada de modelo.
 
-**Tech Stack:** .NET 10, `Microsoft.Extensions.AI.Abstractions` 9.5.0 (`ChatMessage`/`ChatResponse`/`IChatClient` como fronteira de normalização de turns/outcomes), EF/Npgsql não necessário nesta PR, testes públicos xUnit.
+**Tech Stack:** .NET 10, `Microsoft.Extensions.AI.Abstractions` 10.8.3 (`ChatMessage`/`ChatResponse`/`IChatClient` como fronteira de normalização de turns/outcomes), EF/Npgsql não necessário nesta PR, testes públicos xUnit.
 
 **Spec:** `docs/handoffs/agentic-mvp/priority-agent-whatsapp/agent-harness-context.md` (handoff) · `docs/superpowers/specs/2026-08-11-agent-framework-boundaries-design.md` (invariantes de segurança, seção 4) · `docs/superpowers/specs/2026-08-15-backend-first-simplification.md` (por que o runtime foi removido).
 
@@ -21,7 +21,7 @@
 - Modificar `src/Foundation/Vinx.Erp.Foundation/` SOMENTE se imprescindível para consumir o resolver existente; nunca duplicar RLS. **Ruling desta PR: Foundation intocada.**
 - ApiHost, WorkerHost, frontend e WhatsApp ficam fora; não tocar `quality/private`.
 - Um arquivo por classe/família coesa (precedente: `ActorContext.cs` e `AuthorizedCompanySetResolver.cs` co-localizam tipos pequenos relacionados); net10.0; `TreatWarningsAsErrors`; lockfiles (`packages.lock.json`) commitados; `dotnet format whitespace --verify-no-changes` limpo.
-- Pacote novo autorizado: somente `Microsoft.Extensions.AI.Abstractions` 9.5.0 em `Directory.Packages.props` (consumidor: `Vinx.Erp.AI`; justificar no PR). Sem dependência sem uso atual.
+- Pacote novo autorizado: somente `Microsoft.Extensions.AI.Abstractions` 10.8.3 em `Directory.Packages.props` (consumidor: `Vinx.Erp.AI`; justificar no PR). Sem dependência sem uso atual.
 - Documentação em português; XML `<summary>` compacto em métodos públicos cuja garantia não é óbvia.
 - Branch: `codex/issue-127-132-agent-harness-context` a partir de `origin/main` (64b565a). Worktree: `.worktrees/agent-harness-context`.
 
@@ -37,7 +37,7 @@
 - Create: `src/Modules/Vinx.Erp.AI/Vinx.Erp.AI.csproj`
 - Create: `tests/public/Vinx.Erp.AI.UnitTests/Vinx.Erp.AI.UnitTests.csproj`
 - Modify: `Vinx.Erp.sln` (`dotnet sln add` dos dois projetos)
-- Modify: `Directory.Packages.props` (adicionar `Microsoft.Extensions.AI.Abstractions` 9.5.0)
+- Modify: `Directory.Packages.props` (adicionar `Microsoft.Extensions.AI.Abstractions` 10.8.3)
 - Create: `tests/public/Vinx.Erp.ArchitectureTests/AiModuleDependencyTests.cs`
 - Generated: `packages.lock.json` dos dois projetos novos (commit)
 
@@ -130,7 +130,7 @@ public sealed class AiModuleDependencyTests
 `Directory.Packages.props` (ItemGroup existente, ordem alfabética):
 
 ```xml
-    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="9.5.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.8.3" />
 ```
 
 Adicionar um arquivo mínimo temporário? NÃO — csproj vazio compila sem .cs. Registrar na solução e gerar lockfiles:
