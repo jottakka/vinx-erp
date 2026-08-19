@@ -18,11 +18,7 @@ public sealed class AgentOutputGateSchemaTests
         var response = new AgentModelResponse(
             Text: "Resumo enviado para contato@exemplo.com",
             StructuredJson: """{ "titulo": "R", "corpo": "C" }""",
-            CitedSources:
-            [
-                authorizedSource,
-                new AgentCitedSource("fonte-estrangeira", BetaCompanyId),
-            ],
+            CitedSources: [authorizedSource],
             Confidence: 0.9,
             HasToolProposal: false);
 
@@ -33,7 +29,7 @@ public sealed class AgentOutputGateSchemaTests
         Assert.Equal(AgentPolicyVersion.Current, result.PolicyVersion);
         Assert.Equal("2026-08-19.1", result.PolicyVersion);
 
-        // Só a fonte da empresa do contexto passa; a estrangeira não aparece no resultado.
+        // A fonte da empresa do contexto chega ao canal; a de outra empresa agora nega (fatia de grounding).
         var source = Assert.Single(result.AuthorizedSources);
         Assert.Equal(authorizedSource, source);
         Assert.DoesNotContain(BetaCompanyId.ToString(), result.ToString(), StringComparison.Ordinal);
@@ -72,10 +68,11 @@ public sealed class AgentOutputGateSchemaTests
     public void Tool_proposal_flag_is_preserved_regardless_of_status()
     {
         var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor());
+        // Fonte autorizada presente para não cair em no_evidence (regra de fatia posterior).
         var accepted = new AgentModelResponse(
             Text: null,
             StructuredJson: """{ "titulo": "R", "corpo": "C" }""",
-            CitedSources: [],
+            CitedSources: [new AgentCitedSource("fonte-1", AlfaCompanyId)],
             Confidence: null,
             HasToolProposal: true);
         var rejected = new AgentModelResponse(

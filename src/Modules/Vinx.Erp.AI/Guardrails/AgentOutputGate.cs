@@ -39,9 +39,9 @@ public sealed record AgentOutputGateRequest(
 /// <summary>
 /// Gate determinístico de saída com ordem fixa: primeiro o contrato
 /// estruturado — schema inválido reprova sem expor texto —, depois a
-/// autorização de fontes e a redação do texto liberado. As demais regras da
-/// política (injeção, confiança, evidência) entram nas próximas fatias
-/// mantendo esta ordem.
+/// autorização de fontes (violação cross-tenant nega), o grounding (fonte
+/// exigida ausente, sem evidência) e a confiança mínima, sempre por
+/// abstenção. A injeção de prompt entra na próxima fatia mantendo esta ordem.
 /// </summary>
 public sealed class AgentOutputGate(SourceAuthorizationGate sources, SensitiveOutputRedactor redactor)
 {
@@ -55,6 +55,9 @@ public sealed class AgentOutputGate(SourceAuthorizationGate sources, SensitiveOu
     public const string LowConfidence = "low_confidence";
     public const string NoEvidence = "no_evidence";
 
+    /// <summary>Confiança mínima para liberar a resposta; abaixo disso o gate se abstém.</summary>
+    public const double MinimumConfidence = 0.5;
+
     /// <summary>Avalia a resposta do modelo contra a política de saída vigente.</summary>
     public AgentOutputGateResult Evaluate(AgentOutputGateRequest request)
     {
@@ -63,22 +66,47 @@ public sealed class AgentOutputGate(SourceAuthorizationGate sources, SensitiveOu
         var validation = request.Contract.Validate(request.Response.StructuredJson);
         if (!validation.IsValid)
         {
-            // Fail-closed: nem texto redigido nem fontes chegam ao canal; só a proposta segue preservada.
-            return new AgentOutputGateResult(
-                AgentOutputGateStatus.ValidationError,
-                SchemaInvalid,
-                RedactedText: null,
-                AuthorizedSources: [],
-                AgentPolicyVersion.Current,
-                request.Response.HasToolProposal);
+            return Withheld(request, AgentOutputGateStatus.ValidationError, SchemaInvalid);
+        }
+
+        // Fonte de outra empresa nega sem expor a intrusa em nenhum campo.
+        var authorization = sources.Authorize(request.Context, request.Response.CitedSources);
+        if (authorization.CrossTenantViolation)
+        {
+            return Withheld(request, AgentOutputGateStatus.Denied, CrossTenantSource);
+        }
+
+        // Fontes exigidas sem nenhuma autorizada: abstenção, nunca completa lacunas.
+        if (request.SourcesRequired && authorization.AuthorizedSources.Count == 0)
+        {
+            return Withheld(request, AgentOutputGateStatus.NeedsClarification, NoAuthorizedSource);
+        }
+
+        // Confiança abaixo do piso abstém; null não compara (sem confiança reportada não há base para abster).
+        if (request.Response.Confidence < MinimumConfidence)
+        {
+            return Withheld(request, AgentOutputGateStatus.NeedsClarification, LowConfidence);
+        }
+
+        // Sem texto e sem fontes não há evidência nenhuma: abstenção.
+        if (string.IsNullOrEmpty(request.Response.Text) && authorization.AuthorizedSources.Count == 0)
+        {
+            return Withheld(request, AgentOutputGateStatus.NeedsClarification, NoEvidence);
         }
 
         return new AgentOutputGateResult(
             AgentOutputGateStatus.Result,
             Ok,
             redactor.Redact(request.Response.Text),
-            sources.Authorize(request.Context, request.Response.CitedSources),
+            authorization.AuthorizedSources,
             AgentPolicyVersion.Current,
             request.Response.HasToolProposal);
     }
+
+    private static AgentOutputGateResult Withheld(
+        AgentOutputGateRequest request,
+        AgentOutputGateStatus status,
+        string reasonCode) =>
+        // Nada chega ao canal: nem texto redigido nem fontes; só a proposta segue espelhada.
+        new(status, reasonCode, RedactedText: null, AuthorizedSources: [], AgentPolicyVersion.Current, request.Response.HasToolProposal);
 }
