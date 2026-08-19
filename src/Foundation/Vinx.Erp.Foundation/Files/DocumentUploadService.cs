@@ -38,6 +38,17 @@ public sealed class DocumentUploadService(
     private static readonly CapabilityRequirement ConfirmCapability =
         new(KnownCapabilities.FilesConfirm, CapabilityScope.Company);
 
+    // Somente falhas determinísticas são terminais; qualquer outra (scanner indisponível, timeout,
+    // veredito malformado/antigo ou storage ilegível) é transitória e mantém a quarentena (retryable).
+    private static readonly HashSet<string> TerminalVerificationFailures = new(StringComparer.Ordinal)
+    {
+        "malware_detected",
+        "object_key_mismatch",
+        "size_mismatch",
+        "checksum_mismatch",
+        "content_type_mismatch"
+    };
+
     public async Task<DocumentUploadResult<DocumentUploadIntentResult>> CreateIntentAsync(
         ActorContext actor,
         CreateDocumentUploadIntentCommand command,
@@ -372,6 +383,15 @@ public sealed class DocumentUploadService(
                 : DocumentVerificationPolicy.Validate(file, inspection, verdict));
         if (verificationError is not null)
         {
+            if (!TerminalVerificationFailures.Contains(verificationError))
+            {
+                // Transitório (scanner/storage): nenhuma transição de estado — o documento
+                // permanece em quarentena e a confirmação pode ser retentada sem reabri-lo.
+                await transaction.RollbackAsync(cancellationToken);
+                return await ReturnRetryableVerificationFailureAsync(
+                    actor, command, file.Id, verificationError, cancellationToken);
+            }
+
             return await CompleteVerificationFailureAsync(
                 transaction, actor, command, payloadHash, file, verificationError, cancellationToken);
         }
@@ -406,6 +426,39 @@ public sealed class DocumentUploadService(
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return DocumentUploadResult<DocumentUploadConfirmationResult>.Success(result);
+    }
+
+    /// <summary>
+    /// Falha transitória de verificação (scanner/storage): o registro do documento não é tocado —
+    /// sem transição de estado, sem idempotência — e a confirmação pode ser retentada.
+    /// </summary>
+    private async Task<DocumentUploadResult<DocumentUploadConfirmationResult>> ReturnRetryableVerificationFailureAsync(
+        ActorContext actor,
+        ConfirmDocumentUploadCommand command,
+        Guid fileId,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+            await AppendAuditAsync(
+                actor, command.CompanyId, ConfirmationCommandName, "file", fileId, AuditOutcome.Failure, reason, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return DocumentUploadResult<DocumentUploadConfirmationResult>.Failure(
+                reason, StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogUnexpectedFailure(exception, AuditOperationName, "audit_unavailable");
+            return DocumentUploadResult<DocumentUploadConfirmationResult>.Failure(
+                "upload_confirmation_unavailable", StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     private async Task<DocumentUploadResult<DocumentUploadIntentResult>> ReturnConcurrentIntentReplayAsync(

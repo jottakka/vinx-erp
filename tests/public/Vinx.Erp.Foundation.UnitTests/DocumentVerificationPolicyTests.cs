@@ -145,20 +145,8 @@ public sealed class DocumentVerificationPolicyTests
         Assert.Equal("malware_scan_unavailable", DocumentVerificationPolicy.Validate(record, stored, verdict));
     }
 
-    [Fact]
-    public void Verification_accepts_a_fresh_clean_verdict_after_an_unavailable_one()
-    {
-        var record = NewRecord();
-        var stored = NewInspection(record);
-        var unavailable = new MalwareScanVerdict(
-            MalwareScanStatus.Unavailable, null, null, null, DateTimeOffset.UtcNow, null, "scan_timeout");
-
-        var firstAttempt = DocumentVerificationPolicy.Validate(record, stored, unavailable);
-        var retryAttempt = DocumentVerificationPolicy.Validate(record, stored, NewCleanVerdict(Checksum));
-
-        Assert.Equal("malware_scan_unavailable", firstAttempt);
-        Assert.Null(retryAttempt);
-    }
+    // Retry após veredito indisponível é coberto na integração (estado na quarentena + novo scan),
+    // onde a máquina de estados vive — a política é stateless por chamada.
 
     private static StorageObjectInspection NewInspection(
         FileRecord record,

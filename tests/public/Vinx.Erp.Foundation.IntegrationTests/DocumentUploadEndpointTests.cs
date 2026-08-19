@@ -156,7 +156,7 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
-    public async Task Unavailable_malware_scan_marks_the_file_failed_and_records_a_failure_without_a_download_url()
+    public async Task Unavailable_malware_scan_keeps_the_file_quarantined_and_records_a_failure_without_a_download_url()
     {
         var storage = new ControlledFileStorage();
         await using var factory = await CreateFactoryAsync(
@@ -170,11 +170,12 @@ public sealed class DocumentUploadEndpointTests
             "/foundation/files/confirmations",
             new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
 
-        response.EnsureSuccessStatusCode();
-        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var failed = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
-        Assert.Equal("malware_scan_unavailable", failed.FailureReason);
+        var quarantined = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantined.ProcessingState);
+        Assert.Null(quarantined.FailureReason);
         var audit = await administrator.AuditEvents.SingleAsync(candidate => candidate.Action == "foundation.files.upload.confirm");
         Assert.Equal(AuditOutcome.Failure, audit.Outcome);
         Assert.Equal("malware_scan_unavailable", audit.Reason);
@@ -197,12 +198,12 @@ public sealed class DocumentUploadEndpointTests
             "/foundation/files/confirmations",
             new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
 
-        response.EnsureSuccessStatusCode();
-        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var failed = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
-        Assert.Equal("verification_failed", failed.ProcessingState);
-        Assert.Equal("malware_scan_unavailable", failed.FailureReason);
+        var quarantined = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantined.ProcessingState);
+        Assert.Null(quarantined.FailureReason);
         var audit = await administrator.AuditEvents.SingleAsync(candidate => candidate.Action == "foundation.files.upload.confirm");
         Assert.Equal(AuditOutcome.Failure, audit.Outcome);
         Assert.Equal("malware_scan_unavailable", audit.Reason);
@@ -228,12 +229,12 @@ public sealed class DocumentUploadEndpointTests
             "/foundation/files/confirmations",
             new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
 
-        response.EnsureSuccessStatusCode();
-        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        Assert.Equal(
-            "malware_scan_unavailable",
-            (await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).FailureReason);
+        var quarantinedAfterTimeout = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterTimeout.ProcessingState);
+        Assert.Null(quarantinedAfterTimeout.FailureReason);
         var warning = Assert.Single(logs.Entries, entry =>
             entry.CategoryName == typeof(DocumentUploadService).FullName
             && Equals(entry.Properties.GetValueOrDefault("Operation"), "foundation.files.upload.scan"));
@@ -261,12 +262,12 @@ public sealed class DocumentUploadEndpointTests
             "/foundation/files/confirmations",
             new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
 
-        response.EnsureSuccessStatusCode();
-        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        Assert.Equal(
-            "malware_scan_unavailable",
-            (await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).FailureReason);
+        var quarantinedAfterFailure = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterFailure.ProcessingState);
+        Assert.Null(quarantinedAfterFailure.FailureReason);
         var warning = Assert.Single(logs.Entries, entry =>
             entry.CategoryName == typeof(DocumentUploadService).FullName
             && Equals(entry.Properties.GetValueOrDefault("Operation"), "foundation.files.upload.scan"));
@@ -291,12 +292,13 @@ public sealed class DocumentUploadEndpointTests
             "/foundation/files/confirmations",
             new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
 
-        response.EnsureSuccessStatusCode();
-        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var failed = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
-        Assert.Equal("verification_failed", failed.ProcessingState);
-        Assert.Equal("malware_scan_unavailable", failed.FailureReason);
+        var quarantinedAfterStaleVerdict = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterStaleVerdict.ProcessingState);
+        Assert.Null(quarantinedAfterStaleVerdict.FailureReason);
+        Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
     }
 
     [Fact]
@@ -364,7 +366,54 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
-    public async Task Storage_read_failure_after_upload_marks_the_file_failed_without_a_download_endpoint()
+    public async Task Unavailable_confirmation_keeps_quarantine_and_a_retry_with_a_fresh_clean_verdict_confirms()
+    {
+        // Caso 5 do brief, literal: a 1ª confirmação COMPLETA com veredito indisponível mantém o
+        // documento em quarentena (sem reabrir documento obsoleto); a 2ª, com veredito Clean novo,
+        // confirma — inclusive reutilizando o mesmo RequestId (nada ficou registrado na 1ª).
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.Unavailable };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var request = new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId);
+
+        var firstConfirmation = await factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, firstConfirmation.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await firstConfirmation.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var quarantinedAfterUnavailable = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+            Assert.Equal("quarantined", quarantinedAfterUnavailable.ProcessingState);
+            Assert.Null(quarantinedAfterUnavailable.FailureReason);
+            Assert.Empty(await administrator.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+        }
+
+        scanner.Status = MalwareScanStatus.Clean;
+        var retryConfirmation = await factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request);
+
+        retryConfirmation.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await retryConfirmation.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        await using var verification = factory.Fixture.CreateAdministratorDbContext();
+        var confirmedDocument = await verification.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("confirmed", confirmedDocument.ProcessingState);
+        Assert.Null(confirmedDocument.FailureReason);
+        Assert.Equal(2, scanner.ScanCount);
+        Assert.Single(await verification.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+        var confirmAudits = await verification.AuditEvents
+            .Where(audit => audit.Action == "foundation.files.upload.confirm")
+            .OrderBy(audit => audit.OccurredAt)
+            .ToListAsync();
+        Assert.Equal([AuditOutcome.Failure, AuditOutcome.Success], confirmAudits.Select(audit => audit.Outcome).ToList());
+        Assert.Equal("malware_scan_unavailable", confirmAudits[0].Reason);
+        Assert.Null(confirmAudits[1].Reason);
+    }
+
+    [Fact]
+    public async Task Storage_read_failure_keeps_the_file_quarantined_without_a_download_endpoint()
     {
         var storage = new ControlledFileStorage { FailReads = true };
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
@@ -377,8 +426,12 @@ public sealed class DocumentUploadEndpointTests
             "/foundation/files/confirmations",
             new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
 
-        response.EnsureSuccessStatusCode();
-        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("storage_read_failed", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantinedAfterStorageFailure = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterStorageFailure.ProcessingState);
+        Assert.Null(quarantinedAfterStorageFailure.FailureReason);
         Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
         var failure = Assert.Single(logs.Entries, entry =>
             entry.CategoryName == typeof(DocumentUploadService).FullName
@@ -920,7 +973,7 @@ public sealed class DocumentUploadEndpointTests
         private readonly TaskCompletionSource scanStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int scanCount;
 
-        public MalwareScanStatus Status { get; init; } = MalwareScanStatus.Clean;
+        public MalwareScanStatus Status { get; set; } = MalwareScanStatus.Clean;
         public string? OverrideContentChecksum { get; init; }
         public TimeSpan? Delay { get; set; }
         public Exception? FailWith { get; init; }
