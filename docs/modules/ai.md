@@ -128,6 +128,31 @@ leitura/OCR, estado liberado, retenção e checksum, sem URL assinada. Sem a
 fonte real — e sem engine de antimalware aprovado — o OCR em runtime é
 fail-closed; os testes desta fatia usam fontes sintéticas controladas.
 
+## Contrato de saída
+
+`AgentOutputGate` valida e redige a resposta normalizada do modelo
+(`AgentModelResponse`) em ordem FIXA: contrato estrutural por jornada
+(`AgentOutputContract`, campo obrigatório ausente ou desconhecido reprova,
+JSON inválido falha fechado), injeção de prompt (lista fechada de marcadores
+PT/EN como defesa-em-profundidade — nega suspeito, nunca autoriza),
+autorização de fontes contra o contexto (fonte de outra empresa nega;
+somente fontes da empresa do contexto passam), grounding e confiança
+(fontes exigidas sem autorizada, confiança abaixo do piso 0,5 ou resposta
+sem texto e sem fontes abstém) e redação determinística ao final (o texto
+liberado é sempre o redigido; a redação nunca altera o desfecho). Reason
+codes estáveis: `ok`, `schema_invalid`, `prompt_injection_detected`,
+`cross_tenant_source`, `no_authorized_source`, `low_confidence` e
+`no_evidence`. Negações e abstenções não expõem texto nem fontes; a
+proposta de tool segue como estado puro (`HasToolProposal`) em qualquer
+desfecho, sem caminho de execução.
+
+Toda decisão registra a política vigente `AgentPolicyVersion.Current`
+(`2026-08-19.1`); mudança de marcadores de injeção, categorias de redação ou
+piso de confiança exige nova versão datada. A política é pura e stateless
+por chamada. Nenhum host chama o gate nesta fatia: a costura com a
+resposta do provider e o canal supervisionado fica para a API (#138). Nada
+aqui promete canal, provider ou execução de ferramenta.
+
 ## Ownership
 
 O módulo é responsável somente pela conversão de protocolo de providers
@@ -165,10 +190,13 @@ não atende.
 
 ## Contract version
 
-`2.2` — mudança intencional sobre a 2.1: a API hospedada do DeepSeek é
-text-only, portanto o perfil DeepSeek rejeita imagem antes de HTTP (o teste
-"imagem chega à wire como image_url" foi substituído por "imagem rejeitada
-com zero chamadas"), e conteúdo de dados fora do perfil passou a ser
+`2.3` — mudança intencional sobre a 2.2: adiciona o contrato de saída
+validado (#136) — `AgentOutputGate` com ordem fixa (contrato estrutural,
+injeção de prompt, autorização de fontes, grounding/confiança, redação
+determinística) versionado por `AgentPolicyVersion` (`2026-08-19.1`);
+negações e abstenções não expõem texto nem fontes. A 2.2 permanece vigente
+no que descreve: a API hospedada do DeepSeek é text-only, o perfil DeepSeek
+rejeita imagem antes de HTTP, e conteúdo de dados fora do perfil é
 rejeitado deterministicamente em vez de descartado em silêncio.
 
 ## Deletion strategy
