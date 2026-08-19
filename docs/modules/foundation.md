@@ -262,6 +262,19 @@ evento é fabricado. O worker de entrega (#48) e o adapter Meta (#28) consomem
 a fila `notification-delivery` em fatias posteriores; o WorkerHost não é
 alterado aqui.
 
+A fatia #48 estende a máquina de estados do worker
+(`pending_provider → provider_in_flight →
+delivered|provider_failed|provider_ambiguous`, com `attempt_count`,
+`provider_attempt_id` como lease e `failure_reason` estável) e adiciona as
+funções `accept/claim/finalize/release_notification_delivery`, executáveis
+somente por `vinx_worker`. O claim usa `FOR UPDATE` com token de tentativa; o
+finalize é monotônico por token; transitivas liberam o lease
+(`provider_in_flight → pending_provider`) para o retry finito do worker
+(1s/5s/30s, depois DLQ redigida com tipo estável); timeout do provider é
+`provider_ambiguous` terminal sem retry cego, aguardando reconciliação da
+fatia Meta. A fronteira de providers vive no módulo `Vinx.Erp.Notifications`
+(ver `docs/modules/notifications.md`).
+
 ## Diretório local de funcionários
 
 `POST /foundation/companies/{companyId}/employees` reserva uma pessoa no
