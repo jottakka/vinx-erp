@@ -46,27 +46,28 @@ public partial class AddNotificationDeliveryWorker : Migration
             CREATE FUNCTION notifications.accept_notification_delivery(
                 p_delivery_id uuid,
                 p_correlation_id uuid)
-            RETURNS TABLE (status text, transitioned boolean)
+            RETURNS TABLE (status text, transitioned boolean, channel text)
             LANGUAGE plpgsql SECURITY DEFINER
             SET search_path TO pg_catalog, notifications, pg_temp
             AS $function$
             DECLARE
                 v_recipient_user_id uuid;
                 v_company_id uuid;
+                v_channel text;
                 v_status text;
             BEGIN
                 IF p_delivery_id IS NULL OR p_correlation_id IS NULL THEN
                     RAISE EXCEPTION 'notification delivery parameters are invalid' USING ERRCODE = '22023';
                 END IF;
 
-                SELECT intent.recipient_user_id, intent.company_id, intent.status
-                    INTO v_recipient_user_id, v_company_id, v_status
+                SELECT intent.recipient_user_id, intent.company_id, intent.channel, intent.status
+                    INTO v_recipient_user_id, v_company_id, v_channel, v_status
                 FROM notifications.notification_intents AS intent
                 WHERE intent.id = p_delivery_id
                 FOR UPDATE;
 
                 IF NOT FOUND THEN
-                    RETURN QUERY SELECT 'not_found'::text, false;
+                    RETURN QUERY SELECT 'not_found'::text, false, NULL::text;
                     RETURN;
                 END IF;
 
@@ -80,7 +81,7 @@ public partial class AddNotificationDeliveryWorker : Migration
                             'notification.delivery.ingress', 'notification_intent', p_delivery_id,
                             'success', p_correlation_id, NULL,
                             jsonb_build_object('from', 'pending_delivery', 'to', 'pending_provider'));
-                        RETURN QUERY SELECT 'pending_provider'::text, true;
+                        RETURN QUERY SELECT 'pending_provider'::text, true, v_channel;
                         RETURN;
                     END IF;
                     SELECT intent.status INTO v_status
@@ -88,7 +89,7 @@ public partial class AddNotificationDeliveryWorker : Migration
                     WHERE intent.id = p_delivery_id;
                 END IF;
 
-                RETURN QUERY SELECT v_status, false;
+                RETURN QUERY SELECT v_status, false, v_channel;
             END;
             $function$;
             REVOKE ALL ON FUNCTION notifications.accept_notification_delivery(uuid, uuid)
