@@ -12,7 +12,10 @@ public sealed class InAppNotificationProvider : INotificationProvider
     public string Channel => NotificationChannel.InApp;
 
     public Task<NotificationProviderResult> DeliverAsync(
-        Guid deliveryId,
+        NotificationDeliveryRequest request,
         CancellationToken cancellationToken
-    ) => Task.FromResult(new NotificationProviderResult(NotificationProviderResultKind.Delivered));
+    ) =>
+        Task.FromResult(
+            new NotificationProviderResult(NotificationProviderResultKind.Delivered)
+        );
 }

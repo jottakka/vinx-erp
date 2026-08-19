@@ -9,6 +9,7 @@ using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Notifications;
+using Vinx.Erp.Notifications.Providers.Meta;
 using Vinx.Erp.WorkerHost;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
@@ -117,7 +118,29 @@ builder.Services.AddScoped<OwnerInvitationProviderDeliveryService>();
 builder.Services.AddSingleton<NotificationDeliveryMetrics>();
 builder.Services.AddScoped<NotificationProviderResolver>();
 builder.Services.AddScoped<INotificationProvider, InAppNotificationProvider>();
+builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
+builder
+    .Services.AddOptions<MetaWhatsAppOptions>()
+    .BindConfiguration(MetaWhatsAppOptions.SectionName)
+    .Validate(
+        options =>
+            !string.IsNullOrWhiteSpace(options.PhoneNumberId)
+            && !string.IsNullOrWhiteSpace(options.AccessToken)
+            && !string.IsNullOrWhiteSpace(options.WebAppBaseUrl)
+            && MetaWhatsAppOptions.IsAllowedHttpsUrl(options.WebAppBaseUrl),
+        "Meta WhatsApp outbound options are invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<MetaWhatsAppOptions>>().Value
+);
+builder
+    .Services.AddHttpClient(MetaWhatsAppClient.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
+    );
+builder.Services.AddScoped<MetaWhatsAppClient>();
 builder
     .Services.AddHttpClient(
         SupabaseAdminOwnerInvitationClient.HttpClientName,

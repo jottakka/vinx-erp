@@ -152,6 +152,78 @@ internal static class NotificationIntentSeed
         await command.ExecuteNonQueryAsync();
     }
 
+    public static async Task SeedContactAsync(
+        FoundationApiFactory factory,
+        Guid companyId,
+        Guid userId,
+        string phoneNumber
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO notifications.notification_recipient_contacts (company_id, user_id, channel, phone_number, updated_by_user_id)
+            VALUES (@company_id, @user_id, 'whatsapp', @phone, @user_id)
+            ON CONFLICT (company_id, user_id, channel) DO UPDATE
+                SET phone_number = EXCLUDED.phone_number, updated_at = clock_timestamp()
+            """,
+            administrator
+        );
+        command.Parameters.AddWithValue("company_id", companyId);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("phone", phoneNumber);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public static async Task SeedTemplateMetaAsync(
+        FoundationApiFactory factory,
+        Guid companyId,
+        string metaTemplateName,
+        string metaLanguage
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE notifications.notification_templates
+                SET meta_template_name = @name, meta_language = @language
+                WHERE company_id = @company_id AND channel = 'whatsapp'
+            """,
+            administrator
+        );
+        command.Parameters.AddWithValue("company_id", companyId);
+        command.Parameters.AddWithValue("name", metaTemplateName);
+        command.Parameters.AddWithValue("language", metaLanguage);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public sealed record ProviderEventRow(string MessageId, string EventType, string? Status);
+
+    public static async Task<IReadOnlyList<ProviderEventRow>> ReadProviderEventsAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT message_id, event_type, status FROM notifications.notification_provider_events ORDER BY message_id, event_type",
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        var rows = new List<ProviderEventRow>();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(
+                new ProviderEventRow(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2)
+                )
+            );
+        }
+
+        return rows;
+    }
+
     public static async Task<NotificationEnqueueResult> EnqueueAsync(
         FoundationApiFactory factory,
         NotificationIntentCommand command

@@ -13,6 +13,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 using Vinx.Erp.ApiHost;
+using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.Atendimento;
 using Vinx.Erp.Foundation;
@@ -24,6 +25,7 @@ using Vinx.Erp.Foundation.Employees;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Notifications;
+using Vinx.Erp.Notifications.Providers.Meta;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
@@ -46,6 +48,20 @@ builder
         "Foundation database connection must be configured."
     )
     .ValidateOnStart();
+builder
+    .Services.AddOptions<MetaWhatsAppOptions>()
+    .BindConfiguration(MetaWhatsAppOptions.SectionName)
+    .Validate(
+        options =>
+            !string.IsNullOrWhiteSpace(options.AppSecret)
+            && !string.IsNullOrWhiteSpace(options.WebhookVerifyToken)
+            && MetaWhatsAppOptions.IsAllowedHttpsUrl(options.WebAppBaseUrl),
+        "Meta WhatsApp webhook options are invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<MetaWhatsAppOptions>>().Value
+);
 builder
     .Services.AddOptions<SupabaseStorageOptions>()
     .Bind(builder.Configuration)
@@ -607,6 +623,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 app.MapBrowserBffSessionEndpoints();
+app.MapMetaWhatsAppWebhookEndpoints();
 app.MapControllers();
 var foundation = app.MapGroup("/foundation")
     .RequireAuthorization()

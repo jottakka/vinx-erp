@@ -255,6 +255,13 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.co/auth/v1");
         builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
         builder.UseSetting("SUPABASE_AUTH_PUBLISHABLE_KEY", "test-publishable-key");
+        // Segredos de teste sem valor real; o webhook valida assinatura
+        // HMAC com estas chaves nos testes de integração.
+        builder.UseSetting("META_WHATSAPP_PHONE_NUMBER_ID", "111111111111111");
+        builder.UseSetting("META_WHATSAPP_ACCESS_TOKEN", "test-meta-access-token");
+        builder.UseSetting("META_WHATSAPP_WEB_APP_BASE_URL", "https://app.example.test");
+        builder.UseSetting("META_WHATSAPP_APP_SECRET", "test-meta-app-secret");
+        builder.UseSetting("META_WHATSAPP_WEBHOOK_VERIFY_TOKEN", "test-meta-verify-token");
         builder.ConfigureTestServices(services =>
         {
             services.AddTransient<IStartupFilter, AllowAnonymousTestEndpointStartupFilter>();

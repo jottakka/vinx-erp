@@ -224,7 +224,10 @@ public sealed class NotificationWorkerTests
         // O perdedor da corrida vê o lease alheio e retorna skip sem
         // confirmação: status intermediário legítimo, nunca regressão.
         var loser = Assert.Single(results, result => !result.Finalized);
-        Assert.Contains(loser.Status, ["delivered", "provider_in_flight"]);
+        Assert.Contains(
+            loser.Status,
+            new[] { "delivered", "provider_in_flight" }
+        );
         var state = await NotificationIntentSeed.ReadDeliveryAsync(factory, deliveryId);
         Assert.Equal("delivered", state.Status);
         Assert.Equal(1, state.AttemptCount);
