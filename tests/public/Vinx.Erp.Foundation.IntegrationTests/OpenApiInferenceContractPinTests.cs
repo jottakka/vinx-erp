@@ -153,6 +153,8 @@ public sealed class OpenApiInferenceContractPinTests
             RequiredOf(assign).Order()
         );
         AssertClosedObject(assign);
+        AssertUuid(assign.GetProperty("properties").GetProperty("companyId"));
+        AssertUuid(assign.GetProperty("properties").GetProperty("requestId"));
         AssertUuid(assign.GetProperty("properties").GetProperty("assigneeMembershipId"));
         AssertExpectedVersionMinimumOfOne(assign);
 
@@ -162,6 +164,8 @@ public sealed class OpenApiInferenceContractPinTests
             RequiredOf(move).Order()
         );
         AssertClosedObject(move);
+        AssertUuid(move.GetProperty("properties").GetProperty("companyId"));
+        AssertUuid(move.GetProperty("properties").GetProperty("requestId"));
         var column = move.GetProperty("properties").GetProperty("column");
         Assert.Equal(1, column.GetProperty("minLength").GetInt32());
         Assert.Equal(30, column.GetProperty("maxLength").GetInt32());
