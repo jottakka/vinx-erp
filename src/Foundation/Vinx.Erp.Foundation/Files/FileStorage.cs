@@ -31,6 +31,9 @@ public interface FileStorage
 
     Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken);
 
+    /// <summary>Abre o conteúdo privado do objeto para leitura única; o caller dispõe o stream.</summary>
+    Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken);
+
     Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
         string providerKey,
         TimeSpan lifetime,

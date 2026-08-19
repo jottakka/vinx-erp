@@ -66,9 +66,42 @@ public sealed class FileRecord : SoftDeletableEntity, ICompanyScoped
     public string ProviderKey { get; private set; } = null!;
     public string ProcessingState { get; private set; } = null!;
     public string? FailureReason { get; private set; }
+
+    /// <summary>Engine de antimalware que produziu o veredito durável (ex.: "ClamAV"); bind de <c>MalwareScanVerdict.Engine</c>.</summary>
+    public string? ScanEngine { get; private set; }
+
+    /// <summary>Versão da engine do scan durável; bind de <c>MalwareScanVerdict.EngineVersion</c>.</summary>
+    public string? ScanEngineVersion { get; private set; }
+
+    /// <summary>Versão de assinatura do scan durável; bind de <c>MalwareScanVerdict.SignatureVersion</c>.</summary>
+    public string? ScanSignatureVersion { get; private set; }
+
+    /// <summary>Momento UTC do scan durável; bind de <c>MalwareScanVerdict.ScannedAtUtc</c>.</summary>
+    public DateTimeOffset? ScannedAtUtc { get; private set; }
+
     public bool IsQuarantined => true;
     public Company Company { get; private set; } = null!;
     public Membership UploaderMembership { get; private set; } = null!;
+
+    /// <summary>
+    /// Registra os metadados do veredito de antimalware. Chamado apenas em saídas duráveis
+    /// (confirmação clean e falha terminal <c>malware_detected</c>); não altera <see cref="ProcessingState"/>.
+    /// </summary>
+    public void RecordScan(string engine, string engineVersion, string signatureVersion, DateTimeOffset scannedAtUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(engine);
+        ArgumentException.ThrowIfNullOrWhiteSpace(engineVersion);
+        ArgumentException.ThrowIfNullOrWhiteSpace(signatureVersion);
+        if (scannedAtUtc == default)
+        {
+            throw new ArgumentException("Scan timestamp is required.", nameof(scannedAtUtc));
+        }
+
+        ScanEngine = engine;
+        ScanEngineVersion = engineVersion;
+        ScanSignatureVersion = signatureVersion;
+        ScannedAtUtc = scannedAtUtc;
+    }
 
     public void MarkVerified(Guid actorUserId, Guid requestId)
     {

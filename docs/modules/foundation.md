@@ -368,16 +368,28 @@ libera somente veredito `Clean` atual: engine, versão e assinatura preenchidas,
 timestamp não-default e checksum do veredito igual ao checksum do objeto
 inspecionado agora. Qualquer outro resultado falha fechado.
 
-Engine aprovada: nenhuma até o momento — a escolha é pendência registrada do
-responsável (comparativo em
+Engine aprovada: **ClamAV/clamd, 2026-08-19** (comparativo e decisão em
 `docs/superpowers/specs/2026-08-18-issue-104-antimalware-engine-comparison.md`).
-Sem engine, a implementação de produção é `BlockedMalwareScanner`, fail-closed:
-todo scan devolve indisponível com motivo seguro `scanner_not_configured` e
-nenhum documento sai da quarentena. Detecção de malware e divergências duras de
-metadados são terminais (`verification_failed`); indisponibilidade, timeout,
-veredito malformado/antigo e falha de leitura do storage são transitórias e
-mantêm o documento em quarentena, retentável sem reabri-lo. O scan tem timeout
-próprio por chamada; cancelamento externo propaga.
+A engine real é condicionada por configuração: com
+`MalwareScanner:ClamAvEndpoint` (`host:port`, formato validado on-start) o host
+compõe `ClamAvMalwareScanner`, que faz streaming do conteúdo direto do storage
+privado para o clamd (protocolo INSTREAM), computa o checksum SHA-256 durante o
+streaming e preenche engine (`ClamAV`), versão de engine e versão de assinatura
+pelo comando `VERSION`. Sem endpoint configurado, a implementação de produção
+permanece `BlockedMalwareScanner`, fail-closed: todo scan devolve indisponível
+com motivo seguro `scanner_not_configured` e nenhum documento sai da quarentena.
+Detecção de malware e divergências duras de metadados são terminais
+(`verification_failed`); indisponibilidade, timeout, veredito malformado/antigo
+e falha de leitura do storage são transitórias e mantêm o documento em
+quarentena, retentável sem reabri-lo. O scan tem timeout próprio por chamada;
+cancelamento externo propaga.
+
+Vereditos duráveis persistem no `FileRecord` as colunas `scan_engine`,
+`scan_engine_version`, `scan_signature_version` e `scanned_at_utc`: gravadas na
+confirmação `Clean` e no terminal `malware_detected`; transitórios e terminais
+sem scan (mismatch de metadados) deixam as colunas NULL, e uma detecção cujo
+fetch de versões falhou persiste terminal com colunas NULL — detecção confirmada
+nunca é rebaixada por metadado ausente.
 
 Operação segura: logs do scan registram somente operação, módulo, resultado,
 motivo seguro e duração. Payload, bytes, checksum e conteúdo de arquivo nunca

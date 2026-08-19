@@ -118,15 +118,24 @@ builder.Services.AddScoped<EmployeeDirectoryService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
-// Engine fail-closed até a aprovação da engine real: todo scan retorna indisponível.
+// Engine antimalware condicionada por configuração: sem "MalwareScanner:ClamAvEndpoint"
+// o host permanece fail-closed (BlockedMalwareScanner); endpoint válido ativa o clamd.
 builder
     .Services.AddOptions<MalwareScannerOptions>()
+    .Bind(builder.Configuration.GetSection("MalwareScanner"))
     .Validate(
-        options => options.Timeout > TimeSpan.Zero && options.MaxScanBytes > 0,
-        "Malware scanner options must define a positive timeout and byte limit."
+        options => options.Timeout > TimeSpan.Zero
+            && options.MaxScanBytes > 0
+            && (string.IsNullOrWhiteSpace(options.ClamAvEndpoint)
+                || MalwareScannerOptions.TryParseEndpoint(options.ClamAvEndpoint, out _, out _)),
+        "Malware scanner options must define a positive timeout and byte limit, plus a 'host:port' ClamAV endpoint when set."
     )
     .ValidateOnStart();
-builder.Services.AddSingleton<IMalwareScanner, BlockedMalwareScanner>();
+builder.Services.AddSingleton<IMalwareScanner>(serviceProvider =>
+    MalwareScannerComposition.SelectScanner(
+        serviceProvider.GetRequiredService<IOptions<MalwareScannerOptions>>().Value
+    )
+);
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddScoped<PaguaiDraftService>();
 builder.Services.AddScoped<AtendimentoCardService>();

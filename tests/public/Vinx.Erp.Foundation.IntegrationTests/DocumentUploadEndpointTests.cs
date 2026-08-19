@@ -126,6 +126,34 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
+    public async Task Malware_scan_request_carries_a_content_opener()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage);
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        var request = scanner.LastRequest;
+        Assert.NotNull(request);
+        Assert.NotNull(request!.OpenContentAsync);
+        // O scanner não abre por conta própria: a abertura é lazy, no caller do delegate.
+        Assert.Equal(0, storage.OpenCount);
+        await using var content = await request.OpenContentAsync!(CancellationToken.None);
+        using var read = new MemoryStream();
+        await content.CopyToAsync(read);
+        Assert.Equal(SafePayload, read.ToArray());
+        Assert.Equal(1, storage.OpenCount);
+    }
+
+    [Fact]
     public async Task Malware_detection_marks_the_file_failed_without_returning_a_read_url()
     {
         var storage = new ControlledFileStorage();
@@ -153,6 +181,157 @@ public sealed class DocumentUploadEndpointTests
         var failed = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
         Assert.Equal("malware_detected", failed.FailureReason);
         Assert.Null(typeof(ConfirmationResponse).GetProperty("DownloadUrl"));
+    }
+
+    [Fact]
+    public async Task Clean_confirmation_persists_scan_metadata()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var confirmed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("confirmed", confirmed.ProcessingState);
+        // O veredito durável chega inteiro: engine, versões e momento do scan.
+        Assert.Equal("vinx-test-engine", confirmed.ScanEngine);
+        Assert.Equal("1.0.0", confirmed.ScanEngineVersion);
+        Assert.Equal("1.2026.08", confirmed.ScanSignatureVersion);
+        Assert.NotNull(confirmed.ScannedAtUtc);
+    }
+
+    [Fact]
+    public async Task Malware_detected_persists_scan_metadata_and_stays_terminal()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.MalwareDetected });
+        var scenario = await SeedScenarioAsync(factory);
+        var malwareIntent = NewIntent(scenario.CompanyId) with
+        {
+            SizeBytes = EicarPayload.Length,
+            Checksum = ComputeChecksum(EicarPayload)
+        };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", malwareIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, EicarPayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var failed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("verification_failed", failed.ProcessingState);
+        Assert.Equal("malware_detected", failed.FailureReason);
+        Assert.Equal("vinx-test-engine", failed.ScanEngine);
+        Assert.Equal("1.0.0", failed.ScanEngineVersion);
+        Assert.Equal("1.2026.08", failed.ScanSignatureVersion);
+        Assert.NotNull(failed.ScannedAtUtc);
+    }
+
+    [Fact]
+    public async Task Detected_without_version_metadata_stays_terminal_with_empty_scan_metadata()
+    {
+        var storage = new ControlledFileStorage();
+        // Detecção com fetch de VERSION falho: o adapter real mantém o veredito Detectado sem
+        // versões. O terminal NÃO pode degradar para 503 — os metadados de scan apenas ficam NULL.
+        await using var factory = await CreateFactoryAsync(
+            storage,
+            new ControlledMalwareScanner(storage)
+            {
+                Status = MalwareScanStatus.MalwareDetected,
+                OmitVersionMetadata = true
+            });
+        var scenario = await SeedScenarioAsync(factory);
+        var malwareIntent = NewIntent(scenario.CompanyId) with
+        {
+            SizeBytes = EicarPayload.Length,
+            Checksum = ComputeChecksum(EicarPayload)
+        };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", malwareIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, EicarPayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var failed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("verification_failed", failed.ProcessingState);
+        Assert.Equal("malware_detected", failed.FailureReason);
+        AssertScanMetadataEmpty(failed);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var audit = await administrator.AuditEvents.SingleAsync(candidate =>
+            candidate.Action == "foundation.files.upload.confirm" && candidate.Outcome == AuditOutcome.Failure);
+        Assert.Equal("malware_detected", audit.Reason);
+    }
+
+    [Fact]
+    public async Task Transient_unavailable_keeps_scan_metadata_empty()
+    {
+        var storage = new ControlledFileStorage();
+        // Scanner fora do ar: veredito indisponível (scan_failed) é transitório —
+        // o documento permanece em quarentena e nenhum metadado de scan é gravado.
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { FailWith = new InvalidOperationException("engine offline") });
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        var quarantined = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("quarantined", quarantined.ProcessingState);
+        Assert.Null(quarantined.FailureReason);
+        AssertScanMetadataEmpty(quarantined);
+    }
+
+    [Fact]
+    public async Task Metadata_mismatch_terminal_keeps_scan_metadata_empty()
+    {
+        var storage = new ControlledFileStorage();
+        // Checksum declarado diverge do conteúdo armazenado: mismatch terminal sem
+        // veredito durável — os metadados de scan ficam NULL mesmo com scanner saudável.
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var mismatchedIntent = NewIntent(scenario.CompanyId) with { Checksum = ComputeChecksum(EicarPayload) };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", mismatchedIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var failed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("verification_failed", failed.ProcessingState);
+        Assert.Equal("checksum_mismatch", failed.FailureReason);
+        AssertScanMetadataEmpty(failed);
     }
 
     [Fact]
@@ -795,6 +974,15 @@ public sealed class DocumentUploadEndpointTests
     private static string ComputeChecksum(byte[] content) =>
         $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}";
 
+    // Sem veredito durável não há evidência de scan: as colunas ficam NULL.
+    private static void AssertScanMetadataEmpty(FileRecord file)
+    {
+        Assert.Null(file.ScanEngine);
+        Assert.Null(file.ScanEngineVersion);
+        Assert.Null(file.ScanSignatureVersion);
+        Assert.Null(file.ScannedAtUtc);
+    }
+
     private static Task<FoundationApiFactory> CreateFactoryAsync(
         ControlledFileStorage storage,
         IMalwareScanner? scanner = null,
@@ -899,10 +1087,12 @@ public sealed class DocumentUploadEndpointTests
         private readonly TaskCompletionSource inspectionRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _uploadUrlCount;
         private int inspectionCount;
+        private int openCount;
         public bool FailReads { get; init; }
         public bool BlockInspection { get; init; }
         public int InspectionsToBlock { get; init; } = 1;
         public int InspectionCount => Volatile.Read(ref inspectionCount);
+        public int OpenCount => Volatile.Read(ref openCount);
 
         public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(string providerKey, CancellationToken cancellationToken) =>
@@ -956,6 +1146,13 @@ public sealed class DocumentUploadEndpointTests
         public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(string prefix, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<StorageObjectSummary>>([]);
         public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) => Task.CompletedTask;
 
+        public Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken)
+        {
+            var stored = _objects[providerKey];
+            Interlocked.Increment(ref openCount);
+            return Task.FromResult<Stream>(new MemoryStream(stored.Content, writable: false));
+        }
+
         public void Put(string providerKey, byte[] content, string contentType) =>
             _objects[providerKey] = new StoredObject(content, contentType);
 
@@ -972,17 +1169,21 @@ public sealed class DocumentUploadEndpointTests
     {
         private readonly TaskCompletionSource scanStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int scanCount;
+        private MalwareScanRequest? lastRequest;
 
         public MalwareScanStatus Status { get; set; } = MalwareScanStatus.Clean;
         public string? OverrideContentChecksum { get; init; }
+        public bool OmitVersionMetadata { get; init; }
         public TimeSpan? Delay { get; set; }
         public Exception? FailWith { get; init; }
         public int ScanCount => Volatile.Read(ref scanCount);
         public Task ScanStarted => scanStarted.Task;
+        public MalwareScanRequest? LastRequest => lastRequest;
 
         public async Task<MalwareScanVerdict> ScanAsync(MalwareScanRequest request, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref scanCount);
+            lastRequest = request;
             scanStarted.TrySetResult();
             if (Delay is { } delay)
             {
@@ -992,6 +1193,13 @@ public sealed class DocumentUploadEndpointTests
             if (FailWith is { } failure)
             {
                 throw failure;
+            }
+
+            if (OmitVersionMetadata)
+            {
+                // Detecção sem versões: espelha o adapter real, que nunca rebaixa uma detecção
+                // quando o fetch de VERSION falha (engine/versões ficam incompletas).
+                return new MalwareScanVerdict(Status, "ClamAV", null, null, DateTimeOffset.UtcNow, null, null);
             }
 
             return new MalwareScanVerdict(

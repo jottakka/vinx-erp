@@ -31,6 +31,7 @@ public sealed class DocumentUploadService(
     private const string ScanOperationName = "foundation.files.upload.scan";
     private const string AuditOperationName = "foundation.files.upload.audit";
     private const string ScanModuleName = "files";
+    private const string MalwareDetectedFailureReason = "malware_detected";
     private const string ScanEventTemplate =
         "Document malware scan {Operation} {Module} {Result} {Reason} after {ElapsedMs}ms";
     private static readonly CapabilityRequirement UploadCapability =
@@ -42,7 +43,7 @@ public sealed class DocumentUploadService(
     // veredito malformado/antigo ou storage ilegível) é transitória e mantém a quarentena (retryable).
     private static readonly HashSet<string> TerminalVerificationFailures = new(StringComparer.Ordinal)
     {
-        "malware_detected",
+        MalwareDetectedFailureReason,
         "object_key_mismatch",
         "size_mismatch",
         "checksum_mismatch",
@@ -290,7 +291,12 @@ public sealed class DocumentUploadService(
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            return await malwareScanner.ScanAsync(new MalwareScanRequest(providerKey, null), scanScope.Token);
+            // O conteúdo é aberto de forma lazy pelo scanner, direto do storage privado.
+            return await malwareScanner.ScanAsync(
+                new MalwareScanRequest(
+                    providerKey,
+                    scanToken => storage.OpenReadAsync(providerKey, scanToken)),
+                scanScope.Token);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -393,11 +399,13 @@ public sealed class DocumentUploadService(
             }
 
             return await CompleteVerificationFailureAsync(
-                transaction, actor, command, payloadHash, file, verificationError, cancellationToken);
+                transaction, actor, command, payloadHash, file, verdict, verificationError, cancellationToken);
         }
 
         file.MarkVerified(actor.UserId, command.RequestId);
         file.MarkConfirmed(actor.UserId, command.RequestId);
+        // Saída durável clean: o veredito passou pela política com metadados completos.
+        file.RecordScan(verdict!.Engine!, verdict.EngineVersion!, verdict.SignatureVersion!, verdict.ScannedAtUtc);
         var result = new DocumentUploadConfirmationResult(file.Id, file.ProcessingState);
         database.IdempotencyRecords.Add(NewIdempotencyRecord(
             actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, payloadHash, result));
@@ -414,10 +422,25 @@ public sealed class DocumentUploadService(
         ConfirmDocumentUploadCommand command,
         string payloadHash,
         FileRecord file,
+        MalwareScanVerdict? verdict,
         string reason,
         CancellationToken cancellationToken)
     {
         file.MarkVerificationFailed(reason, actor.UserId, command.RequestId);
+        // O adapter real mantém detecções com fetch de VERSION falho (veredito Detectado sem
+        // versões): o terminal nunca pode degradar para 503. Metadados só são gravados quando
+        // o veredito está completo; incompletos deixam as colunas NULL e a transição procede.
+        var hasCompleteScanMetadata =
+            verdict is not null
+            && !string.IsNullOrWhiteSpace(verdict.Engine)
+            && !string.IsNullOrWhiteSpace(verdict.EngineVersion)
+            && !string.IsNullOrWhiteSpace(verdict.SignatureVersion)
+            && verdict.ScannedAtUtc != default;
+        if (string.Equals(reason, MalwareDetectedFailureReason, StringComparison.Ordinal) && hasCompleteScanMetadata)
+        {
+            file.RecordScan(verdict!.Engine!, verdict!.EngineVersion!, verdict!.SignatureVersion!, verdict!.ScannedAtUtc);
+        }
+
         var result = new DocumentUploadConfirmationResult(file.Id, file.ProcessingState);
         database.IdempotencyRecords.Add(NewIdempotencyRecord(
             actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, payloadHash, result));
