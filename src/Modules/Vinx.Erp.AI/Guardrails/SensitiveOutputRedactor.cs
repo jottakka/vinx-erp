@@ -16,10 +16,14 @@ public sealed record RedactionResult(string? RedactedText, bool RedactedSomethin
 /// contextual "agência"/"conta"/"account" PT/EN, e IBAN-like) →
 /// [dado-bancario-redigido]; marcadores médicos de lista FECHADA →
 /// [conteudo-medico-redigido]; URL com host fora da allow-list →
-/// [link-removido] (host allow-listado permanece intacto, comparação
-/// OrdinalIgnoreCase e host exato). Ordem: URLs primeiro (segmento allow-listado
-/// é preservado byte a byte e protegido das demais regras), depois CNPJ, CPF,
-/// dados bancários, marcadores médicos e e-mail.
+/// [link-removido] — casam URLs com esquema http(s) e também sem esquema
+/// iniciadas por www. (domínio nu sem esquema NÃO é casado; lacuna
+/// documentada). Host allow-listado permanece intacto, comparação
+/// OrdinalIgnoreCase e host exato tolerando um rótulo inicial www. (o
+/// prefixo http:// usado apenas para parse nunca altera o texto preservado).
+/// Ordem: URLs primeiro (segmento allow-listado é preservado byte a byte e
+/// protegido das demais regras), depois CNPJ, CPF, dados bancários,
+/// marcadores médicos e e-mail.
 /// </summary>
 public sealed partial class SensitiveOutputRedactor(IReadOnlySet<string> allowedLinkHosts)
 {
@@ -34,7 +38,7 @@ public sealed partial class SensitiveOutputRedactor(IReadOnlySet<string> allowed
     private readonly HashSet<string> allowedHosts =
         new(allowedLinkHosts ?? throw new ArgumentNullException(nameof(allowedLinkHosts)), StringComparer.OrdinalIgnoreCase);
 
-    [GeneratedRegex("https?://[^\\s]+", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    [GeneratedRegex("(?<![\\w@.])(?:https?://|www\\.)\\S+", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex UrlPattern();
 
     // CNPJ antes do CPF: sequência de 14 dígitos é um identificador único, nunca dois de 11.
@@ -99,13 +103,23 @@ public sealed partial class SensitiveOutputRedactor(IReadOnlySet<string> allowed
     private (string Replacement, bool Removed) ResolveUrl(string url)
     {
         var trimmed = url.TrimEnd(UrlTrailingPunctuation);
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var parsed) && allowedHosts.Contains(parsed.Host))
+
+        // Match sem esquema (www.): o prefixo http:// existe só para o parse do
+        // host; o texto preservado é sempre o match original.
+        var parseTarget = trimmed.StartsWith("www.", StringComparison.OrdinalIgnoreCase)
+            ? "http://" + trimmed
+            : trimmed;
+        if (Uri.TryCreate(parseTarget, UriKind.Absolute, out var parsed) && IsHostAllowed(parsed.Host))
         {
             return (url, Removed: false);
         }
 
         return (LinkToken + url[trimmed.Length..], Removed: true);
     }
+
+    private bool IsHostAllowed(string host) =>
+        allowedHosts.Contains(host)
+        || (host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) && allowedHosts.Contains(host[4..]));
 
     private static string RedactPatterns(string segment)
     {

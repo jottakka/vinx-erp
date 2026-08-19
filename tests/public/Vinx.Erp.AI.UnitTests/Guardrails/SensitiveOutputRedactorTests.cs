@@ -14,7 +14,7 @@ public sealed class SensitiveOutputRedactorTests
     [Fact]
     public void Email_is_replaced_by_fixed_token_without_echoing_address()
     {
-        var result = Redactor().Redact("Enviei o pedido para joao.silva@exemplo.com ontem");
+        var result = Redactor().Redact("Enviei o pedido para joao.silva@example.com ontem");
 
         Assert.Equal("Enviei o pedido para [email-redigido] ontem", result.RedactedText);
         Assert.True(result.RedactedSomething);
@@ -134,6 +134,28 @@ public sealed class SensitiveOutputRedactorTests
     }
 
     [Fact]
+    public void Schemeless_www_url_is_removed_when_host_is_not_allowlisted()
+    {
+        var result = Redactor("docs.vinx.example").Redact("Acesse www.malicioso.example/roubo agora");
+
+        Assert.Equal("Acesse [link-removido] agora", result.RedactedText);
+        Assert.True(result.RedactedSomething);
+        Assert.DoesNotContain("malicioso", result.RedactedText!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Schemeless_www_url_with_allowed_host_stays_intact()
+    {
+        const string text = "Veja www.docs.vinx.example/guia hoje";
+        var result = Redactor("docs.vinx.example").Redact(text);
+
+        // O prefixo www. é tolerado na comparação de host; o texto original
+        // (sem esquema) é preservado byte a byte.
+        Assert.Equal(text, result.RedactedText);
+        Assert.False(result.RedactedSomething);
+    }
+
+    [Fact]
     public void Clean_text_returns_unchanged_without_redaction_flag()
     {
         const string text = "Resumo do dia: pedido 123 aprovado em 2 minutos.";
@@ -157,7 +179,7 @@ public sealed class SensitiveOutputRedactorTests
     public void Mixed_sensitive_text_redacts_every_category_without_any_echo()
     {
         var result = Redactor("docs.vinx.example").Redact(
-            "Fale com joao@exemplo.com, CPF 123.456.789-09, conta 54321-6, dosagem 500 mg e https://malicioso.example/x.");
+            "Fale com joao@example.com, CPF 123.456.789-09, conta 54321-6, dosagem 500 mg e https://malicioso.example/x.");
 
         var redacted = result.RedactedText!;
         Assert.Contains("[email-redigido]", redacted, StringComparison.Ordinal);

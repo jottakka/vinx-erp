@@ -85,7 +85,7 @@ public sealed class AgentOutputGateAdversarialTests
     {
         var gate = Gate();
         var response = Response(
-            text: "Proposta enviada para contato@exemplo.com",
+            text: "Proposta enviada para contato@example.com",
             sources: [new AgentCitedSource("fonte-alfa", AlfaCompanyId)],
             confidence: 0.9,
             hasToolProposal: true);
@@ -100,7 +100,7 @@ public sealed class AgentOutputGateAdversarialTests
         Assert.True(result.HasToolProposal);
         Assert.NotNull(result.RedactedText);
         Assert.Contains("[email-redigido]", result.RedactedText!, StringComparison.Ordinal);
-        Assert.DoesNotContain("exemplo.com", result.RedactedText!, StringComparison.Ordinal);
+        Assert.DoesNotContain("example.com", result.RedactedText!, StringComparison.Ordinal);
     }
 
     [Fact]

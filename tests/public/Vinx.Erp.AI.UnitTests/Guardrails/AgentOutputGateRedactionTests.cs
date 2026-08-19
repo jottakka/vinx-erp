@@ -14,7 +14,7 @@ public sealed class AgentOutputGateRedactionTests
     public void Result_text_is_always_redacted_and_never_echoes_the_email()
     {
         var gate = Gate();
-        var response = Response(text: "Resumo enviado para joao.silva@exemplo.com ontem", confidence: 0.9);
+        var response = Response(text: "Resumo enviado para joao.silva@example.com ontem", confidence: 0.9);
 
         var result = gate.Evaluate(new AgentOutputGateRequest(Context(), response, Contract(), SourcesRequired: true));
 
@@ -22,8 +22,8 @@ public sealed class AgentOutputGateRedactionTests
         Assert.Equal("ok", result.ReasonCode);
         Assert.NotNull(result.RedactedText);
         Assert.Contains("[email-redigido]", result.RedactedText!, StringComparison.Ordinal);
-        Assert.DoesNotContain("joao.silva@exemplo.com", result.RedactedText!, StringComparison.Ordinal);
-        Assert.DoesNotContain("exemplo.com", result.RedactedText!, StringComparison.Ordinal);
+        Assert.DoesNotContain("joao.silva@example.com", result.RedactedText!, StringComparison.Ordinal);
+        Assert.DoesNotContain("example.com", result.RedactedText!, StringComparison.Ordinal);
     }
 
     [Fact]

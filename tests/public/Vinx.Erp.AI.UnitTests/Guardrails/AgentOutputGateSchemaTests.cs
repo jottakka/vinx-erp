@@ -16,7 +16,7 @@ public sealed class AgentOutputGateSchemaTests
         var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
         var authorizedSource = new AgentCitedSource("fonte-1", AlfaCompanyId);
         var response = new AgentModelResponse(
-            Text: "Resumo enviado para contato@exemplo.com",
+            Text: "Resumo enviado para contato@example.com",
             StructuredJson: """{ "titulo": "R", "corpo": "C" }""",
             CitedSources: [authorizedSource],
             Confidence: 0.9,
@@ -37,7 +37,7 @@ public sealed class AgentOutputGateSchemaTests
         // O texto liberado já passa pelo redator: e-mail vira marcador fixo.
         Assert.NotNull(result.RedactedText);
         Assert.Contains("[email-redigido]", result.RedactedText!);
-        Assert.DoesNotContain("exemplo.com", result.RedactedText!, StringComparison.Ordinal);
+        Assert.DoesNotContain("example.com", result.RedactedText!, StringComparison.Ordinal);
     }
 
     [Fact]

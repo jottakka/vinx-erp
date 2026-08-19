@@ -5,7 +5,7 @@
 Esta matriz cobre a fatia de guardrails de saída do módulo `Vinx.Erp.AI`
 (namespace `Guardrails`): contrato estrito do payload estruturado por
 jornada, gate determinístico com ordem fixa, autorização de fontes contra o
-contexto e redação sensível por padrões fixos. Os 42 casos desta fatia usam
+contexto e redação sensível por padrões fixos. Os 44 casos desta fatia usam
 somente texto sintético (domínios `.example`, identificadores publicados como
 exemplo); nenhum teste chama provider, canal, ferramenta ou banco, e nenhum
 prompt real aparece em fixture ou asserção. A resposta normalizada
@@ -19,7 +19,7 @@ resultado.
 | FU | `dotnet test tests/public/Vinx.Erp.Foundation.UnitTests` |
 | ARQ | `dotnet test tests/public/Vinx.Erp.ArchitectureTests` |
 
-AU fecha com 140 casos no total (42 desta fatia). FU roda somente como
+AU fecha com 142 casos no total (44 desta fatia). FU roda somente como
 regressão (Foundation intocada). ARQ inclui o contrato de documentação do
 módulo (`ModuleContractDocumentationTests`, headings obrigatórios de
 `docs/modules/ai.md`).
@@ -46,6 +46,7 @@ módulo (`ModuleContractDocumentationTests`, headings obrigatórios de
 | sucesso | AU | Dado texto com marcadores médicos da lista fechada (diagnóstico, prescrição, CID-10, dosagem em mg), quando redige, então cada um vira o mesmo marcador. | 4 ocorrências de `[conteudo-medico-redigido]`; nenhum termo original sobra. | `SensitiveOutputRedactorTests.Medical_markers_from_closed_list_are_redacted` |
 | sucesso | AU | Dado URL com host allow-listado, quando redige, então permanece intacta — inclusive dígitos de CPF no path. | Texto igual ao original; `RedactedSomething` false; demais regras não tocam o span de URL. | `SensitiveOutputRedactorTests.Url_with_allowed_host_stays_intact_including_digits_in_path` |
 | sucesso | AU | Dado URL com host em caixa diferente da allow-list, quando redige, então permanece intacta. | Comparação de host `OrdinalIgnoreCase`: `DOCS.VINX.EXAMPLE` permitido como `docs.vinx.example`. | `SensitiveOutputRedactorTests.Url_host_allow_list_is_case_insensitive` |
+| sucesso | AU | Dado URL sem esquema iniciada por www. com host allow-listado (`www.docs.vinx.example` contra entrada `docs.vinx.example`), quando redige, então permanece intacta byte a byte. | Texto igual ao original; `RedactedSomething` false; rótulo www. tolerado na comparação de host e o prefixo de parse não altera o texto preservado. | `SensitiveOutputRedactorTests.Schemeless_www_url_with_allowed_host_stays_intact` |
 | sucesso | AU | Dado texto misto com todas as categorias sensíveis, quando redige, então cada categoria vira marcador e nada ecoa. | Um marcador por categoria (e-mail, identificador, bancário, médico, link); nenhum valor original presente. | `SensitiveOutputRedactorTests.Mixed_sensitive_text_redacts_every_category_without_any_echo` |
 | sucesso | AU | Dado resposta `ok` cujo texto contém e-mail, quando o gate libera, então o texto exposto é sempre o redigido. | `RedactedText` com `[email-redigido]`; domínio do e-mail ausente. | `AgentOutputGateRedactionTests.Result_text_is_always_redacted_and_never_echoes_the_email` |
 | validação | AU | Dado payload sem campo obrigatório, quando o contrato valida, então reprova nomeando o campo. | `required_field_missing:corpo`. | `AgentOutputContractTests.Missing_required_field_reports_field_name` |
@@ -65,6 +66,7 @@ módulo (`ModuleContractDocumentationTests`, headings obrigatórios de
 | acesso | AU | Dado texto contendo marcador da lista fechada de injeção, quando o gate avalia (passo 2, antes das fontes), então nega sem expor o texto. | `Denied/prompt_injection_detected`; texto hostil, marcador e fontes ausentes do resultado inteiro. | `AgentOutputGateAdversarialTests.Injection_marker_denies_without_exposing_text` |
 | acesso | AU | Dado injeção e fonte cross-tenant na mesma resposta, quando o gate avalia, então a injeção (passo 2) define o desfecho antes da fonte (passo 4). | `prompt_injection_detected` — não `cross_tenant_source`; ordem fixa é observável no reason code. | `AgentOutputGateAdversarialTests.Injection_wins_over_cross_tenant_source` |
 | acesso | AU | Dado URL com host fora da allow-list, quando redige, então o link é removido. | `Detalhes em [link-removido] fim` — só a URL some, o texto da frase permanece. | `SensitiveOutputRedactorTests.Url_with_unknown_host_is_removed` |
+| acesso | AU | Dado URL SEM esquema iniciada por www. com host fora da allow-list (`www.malicioso.example/roubo`), quando redige, então o link é removido — sem bypass pela ausência de esquema. | `Acesse [link-removido] agora`; host não ecoado. | `SensitiveOutputRedactorTests.Schemeless_www_url_is_removed_when_host_is_not_allowlisted` |
 | estado | AU | Dado resposta com proposta de tool em JSON válido e em JSON quebrado, quando o gate avalia ambas, então a flag `HasToolProposal` sobrevive a qualquer status. | `Result` e `ValidationError` com `HasToolProposal` true — o estado de confirmação é espelhado, nunca descartado. | `AgentOutputGateSchemaTests.Tool_proposal_flag_is_preserved_regardless_of_status` |
 | estado | AU | Dado resposta com proposta de tool e e-mail no texto, quando o gate libera, então o estado é puro: `Result/ok` com a flag e somente texto redigido. | `HasToolProposal` true; `[email-redigido]` presente; nenhum caminho de execução no gate. | `AgentOutputGateAdversarialTests.Tool_proposal_state_is_pure_and_carries_redacted_text` |
 | estado | AU | Dado texto lotado de CPF, CNPJ e link hostil, quando o gate libera, então a redação é cosmética e nunca muda o desfecho. | Permanece `Result/ok`; 2 tokens de identificador (14 dígitos = um) e link removido; nenhum dígito original ecoado. | `AgentOutputGateRedactionTests.Redaction_never_changes_gate_status` |
@@ -93,8 +95,16 @@ proposta de tool (`HasToolProposal`) segue espelhada em qualquer desfecho.
   sem rótulo contextual imediato (agência/conta/account), sequências de
   12–13 dígitos (nem CPF de 11 nem CNPJ de 14), IBAN escrito em minúsculas
   (o padrão exige caixa alta) e dosagem com dois-pontos entre o rótulo e o
-  valor ("dosagem: 500 mg"). Sem moderação semântica: categoria fora dos
+  valor ("dosagem: 500 mg"). URLs casam somente com esquema `http(s)://` ou
+  iniciadas por `www.`; domínio nu sem esquema e sem www. (ex.:
+  `malicioso.example/roubo`) NÃO é casado — evitar falso positivo em nomes
+  de arquivo/produto. Sem moderação semântica: categoria fora dos
   padrões atravessa.
+- O payload estruturado (`StructuredJson`) não é varrido por marcadores de
+  injeção nem redigido nesta fatia e não viaja no resultado do gate; ao
+  integrar com o canal supervisionado (#138), qualquer campo do payload
+  exposto ao usuário final deve ser roteado pelo gate/redator como o texto
+  já é.
 - `requires_confirmation_state` é declarado e não emitido: a proposta de
   tool viaja como estado puro (`HasToolProposal`) em qualquer desfecho; não
   existe fluxo de confirmação nesta fatia.
