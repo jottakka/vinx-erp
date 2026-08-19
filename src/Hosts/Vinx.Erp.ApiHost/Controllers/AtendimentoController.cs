@@ -75,7 +75,7 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
         CancellationToken cancellationToken
     )
     {
-        if (!IsTrimmed(model.Title!) || !IsTrimmed(model.Description!))
+        if (!IsTrimmed(model.Title) || !IsTrimmed(model.Description))
         {
             return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
         }
@@ -124,7 +124,7 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
         CancellationToken cancellationToken
     )
     {
-        if (!IsTrimmed(model.Column!))
+        if (!IsTrimmed(model.Column))
         {
             return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
         }

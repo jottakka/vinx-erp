@@ -81,7 +81,6 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
 
     [HttpPost("requests")]
     [PaguaiAntiforgeryRequiredMetadata]
-    [PaguaiJsonRequestBodyMetadata]
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status200OK)]
@@ -97,7 +96,7 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
         CancellationToken cancellationToken
     )
     {
-        if (!IsTrimmed(model.Title!) || !IsTrimmed(model.Description!))
+        if (!IsTrimmed(model.Title) || !IsTrimmed(model.Description))
         {
             return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
         }

@@ -11,9 +11,10 @@ using Vinx.Erp.ApiHost.Constants;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Microsoft.OpenApi;
 using Vinx.Erp.ApiHost;
 using Vinx.Erp.ApiHost.Identity;
+using Vinx.Erp.ApiHost.Models;
+using Vinx.Erp.ApiHost.OpenApi;
 using Vinx.Erp.Atendimento;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
@@ -260,322 +261,12 @@ builder
     .ValidateOnStart();
 builder.Services.AddOpenApi(options =>
 {
-    options.AddDocumentTransformer(
-        (document, _, _) =>
-        {
-            document.Components ??= new OpenApiComponents();
-            document.Components.SecuritySchemes ??=
-                new Dictionary<string, IOpenApiSecurityScheme>();
-            document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme
-            {
-                Type = SecuritySchemeType.Http,
-                Scheme = "bearer",
-                BearerFormat = "JWT",
-            };
-            document.Components.SecuritySchemes[BrowserBffAuthenticationExtensions.CookieScheme] =
-                new OpenApiSecurityScheme
-                {
-                    Type = SecuritySchemeType.ApiKey,
-                    In = ParameterLocation.Cookie,
-                    Name = BrowserBffAuthenticationExtensions.GetSessionCookieName(
-                        builder.Environment
-                    ),
-                };
-            return Task.CompletedTask;
-        }
-    );
-    options.AddOperationTransformer(
-        (operation, context, _) =>
-        {
-            var metadata = context.Description.ActionDescriptor.EndpointMetadata;
-            if (operation.Responses is not null)
-            {
-                var document =
-                    context.Document
-                    ?? throw new InvalidOperationException(
-                        "OpenAPI response contract requires a document context."
-                    );
-                // Os transformers executam antes do registro final dos componentes pelo host.
-                document.Workspace ??= new OpenApiWorkspace();
-                document.RegisterComponents();
-                foreach (var response in operation.Responses.Values)
-                {
-                    var concreteResponse = response switch
-                    {
-                        OpenApiResponse direct => direct,
-                        OpenApiResponseReference reference => reference.RecursiveTarget
-                            ?? throw new InvalidOperationException(
-                                "OpenAPI response reference must resolve to a concrete response."
-                            ),
-                        _ => throw new InvalidOperationException(
-                            "OpenAPI response must be a concrete response or a resolvable response reference."
-                        ),
-                    };
-
-                    concreteResponse.Headers ??= new Dictionary<string, IOpenApiHeader>();
-                    concreteResponse.Headers[RequestCorrelationMiddleware.ResponseHeaderName] =
-                        new OpenApiHeader
-                        {
-                            Description =
-                                "Referência opaca gerada pelo servidor para suporte da requisição.",
-                            Required = true,
-                            Schema = new OpenApiSchema
-                            {
-                                Type = JsonSchemaType.String,
-                                Format = "uuid",
-                            },
-                        };
-                }
-            }
-
-            if (metadata?.OfType<BrowserBffSessionSignInOpenApiMetadata>().Any() == true)
-            {
-                operation.RequestBody = new OpenApiRequestBody
-                {
-                    Required = true,
-                    Content = new Dictionary<string, OpenApiMediaType>
-                    {
-                        ["application/json"] = new OpenApiMediaType
-                        {
-                            Schema = new OpenApiSchema
-                            {
-                                Type = JsonSchemaType.Object,
-                                Required = new HashSet<string> { "email", "password" },
-                                Properties = new Dictionary<string, IOpenApiSchema>
-                                {
-                                    ["email"] = new OpenApiSchema { Type = JsonSchemaType.String },
-                                    ["password"] = new OpenApiSchema
-                                    {
-                                        Type = JsonSchemaType.String,
-                                    },
-                                },
-                                AdditionalPropertiesAllowed = false,
-                            },
-                        },
-                    },
-                };
-            }
-
-            if (metadata?.OfType<EmployeeDirectoryCreateOpenApiMetadata>().Any() == true)
-            {
-                operation.Parameters ??= [];
-                operation.Parameters.Add(
-                    new OpenApiParameter
-                    {
-                        Name = BrowserBffAuthenticationExtensions.AntiforgeryHeaderName,
-                        In = ParameterLocation.Header,
-                        Required = false,
-                        Description =
-                            "Obrigatório somente quando autenticado por BrowserSessionCookie; dispensado para Bearer.",
-                        Schema = new OpenApiSchema { Type = JsonSchemaType.String },
-                    }
-                );
-                var opaqueResponse = new OpenApiSchema
-                {
-                    Type = JsonSchemaType.Object,
-                    Required = new HashSet<string> { "employeeId", "membershipId", "userId" },
-                    Properties = new Dictionary<string, IOpenApiSchema>
-                    {
-                        ["employeeId"] = new OpenApiSchema
-                        {
-                            Type = JsonSchemaType.String,
-                            Format = "uuid",
-                        },
-                        ["membershipId"] = new OpenApiSchema
-                        {
-                            Type = JsonSchemaType.String,
-                            Format = "uuid",
-                        },
-                        ["userId"] = new OpenApiSchema
-                        {
-                            Type = JsonSchemaType.String,
-                            Format = "uuid",
-                        },
-                    },
-                    AdditionalPropertiesAllowed = false,
-                };
-                operation.RequestBody = new OpenApiRequestBody
-                {
-                    Required = true,
-                    Content = new Dictionary<string, OpenApiMediaType>
-                    {
-                        ["application/json"] = new OpenApiMediaType
-                        {
-                            Schema = new OpenApiSchema
-                            {
-                                Type = JsonSchemaType.Object,
-                                Required = new HashSet<string>
-                                {
-                                    "requestId",
-                                    "companyId",
-                                    "displayName",
-                                    "email",
-                                },
-                                Properties = new Dictionary<string, IOpenApiSchema>
-                                {
-                                    ["requestId"] = new OpenApiSchema
-                                    {
-                                        Type = JsonSchemaType.String,
-                                        Format = "uuid",
-                                    },
-                                    ["companyId"] = new OpenApiSchema
-                                    {
-                                        Type = JsonSchemaType.String,
-                                        Format = "uuid",
-                                    },
-                                    ["displayName"] = new OpenApiSchema
-                                    {
-                                        Type = JsonSchemaType.String,
-                                    },
-                                    ["email"] = new OpenApiSchema
-                                    {
-                                        Type = JsonSchemaType.String,
-                                        Format = "email",
-                                    },
-                                },
-                                AdditionalPropertiesAllowed = false,
-                            },
-                        },
-                    },
-                };
-                foreach (var status in new[] { "200", "201" })
-                {
-                    var response = operation.Responses![status] switch
-                    {
-                        OpenApiResponse direct => direct,
-                        OpenApiResponseReference reference => reference.RecursiveTarget!,
-                        _ => throw new InvalidOperationException("Employee response must resolve."),
-                    };
-                    response.Content ??= new Dictionary<string, OpenApiMediaType>();
-                    response.Content["application/json"] = new OpenApiMediaType
-                    {
-                        Schema = opaqueResponse,
-                    };
-                }
-            }
-
-            if (metadata?.OfType<PaguaiJsonRequestBodyMetadata>().Any() == true)
-            {
-                operation.RequestBody = new OpenApiRequestBody
-                {
-                    Required = true,
-                    Content = new Dictionary<string, OpenApiMediaType>
-                    {
-                        ["application/json"] = new OpenApiMediaType
-                        {
-                            Schema = new OpenApiSchema
-                            {
-                                Type = JsonSchemaType.Object,
-                                Required = new HashSet<string>
-                                {
-                                    "companyId",
-                                    "requestId",
-                                    "title",
-                                    "description",
-                                },
-                                Properties = new Dictionary<string, IOpenApiSchema>
-                                {
-                                    ["companyId"] = new OpenApiSchema
-                                    {
-                                        Type = JsonSchemaType.String,
-                                        Format = "uuid",
-                                    },
-                                    ["requestId"] = new OpenApiSchema
-                                    {
-                                        Type = JsonSchemaType.String,
-                                        Format = "uuid",
-                                    },
-                                    ["title"] = new OpenApiSchema
-                                    {
-                                        Type = JsonSchemaType.String,
-                                        MaxLength = 200,
-                                    },
-                                    ["description"] = new OpenApiSchema
-                                    {
-                                        Type = JsonSchemaType.String,
-                                        MaxLength = 4000,
-                                    },
-                                },
-                                AdditionalPropertiesAllowed = false,
-                            },
-                        },
-                    },
-                };
-            }
-
-            if (
-                metadata?.OfType<BrowserBffAntiforgeryRequiredMetadata>().Any() == true
-                || metadata?.OfType<PaguaiAntiforgeryRequiredMetadata>().Any() == true
-                || metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true
-            )
-            {
-                operation.Parameters ??= [];
-                operation.Parameters.Add(
-                    new OpenApiParameter
-                    {
-                        Name = BrowserBffAuthenticationExtensions.AntiforgeryHeaderName,
-                        In = ParameterLocation.Header,
-                        Required =
-                            metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true
-                            || metadata
-                                ?.OfType<BrowserBffAntiforgeryRequiredMetadata>()
-                                .Any(requirement => !requirement.CookieAuthenticatedOnly) == true,
-                        Description =
-                            "Obrigatório quando a operação autenticada usa o cookie de sessão BFF.",
-                        Schema = new OpenApiSchema { Type = JsonSchemaType.String },
-                    }
-                );
-            }
-
-            if (
-                metadata?.OfType<IAllowAnonymous>().Any() != true
-                && metadata?.OfType<IAuthorizeData>().Any() == true
-            )
-            {
-                operation.Security ??= [];
-                if (metadata?.OfType<BrowserBffCookieOnlyEndpointMetadata>().Any() == true)
-                {
-                    operation.Security.Add(
-                        new OpenApiSecurityRequirement
-                        {
-                            [
-                                new OpenApiSecuritySchemeReference(
-                                    BrowserBffAuthenticationExtensions.CookieScheme,
-                                    context.Document,
-                                    null
-                                )
-                            ] = [],
-                        }
-                    );
-                }
-                else
-                {
-                    operation.Security.Add(
-                        new OpenApiSecurityRequirement
-                        {
-                            [
-                                new OpenApiSecuritySchemeReference("Bearer", context.Document, null)
-                            ] = [],
-                        }
-                    );
-                    operation.Security.Add(
-                        new OpenApiSecurityRequirement
-                        {
-                            [
-                                new OpenApiSecuritySchemeReference(
-                                    BrowserBffAuthenticationExtensions.CookieScheme,
-                                    context.Document,
-                                    null
-                                )
-                            ] = [],
-                        }
-                    );
-                }
-            }
-
-            return Task.CompletedTask;
-        }
-    );
+    options.AddDocumentTransformer<SecuritySchemeDocumentTransformer>();
+    options.AddOperationTransformer<CorrelationResponseHeaderOperationTransformer>();
+    options.AddOperationTransformer<StrictJsonRequestBodyOperationTransformer>();
+    options.AddOperationTransformer<CsrfHeaderOperationTransformer>();
+    options.AddOperationTransformer<SecurityRequirementsOperationTransformer>();
+    options.AddSchemaTransformer<SerializerContractSchemaTransformer>();
 });
 
 var app = builder.Build();
@@ -873,10 +564,11 @@ foundation
         }
     )
     .WithName("EmployeeDirectoryCreate")
-    .WithMetadata(new EmployeeDirectoryCreateOpenApiMetadata())
+    .WithMetadata(new JsonRequestBodyContract(typeof(CreateEmployeeCommand)))
+    .WithMetadata(new BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true))
     .WithMetadata(new BrowserBffNoStoreEndpointMetadata())
-    .Produces(StatusCodes.Status201Created)
-    .Produces(StatusCodes.Status200OK)
+    .Produces<EmployeeDirectoryCreatedResponse>(StatusCodes.Status201Created)
+    .Produces<EmployeeDirectoryCreatedResponse>(StatusCodes.Status200OK)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
     .Produces(StatusCodes.Status401Unauthorized)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
@@ -1093,5 +785,3 @@ internal static class EmployeeDirectoryHttpContract
         return true;
     }
 }
-
-internal sealed class EmployeeDirectoryCreateOpenApiMetadata;

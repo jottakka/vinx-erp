@@ -1,12 +1,14 @@
 using System.Text.Json;
+using Vinx.Erp.Foundation.Identity;
 
 namespace Vinx.Erp.Paguai;
 
 /// <summary>Marcador de antiforgery exigido na operação (mantém o contrato OpenAPI e o middleware).</summary>
-public sealed class PaguaiAntiforgeryRequiredMetadata : Attribute;
-
-/// <summary>Marcador de corpo JSON estrito (o transformer OpenAPI injeta o schema canônico).</summary>
-public sealed class PaguaiJsonRequestBodyMetadata : Attribute;
+public sealed class PaguaiAntiforgeryRequiredMetadata : Attribute, IAntiforgeryRequiredMetadata
+{
+    /// <summary>Bearer dispensa o token; somente a sessão de cookie BFF o exige.</summary>
+    public bool CookieAuthenticatedOnly => true;
+}
 
 public static class PaguaiDraftHttpContract
 {

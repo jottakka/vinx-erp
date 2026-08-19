@@ -8,21 +8,21 @@ public sealed class MoveAtendimentoCardRequest
 {
     [Required]
     [NonEmptyGuid]
-    public Guid? CompanyId { get; init; }
+    public Guid CompanyId { get; init; }
 
     [Required]
     [NonEmptyGuid]
-    public Guid? RequestId { get; init; }
+    public Guid RequestId { get; init; }
 
     [Required]
     [Range(1, long.MaxValue)]
-    public long? ExpectedVersion { get; init; }
+    public long ExpectedVersion { get; init; }
 
     [Required]
     [MinLength(1)]
     [MaxLength(30)]
-    public string? Column { get; init; }
+    public string Column { get; init; } = string.Empty;
 
     public MoveAtendimentoCardCommand ToCommand() =>
-        new(CompanyId!.Value, RequestId!.Value, ExpectedVersion!.Value, Column!);
+        new(CompanyId, RequestId, ExpectedVersion, Column);
 }
