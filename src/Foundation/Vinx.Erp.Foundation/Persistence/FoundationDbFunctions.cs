@@ -21,7 +21,7 @@ internal static class FoundationDbFunctions
     {
         var row = await database.Database
             .SqlQuery<SessionLockRow>(
-                $"SELECT sessions_valid_after AS \"SessionsValidAfter\" FROM foundation.lock_user_for_session_admission({userId})")
+                $"SELECT sessions_valid_after FROM foundation.lock_user_for_session_admission({userId})")
             .SingleOrDefaultAsync(cancellationToken);
         return row is null
             ? new LockedUser(false, null)
@@ -46,7 +46,7 @@ internal static class FoundationDbFunctions
         var row = await database.Database
             .SqlQuery<OwnerInvitationDeliveryIngressRow>(
                 $"""
-                SELECT status AS "Status", provider_pending_at AS "ProviderPendingAt", transitioned AS "Transitioned"
+                SELECT status, provider_pending_at, transitioned
                 FROM foundation.accept_owner_invitation_delivery({invitationId}, {correlationId})
                 """)
             .SingleOrDefaultAsync(cancellationToken);
@@ -62,7 +62,7 @@ internal static class FoundationDbFunctions
         var row = await database.Database
             .SqlQuery<OwnerInvitationProviderClaimRow>(
                 $"""
-                SELECT status AS "Status", attempt_id AS "AttemptId", owner_email AS "OwnerEmail", claimed AS "Claimed"
+                SELECT status, attempt_id, owner_email, claimed
                 FROM foundation.claim_owner_invitation_provider_delivery({invitationId}, {correlationId})
                 """)
             .SingleOrDefaultAsync(cancellationToken);
@@ -83,7 +83,7 @@ internal static class FoundationDbFunctions
         var row = await database.Database
             .SqlQuery<OwnerInvitationProviderFinalizationRow>(
                 $"""
-                SELECT status AS "Status", finalized AS "Finalized"
+                SELECT status, finalized
                 FROM foundation.finalize_owner_invitation_provider_delivery({invitationId}, {attemptId}, {correlationId}, {outcome}, {issuer}, {subject}, {failureReason})
                 """)
             .SingleOrDefaultAsync(cancellationToken);
@@ -103,7 +103,7 @@ internal static class FoundationDbFunctions
         var row = await database.Database
             .SqlQuery<ProvisionedOrganizationRow>(
                 $"""
-                SELECT status AS "Status", group_id AS "GroupId", company_id AS "CompanyId", owner_user_id AS "OwnerUserId", owner_membership_id AS "OwnerMembershipId", owner_invitation_id AS "OwnerInvitationId"
+                SELECT status, group_id, company_id, owner_user_id, owner_membership_id, owner_invitation_id
                 FROM foundation.provision_platform_organization({requestId}, {groupName}, {companyName}, {ownerDisplayName}, {ownerEmail}, {payloadHash})
                 """)
             .SingleOrDefaultAsync(cancellationToken);
@@ -143,7 +143,7 @@ internal static class FoundationDbFunctions
         var row = await database.Database
             .SqlQuery<EmployeeDirectoryEntryRow>(
                 $"""
-                SELECT status AS "Status", employee_id AS "EmployeeId", membership_id AS "MembershipId", user_id AS "UserId"
+                SELECT status, employee_id, membership_id, user_id
                 FROM foundation.create_employee_directory_entry({requestId}, {companyId}, {displayName}, {email}, {payloadHash})
                 """)
             .SingleOrDefaultAsync(cancellationToken);
