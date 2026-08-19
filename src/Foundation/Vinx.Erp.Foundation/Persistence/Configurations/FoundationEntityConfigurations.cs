@@ -337,6 +337,9 @@ public sealed class FileRecordConfiguration : IEntityTypeConfiguration<FileRecor
         builder.Property(entity => entity.ProviderKey).HasMaxLength(1000).IsRequired();
         builder.Property(entity => entity.ProcessingState).HasMaxLength(30).IsRequired();
         builder.Property(entity => entity.FailureReason).HasMaxLength(200);
+        builder.Property(entity => entity.ScanEngine).HasMaxLength(100);
+        builder.Property(entity => entity.ScanEngineVersion).HasMaxLength(50);
+        builder.Property(entity => entity.ScanSignatureVersion).HasMaxLength(50);
         builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasDefaultValue(1L);
         builder.Property(entity => entity.DeletedReason).HasMaxLength(500);
         builder.HasIndex(entity => new { entity.CompanyId, entity.ProviderKey }).IsUnique().HasFilter("deleted_at IS NULL");

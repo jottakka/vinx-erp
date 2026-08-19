@@ -31,6 +31,7 @@ public sealed class DocumentUploadService(
     private const string ScanOperationName = "foundation.files.upload.scan";
     private const string AuditOperationName = "foundation.files.upload.audit";
     private const string ScanModuleName = "files";
+    private const string MalwareDetectedFailureReason = "malware_detected";
     private const string ScanEventTemplate =
         "Document malware scan {Operation} {Module} {Result} {Reason} after {ElapsedMs}ms";
     private static readonly CapabilityRequirement UploadCapability =
@@ -42,7 +43,7 @@ public sealed class DocumentUploadService(
     // veredito malformado/antigo ou storage ilegível) é transitória e mantém a quarentena (retryable).
     private static readonly HashSet<string> TerminalVerificationFailures = new(StringComparer.Ordinal)
     {
-        "malware_detected",
+        MalwareDetectedFailureReason,
         "object_key_mismatch",
         "size_mismatch",
         "checksum_mismatch",
@@ -398,11 +399,13 @@ public sealed class DocumentUploadService(
             }
 
             return await CompleteVerificationFailureAsync(
-                transaction, actor, command, payloadHash, file, verificationError, cancellationToken);
+                transaction, actor, command, payloadHash, file, verdict, verificationError, cancellationToken);
         }
 
         file.MarkVerified(actor.UserId, command.RequestId);
         file.MarkConfirmed(actor.UserId, command.RequestId);
+        // Saída durável clean: o veredito passou pela política com metadados completos.
+        file.RecordScan(verdict!.Engine!, verdict.EngineVersion!, verdict.SignatureVersion!, verdict.ScannedAtUtc);
         var result = new DocumentUploadConfirmationResult(file.Id, file.ProcessingState);
         database.IdempotencyRecords.Add(NewIdempotencyRecord(
             actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, payloadHash, result));
@@ -419,10 +422,18 @@ public sealed class DocumentUploadService(
         ConfirmDocumentUploadCommand command,
         string payloadHash,
         FileRecord file,
+        MalwareScanVerdict? verdict,
         string reason,
         CancellationToken cancellationToken)
     {
         file.MarkVerificationFailed(reason, actor.UserId, command.RequestId);
+        if (string.Equals(reason, MalwareDetectedFailureReason, StringComparison.Ordinal) && verdict is not null)
+        {
+            // Terminal de detecção: houve scan e o veredito da engine é durável.
+            // Mismatches de metadados não gravam (não houve veredito durável de engine).
+            file.RecordScan(verdict.Engine!, verdict.EngineVersion!, verdict.SignatureVersion!, verdict.ScannedAtUtc);
+        }
+
         var result = new DocumentUploadConfirmationResult(file.Id, file.ProcessingState);
         database.IdempotencyRecords.Add(NewIdempotencyRecord(
             actor.UserId, command.CompanyId, ConfirmationCommandName, command.RequestId, payloadHash, result));

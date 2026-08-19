@@ -184,6 +184,116 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
+    public async Task Clean_confirmation_persists_scan_metadata()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var confirmed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("confirmed", confirmed.ProcessingState);
+        // O veredito durável chega inteiro: engine, versões e momento do scan.
+        Assert.Equal("vinx-test-engine", confirmed.ScanEngine);
+        Assert.Equal("1.0.0", confirmed.ScanEngineVersion);
+        Assert.Equal("1.2026.08", confirmed.ScanSignatureVersion);
+        Assert.NotNull(confirmed.ScannedAtUtc);
+    }
+
+    [Fact]
+    public async Task Malware_detected_persists_scan_metadata_and_stays_terminal()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.MalwareDetected });
+        var scenario = await SeedScenarioAsync(factory);
+        var malwareIntent = NewIntent(scenario.CompanyId) with
+        {
+            SizeBytes = EicarPayload.Length,
+            Checksum = ComputeChecksum(EicarPayload)
+        };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", malwareIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, EicarPayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var failed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("verification_failed", failed.ProcessingState);
+        Assert.Equal("malware_detected", failed.FailureReason);
+        Assert.Equal("vinx-test-engine", failed.ScanEngine);
+        Assert.Equal("1.0.0", failed.ScanEngineVersion);
+        Assert.Equal("1.2026.08", failed.ScanSignatureVersion);
+        Assert.NotNull(failed.ScannedAtUtc);
+    }
+
+    [Fact]
+    public async Task Transient_unavailable_keeps_scan_metadata_empty()
+    {
+        var storage = new ControlledFileStorage();
+        // Scanner fora do ar: veredito indisponível (scan_failed) é transitório —
+        // o documento permanece em quarentena e nenhum metadado de scan é gravado.
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { FailWith = new InvalidOperationException("engine offline") });
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        var quarantined = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("quarantined", quarantined.ProcessingState);
+        Assert.Null(quarantined.FailureReason);
+        AssertScanMetadataEmpty(quarantined);
+    }
+
+    [Fact]
+    public async Task Metadata_mismatch_terminal_keeps_scan_metadata_empty()
+    {
+        var storage = new ControlledFileStorage();
+        // Checksum declarado diverge do conteúdo armazenado: mismatch terminal sem
+        // veredito durável — os metadados de scan ficam NULL mesmo com scanner saudável.
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var mismatchedIntent = NewIntent(scenario.CompanyId) with { Checksum = ComputeChecksum(EicarPayload) };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", mismatchedIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var failed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("verification_failed", failed.ProcessingState);
+        Assert.Equal("checksum_mismatch", failed.FailureReason);
+        AssertScanMetadataEmpty(failed);
+    }
+
+    [Fact]
     public async Task Unavailable_malware_scan_keeps_the_file_quarantined_and_records_a_failure_without_a_download_url()
     {
         var storage = new ControlledFileStorage();
@@ -822,6 +932,15 @@ public sealed class DocumentUploadEndpointTests
 
     private static string ComputeChecksum(byte[] content) =>
         $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}";
+
+    // Sem veredito durável não há evidência de scan: as colunas ficam NULL.
+    private static void AssertScanMetadataEmpty(FileRecord file)
+    {
+        Assert.Null(file.ScanEngine);
+        Assert.Null(file.ScanEngineVersion);
+        Assert.Null(file.ScanSignatureVersion);
+        Assert.Null(file.ScannedAtUtc);
+    }
 
     private static Task<FoundationApiFactory> CreateFactoryAsync(
         ControlledFileStorage storage,

@@ -492,6 +492,25 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasDefaultValue(1L)
                         .HasColumnName("row_version");
 
+                    b.Property<string>("ScanEngine")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("scan_engine");
+
+                    b.Property<string>("ScanEngineVersion")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("scan_engine_version");
+
+                    b.Property<string>("ScanSignatureVersion")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("scan_signature_version");
+
+                    b.Property<DateTimeOffset?>("ScannedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("scanned_at_utc");
+
                     b.Property<long>("SizeBytes")
                         .HasColumnType("bigint")
                         .HasColumnName("size_bytes");
