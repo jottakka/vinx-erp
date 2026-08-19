@@ -7,8 +7,10 @@ os providers (#135). Desde #135-B, o provider é um núcleo genérico
 OpenAI-compatible (`OpenAiCompatibleChatClient`) atrás de `IChatClient`
 (Microsoft.Extensions.AI) com SDK oficial OpenAI 2.x; o DeepSeek v4 Flash é
 um perfil nomeado do núcleo, e perfis de visão podem ser declarados para o
-OCR de #134. Não existe Anthropic, OpenCode, memória longa, vector store,
-streaming nem persistência de conversa.
+OCR de #134. Desde #138 a API supervisionada `POST /agent/runs` expõe o
+núcleo no ApiHost (ver seção API supervisionada). Não existe Anthropic,
+OpenCode, memória longa, vector store, streaming nem persistência de
+conversa.
 
 O adapter serve leitura, resumo, extração e rascunho não persistido. Ele
 converte protocolo e devolve resposta normalizada ou proposta de tool; não
@@ -21,9 +23,8 @@ timeout, orçamento, limites, modalidades e allowlist de egress vêm sempre da
 configuração; o request do chamador nunca escolhe esses valores. O client
 tira um snapshot imutável na construção e valida o perfil na fronteira:
 mutar as options em runtime não troca endpoint, modelo ou limites de uma
-instância viva. O `Validator` (options pattern) está declarado para o host
-registrar com `ValidateOnStart` na fatia da API (#138); nenhum registro DI
-existe nesta fatia.
+instância viva. Desde #138 o host registra o `Validator` com
+`ValidateOnStart` na composição da API (`AddAgentRunSurface`).
 
 Limites do perfil:
 
@@ -51,9 +52,12 @@ reservada, multicast, documentação, unspecified ou IPv4-mapped são
 rejeitados (IPv4, IPv6 e grafias equivalentes). `ApprovedHosts`, quando
 presente no cofre de configuração, restringe por host exato normalizado ou
 sufixo com fronteira de ponto — `EndsWith` ingênuo é proibido. A política
-expõe validação por endereço resolvido para o transporte do host (#138)
-validar cada conexão contra DNS rebinding; redirects automáticos e proxy
-também são decisões do transporte composto em #138.
+expõe validação por endereço resolvido para o transporte do host validar cada
+conexão contra DNS rebinding; redirects automáticos e proxy também são
+decisões do transporte. A composição de #138 registra o `HttpClientFactory`
+nomeado com endpoint e timeout do perfil aprovado; a guarda por endereço
+resolvido e o travamento de redirects permanecem pendentes de transporte
+dedicado (registro na issue).
 
 ## Modalidades e contrato de visão
 
@@ -111,9 +115,8 @@ texto; imagem direta é canonicalizada (decode → teto de pixels → strip de
 metadados → re-encode) — o provider nunca recebe bytes originais. Saída é
 JSON estrito com fonte/página/confiança e `untrusted: true`: texto de
 documento é dado, nunca instrução. Allowlist de classificação/consentimento
-(default deny) roda antes de qualquer raster/OCR; classe que exige redação
-permanece rejeitada — o contrato de saída (#136) não redige, e redação
-futura será por detector não determinístico decidido por canal.
+(default deny) roda antes de qualquer raster/OCR; classe que exige redação é
+rejeitada até #136.
 
 A leitura é **efêmera**: nenhum contexto, cache ou resposta é retido entre
 execuções; falhas (limite, timeout cooperativo, provider, schema) viram
@@ -153,27 +156,56 @@ PII ou triagem de injeção, será por detector não determinístico
 
 Toda decisão registra a política vigente `AgentPolicyVersion.Current`
 (`2026-08-19.2`); mudança das regras do gate ou do piso de confiança exige
-nova versão datada. A política é pura e stateless por chamada. Nenhum host
-chama o gate nesta fatia: a costura com a resposta do provider e o canal
-supervisionado fica para a API (#138). Nada aqui promete canal, provider ou
+nova versão datada. A política é pura e stateless
+por chamada. Desde #138 o runner compõe o gate como passo final e a API
+supervisionada o aplica a cada resposta; nada aqui promete canal, provider ou
 execução de ferramenta.
+
+## API supervisionada (#138)
+
+O ApiHost expõe `POST /agent/runs` (grupo `/agent` com autorização de sessão
+interna e rate limit `foundation`): o corpo aceita SOMENTE
+`{ requestId, journey, message, companyId? }` sob parse estrito (campos
+fechados, tipos exatos, cap de 24 KiB por bytes efetivamente lidos) e o
+cliente nunca envia provider, modelo, capability ou veredito. A ordem completa
+é: autenticação → rate limit `foundation` → session gate interno → parse estrito (400 tipado `validation_error`
+sem eco do payload) → idempotência por `requestId`/commandName `agent.run`
+(replay devolve o mesmo corpo sem nova chamada; hash divergente vira 409
+`idempotency_conflict` auditado) → validação de entrada → contexto confiável
+(membership + `ai.read` escopo Company; empresa forjada nega sem consultar o
+modelo) → gate de provider (fail-closed `provider_not_configured`) → UMA
+chamada de modelo com seleção composta server-side → `AgentOutputGate` na
+ordem fixa → resposta tipada `result | needs_clarification | denied |
+validation_error | conflict | requires_confirmation` com correlation;
+`requires_confirmation` é opaco (sem texto nem nome da ação). Timeout vira 504
+`agent_timeout`; provider ausente/indisponível vira 503
+`provider_not_configured`/`agent_unavailable`; desfechos 5xx não são
+persistidos nem auditados e o `requestId` pode retentar. A persistência
+(idempotência + auditoria `AuditSource.Ai` com metadata `{status,
+reasonCode}`) acontece na mesma transação e nunca carrega prompt, resposta
+bruta, transcript ou PII — o `ResultJson` guarda somente a resposta segura.
+Execução local (sem key → 503 `provider_not_configured`; com key via env) no
+runbook `docs/runbooks/local-development.md`; matriz BDD em
+`docs/verification/issue-138-agent-api-test-cases.md`.
 
 ## Ownership
 
 O módulo é responsável somente pela conversão de protocolo de providers
 aprovados: mapeamento, sanitização de fronteira, classificação de falha e
 reporte de uso. Regras de negócio continuam nos módulos; autorização,
-identidade, RLS e auditoria continuam na Foundation. O registro DI, o
-HttpClientFactory e a composição do transporte guardado (ConnectCallback,
-redirects, proxy) pertencem à fatia da API (#138), após o contrato
-estabilizar.
+identidade, RLS e auditoria continuam na Foundation. Desde #138 o registro DI
+da superfície de execução (`AddAgentRunSurface`/`MapAgentRunSurface`), o
+`HttpClientFactory` nomeado e a composição do transporte pertencem ao ApiHost;
+o módulo permanece puro de host.
 
 ## Company scope
 
-Não há requisição AI ativa exposta. A futura fronteira deve receber ator e
-empresa de contexto confiável criado pelo servidor, nunca de texto, argumento
-de tool ou claim não materializado, e deve reautorizar cada caso de uso na
-Foundation. O adapter não compartilha resposta entre atores ou empresas.
+A única fronteira AI exposta é `POST /agent/runs` (#138): o ator e a empresa
+de contexto confiável vêm do servidor (session gate + snapshot de autorização
+da Foundation), nunca de texto, argumento de tool ou claim não materializado;
+a jornada company-scoped exige `companyId` de empresa com membership e
+capability `ai.read` em escopo Company, e cada resposta é isolada por
+correlation. O adapter não compartilha resposta entre atores ou empresas.
 
 ## Ordem de retorno
 
@@ -185,8 +217,8 @@ Foundation. O adapter não compartilha resposta entre atores ou empresas.
 4. #134 normaliza PDF/imagem `clean` em contexto verificado, consumindo o
    perfil de visão;
 5. #136 valida a saída real;
-6. #138 conecta contexto, provider, guardrails e aprovação numa API
-   supervisionada.
+6. #138 (esta fatia) conecta contexto, provider, guardrails e aprovação na
+   API supervisionada `POST /agent/runs`.
 
 A primeira opção continua sendo SDK oficial e `Microsoft.Extensions.AI`; não
 serão criados loop de chat, dispatcher de ferramentas, timers, fila, checkpoint
@@ -195,16 +227,21 @@ não atende.
 
 ## Contract version
 
-`2.3` — mudança intencional sobre a 2.2: adiciona o contrato de saída
-validado (#136) — `AgentOutputGate` com ordem fixa (contrato estrutural,
-autorização de fontes, grounding/confiança) versionado por
-`AgentPolicyVersion` (`2026-08-19.2`); negações e abstenções não expõem
-texto nem fontes; o gate não redige conteúdo nem detecta injeção — redação
-de PII e triagem de injeção, quando exigidas por canal, serão detector não
-determinístico em #138+. A 2.2 permanece vigente no que descreve: a API
-hospedada do DeepSeek é text-only, o perfil DeepSeek rejeita imagem antes de
-HTTP, e conteúdo de dados fora do perfil é rejeitado deterministicamente em
-vez de descartado em silêncio.
+`2.4` — mudança intencional sobre a 2.3: adiciona a superfície HTTP
+supervisionada `POST /agent/runs` (#138) — parse estrito do corpo
+`{ requestId, journey, message, companyId? }`, idempotência por `requestId`
+(commandName `agent.run`, `ResultJson` somente com a resposta segura),
+auditoria `AuditSource.Ai` com metadata `{status, reasonCode}`, composição
+server-side do provider (`AddAgentRunSurface`, fail-closed
+`provider_not_configured`) e mapeamentos de fronteira (timeout 504
+`agent_timeout`; indisponibilidade 503). A 2.3 permanece vigente no que
+descreve: o contrato de saída validado (#136) com ordem fixa e versão de
+política `AgentPolicyVersion` (`2026-08-19.2`), negações e abstenções sem
+texto nem fontes, gate sem redação de conteúdo nem detecção de injeção
+(detector não determinístico futuro por canal). A 2.2 permanece vigente no que descreve: a API hospedada do
+DeepSeek é text-only, o perfil DeepSeek rejeita imagem antes de HTTP, e
+conteúdo de dados fora do perfil é rejeitado deterministicamente em vez de
+descartado em silêncio.
 
 ## Deletion strategy
 

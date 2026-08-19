@@ -1095,6 +1095,7 @@
           "Microsoft.NET.Test.Sdk": "[17.14.1, )",
           "Npgsql": "[10.0.3, )",
           "Testcontainers.PostgreSql": "[4.9.0, )",
+          "Vinx.Erp.AI": "[1.0.0, )",
           "Vinx.Erp.ApiHost": "[1.0.0, )",
           "Vinx.Erp.Atendimento": "[1.0.0, )",
           "Vinx.Erp.WorkerHost": "[1.0.0, )",
