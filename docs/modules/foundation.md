@@ -368,6 +368,45 @@ revoga todas as sessões da própria pessoa pela função transacional existente
 de sessão (#80), administração de sessão (#81), MFA/AAL (#18), recuperação
 (#19) e logout/banimento no provedor (#20) continuam adiados.
 
+## Arquivos e antimalware
+
+O upload documental preserva o ciclo da #52: a intenção persiste `FileRecord`
+em `quarantined` antes de emitir URL assinada de upload, e a confirmação
+reinspeciona o objeto no storage privado server-side antes de qualquer
+liberação. A confirmação exige, além da inspeção determinística de metadados,
+um veredito antimalware produzido no servidor por `IMalwareScanner`; o cliente
+nunca envia ou escolhe veredito, engine ou versão. `DocumentVerificationPolicy`
+libera somente veredito `Clean` atual: engine, versão e assinatura preenchidas,
+timestamp não-default e checksum do veredito igual ao checksum do objeto
+inspecionado agora. Qualquer outro resultado falha fechado.
+
+Engine aprovada: **ClamAV/clamd, 2026-08-19** (comparativo e decisão em
+`docs/superpowers/specs/2026-08-18-issue-104-antimalware-engine-comparison.md`).
+A engine real é condicionada por configuração: com
+`MalwareScanner:ClamAvEndpoint` (`host:port`, formato validado on-start) o host
+compõe `ClamAvMalwareScanner`, que faz streaming do conteúdo direto do storage
+privado para o clamd (protocolo INSTREAM), computa o checksum SHA-256 durante o
+streaming e preenche engine (`ClamAV`), versão de engine e versão de assinatura
+pelo comando `VERSION`. Sem endpoint configurado, a implementação de produção
+permanece `BlockedMalwareScanner`, fail-closed: todo scan devolve indisponível
+com motivo seguro `scanner_not_configured` e nenhum documento sai da quarentena.
+Detecção de malware e divergências duras de metadados são terminais
+(`verification_failed`); indisponibilidade, timeout, veredito malformado/antigo
+e falha de leitura do storage são transitórias e mantêm o documento em
+quarentena, retentável sem reabri-lo. O scan tem timeout próprio por chamada;
+cancelamento externo propaga.
+
+Vereditos duráveis persistem no `FileRecord` as colunas `scan_engine`,
+`scan_engine_version`, `scan_signature_version` e `scanned_at_utc`: gravadas na
+confirmação `Clean` e no terminal `malware_detected`; transitórios e terminais
+sem scan (mismatch de metadados) deixam as colunas NULL, e uma detecção cujo
+fetch de versões falhou persiste terminal com colunas NULL — detecção confirmada
+nunca é rebaixada por metadado ausente.
+
+Operação segura: logs do scan registram somente operação, módulo, resultado,
+motivo seguro e duração. Payload, bytes, checksum e conteúdo de arquivo nunca
+aparecem em log, auditoria ou documentação.
+
 ## Aprovações duráveis
 
 `PrepareApprovalService` exige membership ativa e

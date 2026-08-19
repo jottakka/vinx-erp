@@ -1,9 +1,8 @@
-using System.Data.Common;
+using System.ComponentModel.DataAnnotations;
 using System.Net.Mail;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Vinx.Erp.Foundation.Audit;
@@ -19,7 +18,7 @@ public sealed record CreateEmployeeCommand(
     Guid RequestId,
     Guid CompanyId,
     string DisplayName,
-    string Email
+    [property: EmailAddress] string Email
 );
 
 public enum EmployeeDirectoryWriteState
@@ -69,39 +68,20 @@ public sealed class EmployeeDirectoryService(
                 cancellationToken
             );
             await FoundationRlsContext.ApplyActorAsync(database.Database, actor, cancellationToken);
-            var connection = database.Database.GetDbConnection();
-            await using var sql = connection.CreateCommand();
-            sql.Transaction = transaction.GetDbTransaction();
-            sql.CommandText =
-                "SELECT status, employee_id, membership_id, user_id FROM foundation.create_employee_directory_entry(@request_id, @company_id, @display_name, @email, @payload_hash)";
-            Add(sql, "request_id", normalized.RequestId);
-            Add(sql, "company_id", normalized.CompanyId);
-            Add(sql, "display_name", normalized.DisplayName);
-            Add(sql, "email", normalized.Email);
-            Add(sql, "payload_hash", normalized.PayloadHash);
-            EmployeeDirectoryWriteResult result;
-            await using (var reader = await sql.ExecuteReaderAsync(cancellationToken))
-            {
-                if (!await reader.ReadAsync(cancellationToken))
-                    throw new InvalidOperationException(
-                        "Employee directory function returned no result."
-                    );
-                var state = reader.GetString(0) switch
-                {
-                    "created" => EmployeeDirectoryWriteState.Created,
-                    "replay" => EmployeeDirectoryWriteState.Replay,
-                    "idempotency_conflict" => EmployeeDirectoryWriteState.IdempotencyConflict,
-                    _ => throw new InvalidOperationException(
-                        "Employee directory function returned unknown status."
-                    ),
-                };
-                result = new EmployeeDirectoryWriteResult(
-                    state,
-                    reader.GetGuid(1),
-                    reader.GetGuid(2),
-                    reader.GetGuid(3)
-                );
-            }
+            var created = await database.CreateEmployeeDirectoryEntryAsync(
+                normalized.RequestId,
+                normalized.CompanyId,
+                normalized.DisplayName,
+                normalized.Email,
+                normalized.PayloadHash,
+                cancellationToken
+            );
+            var result = new EmployeeDirectoryWriteResult(
+                created.State,
+                created.EmployeeId,
+                created.MembershipId,
+                created.UserId
+            );
             await transaction.CommitAsync(cancellationToken);
             return result;
         }
@@ -171,14 +151,6 @@ public sealed class EmployeeDirectoryService(
                         .ToListAsync(token),
             cancellationToken
         );
-    }
-
-    private static void Add(DbCommand command, string name, object value)
-    {
-        var parameter = command.CreateParameter();
-        parameter.ParameterName = name;
-        parameter.Value = value;
-        command.Parameters.Add(parameter);
     }
 
     private async Task<bool> AuditDeniedAsync(

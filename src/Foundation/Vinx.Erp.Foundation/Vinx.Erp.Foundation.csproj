@@ -3,6 +3,10 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
+    <!-- O cliente clamd é internal; os testes de protocolo o exercitam contra o fake in-process. -->
+    <InternalsVisibleTo Include="Vinx.Erp.Foundation.UnitTests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="EFCore.NamingConventions" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" />

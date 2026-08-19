@@ -1,8 +1,6 @@
-using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
@@ -74,7 +72,7 @@ public sealed class PlatformOrganizationProvisioningService(
                 cancellationToken
             );
             await FoundationRlsContext.ApplyActorAsync(database.Database, actor, cancellationToken);
-            result = await ExecuteAsync(normalized, transaction, cancellationToken);
+            result = await ExecuteAsync(normalized, cancellationToken);
             if (result.State is PlatformOrganizationProvisioningState.Created)
             {
                 outbox.Enroll(database);
@@ -157,58 +155,30 @@ public sealed class PlatformOrganizationProvisioningService(
 
     private async Task<PlatformOrganizationProvisioningResult> ExecuteAsync(
         NormalizedCommand command,
-        IDbContextTransaction transaction,
         CancellationToken cancellationToken
     )
     {
-        var connection = database.Database.GetDbConnection();
-        await using var sql = connection.CreateCommand();
-        sql.Transaction = transaction.GetDbTransaction();
-        sql.CommandText = """
-            SELECT status, group_id, company_id, owner_user_id, owner_membership_id, owner_invitation_id
-            FROM foundation.provision_platform_organization(
-                @request_id, @group_name, @company_name, @owner_display_name, @owner_email, @payload_hash)
-            """;
-        AddParameter(sql, "request_id", command.RequestId);
-        AddParameter(sql, "group_name", command.GroupName);
-        AddParameter(sql, "company_name", command.CompanyName);
-        AddParameter(sql, "owner_display_name", command.OwnerDisplayName);
-        AddParameter(sql, "owner_email", command.OwnerEmail);
-        AddParameter(sql, "payload_hash", command.PayloadHash);
-        PlatformOrganizationProvisioningResult result;
-        await using (var reader = await sql.ExecuteReaderAsync(cancellationToken))
-        {
-            if (!await reader.ReadAsync(cancellationToken))
-            {
-                throw new InvalidOperationException(
-                    "Organization provisioning did not return a result."
-                );
-            }
-
-            var state = reader.GetString(0) switch
-            {
-                "created" => PlatformOrganizationProvisioningState.Created,
-                "replay" => PlatformOrganizationProvisioningState.Replay,
-                "idempotency_conflict" => PlatformOrganizationProvisioningState.IdempotencyConflict,
-                _ => throw new InvalidOperationException(
-                    "Organization provisioning returned an unknown state."
-                ),
-            };
-            result = new PlatformOrganizationProvisioningResult(
-                state,
-                reader.GetGuid(1),
-                reader.GetGuid(2),
-                reader.GetGuid(3),
-                reader.GetGuid(4),
-                reader.GetGuid(5)
-            );
-        }
+        var created = await database.ProvisionPlatformOrganizationAsync(
+            command.RequestId,
+            command.GroupName,
+            command.CompanyName,
+            command.OwnerDisplayName,
+            command.OwnerEmail,
+            command.PayloadHash,
+            cancellationToken
+        );
+        var result = new PlatformOrganizationProvisioningResult(
+            created.State,
+            created.GroupId,
+            created.CompanyId,
+            created.OwnerUserId,
+            created.OwnerMembershipId,
+            created.OwnerInvitationId
+        );
 
         if (result.State is PlatformOrganizationProvisioningState.Created)
         {
-            await EnsureInitialOwnerCanCreateEmployeesAsync(
-                connection,
-                transaction,
+            await database.EnsurePlatformOwnerEmployeeCreateAsync(
                 command.RequestId,
                 result.CompanyId!.Value,
                 result.OwnerMembershipId!.Value,
@@ -217,37 +187,6 @@ public sealed class PlatformOrganizationProvisioningService(
         }
 
         return result;
-    }
-
-    /// <summary>
-    /// Mantém a reserva local de funcionário disponível para o dono inicial
-    /// sem conceder qualquer acesso de tenant ao operador global.
-    /// </summary>
-    private static async Task EnsureInitialOwnerCanCreateEmployeesAsync(
-        DbConnection connection,
-        IDbContextTransaction transaction,
-        Guid requestId,
-        Guid companyId,
-        Guid ownerMembershipId,
-        CancellationToken cancellationToken
-    )
-    {
-        await using var sql = connection.CreateCommand();
-        sql.Transaction = transaction.GetDbTransaction();
-        sql.CommandText =
-            "SELECT foundation.ensure_platform_owner_employee_create(@request_id, @company_id, @owner_membership_id)";
-        AddParameter(sql, "request_id", requestId);
-        AddParameter(sql, "company_id", companyId);
-        AddParameter(sql, "owner_membership_id", ownerMembershipId);
-        await sql.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static void AddParameter(DbCommand command, string name, object value)
-    {
-        var parameter = command.CreateParameter();
-        parameter.ParameterName = name;
-        parameter.Value = value;
-        command.Parameters.Add(parameter);
     }
 
     private static bool IsExpectedAccessDenial(PostgresException exception) =>

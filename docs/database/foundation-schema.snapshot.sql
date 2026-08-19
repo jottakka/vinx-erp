@@ -1058,7 +1058,11 @@ CREATE TABLE foundation.files (
     original_file_name character varying(255) NOT NULL,
     processing_state character varying(30) NOT NULL,
     retention_until timestamp with time zone NOT NULL,
-    size_bytes bigint NOT NULL
+    size_bytes bigint NOT NULL,
+    scan_engine character varying(100),
+    scan_engine_version character varying(50),
+    scan_signature_version character varying(50),
+    scanned_at_utc timestamp with time zone
 );
 
 ALTER TABLE ONLY foundation.files FORCE ROW LEVEL SECURITY;

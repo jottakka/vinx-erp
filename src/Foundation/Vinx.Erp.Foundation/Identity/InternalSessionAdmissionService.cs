@@ -1,6 +1,4 @@
-using System.Data;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Vinx.Erp.Foundation.Audit;
@@ -39,7 +37,7 @@ public sealed class InternalSessionAdmissionService(
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-            var lockedUser = await LockUserAsync(userId, transaction, cancellationToken);
+            var lockedUser = await LockUserAsync(userId, cancellationToken);
             if (!lockedUser.Exists)
             {
                 await transaction.RollbackAsync(cancellationToken);
@@ -118,7 +116,7 @@ public sealed class InternalSessionAdmissionService(
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-            var lockedUser = await LockUserAsync(userId, transaction, cancellationToken);
+            var lockedUser = await LockUserAsync(userId, cancellationToken);
             if (!lockedUser.Exists)
             {
                 await transaction.RollbackAsync(cancellationToken);
@@ -238,34 +236,8 @@ public sealed class InternalSessionAdmissionService(
 
     private async Task<LockedUser> LockUserAsync(
         Guid userId,
-        IDbContextTransaction transaction,
-        CancellationToken cancellationToken)
-    {
-        var connection = database.Database.GetDbConnection();
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction.GetDbTransaction();
-        command.CommandText =
-            "SELECT sessions_valid_after FROM foundation.lock_user_for_session_admission(@user_id)";
-        var parameter = command.CreateParameter();
-        parameter.ParameterName = "user_id";
-        parameter.Value = userId;
-        command.Parameters.Add(parameter);
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-        {
-            return new LockedUser(false, null);
-        }
-
-        var value = reader.IsDBNull(0) ? null : reader.GetValue(0);
-        return new LockedUser(true, value switch
-        {
-            null or DBNull => null,
-            DateTimeOffset timestamp => timestamp,
-            DateTime timestamp => new DateTimeOffset(DateTime.SpecifyKind(timestamp, DateTimeKind.Utc)),
-            _ => throw new DataException("Session admission lock returned an unsupported timestamp.")
-        });
-    }
+        CancellationToken cancellationToken) =>
+        await database.LockUserForSessionAdmissionAsync(userId, cancellationToken);
 
     private SessionAdmissionResult LogUnavailable(Exception? exception = null)
     {
@@ -297,6 +269,4 @@ public sealed class InternalSessionAdmissionService(
         {
         }
     }
-
-    private readonly record struct LockedUser(bool Exists, DateTimeOffset? SessionsValidAfter);
 }

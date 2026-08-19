@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Vinx.Erp.ApiHost.OpenApi;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
@@ -114,7 +115,9 @@ internal static class BrowserBffSessionEndpoints
             .RequireRateLimiting(BrowserBffAuthenticationExtensions.LoginRateLimitPolicyName)
             .WithName("BrowserSessionSignIn")
             .WithMetadata(new BrowserBffAntiforgeryRequiredMetadata())
-            .WithMetadata(new BrowserBffSessionSignInOpenApiMetadata())
+            .WithMetadata(
+                new JsonRequestBodyContract(typeof(BrowserBffSessionSignInCommand))
+            )
             .Produces(StatusCodes.Status204NoContent)
             .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status401Unauthorized)

@@ -1,82 +1,183 @@
-# Módulo AI
+# Módulo AI — núcleo OpenAI-compatible e perfil DeepSeek
 
 ## Estado
 
-A fatia #127+#132 entrega a base mínima hospedada no módulo `Vinx.Erp.AI`:
-catálogo server-side de perfis aprovados, resolução de contexto confiável
-fail-closed e um runner que aplica a política antes de qualquer chamada de
-modelo, com desfecho normalizado. Nesta fatia não existe provider real, API,
-UI nem execução de ferramentas.
+O módulo tem o harness de contexto confiável (#132), o catálogo de perfis e
+os providers (#135). Desde #135-B, o provider é um núcleo genérico
+OpenAI-compatible (`OpenAiCompatibleChatClient`) atrás de `IChatClient`
+(Microsoft.Extensions.AI) com SDK oficial OpenAI 2.x; o DeepSeek v4 Flash é
+um perfil nomeado do núcleo, e perfis de visão podem ser declarados para o
+OCR de #134. Não existe Anthropic, OpenCode, memória longa, vector store,
+streaming nem persistência de conversa.
 
-O único perfil aprovado é `read_only_summarize_v1` (journey `summarize`,
-escopo de empresa, capability `ai.read`, `ModelSelection` nulo, timeout de 30
-s, `TurnLimit` 1, orçamento de 8.000 tokens e `AllowedTools` vazio). Como
-shipa sem `ModelSelection`, a produção devolve
-`unavailable/provider_not_configured` até a #135 atribuir o provider
-aprovado.
+O adapter serve leitura, resumo, extração e rascunho não persistido. Ele
+converte protocolo e devolve resposta normalizada ou proposta de tool; não
+autoriza, não escolhe empresa, não invoca ferramenta e não persiste conversa.
+
+## Perfil server-side
+
+`OpenAiCompatibleOptions` define o perfil aprovado: endpoint, modelo,
+timeout, orçamento, limites, modalidades e allowlist de egress vêm sempre da
+configuração; o request do chamador nunca escolhe esses valores. O client
+tira um snapshot imutável na construção e valida o perfil na fronteira:
+mutar as options em runtime não troca endpoint, modelo ou limites de uma
+instância viva. O `Validator` (options pattern) está declarado para o host
+registrar com `ValidateOnStart` na fatia da API (#138); nenhum registro DI
+existe nesta fatia.
+
+Limites do perfil:
+
+| Limite | Papel |
+| --- | --- |
+| `Timeout` (1s–5min) | Latência máxima por chamada, com cancelamento vinculado ao token do chamador |
+| `MaxMessages` | Teto de mensagens por conversa normalizada |
+| `MaxInputCharacters` | Teto determinístico de entrada antes de qualquer chamada HTTP |
+| `MaxOutputTokens` | Teto de tokens de saída enviado ao provider (clamp; nunca excede o perfil) |
+| `MaxTotalTokensPerCall` | Orçamento por execução: teto relacional que precisa cobrir o limite de saída |
+| `MaxImagesPerRequest` / `MaxImageBytesPerImage` / `MaxImageBytesPerRequest` | Tetos de contagem e bytes (individual e agregado) quando o perfil aceita imagem |
+| `EstimatedTokensPerImage` | Admissão preflight: estimativa por imagem conta contra o orçamento da chamada antes do HTTP |
+
+O orçamento por execução é reportado pelo usage normalizado
+(entrada/saída/total) para o ledger do runtime; o adapter não mantém estado
+entre chamadas.
+
+## Endpoint hardening (política de egress)
+
+Endpoint é configuration-driven e validado por `ProviderEgressPolicy`
+(função pura, sem I/O de rede) na construção do client: URI absoluta
+`https`; porta 443 ou porta explicitamente aprovada; `localhost` e literais
+IP em faixa loopback, privada, CGNAT, link-local (inclui 169.254.169.254),
+reservada, multicast, documentação, unspecified ou IPv4-mapped são
+rejeitados (IPv4, IPv6 e grafias equivalentes). `ApprovedHosts`, quando
+presente no cofre de configuração, restringe por host exato normalizado ou
+sufixo com fronteira de ponto — `EndsWith` ingênuo é proibido. A política
+expõe validação por endereço resolvido para o transporte do host (#138)
+validar cada conexão contra DNS rebinding; redirects automáticos e proxy
+também são decisões do transporte composto em #138.
+
+## Modalidades e contrato de visão
+
+Perfis declaram o que aceitam. `AllowImageInputs=false` (padrão, inclui o
+DeepSeek hospedado): qualquer conteúdo de imagem na conversa é rejeitado
+deterministicamente antes de HTTP. `AllowImageInputs=true`: somente
+`DataContent` por bytes com media type png/jpeg/webp, dentro dos tetos de
+contagem e bytes e da admissão preflight. Imagem por URL nunca é aceita — o
+servidor não busca URL de request; o ME.AI nem representa URL externa (o
+construtor de `DataContent` exige data URI), e o mapper ainda rejeita
+esquema não-data como defesa de fronteira. PDF nunca vai ao provider:
+extração e rasterização pertencem ao #134 (`DocumentTextExtractor`), que
+consume um perfil de visão com páginas em imagem. Limite de dimensão/pixel
+decodado é follow-up registrado (inspeção segura sem dependência nova sem
+aprovação).
+
+## Fronteira e falhas
+
+O request é sanitizado pelo mapper: somente os papéis system/user/assistant/
+tool e os conteúdos texto, imagem permitida pelo perfil e protocolo de tool
+seguem para o provider. Author, additional properties e qualquer conteúdo
+fora da allowlist de modalidades são removidos ou rejeitados antes da
+fronteira: contexto confiável completo, JWT, e-mail, capability, segredo,
+documento bruto e prompt interno não viajam no request. Desde o contrato
+2.2, conteúdo de dados fora do perfil (imagem em perfil text-only, media
+type não aprovado, imagem por URL) é falha determinística antes de HTTP —
+nunca descartado em silêncio e nunca erro 400 descoberto no provider.
+
+Tool proposals chegam tipadas (`FunctionCallContent` com argumentos parseados);
+argumentos inválidos viram falha `provider_invalid`, nunca resultado inventado.
+A invocação de ferramenta é estruturalmente impossível: o adapter não monta
+pipeline de invocação (não usa `FunctionInvokingChatClient`), mesmo com
+`ChatToolMode.Auto`.
+
+Falhas externas são classificadas em `timeout`, `cancelled`, `rate_limited`,
+`provider_invalid` e `provider_unavailable`, sem retry (inclusive no SDK:
+`ClientRetryPolicy(0)`). A exceção publicada tem mensagem fixa e redacted e
+nenhuma causa bruta na cadeia pública (nem `Message`, nem `ToString()`, nem
+`InnerException`): body, prompt, headers secretos e resposta bruta nunca
+aparecem em exceção ou log. O cancelamento do chamador é `cancelled` e não
+gera log. Cada execução recebe um correlation ID devolvido na resposta e
+propagado pelo escopo de logging com o rótulo do perfil
+(`ai/openai-compatible`, `ai/deepseek`).
+
+O SDK aprovado serializa o teto de saída como `max_completion_tokens`; o valor
+do perfil é aplicado pelo adapter independentemente do campo aceito pelo
+endpoint real.
+
+## Contexto de documento (OCR)
+
+O pipeline `DocumentContext` transforma documento autorizado em contexto
+normalizado: extração local da camada de texto (PdfPig) primeiro; raster + OCR
+por visão (PDFtoImage/PDFium → perfil de visão) somente para páginas sem
+texto; imagem direta é canonicalizada (decode → teto de pixels → strip de
+metadados → re-encode) — o provider nunca recebe bytes originais. Saída é
+JSON estrito com fonte/página/confiança e `untrusted: true`: texto de
+documento é dado, nunca instrução. Allowlist de classificação/consentimento
+(default deny) roda antes de qualquer raster/OCR; classe que exige redação é
+rejeitada até #136.
+
+A leitura é **efêmera**: nenhum contexto, cache ou resposta é retido entre
+execuções; falhas (limite, timeout cooperativo, provider, schema) viram
+`NeedsClarification` com razão fixa. Limites são compostos com o perfil de
+visão vinculado: uma página por chamada e bytes codificados
+`≤ min(teto OCR, MaxImageBytesPerImage)`, com degraus determinísticos de DPI
+e rejeição segura. O PDFium não é thread-safe: rasterização é globalmente
+serializada por gate; timeout de parse/render é cooperativo.
+
+A fronteira de leitura é `IAuthorizedDocumentSource`, implementação owner da
+Foundation (fatia #134-A): RLS, membership ativa, capability dedicada de
+leitura/OCR, estado liberado, retenção e checksum, sem URL assinada. Sem a
+fonte real — e sem engine de antimalware aprovado — o OCR em runtime é
+fail-closed; os testes desta fatia usam fontes sintéticas controladas.
 
 ## Ownership
 
-O módulo AI é responsável somente pela orquestração de inferência: perfis
-aprovados, resolução de contexto confiável, seleção de provider e uma única
-chamada de modelo por execução. Identidade, autorização, capabilities, RLS e
-auditoria pertencem à Foundation; o módulo consome o snapshot de autorização
-pronto e nunca o produz. Regras de negócio continuam nos módulos de domínio.
+O módulo é responsável somente pela conversão de protocolo de providers
+aprovados: mapeamento, sanitização de fronteira, classificação de falha e
+reporte de uso. Regras de negócio continuam nos módulos; autorização,
+identidade, RLS e auditoria continuam na Foundation. O registro DI, o
+HttpClientFactory e a composição do transporte guardado (ConnectCallback,
+redirects, proxy) pertencem à fatia da API (#138), após o contrato
+estabilizar.
 
 ## Company scope
 
-O contexto é sempre fail-closed na ordem fixa: `company_required` →
-`company_not_authorized` → `capability_denied` → resolvido. A empresa vem
-exclusivamente do snapshot de autorização do ator criado pelo servidor; a
-mensagem do usuário, o canal ou qualquer argumento nunca escolhem a empresa.
-O contexto mínimo (`AgentExecutionContext`) carrega somente identificadores e
-nomes normativos da única empresa autorizada — nunca prompt, JWT, e-mail ou
-segredo — e nenhuma empresa fora do snapshot é consultada ou exposta.
+Não há requisição AI ativa exposta. A futura fronteira deve receber ator e
+empresa de contexto confiável criado pelo servidor, nunca de texto, argumento
+de tool ou claim não materializado, e deve reautorizar cada caso de uso na
+Foundation. O adapter não compartilha resposta entre atores ou empresas.
 
-## Execução e desfechos
+## Ordem de retorno
 
-O `AgentRunner` segue a ordem fixa: validação de entrada, resolução de
-contexto, seleção de provider e, no máximo, uma chamada de modelo. Nenhuma
-falha intermediária chama o modelo. O desfecho normalizado (`AgentOutcome`)
-cobre `Completed`, `NeedsClarification`, `RequiresConfirmation`, `Denied`,
-`Invalid`, `Unavailable` e `TimedOut`, com reason codes estáveis:
-`completed`, `message_empty`, `profile_unknown`, `company_required`,
-`company_not_authorized`, `capability_denied`, `context_unavailable`,
-`provider_not_configured`, `model_unavailable`, `model_timeout` e
-`tool_proposal_requires_confirmation`. Tool call volta como proposta que
-exige confirmação; o runner não executa ferramentas, não mantém loop de chat
-nem estado entre execuções, e nunca loga prompt, resposta ou PII.
+1. #110 entregou bootstrap HTTP para o frontend;
+2. #132 entrega contexto confiável neutro de transporte;
+3. #135-A integrou o adapter DeepSeek por SDK oficial e `IChatClient`; #135-B
+   (esta fatia) extraiu o núcleo OpenAI-compatible genérico, o perfil de
+   visão e a política de egress; #135 completa os demais adapters previstos;
+4. #134 normaliza PDF/imagem `clean` em contexto verificado, consumindo o
+   perfil de visão;
+5. #136 valida e redige a saída real;
+6. #138 conecta contexto, provider, guardrails e aprovação numa API
+   supervisionada.
 
-## Histórico e próximos passos
-
-A simplificação anterior removeu o runtime AI não hospedado; esta fatia
-reintroduz código AI somente com a base verificada, sem provider real. Quando
-a integração voltar, a primeira opção continua sendo Microsoft Agent
-Framework e o SDK oficial do provider. Próximas fatias:
-
-1. #135 integra o provider real por SDK oficial e `IChatClient`, atribuindo o
-   `ModelSelection` aprovado ao perfil;
-2. #138 semeia a capability `ai.read`, conecta contexto, provider, guardrails
-   e aprovação numa API supervisionada.
-
-Não serão recriados dispatcher de ferramentas, timers, fila, checkpoint ou
-workflow próprios sem caso de uso hospedado e evidência de que a plataforma
+A primeira opção continua sendo SDK oficial e `Microsoft.Extensions.AI`; não
+serão criados loop de chat, dispatcher de ferramentas, timers, fila, checkpoint
+ou workflow próprios sem caso de uso hospedado e evidência de que a plataforma
 não atende.
 
 ## Contract version
 
-`3.0`
+`2.2` — mudança intencional sobre a 2.1: a API hospedada do DeepSeek é
+text-only, portanto o perfil DeepSeek rejeita imagem antes de HTTP (o teste
+"imagem chega à wire como image_url" foi substituído por "imagem rejeitada
+com zero chamadas"), e conteúdo de dados fora do perfil passou a ser
+rejeitado deterministicamente em vez de descartado em silêncio.
 
 ## Deletion strategy
 
-O módulo não mantém dados para excluir. Aprovações duráveis continuam sob a
-retenção, soft-delete e futura purga física definidas pela Foundation.
+O módulo não mantém dados para excluir; nenhuma conversa é persistida. Aprovações duráveis continuam sob a retenção, soft-delete e futura purga física definidas pela Foundation.
 
 ## Migration notes
 
-Nenhuma migração nesta fatia. A capability `ai.read` existe apenas como
-constante `AgentCapabilities.Read` no módulo, com UUIDv5 canônico documentado
-no código; a seed no catálogo da Foundation vem com a #138. Sem seed, a
-produção falha fechado (default deny). As tabelas, policies, grants e
-capabilities de aprovação permanecem migrações da Foundation e não serão
-duplicadas.
+O módulo não possui migrações. As tabelas, policies, grants e capabilities de
+aprovação permanecem migrações da Foundation. A chave do provider mora no cofre
+de configuração do host; nenhum endpoint ou segredo é versionado neste
+documento ou no código de teste.
