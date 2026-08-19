@@ -67,10 +67,10 @@ public sealed class AgentRunOptions
             throw new InvalidOperationException("Agent endpoint must be an absolute URI when a provider is configured.");
         }
 
-        if (Endpoint.Scheme != Uri.UriSchemeHttps
-            && !(Endpoint.Scheme == Uri.UriSchemeHttp && Endpoint.IsLoopback))
+        if (Endpoint.Scheme != Uri.UriSchemeHttps)
         {
-            throw new InvalidOperationException("Agent endpoint must use HTTPS, except loopback HTTP.");
+            // Espelha a política de egress do módulo: loopback nunca é provider.
+            throw new InvalidOperationException("Agent endpoint must use HTTPS.");
         }
 
         if (string.IsNullOrWhiteSpace(Model))

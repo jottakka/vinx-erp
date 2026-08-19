@@ -144,9 +144,11 @@ ASPNETCORE_URLS=http://127.0.0.1:5080 \
   dotnet run --project src/Hosts/Vinx.Erp.ApiHost
 ```
 
-O provider aprovado é `openai_compatible` ou `deepseek`; endpoint precisa ser
-HTTPS absoluto (loopback HTTP é aceito para teste), e configuração inválida
-derruba o host na partida. A jornada `read_only_summarize_v1` exige sessão
+O provider aprovado é `openai_compatible` ou `deepseek`; o endpoint precisa ser
+HTTPS absoluto — a política de egress do módulo rejeita loopback, então testar
+com provider real em máquina local exige um proxy com terminação TLS — e
+configuração inválida derruba o host na partida. A jornada
+`read_only_summarize_v1` exige sessão
 autenticada, `companyId` de uma empresa com membership e a capability `ai.read`
 em escopo Company. A matriz completa de desfechos (replay por `requestId`,
 `requires_confirmation` opaco, timeout 504 `agent_timeout`) está em

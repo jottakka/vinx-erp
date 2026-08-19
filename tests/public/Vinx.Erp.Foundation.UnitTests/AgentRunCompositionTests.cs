@@ -98,6 +98,21 @@ public sealed class AgentRunCompositionTests
             () => CreateBaseServices().AddAgentRunSurface(configuration));
     }
 
+    [Fact]
+    public void Loopback_http_endpoint_fails_the_composition()
+    {
+        // A política de egress do módulo rejeita loopback: a options espelha a
+        // regra e derruba o host na partida em vez de falhar opaco por request.
+        var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "http://127.0.0.1:9999"),
+            ("AgentRun:Model", "approved-model"),
+            ("AgentRun:ApiKey", "test-api-key"));
+
+        Assert.Throws<InvalidOperationException>(
+            () => CreateBaseServices().AddAgentRunSurface(configuration));
+    }
+
     // Mesma base do host: persistência, auditoria e resolvedor de empresas
     // pertencem à Foundation/Program.cs; a composição só agrega a sua superfície.
     private static ServiceCollection CreateBaseServices()

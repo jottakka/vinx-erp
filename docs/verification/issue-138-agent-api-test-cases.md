@@ -50,7 +50,7 @@ HTTP puro do parser já é coberto por `AgentHttpContractTests` (FU) desde a Tas
 
 ## Ordem completa exercitada (endpoint → gate)
 
-Autenticação (session gate interno) → rate limit `foundation` → parse estrito
+Autenticação → rate limit `foundation` → session gate interno → parse estrito
 do corpo (cap por bytes, campos fechados, tipos exatos) → idempotência (replay
 ou conflito 409) → runner: validação de entrada → resolução de contexto
 confiável (membership + `ai.read` escopo Company; empresa forjada nega sem

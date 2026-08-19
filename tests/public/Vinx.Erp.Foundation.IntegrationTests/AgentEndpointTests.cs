@@ -407,7 +407,7 @@ public sealed class AgentEndpointTests
             agentRunOptions: new AgentRunOptions
             {
                 Provider = AgentRunOptions.OpenAiCompatibleProvider,
-                Endpoint = new Uri("http://127.0.0.1:9999"),
+                Endpoint = new Uri("https://agent-provider.example/v1"),
                 ApiKey = "test-agent-key",
                 Model = "test-agent-model"
             });
