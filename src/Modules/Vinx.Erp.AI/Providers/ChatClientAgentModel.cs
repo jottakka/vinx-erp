@@ -9,7 +9,7 @@ namespace Vinx.Erp.AI.Providers;
 /// modelo segue pinned no perfil do cliente aprovado — o request nunca escolhe
 /// modelo na wire. Não autoriza, não redige e não persiste conversa.
 /// </summary>
-public sealed class IChatClientAgentModel(IChatClient chatClient) : IAgentModel
+public sealed class ChatClientAgentModel(IChatClient chatClient) : IAgentModel
 {
     public Task<ChatResponse> GetResponseAsync(
         IReadOnlyList<ChatMessage> messages,
