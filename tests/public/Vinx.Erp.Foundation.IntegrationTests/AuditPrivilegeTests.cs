@@ -64,6 +64,7 @@ public sealed class AuditPrivilegeTests
                 has_function_privilege('vinx_provisioning_owner', 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE'),
                 has_function_privilege('vinx_employee_directory_owner', 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE'),
                 has_function_privilege('vinx_worker_owner', 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE'),
+                has_function_privilege('vinx_notifications_owner', 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)', 'EXECUTE'),
                 NOT EXISTS (
                     SELECT 1
                     FROM aclexplode(COALESCE(appender.proacl, acldefault('f', appender.proowner))) AS privilege
@@ -87,7 +88,8 @@ public sealed class AuditPrivilegeTests
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_platform_owner'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_provisioning_owner'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_employee_directory_owner'),
-                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_worker_owner')))
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_worker_owner'),
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_notifications_owner')))
             FROM pg_proc AS appender
             WHERE appender.oid = 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)'::regprocedure
             """,
@@ -113,6 +115,7 @@ public sealed class AuditPrivilegeTests
         Assert.True(reader.GetBoolean(14));
         Assert.True(reader.GetBoolean(15));
         Assert.True(reader.GetBoolean(16));
+        Assert.True(reader.GetBoolean(17));
     }
 
     [Theory]
