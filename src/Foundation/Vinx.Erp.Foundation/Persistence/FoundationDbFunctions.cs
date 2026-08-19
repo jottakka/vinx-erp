@@ -1,4 +1,6 @@
+using System.Runtime.ExceptionServices;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Vinx.Erp.Foundation.Employees;
 using Vinx.Erp.Foundation.Platform;
 
@@ -23,10 +25,12 @@ internal static class FoundationDbFunctions
         Guid userId,
         CancellationToken cancellationToken)
     {
-        var row = await database.Database
-            .SqlQuery<SessionLockRow>(
-                $"SELECT sessions_valid_after FROM foundation.lock_user_for_session_admission({userId})")
-            .SingleOrDefaultAsync(cancellationToken);
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<SessionLockRow>(
+                    $"SELECT sessions_valid_after FROM foundation.lock_user_for_session_admission({userId})")
+                .SingleOrDefaultAsync(cancellationToken)
+        );
         return row is null
             ? new LockedUser(false, null)
             : new LockedUser(true, row.SessionsValidAfter);
@@ -37,10 +41,12 @@ internal static class FoundationDbFunctions
         this FoundationDbContext database,
         Guid userId,
         CancellationToken cancellationToken) =>
-        await database.Database
-            .SqlQuery<int>(
-                $"SELECT foundation.revoke_all_user_sessions({userId}) AS \"Value\"")
-            .SingleAsync(cancellationToken);
+        await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<int>(
+                    $"SELECT foundation.revoke_all_user_sessions({userId}) AS \"Value\"")
+                .SingleAsync(cancellationToken)
+        );
 
     /// <summary>Registra o aceite do convite de owner e a transição para entrega via provedor.</summary>
     internal static async Task<OwnerInvitationDeliveryIngressResult> AcceptOwnerInvitationDeliveryAsync(
@@ -49,13 +55,15 @@ internal static class FoundationDbFunctions
         Guid correlationId,
         CancellationToken cancellationToken)
     {
-        var row = await database.Database
-            .SqlQuery<OwnerInvitationDeliveryIngressRow>(
-                $"""
-                SELECT status, provider_pending_at, transitioned
-                FROM foundation.accept_owner_invitation_delivery({invitationId}, {correlationId})
-                """)
-            .SingleOrDefaultAsync(cancellationToken);
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<OwnerInvitationDeliveryIngressRow>(
+                    $"""
+                    SELECT status, provider_pending_at, transitioned
+                    FROM foundation.accept_owner_invitation_delivery({invitationId}, {correlationId})
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+        );
         return ToIngressResult(row);
     }
 
@@ -66,13 +74,15 @@ internal static class FoundationDbFunctions
         Guid correlationId,
         CancellationToken cancellationToken)
     {
-        var row = await database.Database
-            .SqlQuery<OwnerInvitationProviderClaimRow>(
-                $"""
-                SELECT status, attempt_id, owner_email, claimed
-                FROM foundation.claim_owner_invitation_provider_delivery({invitationId}, {correlationId})
-                """)
-            .SingleOrDefaultAsync(cancellationToken);
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<OwnerInvitationProviderClaimRow>(
+                    $"""
+                    SELECT status, attempt_id, owner_email, claimed
+                    FROM foundation.claim_owner_invitation_provider_delivery({invitationId}, {correlationId})
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+        );
         return ToProviderClaim(row);
     }
 
@@ -88,13 +98,15 @@ internal static class FoundationDbFunctions
         string? failureReason,
         CancellationToken cancellationToken)
     {
-        var row = await database.Database
-            .SqlQuery<OwnerInvitationProviderFinalizationRow>(
-                $"""
-                SELECT status, finalized
-                FROM foundation.finalize_owner_invitation_provider_delivery({invitationId}, {attemptId}, {correlationId}, {outcome}, {issuer}, {subject}, {failureReason})
-                """)
-            .SingleOrDefaultAsync(cancellationToken);
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<OwnerInvitationProviderFinalizationRow>(
+                    $"""
+                    SELECT status, finalized
+                    FROM foundation.finalize_owner_invitation_provider_delivery({invitationId}, {attemptId}, {correlationId}, {outcome}, {issuer}, {subject}, {failureReason})
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+        );
         return ToProviderFinalization(row);
     }
 
@@ -112,13 +124,15 @@ internal static class FoundationDbFunctions
         string payloadHash,
         CancellationToken cancellationToken)
     {
-        var row = await database.Database
-            .SqlQuery<ProvisionedOrganizationRow>(
-                $"""
-                SELECT status, group_id, company_id, owner_user_id, owner_membership_id, owner_invitation_id
-                FROM foundation.provision_platform_organization({requestId}, {groupName}, {companyName}, {ownerDisplayName}, {ownerEmail}, {payloadHash})
-                """)
-            .SingleOrDefaultAsync(cancellationToken);
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<ProvisionedOrganizationRow>(
+                    $"""
+                    SELECT status, group_id, company_id, owner_user_id, owner_membership_id, owner_invitation_id
+                    FROM foundation.provision_platform_organization({requestId}, {groupName}, {companyName}, {ownerDisplayName}, {ownerEmail}, {payloadHash})
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+        );
         if (row is null)
         {
             throw new InvalidOperationException("Organization provisioning did not return a result.");
@@ -143,9 +157,12 @@ internal static class FoundationDbFunctions
         Guid companyId,
         Guid ownerMembershipId,
         CancellationToken cancellationToken) =>
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT foundation.ensure_platform_owner_employee_create({requestId}, {companyId}, {ownerMembershipId})",
-            cancellationToken);
+        await UnwrapProviderExceptionAsync(
+            database.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT foundation.ensure_platform_owner_employee_create({requestId}, {companyId}, {ownerMembershipId})",
+                cancellationToken
+            )
+        );
 
     /// <summary>
     /// Cria a entrada idempotente de funcionário no diretório da empresa
@@ -160,13 +177,15 @@ internal static class FoundationDbFunctions
         string payloadHash,
         CancellationToken cancellationToken)
     {
-        var row = await database.Database
-            .SqlQuery<EmployeeDirectoryEntryRow>(
-                $"""
-                SELECT status, employee_id, membership_id, user_id
-                FROM foundation.create_employee_directory_entry({requestId}, {companyId}, {displayName}, {email}, {payloadHash})
-                """)
-            .SingleOrDefaultAsync(cancellationToken);
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<EmployeeDirectoryEntryRow>(
+                    $"""
+                    SELECT status, employee_id, membership_id, user_id
+                    FROM foundation.create_employee_directory_entry({requestId}, {companyId}, {displayName}, {email}, {payloadHash})
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+        );
         if (row is null)
         {
             throw new InvalidOperationException("Employee directory function returned no result.");
@@ -181,6 +200,27 @@ internal static class FoundationDbFunctions
 
     /// <summary>Linha de retorno: <c>sessions_valid_after timestamp with time zone</c> (0 ou 1 linha).</summary>
     private sealed record SessionLockRow(DateTimeOffset? SessionsValidAfter);
+
+    /// <summary>
+    /// Executa a consulta restaurando o contrato de exceção do acesso direto ao Npgsql:
+    /// o EF envolve falhas do provedor em <see cref="InvalidOperationException"/>
+    /// ("transient failure"), o que cega <c>catch (PostgresException)</c> dos serviços
+    /// e políticas de retry baseadas em <c>NpgsqlException.IsTransient</c>. A exceção
+    /// original do provedor é relançada com a pilha preservada.
+    /// </summary>
+    private static async Task<T> UnwrapProviderExceptionAsync<T>(Task<T> query)
+    {
+        try
+        {
+            return await query;
+        }
+        catch (InvalidOperationException exception)
+            when (exception.InnerException is PostgresException)
+        {
+            ExceptionDispatchInfo.Capture(exception.InnerException).Throw();
+            throw; // Inalcançável: Capture.Throw acima sempre lança.
+        }
+    }
 
     /// <summary>
     /// Linha de retorno: <c>status text, provider_pending_at timestamptz, transitioned boolean</c>.
