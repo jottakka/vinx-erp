@@ -13,4 +13,7 @@
     <ProjectReference Include="../../../src/Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
     <ProjectReference Include="../../../src/Modules/Vinx.Erp.Notifications/Vinx.Erp.Notifications.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentHttpContracts.cs" Link="Agent/AgentHttpContracts.cs" />
+  </ItemGroup>
 </Project>
