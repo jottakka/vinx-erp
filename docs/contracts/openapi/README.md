@@ -113,6 +113,32 @@ apenas `id`, `companyId`, `requestId`, `title`, `description`, `state`,
 O contrato não expõe payload em logs ou auditoria. Todas as respostas privadas
 recebem `Cache-Control: private, no-store` e o header de correlação do host.
 
+## Notifications inbox #94
+
+`GET /notifications/inbox?cursor=<opaco>&limit=<1..50>` e
+`GET /notifications/inbox/unread-count` publicam bearer HTTP ou cookie BFF
+de mesma origem e declaram `200`, `400 invalid_request` (cursor/limite
+inválidos), `401`, `429` e `503 notifications_unavailable`. `POST
+/notifications/inbox/{deliveryId}/read` usa a mesma segurança, exige
+`X-CSRF-TOKEN` quando autenticado por cookie BFF e declara `200`, `400
+invalid_request` (CSRF ausente ou `Guid.Empty`), `401`, `404
+resource_not_found`, `429` e `503`. Não há `403`: a inbox é pessoal por
+membership ativa, calculada no servidor a cada chamada, e lista/count vazios
+não revelam empresas.
+
+A resposta de sucesso contém exclusivamente `items` e `nextCursor` (ou
+`unreadCount`); cada item expõe `id`, `companyId`, `source`, `event`,
+`createdAt`, `readAt` e `action {kind, href}` derivados de allowlist fechada
+por chave completa — chaves desconhecidas produzem `Sistema`/`null`/`null` e
+nunca ecoam `event_key`, `deep_link_selector` ou `template_key`. `cursor` é
+opaco, versionado e canônico; a UI navega somente por `action.href`
+allowlistado. A marcação de leitura é idempotente: repetir o POST devolve o
+mesmo `200 {status:"read"}` sem duplicar auditoria. Item inexistente ou fora
+do escopo autorizado é sempre `404 resource_not_found`. `401` e `429` não
+têm corpo. Todas as respostas, inclusive erros, usam `Cache-Control:
+private, no-store` aplicado pelo middleware BFF e o header `X-Correlation-ID`
+do host.
+
 ## Atendimento / Kanban MVP
 
 `GET /atendimento/cards?companyId={uuid}` aceita bearer ou cookie BFF e exige
