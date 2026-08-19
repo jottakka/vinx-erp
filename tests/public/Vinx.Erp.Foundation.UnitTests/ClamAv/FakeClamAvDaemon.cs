@@ -16,6 +16,9 @@ public enum FakeClamAvScript
     /// <summary>INSTREAM responde FOUND com a assinatura sintética do fake.</summary>
     FoundScan,
 
+    /// <summary>INSTREAM responde FOUND, mas zVERSION responde bytes inválidos (fallback de versão).</summary>
+    FoundScanGarbageVersion,
+
     /// <summary>INSTREAM responde o erro de tamanho do clamd ("INSTREAM size limit exceeded").</summary>
     DaemonSizeLimitExceeded,
 
@@ -145,8 +148,11 @@ public sealed class FakeClamAvDaemon : IDisposable
                     {
                         await WriteReplyAsync(
                             stream,
-                            script == FakeClamAvScript.GarbageVersion ? "\u0001\u0002not-a-version" : VersionReply,
-                            nulTerminated: script != FakeClamAvScript.GarbageVersion);
+                            script is FakeClamAvScript.GarbageVersion or FakeClamAvScript.FoundScanGarbageVersion
+                                ? "\u0001\u0002not-a-version"
+                                : VersionReply,
+                            nulTerminated: script is not (FakeClamAvScript.GarbageVersion
+                                or FakeClamAvScript.FoundScanGarbageVersion));
                     }
                 }
                 else if (command == "zINSTREAM")
@@ -254,7 +260,8 @@ public sealed class FakeClamAvDaemon : IDisposable
 
     private static Task WriteScanReplyAsync(NetworkStream stream, FakeClamAvScript script) => script switch
     {
-        FakeClamAvScript.FoundScan => WriteReplyAsync(stream, $"stream: {TestSignature} FOUND", nulTerminated: true),
+        FakeClamAvScript.FoundScan or FakeClamAvScript.FoundScanGarbageVersion =>
+            WriteReplyAsync(stream, $"stream: {TestSignature} FOUND", nulTerminated: true),
         FakeClamAvScript.DaemonSizeLimitExceeded =>
             WriteReplyAsync(stream, "INSTREAM size limit exceeded. ERROR", nulTerminated: true),
         FakeClamAvScript.GarbageScan => WriteReplyAsync(stream, "not-a-clamd-reply", nulTerminated: false),
