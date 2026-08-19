@@ -219,8 +219,12 @@ public sealed class NotificationWorkerTests
         );
 
         Assert.Equal(1, FakeNotificationProvider.Calls);
-        Assert.Single(results, result => result.Finalized);
-        Assert.All(results, result => Assert.Equal("delivered", result.Status));
+        var winner = Assert.Single(results, result => result.Finalized);
+        Assert.Equal("delivered", winner.Status);
+        // O perdedor da corrida vê o lease alheio e retorna skip sem
+        // confirmação: status intermediário legítimo, nunca regressão.
+        var loser = Assert.Single(results, result => !result.Finalized);
+        Assert.Contains(loser.Status, ["delivered", "provider_in_flight"]);
         var state = await NotificationIntentSeed.ReadDeliveryAsync(factory, deliveryId);
         Assert.Equal("delivered", state.Status);
         Assert.Equal(1, state.AttemptCount);
