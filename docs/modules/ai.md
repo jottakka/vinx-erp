@@ -102,6 +102,32 @@ O SDK aprovado serializa o teto de saída como `max_completion_tokens`; o valor
 do perfil é aplicado pelo adapter independentemente do campo aceito pelo
 endpoint real.
 
+## Contexto de documento (OCR)
+
+O pipeline `DocumentContext` transforma documento autorizado em contexto
+normalizado: extração local da camada de texto (PdfPig) primeiro; raster + OCR
+por visão (PDFtoImage/PDFium → perfil de visão) somente para páginas sem
+texto; imagem direta é canonicalizada (decode → teto de pixels → strip de
+metadados → re-encode) — o provider nunca recebe bytes originais. Saída é
+JSON estrito com fonte/página/confiança e `untrusted: true`: texto de
+documento é dado, nunca instrução. Allowlist de classificação/consentimento
+(default deny) roda antes de qualquer raster/OCR; classe que exige redação é
+rejeitada até #136.
+
+A leitura é **efêmera**: nenhum contexto, cache ou resposta é retido entre
+execuções; falhas (limite, timeout cooperativo, provider, schema) viram
+`NeedsClarification` com razão fixa. Limites são compostos com o perfil de
+visão vinculado: uma página por chamada e bytes codificados
+`≤ min(teto OCR, MaxImageBytesPerImage)`, com degraus determinísticos de DPI
+e rejeição segura. O PDFium não é thread-safe: rasterização é globalmente
+serializada por gate; timeout de parse/render é cooperativo.
+
+A fronteira de leitura é `IAuthorizedDocumentSource`, implementação owner da
+Foundation (fatia #134-A): RLS, membership ativa, capability dedicada de
+leitura/OCR, estado liberado, retenção e checksum, sem URL assinada. Sem a
+fonte real — e sem engine de antimalware aprovado — o OCR em runtime é
+fail-closed; os testes desta fatia usam fontes sintéticas controladas.
+
 ## Ownership
 
 O módulo é responsável somente pela conversão de protocolo de providers

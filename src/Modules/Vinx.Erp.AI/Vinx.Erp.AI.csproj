@@ -8,6 +8,8 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="OpenAI" />
+    <PackageReference Include="PdfPig" />
+    <PackageReference Include="PDFtoImage" />
     <PackageReference Include="System.ClientModel" />
   </ItemGroup>
 </Project>
