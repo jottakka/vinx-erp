@@ -126,6 +126,34 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
+    public async Task Malware_scan_request_carries_a_content_opener()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage);
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        var request = scanner.LastRequest;
+        Assert.NotNull(request);
+        Assert.NotNull(request!.OpenContentAsync);
+        // O scanner não abre por conta própria: a abertura é lazy, no caller do delegate.
+        Assert.Equal(0, storage.OpenCount);
+        await using var content = await request.OpenContentAsync!(CancellationToken.None);
+        using var read = new MemoryStream();
+        await content.CopyToAsync(read);
+        Assert.Equal(SafePayload, read.ToArray());
+        Assert.Equal(1, storage.OpenCount);
+    }
+
+    [Fact]
     public async Task Malware_detection_marks_the_file_failed_without_returning_a_read_url()
     {
         var storage = new ControlledFileStorage();
@@ -899,10 +927,12 @@ public sealed class DocumentUploadEndpointTests
         private readonly TaskCompletionSource inspectionRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _uploadUrlCount;
         private int inspectionCount;
+        private int openCount;
         public bool FailReads { get; init; }
         public bool BlockInspection { get; init; }
         public int InspectionsToBlock { get; init; } = 1;
         public int InspectionCount => Volatile.Read(ref inspectionCount);
+        public int OpenCount => Volatile.Read(ref openCount);
 
         public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(string providerKey, CancellationToken cancellationToken) =>
@@ -956,6 +986,13 @@ public sealed class DocumentUploadEndpointTests
         public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(string prefix, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<StorageObjectSummary>>([]);
         public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) => Task.CompletedTask;
 
+        public Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken)
+        {
+            var stored = _objects[providerKey];
+            Interlocked.Increment(ref openCount);
+            return Task.FromResult<Stream>(new MemoryStream(stored.Content, writable: false));
+        }
+
         public void Put(string providerKey, byte[] content, string contentType) =>
             _objects[providerKey] = new StoredObject(content, contentType);
 
@@ -972,6 +1009,7 @@ public sealed class DocumentUploadEndpointTests
     {
         private readonly TaskCompletionSource scanStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int scanCount;
+        private MalwareScanRequest? lastRequest;
 
         public MalwareScanStatus Status { get; set; } = MalwareScanStatus.Clean;
         public string? OverrideContentChecksum { get; init; }
@@ -979,10 +1017,12 @@ public sealed class DocumentUploadEndpointTests
         public Exception? FailWith { get; init; }
         public int ScanCount => Volatile.Read(ref scanCount);
         public Task ScanStarted => scanStarted.Task;
+        public MalwareScanRequest? LastRequest => lastRequest;
 
         public async Task<MalwareScanVerdict> ScanAsync(MalwareScanRequest request, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref scanCount);
+            lastRequest = request;
             scanStarted.TrySetResult();
             if (Delay is { } delay)
             {

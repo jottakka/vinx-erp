@@ -151,6 +151,62 @@ public sealed class SupabaseFileStorageTests
             () => storage.InspectObjectAsync("quarantine/company/document", CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Open_read_returns_the_content_stream_without_buffering()
+    {
+        var payload = Encoding.UTF8.GetBytes("streamed document payload");
+        var content = new NonBufferedContent(payload);
+        using var handler = new RequestSequenceHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal(
+                "/storage/v1/object/vinx-foundation-private/quarantine/company/document",
+                request.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
+        var storage = CreateStorage(client);
+
+        await using var stream = await storage.OpenReadAsync("quarantine/company/document", CancellationToken.None);
+        using var read = new MemoryStream();
+        await stream.CopyToAsync(read);
+
+        Assert.Equal(payload, read.ToArray());
+        // Com ResponseHeadersRead o HttpClient não materializa o corpo: SerializeToStreamAsync
+        // só roda se a opção de completude fosse buffer (ResponseContentRead).
+        Assert.Equal(0, content.SerializationCount);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("../etc/passwd")]
+    [InlineData("/leading-segment")]
+    [InlineData("trailing-segment/")]
+    [InlineData("back\\slash")]
+    public async Task Open_read_validates_the_object_key(string providerKey)
+    {
+        using var handler = new RequestSequenceHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
+        var storage = CreateStorage(client);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => storage.OpenReadAsync(providerKey, CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task Open_read_fails_closed_on_http_error(HttpStatusCode statusCode)
+    {
+        using var handler = new RequestSequenceHandler(
+            _ => new HttpResponseMessage(statusCode));
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
+        var storage = CreateStorage(client);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => storage.OpenReadAsync("quarantine/company/document", CancellationToken.None));
+    }
+
     private static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(json, Encoding.UTF8, "application/json")
@@ -204,6 +260,33 @@ public sealed class SupabaseFileStorageTests
             }
 
             return Task.FromResult(responses[responseIndex++](request));
+        }
+    }
+
+    /// <summary>
+    /// Conteúdo de resposta que conta materializações: SerializeToStreamAsync só é chamado
+    /// pelo HttpClient quando a completude é buffer (ResponseContentRead), nunca com
+    /// ResponseHeadersRead; ReadAsStreamAsync devolve o stream direto.
+    /// </summary>
+    private sealed class NonBufferedContent(byte[] payload) : HttpContent
+    {
+        private int serializationCount;
+
+        public int SerializationCount => serializationCount;
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            serializationCount++;
+            await stream.WriteAsync(payload);
+        }
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(new MemoryStream(payload, writable: false));
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = payload.Length;
+            return true;
         }
     }
 }

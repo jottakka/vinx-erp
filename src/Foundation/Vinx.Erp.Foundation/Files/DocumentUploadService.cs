@@ -290,7 +290,12 @@ public sealed class DocumentUploadService(
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            return await malwareScanner.ScanAsync(new MalwareScanRequest(providerKey, null), scanScope.Token);
+            // O conteúdo é aberto de forma lazy pelo scanner, direto do storage privado.
+            return await malwareScanner.ScanAsync(
+                new MalwareScanRequest(
+                    providerKey,
+                    scanToken => storage.OpenReadAsync(providerKey, scanToken)),
+                scanScope.Token);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
