@@ -232,6 +232,36 @@ PostgreSQL têm tentativas agendadas finitas. Erro permanente, inesperado ou
 tentativas esgotadas seguem para a DLQ do worker com UUID zerado, sem headers,
 payload original, dados pessoais ou mensagem interna de exceção.
 
+### Intenções de notificação e outbox transacional genérico
+
+A fatia #26 cria a infraestrutura de notificações reutilizável por módulos de
+negócio: schema `notifications` com intenções, preferências por canal e
+templates aprovados. `NotificationIntentService` grava as intenções e a
+mensagem durável `NotificationDeliveryRequested` na mesma transação do
+produtor, replicando o contrato do convite inicial: envelope com somente o
+UUID opaco `deliveryId`, flush após commit único e sem mensagem em `replay`,
+negação ou supressão.
+
+O canal in-app é obrigatório e não é controlável por preferência; o canal
+WhatsApp exige opt-in por `(empresa, destinatário)`, revalidado dentro da
+função `notifications.enqueue_notification_intent` no momento do enfileiramento,
+e sua ausência suprime somente o WhatsApp mantendo o alerta in-app. A
+deduplicação é a chave `(event_key, destinatário, canal, template)` com
+constraint UNIQUE: replays retornam a entrega existente sem segunda mensagem,
+sem auditoria extra e sem regressão de `pending_delivery`. A função valida
+membership ativa do destinatário na empresa (empresa cruzada nega fechado) e
+template aprovado para o canal; grava auditoria `notification.intent.enqueue`
+na mesma transação. A mudança de preferência é self-service por
+`notifications.set_channel_preference` (somente WhatsApp), com auditoria
+somente na transição efetiva.
+
+Nenhuma coluna ou envelope guarda telefone, e-mail, corpo de mensagem, payload
+de negócio ou segredo; o deep-link é um selector relativo opcional. Não há
+produtor de evento de negócio nesta fatia: Paguai permanece rascunho e nenhum
+evento é fabricado. O worker de entrega (#48) e o adapter Meta (#28) consomem
+a fila `notification-delivery` em fatias posteriores; o WorkerHost não é
+alterado aqui.
+
 ## Diretório local de funcionários
 
 `POST /foundation/companies/{companyId}/employees` reserva uma pessoa no
@@ -439,6 +469,14 @@ recebe DML direto em `users`, `memberships`, `employees`, idempotência ou
 grants; executa apenas as duas funções estreitas. O downgrade falha fechado se
 existir recibo de criação de funcionário ou grant ativo da capability, para não
 remover acesso ou estado observado.
+
+`vinx_notifications_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui o schema
+`notifications` (intenções, preferências e templates), com RLS forçado e
+policies restritas ao próprio owner, e as duas funções
+`SECURITY DEFINER` de enfileiramento e preferência. O runtime recebe somente
+`USAGE` no schema e `EXECUTE` nas funções — nenhum DML direto nas tabelas — e
+o worker não recebe qualquer privilégio em `notifications`. O downgrade falha
+fechado enquanto existir qualquer estado nas tabelas do schema.
 
 A revogação de membership marca somente soft-delete e auditoria técnica da
 membership própria. O runtime recebe `UPDATE` apenas nas colunas de ciclo de

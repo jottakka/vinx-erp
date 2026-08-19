@@ -23,6 +23,7 @@ using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Employees;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
@@ -99,6 +100,10 @@ builder.Host.UseWolverine(options =>
         .PublishMessage<OwnerInvitationDeliveryRequested>()
         .ToPostgresqlQueue("owner-invitation-delivery")
         .UseDurableOutbox();
+    options
+        .PublishMessage<NotificationDeliveryRequested>()
+        .ToPostgresqlQueue("notification-delivery")
+        .UseDurableOutbox();
 });
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
@@ -107,6 +112,7 @@ builder.Services.AddScoped<ActorMembershipMapService>();
 builder.Services.AddScoped<FoundationBootstrapService>();
 builder.Services.AddScoped<PlatformOperatorAccessService>();
 builder.Services.AddScoped<PlatformOrganizationProvisioningService>();
+builder.Services.AddScoped<NotificationIntentService>();
 builder.Services.AddScoped<EmployeeDirectoryService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();

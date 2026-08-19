@@ -40,7 +40,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA vinx_wolverine_work
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA vinx_wolverine_worker TO vinx_worker;
 GRANT SELECT, INSERT, UPDATE, DELETE
     ON TABLE vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery,
-        vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery_scheduled
+        vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery_scheduled,
+        vinx_wolverine_queues.wolverine_queue_notification_delivery,
+        vinx_wolverine_queues.wolverine_queue_notification_delivery_scheduled
     TO vinx_worker;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE vinx_migrator IN SCHEMA vinx_wolverine_worker
