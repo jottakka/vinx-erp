@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.Notifications;
+using Vinx.Erp.Notifications.Providers.Meta;
 using WorkerProgram = workerhost::Program;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -52,7 +53,8 @@ internal sealed class FileLoggerProvider(string path) : ILoggerProvider
 internal sealed class NotificationWorkerHostFactory(
     string connectionString,
     bool useFakeWhatsAppProvider = false,
-    string? debugLogPath = null
+    string? debugLogPath = null,
+    HttpMessageHandler? metaGraphHandler = null
 )
     : WebApplicationFactory<WorkerProgram>
 {
@@ -63,6 +65,22 @@ internal sealed class NotificationWorkerHostFactory(
         builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
         builder.UseSetting("SUPABASE_AUTH_SERVICE_ROLE_KEY", "test-service-role-key");
         builder.UseSetting("SUPABASE_INVITE_REDIRECT_URL", "https://app.example.test/convite");
+        // Segredos de teste sem valor real; o client do Graph é substituído
+        // por handler falso nos testes de envio.
+        builder.UseSetting("META_WHATSAPP_PHONE_NUMBER_ID", "111111111111111");
+        builder.UseSetting("META_WHATSAPP_ACCESS_TOKEN", "test-meta-access-token");
+        builder.UseSetting("META_WHATSAPP_WEB_APP_BASE_URL", "https://app.example.test");
+        builder.UseSetting("META_WHATSAPP_APP_SECRET", "test-meta-app-secret");
+        builder.UseSetting("META_WHATSAPP_WEBHOOK_VERIFY_TOKEN", "test-meta-verify-token");
+        if (metaGraphHandler is not null)
+        {
+            builder.ConfigureTestServices(services =>
+                services
+                    .AddHttpClient(MetaWhatsAppClient.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() => metaGraphHandler)
+            );
+        }
+
         if (debugLogPath is not null)
         {
             builder.ConfigureLogging(logging =>
@@ -126,7 +144,7 @@ public sealed class FakeNotificationProvider : INotificationProvider
     }
 
     public Task<NotificationProviderResult> DeliverAsync(
-        Guid deliveryId,
+        NotificationDeliveryRequest request,
         CancellationToken cancellationToken
     )
     {

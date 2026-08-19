@@ -73,33 +73,28 @@ public sealed class NotificationWorkerSecurityTests
             )
         );
         Assert.True(enqueued.WhatsApp!.Created);
-        var deliveryId = enqueued.WhatsApp.DeliveryId!.Value;
+        var deliveryId = enqueued.WhatsApp!.DeliveryId!.Value;
 
-        // Sem provider de WhatsApp registrado: configuração de produção desta
-        // fatia, com apenas o canal in-app.
+        // Desde o adapter Meta (#28) o wiring de produção registra o provider
+        // do canal WhatsApp; sem número cadastrado o resultado é permanente
+        // sem nenhuma chamada externa — e nada vai para a DLQ.
         await using var worker = new NotificationWorkerHostFactory(
             factory.Fixture.WorkerConnectionString
         );
         using var client = worker.CreateClient();
 
-        var bodies = await WaitDeadLetterBodyAsync(factory, 1);
-        var body = Assert.Single(bodies);
-        var envelope = Wolverine.Runtime.Serialization.EnvelopeSerializer.Deserialize(body);
-        using var payload = JsonDocument.Parse(envelope.Data);
-        var property = Assert.Single(payload.RootElement.EnumerateObject());
-        Assert.Equal("deliveryId", property.Name);
-        Assert.Equal(Guid.Empty, property.Value.GetGuid());
-        Assert.DoesNotContain(
-            deliveryId.ToString("D"),
-            JsonSerializer.Serialize(payload.RootElement),
-            StringComparison.OrdinalIgnoreCase
+        var state = await NotificationIntentSeed.WaitUntilDeliveryAsync(
+            factory,
+            deliveryId,
+            "provider_failed",
+            TimeSpan.FromSeconds(30)
         );
-
-        var state = await NotificationIntentSeed.ReadDeliveryAsync(factory, deliveryId);
-        Assert.Equal("pending_provider", state.Status);
-        Assert.False(state.Resolved);
-        Assert.Equal(0, state.AttemptCount);
+        Assert.Equal("provider_failed", state.Status);
+        Assert.False(await HasDeadLettersAsync(factory));
     }
+
+    private static async Task<bool> HasDeadLettersAsync(FoundationApiFactory factory) =>
+        (await NotificationIntentSeed.ReadWorkerDeadLetterBodiesAsync(factory)).Count > 0;
 
     [Fact]
     public async Task Worker_without_function_grants_fails_closed_without_losing_the_delivery()

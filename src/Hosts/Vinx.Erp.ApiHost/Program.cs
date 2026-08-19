@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Vinx.Erp.ApiHost;
+using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.ApiHost.Models;
 using Vinx.Erp.ApiHost.OpenApi;
@@ -25,6 +26,7 @@ using Vinx.Erp.Foundation.Employees;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Notifications;
+using Vinx.Erp.Notifications.Providers.Meta;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
@@ -47,6 +49,29 @@ builder
         "Foundation database connection must be configured."
     )
     .ValidateOnStart();
+builder
+    .Services.AddOptions<MetaWhatsAppOptions>()
+    .Bind(builder.Configuration)
+    .Validate(
+        options =>
+            // Tudo ou nada: ausência total deixa o host subir e o webhook
+            // responde 503; configurado exige o conjunto completo e válido.
+            (
+                string.IsNullOrWhiteSpace(options.AppSecret)
+                && string.IsNullOrWhiteSpace(options.WebhookVerifyToken)
+                && string.IsNullOrWhiteSpace(options.WebAppBaseUrl)
+            )
+            || (
+                !string.IsNullOrWhiteSpace(options.AppSecret)
+                && !string.IsNullOrWhiteSpace(options.WebhookVerifyToken)
+                && MetaWhatsAppOptions.IsAllowedHttpsUrl(options.WebAppBaseUrl)
+            ),
+        "Meta WhatsApp webhook options are invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<MetaWhatsAppOptions>>().Value
+);
 builder
     .Services.AddOptions<SupabaseStorageOptions>()
     .Bind(builder.Configuration)
@@ -316,6 +341,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 app.MapBrowserBffSessionEndpoints();
+app.MapMetaWhatsAppWebhookEndpoints();
 app.MapControllers();
 var foundation = app.MapGroup("/foundation")
     .RequireAuthorization()

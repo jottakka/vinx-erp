@@ -80,7 +80,10 @@ public sealed class NotificationDeliveryWorkerService(
         NotificationProviderResult providerResult;
         try
         {
-            providerResult = await provider.DeliverAsync(deliveryId, cancellationToken);
+            providerResult = await provider.DeliverAsync(
+                new NotificationDeliveryRequest(deliveryId, claim.AttemptId.Value),
+                cancellationToken
+            );
         }
         catch (NotificationProviderTransientException)
         {

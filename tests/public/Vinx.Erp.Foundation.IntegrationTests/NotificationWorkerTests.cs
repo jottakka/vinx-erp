@@ -264,7 +264,19 @@ public sealed class NotificationWorkerTests
         Assert.Equal(4, state.AttemptCount);
 
         var bodies = await NotificationWorkerSecurityTests.WaitDeadLetterBodyAsync(factory, 1);
-        Assert.NotEmpty(bodies);
+        var body = Assert.Single(bodies);
+        // A DLQ é redigida: o envelope persiste somente o identificador zerado,
+        // sem headers, payload original ou identificador real da entrega.
+        var envelope = Wolverine.Runtime.Serialization.EnvelopeSerializer.Deserialize(body);
+        using var payload = System.Text.Json.JsonDocument.Parse(envelope.Data);
+        var property = Assert.Single(payload.RootElement.EnumerateObject());
+        Assert.Equal("deliveryId", property.Name);
+        Assert.Equal(Guid.Empty, property.Value.GetGuid());
+        Assert.DoesNotContain(
+            deliveryId.ToString("D"),
+            System.Text.Encoding.UTF8.GetString(envelope.Data ?? []),
+            StringComparison.OrdinalIgnoreCase
+        );
     }
 
     private static async Task<NotificationEnqueueResult> EnqueueWhatsAppAsync(

@@ -26,9 +26,23 @@ Foundation e pelo RLS do schema `notifications`.
 
 - Mensagem durável: `NotificationDeliveryRequested(Guid DeliveryId)` —
   somente identificador opaco, congelada em #26.
-- Contrato de provider: `INotificationProvider.DeliverAsync(deliveryId, ct)`
-  retornando classificação estável; timeout vira `Ambiguous` e não lança
-  transitiva.
+- Contrato de provider: `INotificationProvider.DeliverAsync(request, ct)`
+  com `NotificationDeliveryRequest(DeliveryId, AttemptId)`; o token da
+  tentativa autoriza a fronteira estreita a ler somente os dados do canal.
+  Classificação estável; timeout vira `Ambiguous` e não lança transitiva.
+
+## Provider Meta (WhatsApp outbound)
+
+`Providers/Meta` implementa o canal `whatsapp`: options `ValidateOnStart`
+(segredos só no secret store), client HTTP sem redirect que apenas classifica
+(2xx com id → Delivered; 4xx → Rejected; 429/5xx → transitiva delegada ao
+retry do worker; timeout → Ambiguous), mapper com template aprovado e no
+máximo o deep-link como variável única, e provider que lê telefone/template
+por `notifications.get_notification_delivery_target` (somente a tentativa em
+curso). O webhook público no ApiHost valida `X-Hub-Signature-256` sobre os
+bytes brutos antes de qualquer parse e grava eventos insert-only por
+`(message_id, event_type)` sem correlação com o negócio; `read` não é
+confirmação humana. Runbook: `docs/runbooks/whatsapp-outbound.md`.
 
 ## Deletion strategy
 
