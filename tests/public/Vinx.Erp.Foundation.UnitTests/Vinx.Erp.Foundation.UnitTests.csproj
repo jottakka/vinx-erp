@@ -19,5 +19,7 @@
   <ItemGroup>
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentHttpContracts.cs" Link="Agent/AgentHttpContracts.cs" />
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentExecutionApplicationService.cs" Link="Agent/AgentExecutionApplicationService.cs" />
+    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentRunOptions.cs" Link="Agent/AgentRunOptions.cs" />
+    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentRunServiceCollectionExtensions.cs" Link="Agent/AgentRunServiceCollectionExtensions.cs" />
   </ItemGroup>
 </Project>
