@@ -221,6 +221,58 @@ public partial class AddNotificationDeliveryWorker : Migration
                 FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION notifications.finalize_notification_delivery(uuid, uuid, uuid, text)
                 TO vinx_worker;
+
+            CREATE FUNCTION notifications.release_notification_delivery(
+                p_delivery_id uuid,
+                p_attempt_id uuid)
+            RETURNS TABLE (status text, released boolean)
+            LANGUAGE plpgsql SECURITY DEFINER
+            SET search_path TO pg_catalog, notifications, pg_temp
+            AS $function$
+            DECLARE
+                v_status text;
+                v_current_attempt_id uuid;
+            BEGIN
+                IF p_delivery_id IS NULL OR p_attempt_id IS NULL THEN
+                    RAISE EXCEPTION 'notification delivery parameters are invalid' USING ERRCODE = '22023';
+                END IF;
+
+                SELECT intent.status, intent.provider_attempt_id
+                    INTO v_status, v_current_attempt_id
+                FROM notifications.notification_intents AS intent
+                WHERE intent.id = p_delivery_id
+                FOR UPDATE;
+
+                IF NOT FOUND THEN
+                    RETURN QUERY SELECT 'not_found'::text, false;
+                    RETURN;
+                END IF;
+
+                IF v_status = 'provider_in_flight' AND v_current_attempt_id = p_attempt_id THEN
+                    UPDATE notifications.notification_intents
+                        SET status = 'pending_provider',
+                            provider_attempt_id = NULL,
+                            provider_claimed_at = NULL,
+                            updated_at = clock_timestamp()
+                        WHERE id = p_delivery_id
+                            AND status = 'provider_in_flight'
+                            AND provider_attempt_id = p_attempt_id;
+                    IF FOUND THEN
+                        RETURN QUERY SELECT 'pending_provider'::text, true;
+                        RETURN;
+                    END IF;
+                    SELECT intent.status INTO v_status
+                    FROM notifications.notification_intents AS intent
+                    WHERE intent.id = p_delivery_id;
+                END IF;
+
+                RETURN QUERY SELECT v_status, false;
+            END;
+            $function$;
+            REVOKE ALL ON FUNCTION notifications.release_notification_delivery(uuid, uuid)
+                FROM PUBLIC, vinx_migrator;
+            GRANT EXECUTE ON FUNCTION notifications.release_notification_delivery(uuid, uuid)
+                TO vinx_worker;
             RESET ROLE;
             """);
 
@@ -246,6 +298,7 @@ public partial class AddNotificationDeliveryWorker : Migration
             DROP FUNCTION notifications.accept_notification_delivery(uuid, uuid);
             DROP FUNCTION notifications.claim_notification_delivery(uuid);
             DROP FUNCTION notifications.finalize_notification_delivery(uuid, uuid, uuid, text);
+            DROP FUNCTION notifications.release_notification_delivery(uuid, uuid);
             RESET ROLE;
             ALTER TABLE notifications.notification_intents
                 DROP CONSTRAINT notification_intents_lifecycle_check;

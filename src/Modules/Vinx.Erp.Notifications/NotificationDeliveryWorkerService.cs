@@ -80,6 +80,19 @@ public sealed class NotificationDeliveryWorkerService(
         {
             providerResult = await provider.DeliverAsync(deliveryId, cancellationToken);
         }
+        catch (NotificationProviderTransientException)
+        {
+            // Libera o lease para que o retry finito do worker possa reivindicar
+            // a entrega; o estado de negócio não confirma nem regride.
+            await ExecuteAsync(
+                "SELECT status, released FROM notifications.release_notification_delivery(@delivery_id, @attempt_id)",
+                static reader => new NotificationDeliveryResult(reader.GetString(0), reader.GetBoolean(1)),
+                cancellationToken,
+                ("delivery_id", deliveryId),
+                ("attempt_id", claim.AttemptId.Value)
+            );
+            throw;
+        }
         finally
         {
             stopwatch.Stop();
