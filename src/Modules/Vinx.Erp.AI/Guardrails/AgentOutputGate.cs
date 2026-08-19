@@ -94,10 +94,12 @@ public sealed class AgentOutputGate(SourceAuthorizationGate sources, SensitiveOu
             return Withheld(request, AgentOutputGateStatus.NeedsClarification, NoEvidence);
         }
 
+        // Caminho ok: o texto exposto é SEMPRE o redigido; a redação nunca altera o status.
+        var redaction = redactor.Redact(request.Response.Text);
         return new AgentOutputGateResult(
             AgentOutputGateStatus.Result,
             Ok,
-            redactor.Redact(request.Response.Text),
+            redaction.RedactedText,
             authorization.AuthorizedSources,
             AgentPolicyVersion.Current,
             request.Response.HasToolProposal);

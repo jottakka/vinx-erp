@@ -13,7 +13,7 @@ public sealed class AgentOutputGateSchemaTests
     [Fact]
     public void Valid_structured_response_returns_result_with_authorized_sources()
     {
-        var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor());
+        var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
         var authorizedSource = new AgentCitedSource("fonte-1", AlfaCompanyId);
         var response = new AgentModelResponse(
             Text: "Resumo enviado para contato@exemplo.com",
@@ -43,7 +43,7 @@ public sealed class AgentOutputGateSchemaTests
     [Fact]
     public void Invalid_schema_blocks_text_from_channel()
     {
-        var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor());
+        var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
         var response = new AgentModelResponse(
             Text: "resumo com dado sensivel",
             StructuredJson: "{ invalido",
@@ -67,7 +67,7 @@ public sealed class AgentOutputGateSchemaTests
     [Fact]
     public void Tool_proposal_flag_is_preserved_regardless_of_status()
     {
-        var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor());
+        var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
         // Fonte autorizada presente para não cair em no_evidence (regra de fatia posterior).
         var accepted = new AgentModelResponse(
             Text: null,

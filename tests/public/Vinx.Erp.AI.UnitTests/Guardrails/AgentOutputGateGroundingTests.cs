@@ -125,7 +125,8 @@ public sealed class AgentOutputGateGroundingTests
         Assert.Single(result.AuthorizedSources);
     }
 
-    private static AgentOutputGate Gate() => new(new SourceAuthorizationGate(), new SensitiveOutputRedactor());
+    private static AgentOutputGate Gate() =>
+        new(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
 
     private static AgentModelResponse Response(string? text, IReadOnlyList<AgentCitedSource> sources, double? confidence) => new(
         Text: text,
