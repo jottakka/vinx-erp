@@ -12,6 +12,9 @@ public partial class AddNotificationDeliveryWorker : Migration
     protected override void Up(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
+            GRANT CREATE ON SCHEMA notifications TO vinx_notifications_owner;
+            GRANT USAGE ON SCHEMA notifications TO vinx_worker;
+            SET ROLE vinx_notifications_owner;
             ALTER TABLE notifications.notification_intents
                 DROP CONSTRAINT notification_intents_status_check;
             ALTER TABLE notifications.notification_intents
@@ -42,7 +45,6 @@ public partial class AddNotificationDeliveryWorker : Migration
                     OR (status IN ('provider_failed', 'provider_ambiguous')
                         AND provider_attempt_id IS NOT NULL AND provider_resolved_at IS NOT NULL AND failure_reason IS NOT NULL));
 
-            SET ROLE vinx_notifications_owner;
             CREATE FUNCTION notifications.accept_notification_delivery(
                 p_delivery_id uuid,
                 p_correlation_id uuid)
@@ -72,9 +74,10 @@ public partial class AddNotificationDeliveryWorker : Migration
                 END IF;
 
                 IF v_status = 'pending_delivery' THEN
-                    UPDATE notifications.notification_intents
+                    UPDATE notifications.notification_intents AS intent
                         SET status = 'pending_provider', updated_at = clock_timestamp()
-                        WHERE id = p_delivery_id AND status = 'pending_delivery';
+                        WHERE intent.id = p_delivery_id
+                            AND intent.status = 'pending_delivery';
                     IF FOUND THEN
                         PERFORM audit.append_event(
                             v_recipient_user_id, 'company', v_company_id, 'worker',
@@ -125,13 +128,14 @@ public partial class AddNotificationDeliveryWorker : Migration
 
                 IF v_status = 'pending_provider' THEN
                     v_attempt_id := gen_random_uuid();
-                    UPDATE notifications.notification_intents
+                    UPDATE notifications.notification_intents AS intent
                         SET status = 'provider_in_flight',
                             provider_attempt_id = v_attempt_id,
                             provider_claimed_at = clock_timestamp(),
-                            attempt_count = attempt_count + 1,
+                            attempt_count = intent.attempt_count + 1,
                             updated_at = clock_timestamp()
-                        WHERE id = p_delivery_id AND status = 'pending_provider';
+                        WHERE intent.id = p_delivery_id
+                            AND intent.status = 'pending_provider';
                     IF FOUND THEN
                         RETURN QUERY SELECT 'provider_in_flight'::text, v_attempt_id, v_channel, true;
                         RETURN;
@@ -192,14 +196,14 @@ public partial class AddNotificationDeliveryWorker : Migration
                     ELSE 'provider_ambiguous' END;
 
                 IF v_status = 'provider_in_flight' AND v_current_attempt_id = p_attempt_id THEN
-                    UPDATE notifications.notification_intents
+                    UPDATE notifications.notification_intents AS intent
                         SET status = v_new_status,
                             provider_resolved_at = clock_timestamp(),
                             failure_reason = v_new_reason,
                             updated_at = clock_timestamp()
-                        WHERE id = p_delivery_id
-                            AND status = 'provider_in_flight'
-                            AND provider_attempt_id = p_attempt_id;
+                        WHERE intent.id = p_delivery_id
+                            AND intent.status = 'provider_in_flight'
+                            AND intent.provider_attempt_id = p_attempt_id;
                     IF FOUND THEN
                         PERFORM audit.append_event(
                             v_recipient_user_id, 'company', v_company_id, 'worker',
@@ -249,14 +253,14 @@ public partial class AddNotificationDeliveryWorker : Migration
                 END IF;
 
                 IF v_status = 'provider_in_flight' AND v_current_attempt_id = p_attempt_id THEN
-                    UPDATE notifications.notification_intents
+                    UPDATE notifications.notification_intents AS intent
                         SET status = 'pending_provider',
                             provider_attempt_id = NULL,
                             provider_claimed_at = NULL,
                             updated_at = clock_timestamp()
-                        WHERE id = p_delivery_id
-                            AND status = 'provider_in_flight'
-                            AND provider_attempt_id = p_attempt_id;
+                        WHERE intent.id = p_delivery_id
+                            AND intent.status = 'provider_in_flight'
+                            AND intent.provider_attempt_id = p_attempt_id;
                     IF FOUND THEN
                         RETURN QUERY SELECT 'pending_provider'::text, true;
                         RETURN;
@@ -274,6 +278,7 @@ public partial class AddNotificationDeliveryWorker : Migration
             GRANT EXECUTE ON FUNCTION notifications.release_notification_delivery(uuid, uuid)
                 TO vinx_worker;
             RESET ROLE;
+            REVOKE CREATE ON SCHEMA notifications FROM vinx_notifications_owner;
             """);
 
     protected override void Down(MigrationBuilder migrationBuilder) =>
@@ -295,11 +300,13 @@ public partial class AddNotificationDeliveryWorker : Migration
                 FROM PUBLIC, vinx_worker, vinx_migrator;
             REVOKE ALL ON FUNCTION notifications.finalize_notification_delivery(uuid, uuid, uuid, text)
                 FROM PUBLIC, vinx_worker, vinx_migrator;
+            REVOKE ALL ON FUNCTION notifications.release_notification_delivery(uuid, uuid)
+                FROM PUBLIC, vinx_worker, vinx_migrator;
+            REVOKE USAGE ON SCHEMA notifications FROM vinx_worker;
             DROP FUNCTION notifications.accept_notification_delivery(uuid, uuid);
             DROP FUNCTION notifications.claim_notification_delivery(uuid);
             DROP FUNCTION notifications.finalize_notification_delivery(uuid, uuid, uuid, text);
             DROP FUNCTION notifications.release_notification_delivery(uuid, uuid);
-            RESET ROLE;
             ALTER TABLE notifications.notification_intents
                 DROP CONSTRAINT notification_intents_lifecycle_check;
             ALTER TABLE notifications.notification_intents
@@ -311,5 +318,6 @@ public partial class AddNotificationDeliveryWorker : Migration
                 DROP CONSTRAINT notification_intents_status_check;
             ALTER TABLE notifications.notification_intents
                 ADD CONSTRAINT notification_intents_status_check CHECK (status IN ('pending_delivery'));
+            RESET ROLE;
             """);
 }

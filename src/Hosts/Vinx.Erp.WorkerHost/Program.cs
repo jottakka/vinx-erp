@@ -133,6 +133,10 @@ builder.Services.AddSingleton<IDeadLetterInterceptor>(serviceProvider =>
 builder.Services.AddSingleton<IHostedService, WorkerDatabasePreflight>();
 builder.Host.UseWolverine(options =>
 {
+    // Em processos de teste com múltiplos hosts Wolverine, o assembly é
+    // global e fixado pelo primeiro host; amarrar explicitamente evita que
+    // este worker adote outro assembly (GH-3521).
+    options.ApplicationAssembly = typeof(Program).Assembly;
     options.UseEntityFrameworkCoreTransactions();
     options.Discovery.DisableConventionalDiscovery(true);
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();

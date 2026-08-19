@@ -267,6 +267,87 @@ internal static class NotificationIntentSeed
         return (long)(await command.ExecuteScalarAsync())!;
     }
 
+    public sealed record DeliveryState(
+        string Status,
+        int AttemptCount,
+        string? FailureReason,
+        bool Resolved
+    );
+
+    public static async Task<DeliveryState> ReadDeliveryAsync(
+        FoundationApiFactory factory,
+        Guid deliveryId
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT status, attempt_count, failure_reason, provider_resolved_at IS NOT NULL
+            FROM notifications.notification_intents WHERE id = @delivery_id
+            """,
+            administrator
+        );
+        command.Parameters.AddWithValue("delivery_id", deliveryId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return new DeliveryState(
+            reader.GetString(0),
+            reader.GetInt32(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.GetBoolean(3)
+        );
+    }
+
+    public static async Task<DeliveryState> WaitUntilDeliveryAsync(
+        FoundationApiFactory factory,
+        Guid deliveryId,
+        string expectedStatus,
+        TimeSpan timeout
+    )
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var state = await ReadDeliveryAsync(factory, deliveryId);
+            if (state.Status == expectedStatus)
+            {
+                return state;
+            }
+
+            await Task.Delay(250);
+        }
+
+        return await ReadDeliveryAsync(factory, deliveryId);
+    }
+
+    public static async Task<IReadOnlyList<byte[]>> ReadWorkerDeadLetterBodiesAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var exists = new NpgsqlCommand(
+            "SELECT to_regclass('vinx_wolverine_worker.wolverine_dead_letters')::text",
+            administrator
+        );
+        if (await exists.ExecuteScalarAsync() is not string)
+        {
+            return [];
+        }
+
+        await using var command = new NpgsqlCommand(
+            "SELECT body FROM vinx_wolverine_worker.wolverine_dead_letters",
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        var bodies = new List<byte[]>();
+        while (await reader.ReadAsync())
+        {
+            bodies.Add(reader.GetFieldValue<byte[]>(0));
+        }
+
+        return bodies;
+    }
+
     private static async Task<bool> NotificationQueueExistsAsync(
         NpgsqlConnection administrator
     )

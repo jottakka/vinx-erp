@@ -49,11 +49,15 @@ public sealed class NotificationDeliveryWorkerService(
             ("delivery_id", deliveryId),
             ("correlation_id", correlationId)
         );
-        if (IsSkip(acceptance.Status))
+        if (IsSkipAfterAcceptance(acceptance.Status))
         {
             metrics.RecordOutcome(acceptance.Channel ?? "unknown", "skipped");
             return new NotificationDeliveryResult(acceptance.Status, false);
         }
+
+        // Resolve o provider antes do claim: canal sem provider é permanente e
+        // não pode deixar a entrega presa com lease em provider_in_flight.
+        var provider = providers.Resolve(acceptance.Channel!);
 
         var claim = await ExecuteAsync(
             "SELECT status, attempt_id, channel, claimed FROM notifications.claim_notification_delivery(@delivery_id)",
@@ -65,15 +69,13 @@ public sealed class NotificationDeliveryWorkerService(
             cancellationToken,
             ("delivery_id", deliveryId)
         );
-        if (IsSkip(claim.Status) || !claim.Claimed || claim.AttemptId is null)
+        if (IsFinal(claim.Status) || !claim.Claimed || claim.AttemptId is null)
         {
             // Terminal antes do claim, ou lease detido por outra tentativa:
             // sem chamada externa e sem confirmação adicional.
             metrics.RecordOutcome(claim.Channel ?? acceptance.Channel ?? "unknown", "skipped");
             return new NotificationDeliveryResult(claim.Status, false);
         }
-
-        var provider = providers.Resolve(claim.Channel!);
         var stopwatch = Stopwatch.StartNew();
         NotificationProviderResult providerResult;
         try
@@ -182,12 +184,15 @@ public sealed class NotificationDeliveryWorkerService(
         }
     }
 
-    private static bool IsSkip(string status) =>
+    private static bool IsSkipAfterAcceptance(string status) =>
         status
             is "delivered"
                 or "provider_failed"
                 or "provider_ambiguous"
                 or "provider_in_flight";
+
+    private static bool IsFinal(string status) =>
+        status is "delivered" or "provider_failed" or "provider_ambiguous";
 
     private static void AddParameter(IDbCommand command, string name, object? value)
     {
