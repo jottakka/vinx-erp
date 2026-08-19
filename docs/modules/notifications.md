@@ -44,6 +44,25 @@ bytes brutos antes de qualquer parse e grava eventos insert-only por
 `(message_id, event_type)` sem correlação com o negócio; `read` não é
 confirmação humana. Runbook: `docs/runbooks/whatsapp-outbound.md`.
 
+## Inbound imagem → OCR → IA (#140 subsete)
+
+`Providers/Meta/InboundWhatsAppInteractionService` orquestra o subsete
+automatizado do #140: o webhook (mesmo endpoint do W3) passa a ler também
+`messages[]` e aceita somente `type=image` com id de mídia; o ingress
+(`InboundWhatsAppIngressService` no ApiHost) deduplica por `message_id`
+(`notifications.record_inbound_whatsapp_message`) e publica
+`InboundWhatsAppImageReceived` na fila durável `whatsapp-inbound` na mesma
+transação (padrão do outbox transacional). O worker faz claim idempotente
+(`claim/complete/fail_inbound_whatsapp_message`), baixa a mídia em duas fases,
+canonicaliza (EXIF descartado, tetos de pixel/byte), transcreve pelo perfil
+de visão (`DocumentVisionOcr` do módulo AI — conteúdo sempre tratado como
+dado), compõe um turno único no perfil de texto e responde em texto na
+janela de 24h (`MetaWhatsAppReplyMapper`, cap 4096). Perfis `InboundWhatsAppAi`
+são tudo-ou-nada: ausentes, cada imagem falha fechada (`ai_unconfigured`);
+parciais derrubam o boot. Falhas terminais carregam motivo estável
+(`failure_reason`); transitivas seguem retry 1s/5s/30s e DLQ redigida
+(`whatsapp_inbound_*`). Runbook: `docs/runbooks/whatsapp-inbound.md`.
+
 ## Deletion strategy
 
 O módulo é stateless; não possui ciclo de vida de dados. Entregas e DLQ

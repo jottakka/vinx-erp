@@ -54,7 +54,10 @@ internal sealed class NotificationWorkerHostFactory(
     string connectionString,
     bool useFakeWhatsAppProvider = false,
     string? debugLogPath = null,
-    HttpMessageHandler? metaGraphHandler = null
+    HttpMessageHandler? metaGraphHandler = null,
+    bool configureInboundAi = false,
+    HttpMessageHandler? inboundTextAiHandler = null,
+    HttpMessageHandler? inboundVisionAiHandler = null
 )
     : WebApplicationFactory<WorkerProgram>
 {
@@ -79,6 +82,36 @@ internal sealed class NotificationWorkerHostFactory(
                     .AddHttpClient(MetaWhatsAppClient.HttpClientName)
                     .ConfigurePrimaryHttpMessageHandler(() => metaGraphHandler)
             );
+        }
+
+        if (configureInboundAi)
+        {
+            // Perfis completos e sem valor real: endpoints https públicos são
+            // exigidos pela política de egresso do #135-B; os handlers falsos
+            // interceptam antes de qualquer rede real. A instância substitui o
+            // singleton diretamente — o bind de seção não é usado em teste.
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<InboundWhatsAppAiOptions>();
+                services.AddSingleton(InboundAiTestProfiles.Create());
+            });
+            if (inboundTextAiHandler is not null)
+            {
+                builder.ConfigureTestServices(services =>
+                    services
+                        .AddHttpClient(InboundWhatsAppInteractionService.TextHttpClientName)
+                        .ConfigurePrimaryHttpMessageHandler(() => inboundTextAiHandler)
+                );
+            }
+
+            if (inboundVisionAiHandler is not null)
+            {
+                builder.ConfigureTestServices(services =>
+                    services
+                        .AddHttpClient(InboundWhatsAppInteractionService.VisionHttpClientName)
+                        .ConfigurePrimaryHttpMessageHandler(() => inboundVisionAiHandler)
+                );
+            }
         }
 
         if (debugLogPath is not null)

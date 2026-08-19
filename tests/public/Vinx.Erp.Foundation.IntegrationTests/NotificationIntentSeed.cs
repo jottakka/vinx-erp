@@ -392,6 +392,74 @@ internal static class NotificationIntentSeed
         return await ReadDeliveryAsync(factory, deliveryId);
     }
 
+    public sealed record InboundRow(
+        string MessageId,
+        string WaId,
+        string MediaId,
+        string? Caption,
+        string Status,
+        string? ReplyMessageId,
+        string? FailureReason
+    );
+
+    public static async Task<IReadOnlyList<InboundRow>> ReadInboundRowsAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT message_id, wa_id, media_id, caption, status, reply_message_id, failure_reason
+                FROM notifications.inbound_whatsapp_messages
+                ORDER BY created_at
+            """,
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        var rows = new List<InboundRow>();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(
+                new InboundRow(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6)
+                )
+            );
+        }
+
+        return rows;
+    }
+
+    public static async Task<InboundRow> WaitUntilInboundAsync(
+        FoundationApiFactory factory,
+        string messageId,
+        string expectedStatus,
+        TimeSpan timeout
+    )
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var row = (await ReadInboundRowsAsync(factory))
+                .SingleOrDefault(row => row.MessageId == messageId);
+            if (row?.Status == expectedStatus)
+            {
+                return row;
+            }
+
+            await Task.Delay(250);
+        }
+
+        return (
+            await ReadInboundRowsAsync(factory)
+        ).Single(row => row.MessageId == messageId);
+    }
+
     public static async Task<IReadOnlyList<byte[]>> ReadWorkerDeadLetterBodiesAsync(
         FoundationApiFactory factory
     )

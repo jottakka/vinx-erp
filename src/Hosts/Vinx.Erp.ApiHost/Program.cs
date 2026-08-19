@@ -26,6 +26,7 @@ using Vinx.Erp.Foundation.Employees;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Notifications;
+using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
@@ -130,6 +131,10 @@ builder.Host.UseWolverine(options =>
         .PublishMessage<NotificationDeliveryRequested>()
         .ToPostgresqlQueue("notification-delivery")
         .UseDurableOutbox();
+    options
+        .PublishMessage<InboundWhatsAppImageReceived>()
+        .ToPostgresqlQueue("whatsapp-inbound")
+        .UseDurableOutbox();
 });
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
@@ -139,6 +144,7 @@ builder.Services.AddScoped<FoundationBootstrapService>();
 builder.Services.AddScoped<PlatformOperatorAccessService>();
 builder.Services.AddScoped<PlatformOrganizationProvisioningService>();
 builder.Services.AddScoped<NotificationIntentService>();
+builder.Services.AddScoped<InboundWhatsAppIngressService>();
 builder.Services.AddScoped<EmployeeDirectoryService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
