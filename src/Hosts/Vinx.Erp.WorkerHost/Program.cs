@@ -122,7 +122,7 @@ builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
 builder
     .Services.AddOptions<MetaWhatsAppOptions>()
-    .BindConfiguration(MetaWhatsAppOptions.SectionName)
+    .Bind(builder.Configuration)
     .Validate(
         options =>
             !string.IsNullOrWhiteSpace(options.PhoneNumberId)
@@ -140,7 +140,6 @@ builder
     .ConfigurePrimaryHttpMessageHandler(() =>
         new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
     );
-builder.Services.AddScoped<MetaWhatsAppClient>();
 builder
     .Services.AddHttpClient(
         SupabaseAdminOwnerInvitationClient.HttpClientName,

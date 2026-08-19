@@ -13,7 +13,7 @@ namespace Vinx.Erp.Notifications.Providers.Meta;
 public sealed class MetaWhatsAppClient(
     HttpClient http,
     MetaWhatsAppOptions options,
-    ILogger<MetaWhatsAppClient> logger
+    ILogger logger
 )
 {
     public const string HttpClientName = "meta-whatsapp";

@@ -15,7 +15,7 @@ namespace Vinx.Erp.Notifications.Providers.Meta;
 /// </summary>
 public sealed class MetaWhatsAppProvider(
     FoundationDbContext database,
-    MetaWhatsAppClient client,
+    System.Net.Http.IHttpClientFactory httpClientFactory,
     MetaWhatsAppOptions options,
     ILogger<MetaWhatsAppProvider> logger
 ) : INotificationProvider
@@ -50,6 +50,11 @@ public sealed class MetaWhatsAppProvider(
             target.MetaLanguage!,
             target.DeepLinkSelector,
             options.WebAppBaseUrl
+        );
+        var client = new MetaWhatsAppClient(
+            httpClientFactory.CreateClient(MetaWhatsAppClient.HttpClientName),
+            options,
+            logger
         );
         return await client.SendAsync(message, cancellationToken);
     }

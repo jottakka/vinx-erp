@@ -6,8 +6,6 @@ namespace Vinx.Erp.Notifications.Providers.Meta;
 /// </summary>
 public sealed class MetaWhatsAppOptions
 {
-    public const string SectionName = "MetaWhatsApp";
-
     [Microsoft.Extensions.Configuration.ConfigurationKeyName("META_WHATSAPP_PHONE_NUMBER_ID")]
     public string PhoneNumberId { get; set; } = string.Empty;
 

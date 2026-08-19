@@ -50,7 +50,7 @@ builder
     .ValidateOnStart();
 builder
     .Services.AddOptions<MetaWhatsAppOptions>()
-    .BindConfiguration(MetaWhatsAppOptions.SectionName)
+    .Bind(builder.Configuration)
     .Validate(
         options =>
             !string.IsNullOrWhiteSpace(options.AppSecret)
