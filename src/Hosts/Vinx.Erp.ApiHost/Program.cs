@@ -112,6 +112,13 @@ builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 // Engine fail-closed até a aprovação da engine real: todo scan retorna indisponível.
+builder
+    .Services.AddOptions<MalwareScannerOptions>()
+    .Validate(
+        options => options.Timeout > TimeSpan.Zero && options.MaxScanBytes > 0,
+        "Malware scanner options must define a positive timeout and byte limit."
+    )
+    .ValidateOnStart();
 builder.Services.AddSingleton<IMalwareScanner, BlockedMalwareScanner>();
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddScoped<PaguaiDraftService>();

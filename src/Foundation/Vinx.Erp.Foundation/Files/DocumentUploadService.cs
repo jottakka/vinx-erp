@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -5,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
@@ -18,6 +20,7 @@ public sealed class DocumentUploadService(
     FoundationDbContext database,
     FileStorage storage,
     IMalwareScanner malwareScanner,
+    IOptions<MalwareScannerOptions> malwareScannerOptions,
     AuditAppender auditAppender,
     ILogger<DocumentUploadService> logger,
     CapabilityEvaluator capabilityEvaluator)
@@ -25,7 +28,11 @@ public sealed class DocumentUploadService(
     private const string IntentCommandName = "foundation.files.upload.intent";
     private const string ConfirmationCommandName = "foundation.files.upload.confirm";
     private const string InspectionOperationName = "foundation.files.upload.inspect";
+    private const string ScanOperationName = "foundation.files.upload.scan";
     private const string AuditOperationName = "foundation.files.upload.audit";
+    private const string ScanModuleName = "files";
+    private const string ScanEventTemplate =
+        "Document malware scan {Operation} {Module} {Result} {Reason} after {ElapsedMs}ms";
     private static readonly CapabilityRequirement UploadCapability =
         new(KnownCapabilities.FilesUpload, CapabilityScope.Company);
     private static readonly CapabilityRequirement ConfirmCapability =
@@ -259,10 +266,52 @@ public sealed class DocumentUploadService(
         return ConfirmationPreparation.ForInspection(providerKey);
     }
 
+    /// <summary>
+    /// Scan server-side com timeout próprio: falha ou timeout da engine nunca derruba a confirmação —
+    /// produzem veredito indisponível (fail-closed) com motivo seguro. Cancelamento externo propaga.
+    /// </summary>
     private async Task<MalwareScanVerdict> ScanForConfirmationAsync(
         string providerKey,
-        CancellationToken cancellationToken) =>
-        await malwareScanner.ScanAsync(new MalwareScanRequest(providerKey, null), cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        using var scanScope = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        scanScope.CancelAfter(malwareScannerOptions.Value.Timeout);
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            return await malwareScanner.ScanAsync(new MalwareScanRequest(providerKey, null), scanScope.Token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return LogScanUnavailable(null, "scan_timeout", stopwatch.Elapsed);
+        }
+        catch (Exception exception)
+        {
+            return LogScanUnavailable(exception, "scan_failed", stopwatch.Elapsed);
+        }
+    }
+
+    private MalwareScanVerdict LogScanUnavailable(Exception? exception, string reason, TimeSpan elapsed)
+    {
+        var elapsedMs = (long)elapsed.TotalMilliseconds;
+        if (exception is null)
+        {
+            logger.LogWarning(
+                ScanEventTemplate, ScanOperationName, ScanModuleName, "unavailable", reason, elapsedMs);
+        }
+        else
+        {
+            logger.LogWarning(
+                exception, ScanEventTemplate, ScanOperationName, ScanModuleName, "unavailable", reason, elapsedMs);
+        }
+
+        return new MalwareScanVerdict(
+            MalwareScanStatus.Unavailable, null, null, null, DateTimeOffset.UtcNow, null, reason);
+    }
 
     private async Task<DocumentUploadResult<DocumentUploadConfirmationResult>> FinalizeConfirmationAsync(
         ActorContext actor,

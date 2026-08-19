@@ -43,6 +43,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly GateDatabaseFailurePoint? _databaseFailurePoint;
     private readonly FileStorage? _testFileStorage;
     private readonly IMalwareScanner? _testMalwareScanner;
+    private readonly TimeSpan? _testMalwareScanTimeout;
     private readonly HttpMessageHandler? _browserSessionProviderHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
     private readonly Func<ValueTask>? _disposeJwtAsync;
@@ -58,6 +59,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         GateDatabaseFailurePoint? databaseFailurePoint = null,
         FileStorage? testFileStorage = null,
         IMalwareScanner? testMalwareScanner = null,
+        TimeSpan? testMalwareScanTimeout = null,
         HttpMessageHandler? browserSessionProviderHandler = null,
         IFoundationFixtureLifecycle? fixture = null,
         Func<ValueTask>? disposeHostAsync = null,
@@ -72,6 +74,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _databaseFailurePoint = databaseFailurePoint;
         _testFileStorage = testFileStorage;
         _testMalwareScanner = testMalwareScanner;
+        _testMalwareScanTimeout = testMalwareScanTimeout;
         _browserSessionProviderHandler = browserSessionProviderHandler;
         _fixture = fixture ?? new FoundationPostgresFixture();
         _disposeHostAsync = disposeHostAsync;
@@ -97,10 +100,17 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Guid? correlationId = null,
         FileStorage? fileStorage = null,
         IMalwareScanner? malwareScanner = null,
+        TimeSpan? malwareScanTimeout = null,
         string? aal = null)
     {
         return await CreateAsync(
-            actorUserId, correlationId, fileStorage, malwareScanner, aal, provisionWolverineStorage: true);
+            actorUserId,
+            correlationId,
+            fileStorage,
+            malwareScanner,
+            malwareScanTimeout,
+            aal,
+            provisionWolverineStorage: true);
     }
 
     internal static async Task<FoundationApiFactory> CreateWithoutWolverineStorageAsync(string? aal = null)
@@ -113,6 +123,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Guid? correlationId = null,
         FileStorage? fileStorage = null,
         IMalwareScanner? malwareScanner = null,
+        TimeSpan? malwareScanTimeout = null,
         string? aal = null,
         bool provisionWolverineStorage = true)
     {
@@ -129,6 +140,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 aal),
             testFileStorage: fileStorage,
             testMalwareScanner: malwareScanner,
+            testMalwareScanTimeout: malwareScanTimeout,
             provisionWolverineStorage: provisionWolverineStorage);
         return await PrepareAsync(factory);
     }
@@ -138,9 +150,11 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Guid? correlationId = null,
         FileStorage? fileStorage = null,
         IMalwareScanner? malwareScanner = null,
+        TimeSpan? malwareScanTimeout = null,
         string? aal = null)
     {
-        var factory = await CreateAsync(actorUserId, correlationId, fileStorage, malwareScanner, aal);
+        var factory = await CreateAsync(
+            actorUserId, correlationId, fileStorage, malwareScanner, malwareScanTimeout, aal);
         return await SeedAuthenticatedActorAndReturnAsync(factory);
     }
 
@@ -283,6 +297,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             {
                 services.RemoveAll<IMalwareScanner>();
                 services.AddSingleton(_testMalwareScanner);
+            }
+            if (_testMalwareScanTimeout is { } malwareScanTimeout)
+            {
+                services.PostConfigure<MalwareScannerOptions>(options => options.Timeout = malwareScanTimeout);
             }
             if (_useJwtBearer)
             {
