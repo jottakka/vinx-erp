@@ -93,6 +93,9 @@ public sealed class OpenApiInferenceContractPinTests
         AssertClosedObject(requestSchema);
         AssertUuid(requestSchema.GetProperty("properties").GetProperty("requestId"));
         AssertUuid(requestSchema.GetProperty("properties").GetProperty("companyId"));
+        var email = requestSchema.GetProperty("properties").GetProperty("email");
+        Assert.Equal("string", email.GetProperty("type").GetString());
+        Assert.Equal("email", email.GetProperty("format").GetString());
 
         var responseSchema = post.GetProperty("responses")
             .GetProperty("201")

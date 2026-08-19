@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -13,7 +14,9 @@ namespace Vinx.Erp.ApiHost.OpenApi;
 /// Reflete no schema as opções de serializer do contrato estrito do host:
 /// objetos com <see cref="JsonUnmappedMemberHandling.Disallow"/> recebem
 /// <c>additionalProperties: false</c>, já que campos desconhecidos são
-/// rejeitados no binding. Genérico para qualquer tipo (request ou response).
+/// rejeitados no binding; propriedades com <see cref="EmailAddressAttribute"/>
+/// recebem <c>format: email</c> (o runtime valida a sintaxe na fronteira).
+/// Genérico para qualquer tipo (request ou response).
 /// </summary>
 public sealed class SerializerContractSchemaTransformer : IOpenApiSchemaTransformer
 {
@@ -39,6 +42,29 @@ public sealed class SerializerContractSchemaTransformer : IOpenApiSchemaTransfor
         )
         {
             schema.AdditionalPropertiesAllowed = false;
+        }
+
+        var properties = schema.Properties;
+        foreach (var property in context.JsonTypeInfo.Properties)
+        {
+            if (
+                property.AttributeProvider?.IsDefined(
+                    typeof(EmailAddressAttribute),
+                    inherit: false
+                ) != true
+            )
+            {
+                continue;
+            }
+
+            var match =
+                properties?.FirstOrDefault(entry =>
+                    string.Equals(entry.Key, property.Name, StringComparison.OrdinalIgnoreCase)
+                ) ?? default;
+            if (match.Value is OpenApiSchema propertySchema)
+            {
+                propertySchema.Format = "email";
+            }
         }
 
         return Task.CompletedTask;
