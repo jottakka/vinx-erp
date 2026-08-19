@@ -198,13 +198,19 @@ public sealed class SupabaseFileStorageTests
     [InlineData(HttpStatusCode.Forbidden)]
     public async Task Open_read_fails_closed_on_http_error(HttpStatusCode statusCode)
     {
-        using var handler = new RequestSequenceHandler(
-            _ => new HttpResponseMessage(statusCode));
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent("storage error", Encoding.UTF8, "text/plain")
+        };
+        using var handler = new RequestSequenceHandler(_ => response);
         using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
         var storage = CreateStorage(client);
 
         await Assert.ThrowsAsync<HttpRequestException>(
             () => storage.OpenReadAsync("quarantine/company/document", CancellationToken.None));
+        // Fail-closed devolve a conexão: a response de erro foi disposta pelo storage.
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => response.Content.ReadAsStreamAsync());
     }
 
     private static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)

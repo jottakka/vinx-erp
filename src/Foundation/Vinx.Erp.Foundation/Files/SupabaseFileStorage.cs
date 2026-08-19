@@ -119,7 +119,8 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
     /// <summary>
     /// Abre o conteúdo privado sem buffer: o GET usa ResponseHeadersRead e o stream é
     /// devolvido direto (o caller dispõe). Sem limite de bytes aqui — o limite é do scanner,
-    /// durante o streaming. A response não é disposta: seu dispose fecharia o stream.
+    /// durante o streaming. A response de sucesso não é disposta (seu dispose fecharia o
+    /// stream); a de erro é disposta antes do throw para devolver a conexão ao pool.
     /// </summary>
     public async Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken)
     {
@@ -129,7 +130,12 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
             request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            response.Dispose();
+            response.EnsureSuccessStatusCode();
+        }
+
         return await response.Content.ReadAsStreamAsync(cancellationToken);
     }
 
