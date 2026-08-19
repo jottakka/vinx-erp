@@ -15,8 +15,9 @@ namespace Vinx.Erp.ApiHost.OpenApi;
 /// objetos com <see cref="JsonUnmappedMemberHandling.Disallow"/> recebem
 /// <c>additionalProperties: false</c>, já que campos desconhecidos são
 /// rejeitados no binding; propriedades com <see cref="EmailAddressAttribute"/>
-/// recebem <c>format: email</c> (o runtime valida a sintaxe na fronteira).
-/// Genérico para qualquer tipo (request ou response).
+/// recebem <c>format: email</c>, espelhando o formato declarado pelo atributo
+/// (a validação de runtime permanece a cargo de cada endpoint). Genérico para
+/// qualquer tipo (request ou response).
 /// </summary>
 public sealed class SerializerContractSchemaTransformer : IOpenApiSchemaTransformer
 {
