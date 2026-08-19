@@ -68,9 +68,14 @@ public sealed class AgentRunner(
         {
             throw;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
-            return Finish(AgentOutcomeStatus.TimedOut, AgentOutcomeReason.ModelTimeout, actor, stopwatch);
+            return Finish(
+                AgentOutcomeStatus.TimedOut,
+                AgentOutcomeReason.ModelTimeout,
+                actor,
+                stopwatch,
+                exception: exception);
         }
         catch (Exception exception)
         {

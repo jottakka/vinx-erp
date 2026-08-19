@@ -94,6 +94,29 @@ public sealed class AgentContextPolicyTests
     }
 
     [Fact]
+    public void Capability_without_company_scope_denies()
+    {
+        // Capability presente apenas com escopo Self: o filtro de escopo do
+        // predicado (espelha o da Foundation) nega sem expor contexto.
+        var selfScoped = new MembershipCapabilitySummary(
+            Guid.NewGuid(),
+            AlfaCompanyId,
+            "Alfa",
+            new[]
+            {
+                new EffectiveCapability(AgentCapabilities.Read, new HashSet<CapabilityScope> { CapabilityScope.Self }),
+            });
+
+        var resolution = AgentPolicy.EvaluateContext(
+            Snapshot(selfScoped),
+            new AgentContextRequest(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), ReadProfile(), AlfaCompanyId));
+
+        Assert.Equal(AgentContextResolutionStatus.Denied, resolution.Status);
+        Assert.Equal("capability_denied", resolution.ReasonCode);
+        Assert.Null(resolution.Context);
+    }
+
+    [Fact]
     public void Revoked_membership_not_reused()
     {
         // O resolver real é selado sobre o FoundationDbContext; a sequência abaixo
