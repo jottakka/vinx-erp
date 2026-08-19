@@ -8,25 +8,20 @@ public sealed class AssignAtendimentoCardRequest
 {
     [Required]
     [NonEmptyGuid]
-    public Guid? CompanyId { get; init; }
+    public Guid CompanyId { get; init; }
 
     [Required]
     [NonEmptyGuid]
-    public Guid? RequestId { get; init; }
+    public Guid RequestId { get; init; }
 
     [Required]
     [Range(1, long.MaxValue)]
-    public long? ExpectedVersion { get; init; }
+    public long ExpectedVersion { get; init; }
 
     [Required]
     [NonEmptyGuid]
-    public Guid? AssigneeMembershipId { get; init; }
+    public Guid AssigneeMembershipId { get; init; }
 
     public AssignAtendimentoCardCommand ToCommand() =>
-        new(
-            CompanyId!.Value,
-            RequestId!.Value,
-            ExpectedVersion!.Value,
-            AssigneeMembershipId!.Value
-        );
+        new(CompanyId, RequestId, ExpectedVersion, AssigneeMembershipId);
 }

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Data.Common;
 using System.Net.Mail;
 using System.Security.Cryptography;
@@ -19,7 +20,7 @@ public sealed record CreateEmployeeCommand(
     Guid RequestId,
     Guid CompanyId,
     string DisplayName,
-    string Email
+    [property: EmailAddress] string Email
 );
 
 public enum EmployeeDirectoryWriteState

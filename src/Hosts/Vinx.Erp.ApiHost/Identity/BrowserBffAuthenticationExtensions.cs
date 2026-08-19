@@ -176,11 +176,9 @@ internal sealed class BrowserBffSessionAuthorizationHandler
 }
 
 internal sealed class BrowserBffAntiforgeryRequiredMetadata(bool cookieAuthenticatedOnly = false)
-    : Attribute
+    : Attribute, IAntiforgeryRequiredMetadata
 {
     public bool CookieAuthenticatedOnly { get; } = cookieAuthenticatedOnly;
 }
 
 internal sealed class BrowserBffCookieOnlyEndpointMetadata;
-
-internal sealed class BrowserBffSessionSignInOpenApiMetadata;

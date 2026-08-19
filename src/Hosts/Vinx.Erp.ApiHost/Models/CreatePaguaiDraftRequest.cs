@@ -8,22 +8,21 @@ public sealed class CreatePaguaiDraftRequest
 {
     [Required]
     [NonEmptyGuid]
-    public Guid? CompanyId { get; init; }
+    public Guid CompanyId { get; init; }
 
     [Required]
     [NonEmptyGuid]
-    public Guid? RequestId { get; init; }
+    public Guid RequestId { get; init; }
 
     [Required]
     [MinLength(1)]
     [MaxLength(200)]
-    public string? Title { get; init; }
+    public string Title { get; init; } = string.Empty;
 
     [Required]
     [MinLength(1)]
     [MaxLength(4000)]
-    public string? Description { get; init; }
+    public string Description { get; init; } = string.Empty;
 
-    public CreateDraftCommand ToCommand() =>
-        new(CompanyId!.Value, RequestId!.Value, Title!, Description!);
+    public CreateDraftCommand ToCommand() => new(CompanyId, RequestId, Title, Description);
 }
