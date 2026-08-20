@@ -448,6 +448,8 @@ public sealed class PaguaiDraftEndpointTests
     [InlineData("0")]
     [InlineData("-0.01")]
     [InlineData("1.001")]
+    [InlineData("1250.")]
+    [InlineData(".5")]
     public async Task Draft_creation_rejects_invalid_decimal_amount(string amount)
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
