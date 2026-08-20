@@ -60,29 +60,37 @@ function message(error: PaguaiDraftError) {
   )[error];
 }
 
-function amountMinorFromReais(value: string): string | null {
+const maximumAmountCents = 999_999_999_999_999_999n;
+
+function amountFromReais(value: string): string | null {
   const trimmed = value.trim();
-  const commaIndex = trimmed.indexOf(",");
-  const dotParts = trimmed.split(".");
-  const normalized =
-    commaIndex >= 0
-      ? trimmed.replace(/\./g, "").replace(",", ".")
-      : dotParts.length === 2 && dotParts[1].length <= 2
-        ? trimmed
-        : trimmed.replace(/\./g, "");
+  let normalized: string;
+  if (/^\d+(?:,\d{1,2})$/.test(trimmed)) {
+    normalized = trimmed.replace(",", ".");
+  } else if (/^\d{1,3}(?:\.\d{3})+,\d{1,2}$/.test(trimmed)) {
+    normalized = trimmed.replace(/\./g, "").replace(",", ".");
+  } else if (/^\d+(?:\.\d{1,2})$/.test(trimmed)) {
+    normalized = trimmed;
+  } else if (/^\d{1,3}(?:\.\d{3})+$/.test(trimmed)) {
+    normalized = trimmed.replace(/\./g, "");
+  } else if (/^\d+$/.test(trimmed)) {
+    normalized = `${trimmed}.00`;
+  } else {
+    return null;
+  }
   if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
   const [whole, fraction = ""] = normalized.split(".");
-  const minor = BigInt(`${whole}${fraction.padEnd(2, "0")}`);
-  if (minor <= 0n || minor > 9223372036854775807n) return null;
-  return minor.toString();
+  const normalizedWhole = BigInt(whole).toString();
+  const normalizedFraction = fraction.padEnd(2, "0");
+  const cents = BigInt(`${normalizedWhole}${normalizedFraction}`);
+  if (cents <= 0n || cents > maximumAmountCents) return null;
+  return `${normalizedWhole}.${normalizedFraction}`;
 }
 
-function formatAmountMinor(amountMinor: string) {
-  const digits = amountMinor;
-  const whole = digits.slice(0, -2) || "0";
-  const fraction = digits.slice(-2).padStart(2, "0");
+function formatAmount(amount: string) {
+  const [whole, fraction = ""] = amount.split(".");
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return `R$ ${grouped},${fraction}`;
+  return `R$ ${grouped},${fraction.padEnd(2, "0")}`;
 }
 
 function formatDueDate(dueDate: string) {
@@ -182,12 +190,10 @@ export function PaguaiPage({
     const form = event.currentTarget;
     const submittedCompanyId = companyId;
     const data = new FormData(form);
-    const amountMinor = amountMinorFromReais(
-      String(data.get("amountReais") ?? ""),
-    );
+    const amount = amountFromReais(String(data.get("amountReais") ?? ""));
     const proofRequirement = String(data.get("proofRequirement") ?? "");
     if (
-      amountMinor === null ||
+      amount === null ||
       (proofRequirement !== "optional" && proofRequirement !== "required")
     ) {
       setError(400);
@@ -201,7 +207,7 @@ export function PaguaiPage({
       requestId,
       title: String(data.get("title") ?? ""),
       description: String(data.get("description") ?? ""),
-      amountMinor,
+      amount,
       currency: "BRL",
       dueDate: String(data.get("dueDate") ?? ""),
       beneficiaryDisplayName: String(data.get("beneficiaryDisplayName") ?? ""),
@@ -347,9 +353,7 @@ export function PaguaiPage({
                   <Typography color="text.secondary">
                     Estado: {selected.state} · versão {selected.version}
                   </Typography>
-                  <Typography>
-                    {formatAmountMinor(selected.amountMinor)}
-                  </Typography>
+                  <Typography>{formatAmount(selected.amount)}</Typography>
                   <Typography>
                     Vencimento: {formatDueDate(selected.dueDate)}
                   </Typography>
@@ -401,9 +405,7 @@ export function PaguaiPage({
                       <Typography color="text.secondary">
                         {draft.state} · versão {draft.version}
                       </Typography>
-                      <Typography>
-                        {formatAmountMinor(draft.amountMinor)}
-                      </Typography>
+                      <Typography>{formatAmount(draft.amount)}</Typography>
                       <Typography color="text.secondary">
                         Vencimento: {formatDueDate(draft.dueDate)}
                       </Typography>

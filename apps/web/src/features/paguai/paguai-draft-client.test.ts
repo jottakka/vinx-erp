@@ -9,7 +9,7 @@ const draft = {
   requestId,
   title: "Papel",
   description: "Papel para impressora",
-  amountMinor: "125000",
+  amount: "1250.00",
   currency: "BRL" as const,
   dueDate: "2026-09-01",
   beneficiaryDisplayName: "Fornecedor Demo",
@@ -34,7 +34,7 @@ describe("Paguai draft client", () => {
       requestId,
       title: draft.title,
       description: draft.description,
-      amountMinor: draft.amountMinor,
+      amount: draft.amount,
       currency: draft.currency,
       dueDate: draft.dueDate,
       beneficiaryDisplayName: draft.beneficiaryDisplayName,
@@ -54,7 +54,20 @@ describe("Paguai draft client", () => {
         method: "POST",
       }),
     ]);
-    expect(JSON.parse(String(calls[1][1].body)).amountMinor).toBe(125000);
+    expect(JSON.parse(String(calls[1][1].body)).amount).toBe("1250.00");
+  });
+
+  it("preserves the maximum decimal amount without IEEE-754 conversion", async () => {
+    const maximum = "9999999999999999.99";
+    const fetchImplementation: typeof fetch = async () =>
+      Response.json({ ...draft, amount: maximum });
+
+    await expect(
+      createPaguaiDraftClient(fetchImplementation).detail(companyId, draft.id),
+    ).resolves.toEqual({
+      ok: true,
+      value: { ...draft, amount: maximum },
+    });
   });
 
   it("rejects an unexpected response rather than exposing it to the page", async () => {

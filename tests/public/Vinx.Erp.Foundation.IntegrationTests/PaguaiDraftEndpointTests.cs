@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -30,13 +32,144 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal(request.RequestId, ReadGuid(root, "requestId"));
         Assert.Equal("Office supplies", root.GetProperty("title").GetString());
         Assert.Equal("Replacement printer paper", root.GetProperty("description").GetString());
-        Assert.Equal(125000, root.GetProperty("amountMinor").GetInt64());
+        Assert.Equal(request.Amount, root.GetProperty("amount").GetString());
         Assert.Equal("BRL", root.GetProperty("currency").GetString());
         Assert.Equal("2026-09-01", root.GetProperty("dueDate").GetString());
         Assert.Equal("Fornecedor Demo", root.GetProperty("beneficiaryDisplayName").GetString());
         Assert.Equal("required", root.GetProperty("proofRequirement").GetString());
         Assert.Equal("rascunho", root.GetProperty("state").GetString());
         Assert.Equal(1, root.GetProperty("version").GetInt32());
+    }
+
+    [Fact]
+    public async Task Draft_creation_accepts_a_two_decimal_amount()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var response = await factory.CreateClient().PostAsJsonAsync(
+            "/paguai/requests",
+            new
+            {
+                companyId = scenario.CompanyId,
+                requestId = Guid.NewGuid(),
+                title = "Office supplies",
+                description = "Replacement printer paper",
+                amount = "1250.25",
+                currency = "BRL",
+                dueDate = new DateOnly(2026, 9, 1),
+                beneficiaryDisplayName = "Fornecedor Demo",
+                proofRequirement = "required",
+            }
+        );
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("1250.25", document.RootElement.GetProperty("amount").GetString());
+    }
+
+    [Fact]
+    public async Task Equivalent_decimal_spellings_replay_the_same_draft()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var requestId = Guid.NewGuid();
+        var firstRequest = NewRequest(scenario.CompanyId, requestId) with { Amount = "1" };
+        var equivalentRequest = firstRequest with { Amount = "1.00" };
+
+        using var first = await client.PostAsJsonAsync("/paguai/requests", firstRequest);
+        using var replay = await client.PostAsJsonAsync("/paguai/requests", equivalentRequest);
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        using var firstDocument = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        using var replayDocument = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+        Assert.Equal(
+            ReadGuid(firstDocument.RootElement, "id"),
+            ReadGuid(replayDocument.RootElement, "id")
+        );
+        Assert.Equal("1.00", replayDocument.RootElement.GetProperty("amount").GetString());
+    }
+
+    [Fact]
+    public async Task Legacy_integer_receipt_replays_after_decimal_contract_upgrade()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid());
+        var draftId = Guid.NewGuid();
+        var createdAt = DateTimeOffset.UtcNow;
+        var legacyResultJson = JsonSerializer.Serialize(
+            new
+            {
+                Id = draftId,
+                CompanyId = request.CompanyId,
+                RequestId = request.RequestId,
+                Title = request.Title,
+                Description = request.Description,
+                AmountMinor = 125000L,
+                Currency = request.Currency,
+                DueDate = request.DueDate,
+                BeneficiaryDisplayName = request.BeneficiaryDisplayName,
+                ProofRequirement = request.ProofRequirement,
+                State = "rascunho",
+                Version = 1,
+                CreatedAt = createdAt,
+            }
+        );
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            administrator.PaguaiRequests.Add(
+                new PaguaiRequest
+                {
+                    Id = draftId,
+                    CompanyId = request.CompanyId,
+                    RequesterUserId = factory.ActorUserId,
+                    RequestId = request.RequestId,
+                    Title = request.Title,
+                    Description = request.Description,
+                    Amount = 1250.00m,
+                    Currency = request.Currency,
+                    DueDate = request.DueDate,
+                    BeneficiaryDisplayName = request.BeneficiaryDisplayName,
+                    ProofRequirement = request.ProofRequirement,
+                    State = "rascunho",
+                    Version = 1,
+                    CreatedAt = createdAt,
+                }
+            );
+            administrator.IdempotencyRecords.Add(
+                new IdempotencyRecord(
+                    Guid.NewGuid(),
+                    request.CompanyId,
+                    factory.ActorUserId,
+                    "paguai.draft.create",
+                    request.RequestId,
+                    LegacyPayloadHash(request, 125000),
+                    legacyResultJson
+                )
+            );
+            await administrator.SaveChangesAsync();
+        }
+
+        using var response = await factory.CreateClient().PostAsJsonAsync(
+            "/paguai/requests",
+            request
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(draftId, ReadGuid(document.RootElement, "id"));
+        Assert.Equal("1250.00", document.RootElement.GetProperty("amount").GetString());
+        await using var audit = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(
+            0,
+            await audit.AuditEvents.CountAsync(auditEvent =>
+                auditEvent.Action == "paguai.draft.create"
+                && auditEvent.RequestedCompanyId == request.CompanyId
+            )
+        );
     }
 
     [Fact]
@@ -219,7 +352,7 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal("object", schema.GetProperty("type").GetString());
         Assert.Equal(
             [
-                "amountMinor",
+                "amount",
                 "beneficiaryDisplayName",
                 "companyId",
                 "currency",
@@ -244,7 +377,17 @@ public sealed class PaguaiDraftEndpointTests
             4000,
             properties.GetProperty("description").GetProperty("maxLength").GetInt32()
         );
-        Assert.Equal("int64", properties.GetProperty("amountMinor").GetProperty("format").GetString());
+        var amount = properties.GetProperty("amount");
+        Assert.Equal("string", amount.GetProperty("type").GetString());
+        Assert.Equal(
+            "^\\d+(?:\\.\\d{1,2})?$",
+            amount.GetProperty("pattern").GetString()
+        );
+        Assert.Equal(0.01m, amount.GetProperty("minimum").GetDecimal());
+        Assert.Equal(
+            9_999_999_999_999_999.99m,
+            amount.GetProperty("maximum").GetDecimal()
+        );
         Assert.Equal("BRL", properties.GetProperty("currency").GetProperty("enum")[0].GetString());
         Assert.Equal("date", properties.GetProperty("dueDate").GetProperty("format").GetString());
         Assert.Equal(200, properties.GetProperty("beneficiaryDisplayName").GetProperty("maxLength").GetInt32());
@@ -302,30 +445,16 @@ public sealed class PaguaiDraftEndpointTests
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
-    public async Task Draft_creation_rejects_non_positive_amount(long amountMinor)
+    [InlineData("0")]
+    [InlineData("-0.01")]
+    [InlineData("1.001")]
+    public async Task Draft_creation_rejects_invalid_decimal_amount(string amount)
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory);
         using var response = await factory.CreateClient().PostAsJsonAsync(
             "/paguai/requests",
-            NewRequest(scenario.CompanyId, Guid.NewGuid()) with { AmountMinor = amountMinor }
-        );
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task Draft_creation_rejects_amount_above_the_json_safe_transport_limit()
-    {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var scenario = await SeedScenarioAsync(factory);
-        using var response = await factory.CreateClient().PostAsJsonAsync(
-            "/paguai/requests",
-            NewRequest(scenario.CompanyId, Guid.NewGuid())
-                with
-            { AmountMinor = 9_007_199_254_740_992L }
+            NewRequest(scenario.CompanyId, Guid.NewGuid()) with { Amount = amount }
         );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -346,7 +475,7 @@ public sealed class PaguaiDraftEndpointTests
             requestId = Guid.NewGuid(),
             title = "Office supplies",
             description = "Replacement printer paper",
-            amountMinor = 125000L,
+            amount = "1250.00",
             currency = "BRL",
             dueDate = "2026-02-30",
             beneficiaryDisplayName = "Fornecedor Demo",
@@ -432,12 +561,33 @@ public sealed class PaguaiDraftEndpointTests
             requestId,
             "Office supplies",
             "Replacement printer paper",
-            125000,
+            "1250.00",
             "BRL",
             new DateOnly(2026, 9, 1),
             "Fornecedor Demo",
             "required"
         );
+
+    private static string LegacyPayloadHash(DraftRequest request, long amountMinor)
+    {
+        var canonical = JsonSerializer.Serialize(
+            new
+            {
+                companyId = request.CompanyId,
+                requestId = request.RequestId,
+                title = request.Title,
+                description = request.Description,
+                amountMinor,
+                currency = request.Currency,
+                dueDate = request.DueDate,
+                beneficiaryDisplayName = request.BeneficiaryDisplayName,
+                proofRequirement = request.ProofRequirement,
+            }
+        );
+        return Convert
+            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
+    }
 
     private static Guid ReadGuid(JsonElement root, string propertyName)
     {
@@ -620,7 +770,7 @@ public sealed class PaguaiDraftEndpointTests
         Guid RequestId,
         string Title,
         string Description,
-        long AmountMinor,
+        string Amount,
         string Currency,
         DateOnly DueDate,
         string BeneficiaryDisplayName,

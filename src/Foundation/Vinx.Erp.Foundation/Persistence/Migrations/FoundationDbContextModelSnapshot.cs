@@ -860,9 +860,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
-                    b.Property<long>("AmountMinor")
-                        .HasColumnType("bigint")
-                        .HasColumnName("amount_minor");
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("amount");
 
                     b.Property<string>("BeneficiaryDisplayName")
                         .IsRequired()
@@ -928,9 +928,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasName("pk_requests");
 
                     b.ToTable("requests", "paguai", t =>
-                    {
-                        t.HasCheckConstraint("ck_paguai_requests_currency_brl", "currency = 'BRL'");
-                    });
+                        {
+                            t.HasCheckConstraint("ck_paguai_requests_currency_brl", "currency = 'BRL'");
+                        });
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Role", b =>

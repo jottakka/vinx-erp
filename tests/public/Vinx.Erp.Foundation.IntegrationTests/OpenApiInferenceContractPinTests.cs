@@ -33,7 +33,7 @@ public sealed class OpenApiInferenceContractPinTests
         Assert.Equal(
             new[]
             {
-                "amountMinor",
+                "amount",
                 "beneficiaryDisplayName",
                 "companyId",
                 "currency",
@@ -58,9 +58,14 @@ public sealed class OpenApiInferenceContractPinTests
         Assert.Equal(new[] { "BRL" }, EnumOf(currency));
         var proofRequirement = schema.GetProperty("properties").GetProperty("proofRequirement");
         Assert.Equal(new[] { "optional", "required" }, EnumOf(proofRequirement));
-        var amountMinor = schema.GetProperty("properties").GetProperty("amountMinor");
-        Assert.Equal(9_007_199_254_740_991L, amountMinor.GetProperty("maximum").GetInt64());
-        Assert.Equal(1L, amountMinor.GetProperty("minimum").GetInt64());
+        var amount = schema.GetProperty("properties").GetProperty("amount");
+        Assert.Equal("string", amount.GetProperty("type").GetString());
+        Assert.Equal(
+            "^\\d+(?:\\.\\d{1,2})?$",
+            amount.GetProperty("pattern").GetString()
+        );
+        Assert.Equal(9_999_999_999_999_999.99m, amount.GetProperty("maximum").GetDecimal());
+        Assert.Equal(0.01m, amount.GetProperty("minimum").GetDecimal());
     }
 
     [Fact]

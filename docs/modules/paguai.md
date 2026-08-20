@@ -5,11 +5,14 @@
 ## MVP #227 — rascunho financeiro mínimo
 
 O MVP persiste `id`, `companyId`, `requestId`, `title`, `description`,
-`amountMinor`, `currency`, `dueDate`, `beneficiaryDisplayName`,
+`amount`, `currency`, `dueDate`, `beneficiaryDisplayName`,
 `proofRequirement`, `state: "rascunho"`, `version: 1` e `createdAt`.
-`amountMinor` é um inteiro positivo de centavos (`bigint` no PostgreSQL e
-`long` no C#), sem escala decimal excedente. A moeda é sempre `BRL`; `dueDate`
-usa `date`/`DateOnly` e JSON `YYYY-MM-DD`. `beneficiaryDisplayName` é texto
+`amount` é um decimal positivo, com no máximo duas casas, persistido como
+`numeric(18,2)` no PostgreSQL e `decimal` no C#. O JSON usa texto decimal exato,
+com duas casas na resposta; valores com escala superior a duas casas são
+rejeitados, sem arredondamento. A
+moeda é sempre `BRL`; `dueDate` usa `date`/`DateOnly` e JSON `YYYY-MM-DD`.
+`beneficiaryDisplayName` é texto
 informativo aparado de 1 a 200 caracteres e não é uma identificação autoritativa.
 `proofRequirement` exige escolha explícita entre `optional` e `required`.
 
@@ -47,6 +50,11 @@ escopo retorna `resource_not_found`.
 A migration do corte remove os rascunhos antigos de `paguai.requests` e os
 registros de idempotência de `paguai.draft.create` antes de adicionar as novas
 colunas `NOT NULL`. O banco aplica `CHECK (currency = 'BRL')`.
+
+A migration de conversão posterior renomeia `amount_minor` para `amount`,
+converte centavos para reais em `numeric(18,2)` e preserva os valores já
+persistidos. Ela também converte o valor dos recibos de idempotência e mantém
+o hash legado aceito pelo replay durante a transição.
 
 Qualquer PR futuro de comportamento Paguai registra `docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
 

@@ -328,6 +328,7 @@ builder.Services.AddOpenApi(options =>
     options.AddOperationTransformer<SecurityRequirementsOperationTransformer>();
     options.AddSchemaTransformer<SerializerContractSchemaTransformer>();
     options.AddSchemaTransformer<AllowedValuesSchemaTransformer>();
+    options.AddSchemaTransformer<DecimalRangeSchemaTransformer>();
 });
 
 var app = builder.Build();

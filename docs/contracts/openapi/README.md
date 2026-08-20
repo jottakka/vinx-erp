@@ -101,9 +101,10 @@ Detalhe de outro solicitante, outra empresa ou sem permissão é sempre
 
 `POST /paguai/requests` usa a mesma segurança; para cookie BFF, CSRF exige
 `X-CSRF-TOKEN`. O corpo JSON estrito contém exatamente `companyId`, `requestId`,
-`title`, `description`, `amountMinor`, `currency`, `dueDate`,
-`beneficiaryDisplayName` e `proofRequirement`. `amountMinor` é inteiro positivo
-em centavos; `currency` é exatamente `BRL`; `dueDate` usa `YYYY-MM-DD`;
+`title`, `description`, `amount`, `currency`, `dueDate`,
+`beneficiaryDisplayName` e `proofRequirement`. `amount` é texto decimal exato
+positivo com no máximo duas casas, entre `0.01` e `9999999999999999.99`, sem
+arredondamento (por exemplo, `"1250.25"`); `currency` é exatamente `BRL`; `dueDate` usa `YYYY-MM-DD`;
 `beneficiaryDisplayName` é aparado, não vazio e limitado a 200 caracteres; e
 `proofRequirement` é `optional` ou `required`. Os textos de título e descrição
 continuam limitados a 200 e 4000 caracteres. Aceita somente
@@ -112,7 +113,7 @@ continuam limitados a 200 e 4000 caracteres. Aceita somente
 devolve `400 {"code":"invalid_request"}`, ambos antes de qualquer mutação. Retorna `201` e `Location` na primeira criação, `200` no
 replay idêntico, `400`, `401`, `403`, `409 {"code":"idempotency_conflict"}`,
 `429` ou `503 {"code":"paguai_unavailable"}`. A resposta de sucesso contém
-`id`, `companyId`, `requestId`, `title`, `description`, `amountMinor`, `currency`,
+`id`, `companyId`, `requestId`, `title`, `description`, `amount`, `currency`,
 `dueDate`, `beneficiaryDisplayName`, `proofRequirement`, `state`, `version` e
 `createdAt`; `state` é `rascunho` e `version` é `1`. O beneficiário é somente
 texto informativo e nunca entra em logs, auditoria ou métricas.

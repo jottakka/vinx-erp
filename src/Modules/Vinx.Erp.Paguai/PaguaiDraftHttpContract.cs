@@ -19,7 +19,7 @@ public static class PaguaiDraftHttpContract
         "requestId",
         "title",
         "description",
-        "amountMinor",
+        "amount",
         "currency",
         "dueDate",
         "beneficiaryDisplayName",
@@ -49,8 +49,7 @@ public static class PaguaiDraftHttpContract
             || !fields["requestId"].TryGetGuid(out var requestId)
             || fields["title"].ValueKind is not JsonValueKind.String
             || fields["description"].ValueKind is not JsonValueKind.String
-            || fields["amountMinor"].ValueKind is not JsonValueKind.Number
-            || !fields["amountMinor"].TryGetInt64(out var amountMinor)
+            || !TryGetAmount(fields["amount"], out var amount)
             || fields["currency"].ValueKind is not JsonValueKind.String
             || fields["dueDate"].ValueKind is not JsonValueKind.String
             || fields["beneficiaryDisplayName"].ValueKind is not JsonValueKind.String
@@ -69,7 +68,7 @@ public static class PaguaiDraftHttpContract
         if (
             companyId == Guid.Empty
             || requestId == Guid.Empty
-            || amountMinor <= 0
+            || !PaguaiAmountRules.IsValid(amount)
             || !IsTrimmedText(title, 1, 200)
             || !IsTrimmedText(description, 1, 4_000)
             || !string.Equals(currency, "BRL", StringComparison.Ordinal)
@@ -92,7 +91,7 @@ public static class PaguaiDraftHttpContract
             requestId,
             title,
             description,
-            amountMinor,
+            amount,
             currency,
             dueDate,
             beneficiaryDisplayName,
@@ -105,4 +104,21 @@ public static class PaguaiDraftHttpContract
         value.Length >= minimumLength
         && value.Length <= maximumLength
         && string.Equals(value, value.Trim(), StringComparison.Ordinal);
+
+    private static bool TryGetAmount(JsonElement value, out decimal amount)
+    {
+        amount = default;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out amount))
+        {
+            return true;
+        }
+
+        return value.ValueKind == JsonValueKind.String
+            && decimal.TryParse(
+                value.GetString(),
+                NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture,
+                out amount
+            );
+    }
 }

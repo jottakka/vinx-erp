@@ -28,9 +28,9 @@ public sealed class PaguaiRequestConfiguration : IEntityTypeConfiguration<Paguai
             .HasColumnName("description")
             .HasMaxLength(4000);
         builder
-            .Property(request => request.AmountMinor)
-            .HasColumnName("amount_minor")
-            .HasColumnType("bigint")
+            .Property(request => request.Amount)
+            .HasColumnName("amount")
+            .HasColumnType("numeric(18,2)")
             .IsRequired();
         builder
             .Property(request => request.Currency)

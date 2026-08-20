@@ -17,7 +17,7 @@ const draft = {
   requestId: "22222222-2222-4222-8222-222222222222",
   title: "Papel",
   description: "Papel para impressora",
-  amountMinor: "125000",
+  amount: "1250.00",
   currency: "BRL" as const,
   dueDate: "2026-09-01",
   beneficiaryDisplayName: "Fornecedor Demo",
@@ -212,7 +212,7 @@ describe("PaguaiPage", () => {
       companyId,
       description: "Descrição do rascunho",
       title: "Novo papel",
-      amountMinor: "125000",
+      amount: "1250.00",
       currency: "BRL",
       dueDate: expect.any(String),
       beneficiaryDisplayName: "Fornecedor Demo",
@@ -261,5 +261,53 @@ describe("PaguaiPage", () => {
     expect(
       screen.queryByRole("heading", { name: "Novo papel", level: 2 }),
     ).toBeNull();
+  });
+
+  it("rejects malformed Brazilian amount grouping before creating", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn();
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    render(
+      <VinxThemeProvider>
+        <SessionProvider gateway={gateway}>
+          <PaguaiPage draftClient={draftClient} />
+        </SessionProvider>
+      </VinxThemeProvider>,
+    );
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "Título" }),
+      "Novo papel",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Descrição" }),
+      "Descrição",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Valor (R$)" }),
+      "1.2,34",
+    );
+    const dueDate = document.querySelector<HTMLInputElement>(
+      'input[name="dueDate"]',
+    );
+    if (!dueDate) throw new Error("due date input missing");
+    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+    await user.type(
+      screen.getByRole("textbox", { name: "Beneficiário (informativo)" }),
+      "Fornecedor Demo",
+    );
+    await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Obrigatório" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    expect(create).not.toHaveBeenCalled();
+    expect(screen.getByText("Revise os campos obrigatórios.")).toBeVisible();
   });
 });
