@@ -78,13 +78,43 @@ bytes brutos antes de qualquer parse e grava eventos insert-only por
 `(message_id, event_type)` sem correlação com o negócio; `read` não é
 confirmação humana. Runbook: `docs/runbooks/whatsapp-outbound.md`.
 
+## Inbound admissão e identidade (#272 PR1)
+
+O webhook (mesmo endpoint do W3) lê `messages[]` dos tipos `image` e
+`document`, exigindo `metadata.phone_number_id` (canal estável; em deploy de
+número único, deve ser exatamente o `META_WHATSAPP_PHONE_NUMBER_ID`
+configurado). O ingress (`InboundWhatsAppIngressService` no ApiHost) resolve
+a identidade e grava a admissão deduplicada por `(phone_number_id,
+message_id)` na mesma transação:
+
+- `IInboundActorResolver`/`SqlInboundActorResolver` chamam
+  `notifications.resolve_inbound_whatsapp_actor(wa_id)` (SECURITY DEFINER,
+  leitura de `notification_recipient_contacts` + memberships/empresas da
+  Foundation), com resultado fechado: `admitted` (exatamente um usuário,
+  empresa e membership ativa), `unbound` (sem contato), `unverified`
+  (contato sem `is_validated`), `inactive` (membership revogada ou empresa
+  excluída) ou `ambiguous` (múltiplas identidades ativas — nunca escolhe).
+  Como um contato se torna validado é política de vinculação pendente de
+  aprovação; esta fronteira somente lê o estado atual.
+- `notifications.admit_inbound_whatsapp_media(...)` persiste a linha com o
+  resultado da resolução (`resolution_state` + ids resolvidos + `resolved_at`)
+  e classifica a entrega como `created`, `replay` ou `conflict` (messageId
+  reaproveitado com payload incompatível — conflito seguro, sem duplicar).
+  O casamento usa somente o `wa_id`; o vínculo `phone_number_id → empresa`
+  aguarda a mesma política.
+
+Somente imagens admitidas publicam `InboundWhatsAppImageReceived` na fila
+durável `whatsapp-inbound` (o subsete #140 abaixo passou a exigir remetente
+admitido). Documentos admitidos ficam duráveis em `pending` sem consumidor:
+download, quarentena, OCR e integração Pagaí pertencem aos PRs seguintes
+(#272), e nenhuma resposta automática é enviada para documentos nesta fatia.
+Linhas não admitidas permanecem `pending` com o estado de resolução fechado
+— são evidência, não fila de retrabalho.
+
 ## Inbound imagem → OCR → IA (#140 subsete)
 
 `Providers/Meta/InboundWhatsAppInteractionService` orquestra o subsete
-automatizado do #140: o webhook (mesmo endpoint do W3) passa a ler também
-`messages[]` e aceita somente `type=image` com id de mídia; o ingress
-(`InboundWhatsAppIngressService` no ApiHost) deduplica por `message_id`
-(`notifications.record_inbound_whatsapp_message`) e publica
+automatizado do #140: após admissão admitida (#272 PR1), o ingress publica
 `InboundWhatsAppImageReceived` na fila durável `whatsapp-inbound` na mesma
 transação (padrão do outbox transacional). O worker faz claim idempotente
 (`claim/complete/fail_inbound_whatsapp_message`), baixa a mídia em duas fases,

@@ -156,22 +156,26 @@ internal static class NotificationIntentSeed
         FoundationApiFactory factory,
         Guid companyId,
         Guid userId,
-        string phoneNumber
+        string phoneNumber,
+        bool isValidated = false
     )
     {
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
             """
-            INSERT INTO notifications.notification_recipient_contacts (company_id, user_id, channel, phone_number, updated_by_user_id)
-            VALUES (@company_id, @user_id, 'whatsapp', @phone, @user_id)
+            INSERT INTO notifications.notification_recipient_contacts (company_id, user_id, channel, phone_number, is_validated, updated_by_user_id)
+            VALUES (@company_id, @user_id, 'whatsapp', @phone, @validated, @user_id)
             ON CONFLICT (company_id, user_id, channel) DO UPDATE
-                SET phone_number = EXCLUDED.phone_number, updated_at = clock_timestamp()
+                SET phone_number = EXCLUDED.phone_number,
+                    is_validated = EXCLUDED.is_validated,
+                    updated_at = clock_timestamp()
             """,
             administrator
         );
         command.Parameters.AddWithValue("company_id", companyId);
         command.Parameters.AddWithValue("user_id", userId);
         command.Parameters.AddWithValue("phone", phoneNumber);
+        command.Parameters.AddWithValue("validated", isValidated);
         await command.ExecuteNonQueryAsync();
     }
 
@@ -394,10 +398,16 @@ internal static class NotificationIntentSeed
 
     public sealed record InboundRow(
         string MessageId,
+        string PhoneNumberId,
         string WaId,
+        string MessageType,
         string MediaId,
         string? Caption,
         string Status,
+        string? ResolutionState,
+        Guid? ResolvedUserId,
+        Guid? ResolvedCompanyId,
+        Guid? ResolvedMembershipId,
         string? ReplyMessageId,
         string? FailureReason
     );
@@ -409,7 +419,9 @@ internal static class NotificationIntentSeed
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
             """
-            SELECT message_id, wa_id, media_id, caption, status, reply_message_id, failure_reason
+            SELECT message_id, phone_number_id, wa_id, message_type, media_id, caption, status,
+                   resolution_state, resolved_user_id, resolved_company_id, resolved_membership_id,
+                   reply_message_id, failure_reason
                 FROM notifications.inbound_whatsapp_messages
                 ORDER BY created_at
             """,
@@ -424,10 +436,16 @@ internal static class NotificationIntentSeed
                     reader.GetString(0),
                     reader.GetString(1),
                     reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.GetString(3),
                     reader.GetString(4),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
-                    reader.IsDBNull(6) ? null : reader.GetString(6)
+                    reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetGuid(8),
+                    reader.IsDBNull(9) ? null : reader.GetGuid(9),
+                    reader.IsDBNull(10) ? null : reader.GetGuid(10),
+                    reader.IsDBNull(11) ? null : reader.GetString(11),
+                    reader.IsDBNull(12) ? null : reader.GetString(12)
                 )
             );
         }

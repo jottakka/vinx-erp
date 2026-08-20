@@ -145,6 +145,7 @@ builder.Services.AddScoped<FoundationBootstrapService>();
 builder.Services.AddScoped<PlatformOperatorAccessService>();
 builder.Services.AddScoped<PlatformOrganizationProvisioningService>();
 builder.Services.AddScoped<NotificationIntentService>();
+builder.Services.AddScoped<IInboundActorResolver, SqlInboundActorResolver>();
 builder.Services.AddScoped<InboundWhatsAppIngressService>();
 builder.Services.AddScoped<NotificationInboxService>();
 builder.Services.AddScoped<EmployeeDirectoryService>();

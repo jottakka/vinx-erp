@@ -13,6 +13,20 @@ public sealed class MetaWhatsAppInboundTests
     private const string WebhookPath = "/foundation/notifications/whatsapp/webhook";
     // Segredo de teste configurado no factory; nenhum valor real.
     private const string AppSecret = "test-meta-app-secret";
+    private const string ChannelPhoneNumberId = "111111111111111";
+    private const string SenderWaId = "556198132901";
+
+    private static async Task SeedAdmittedSenderAsync(FoundationApiFactory factory)
+    {
+        var seed = await NotificationIntentSeed.CreateCompanyWithRecipientAsync(factory);
+        await NotificationIntentSeed.SeedContactAsync(
+            factory,
+            seed.CompanyId,
+            seed.RecipientUserId,
+            $"+{SenderWaId}",
+            isValidated: true
+        );
+    }
 
     private const string OcrStrictJson =
         "{\"text\":\"RECIBO 250 REAIS\",\"confidence\":0.9,\"language\":\"pt\"}";
@@ -23,6 +37,7 @@ public sealed class MetaWhatsAppInboundTests
     public async Task Image_is_transcribed_by_ocr_and_answered_with_an_ai_reply()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
         using var client = factory.CreateClient();
         var meta = new FakeInboundMetaHandler();
         var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
@@ -75,6 +90,7 @@ public sealed class MetaWhatsAppInboundTests
     public async Task Webhook_replay_processes_the_image_only_once()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
         using var client = factory.CreateClient();
         var meta = new FakeInboundMetaHandler();
         var payload = ImagePayload("wamid.in.once", "556198132901", "1938", null);
@@ -112,6 +128,7 @@ public sealed class MetaWhatsAppInboundTests
     public async Task Without_ai_profiles_the_image_fails_closed_without_external_calls()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
         using var client = factory.CreateClient();
         var meta = new FakeInboundMetaHandler();
 
@@ -142,6 +159,7 @@ public sealed class MetaWhatsAppInboundTests
     public async Task Rejected_media_fails_permanently_with_a_stable_reason()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
         using var client = factory.CreateClient();
         var meta = new FakeInboundMetaHandler { FailMediaMetadata = true };
 
@@ -173,6 +191,7 @@ public sealed class MetaWhatsAppInboundTests
     public async Task Transient_media_failure_retries_and_then_completes()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
         using var client = factory.CreateClient();
         var meta = new FakeInboundMetaHandler { FailFirstDownloadOnce = true };
 
@@ -228,6 +247,7 @@ public sealed class MetaWhatsAppInboundTests
               "changes": [
                 {
                   "value": {
+                    "metadata": { "phone_number_id": "{{ChannelPhoneNumberId}}" },
                     "messages": [
                       {
                         "id": "{{messageId}}",

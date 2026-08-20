@@ -1909,6 +1909,11 @@ CREATE POLICY companies_authorized_company_read ON foundation.companies FOR SELE
 CREATE POLICY companies_company_isolation ON foundation.companies USING ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: companies companies_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY companies_notifications_owner_read ON foundation.companies FOR SELECT TO vinx_notifications_owner USING (true);
+
+
 -- Name: companies companies_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY companies_provisioning_owner ON foundation.companies FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
@@ -2023,6 +2028,11 @@ CREATE POLICY memberships_employee_directory_owner_insert ON foundation.membersh
 -- Name: memberships memberships_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY memberships_employee_directory_owner_select ON foundation.memberships FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: memberships memberships_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_notifications_owner_read ON foundation.memberships FOR SELECT TO vinx_notifications_owner USING (true);
 
 
 -- Name: memberships memberships_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
