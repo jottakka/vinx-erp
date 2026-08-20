@@ -17,6 +17,7 @@ import {
 } from "../features/agent/agent-conversation-provider";
 import { AGENT_DOCK_WIDTH, AgentDock } from "../features/agent/agent-dock";
 import { useSession } from "../features/auth/session-provider";
+import { NotificationsProvider } from "../features/notifications/notifications-provider";
 import { AppHeader } from "./shell/app-header";
 import { NavigationList } from "./shell/navigation-list";
 
@@ -36,113 +37,115 @@ export function AppShell() {
 
   return (
     <AgentWorkspace>
-      <Box sx={{ bgcolor: "background.default", minHeight: "100dvh" }}>
-        <Link
-          href="#conteudo-principal"
-          sx={{
-            left: 8,
-            position: "fixed",
-            top: -80,
-            zIndex: (theme) => theme.zIndex.tooltip + 1,
-            "&:focus": {
-              bgcolor: "background.paper",
-              color: "text.primary",
-              p: 1,
-              top: 8,
-            },
-          }}
-          underline="none"
-        >
-          Pular para o conteúdo principal
-        </Link>
-        <AppHeader
-          isSigningOut={isSigningOut}
-          mobileNavigationOpen={mobileNavigationOpen}
-          onOpenNavigation={() => setMobileNavigationOpen(true)}
-          onSignOut={() => void signOut()}
-          userName={bootstrap?.user.displayName ?? ""}
-        />
-        <Drawer
-          open
-          slotProps={{
-            paper: {
-              sx: (theme) => ({
-                borderRightColor: "divider",
-                boxSizing: "border-box",
-                display: "flex",
-                flexDirection: "column",
-                transition: theme.transitions.create("width", {
-                  duration: theme.transitions.duration.shortest,
-                }),
-                width: desktopNavigationCollapsed
-                  ? theme.vinx.layout.collapsedNavigationWidth
-                  : theme.vinx.layout.navigationWidth,
-              }),
-            },
-          }}
-          sx={{ display: { xs: "none", md: "block" } }}
-          variant="permanent"
-        >
-          <Toolbar />
-          <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
-            <NavigationList
-              collapsed={desktopNavigationCollapsed}
-              label="Navegação lateral"
-            />
-          </Box>
-          <Divider />
-          <Box
+      <NotificationsProvider>
+        <Box sx={{ bgcolor: "background.default", minHeight: "100dvh" }}>
+          <Link
+            href="#conteudo-principal"
             sx={{
-              display: "flex",
-              justifyContent: desktopNavigationCollapsed
-                ? "center"
-                : "flex-end",
-              p: 0.5,
+              left: 8,
+              position: "fixed",
+              top: -80,
+              zIndex: (theme) => theme.zIndex.tooltip + 1,
+              "&:focus": {
+                bgcolor: "background.paper",
+                color: "text.primary",
+                p: 1,
+                top: 8,
+              },
             }}
+            underline="none"
           >
-            <IconButton
-              aria-label={
-                desktopNavigationCollapsed
-                  ? "Expandir navegação lateral"
-                  : "Recolher navegação lateral"
-              }
-              onClick={toggleDesktopNavigation}
-            >
-              {desktopNavigationCollapsed ? (
-                <ChevronRightOutlinedIcon />
-              ) : (
-                <ChevronLeftOutlinedIcon />
-              )}
-            </IconButton>
-          </Box>
-        </Drawer>
-        <Drawer
-          onClose={closeMobileNavigation}
-          open={mobileNavigationOpen}
-          slotProps={{
-            paper: {
-              id: "vinx-mobile-navigation",
-              sx: (theme) => ({
-                boxSizing: "border-box",
-                width: theme.vinx.layout.navigationWidth,
-              }),
-            },
-          }}
-          sx={{ display: { md: "none" } }}
-          variant="temporary"
-        >
-          <Toolbar />
-          <NavigationList
-            label="Navegação principal"
-            onNavigate={closeMobileNavigation}
+            Pular para o conteúdo principal
+          </Link>
+          <AppHeader
+            isSigningOut={isSigningOut}
+            mobileNavigationOpen={mobileNavigationOpen}
+            onOpenNavigation={() => setMobileNavigationOpen(true)}
+            onSignOut={() => void signOut()}
+            userName={bootstrap?.user.displayName ?? ""}
           />
-        </Drawer>
-        <AgentDock />
-        <ShellMain
-          error={error}
-          navigationCollapsed={desktopNavigationCollapsed}
-        />
-      </Box>
+          <Drawer
+            open
+            slotProps={{
+              paper: {
+                sx: (theme) => ({
+                  borderRightColor: "divider",
+                  boxSizing: "border-box",
+                  display: "flex",
+                  flexDirection: "column",
+                  transition: theme.transitions.create("width", {
+                    duration: theme.transitions.duration.shortest,
+                  }),
+                  width: desktopNavigationCollapsed
+                    ? theme.vinx.layout.collapsedNavigationWidth
+                    : theme.vinx.layout.navigationWidth,
+                }),
+              },
+            }}
+            sx={{ display: { xs: "none", md: "block" } }}
+            variant="permanent"
+          >
+            <Toolbar />
+            <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
+              <NavigationList
+                collapsed={desktopNavigationCollapsed}
+                label="Navegação lateral"
+              />
+            </Box>
+            <Divider />
+            <Box
+              sx={{
+                display: "flex",
+                justifyContent: desktopNavigationCollapsed
+                  ? "center"
+                  : "flex-end",
+                p: 0.5,
+              }}
+            >
+              <IconButton
+                aria-label={
+                  desktopNavigationCollapsed
+                    ? "Expandir navegação lateral"
+                    : "Recolher navegação lateral"
+                }
+                onClick={toggleDesktopNavigation}
+              >
+                {desktopNavigationCollapsed ? (
+                  <ChevronRightOutlinedIcon />
+                ) : (
+                  <ChevronLeftOutlinedIcon />
+                )}
+              </IconButton>
+            </Box>
+          </Drawer>
+          <Drawer
+            onClose={closeMobileNavigation}
+            open={mobileNavigationOpen}
+            slotProps={{
+              paper: {
+                id: "vinx-mobile-navigation",
+                sx: (theme) => ({
+                  boxSizing: "border-box",
+                  width: theme.vinx.layout.navigationWidth,
+                }),
+              },
+            }}
+            sx={{ display: { md: "none" } }}
+            variant="temporary"
+          >
+            <Toolbar />
+            <NavigationList
+              label="Navegação principal"
+              onNavigate={closeMobileNavigation}
+            />
+          </Drawer>
+          <AgentDock />
+          <ShellMain
+            error={error}
+            navigationCollapsed={desktopNavigationCollapsed}
+          />
+        </Box>
+      </NotificationsProvider>
     </AgentWorkspace>
   );
 }

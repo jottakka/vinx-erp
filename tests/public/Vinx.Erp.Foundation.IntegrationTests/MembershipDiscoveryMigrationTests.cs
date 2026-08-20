@@ -37,7 +37,10 @@ public sealed class MembershipDiscoveryMigrationTests
                     WHERE privilege.privilege_type = 'EXECUTE'
                       AND privilege.grantee NOT IN (
                           function.proowner,
-                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_runtime'))),
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_runtime'),
+                          -- Inbox #94: as funções SECURITY DEFINER de notificação
+                          -- consultam memberships ativas via esta função.
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_notifications_owner'))),
                 authorization_owner.rolcanlogin,
                 authorization_owner.rolinherit,
                 authorization_owner.rolbypassrls,

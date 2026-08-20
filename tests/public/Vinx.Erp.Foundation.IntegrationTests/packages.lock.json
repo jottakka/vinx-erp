@@ -1011,6 +1011,7 @@
         "dependencies": {
           "Microsoft.AspNetCore.OpenApi": "[10.0.10, )",
           "Microsoft.OpenApi": "[2.7.5, )",
+          "Vinx.Erp.AI": "[1.0.0, )",
           "Vinx.Erp.Atendimento": "[1.0.0, )",
           "Vinx.Erp.Foundation": "[1.0.0, )",
           "Vinx.Erp.Notifications": "[1.0.0, )",

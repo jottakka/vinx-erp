@@ -11,6 +11,12 @@ export type AppRouteCatalogEntry = {
 
 export const appRouteCatalog = [
   { group: "workspace", label: "Início", navigation: true, path: "/" },
+  {
+    group: "workspace",
+    label: "Notificações",
+    navigation: true,
+    path: "/notificacoes",
+  },
   { group: "modules", label: "Paguai", navigation: true, path: "/paguai" },
   {
     group: "modules",

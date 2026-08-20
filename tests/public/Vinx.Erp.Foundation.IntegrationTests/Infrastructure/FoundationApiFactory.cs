@@ -23,6 +23,8 @@ using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
+using Vinx.Erp.AI;
+using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.Identity;
 using JsonClaimValueTypes = Microsoft.IdentityModel.JsonWebTokens.JsonClaimValueTypes;
 using Vinx.Erp.Foundation.Persistence;
@@ -44,6 +46,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly FileStorage? _testFileStorage;
     private readonly IMalwareScanner? _testMalwareScanner;
     private readonly TimeSpan? _testMalwareScanTimeout;
+    private readonly IAgentModel? _testAgentModel;
+    private readonly AgentRunOptions? _testAgentRunOptions;
     private readonly HttpMessageHandler? _browserSessionProviderHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
     private readonly Func<ValueTask>? _disposeJwtAsync;
@@ -60,6 +64,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         FileStorage? testFileStorage = null,
         IMalwareScanner? testMalwareScanner = null,
         TimeSpan? testMalwareScanTimeout = null,
+        IAgentModel? testAgentModel = null,
+        AgentRunOptions? testAgentRunOptions = null,
         HttpMessageHandler? browserSessionProviderHandler = null,
         IFoundationFixtureLifecycle? fixture = null,
         Func<ValueTask>? disposeHostAsync = null,
@@ -75,6 +81,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _testFileStorage = testFileStorage;
         _testMalwareScanner = testMalwareScanner;
         _testMalwareScanTimeout = testMalwareScanTimeout;
+        _testAgentModel = testAgentModel;
+        _testAgentRunOptions = testAgentRunOptions;
         _browserSessionProviderHandler = browserSessionProviderHandler;
         _fixture = fixture ?? new FoundationPostgresFixture();
         _disposeHostAsync = disposeHostAsync;
@@ -125,6 +133,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         IMalwareScanner? malwareScanner = null,
         TimeSpan? malwareScanTimeout = null,
         string? aal = null,
+        IAgentModel? agentModel = null,
+        AgentRunOptions? agentRunOptions = null,
         bool provisionWolverineStorage = true)
     {
         var resolvedActorUserId = actorUserId ?? Guid.NewGuid();
@@ -141,6 +151,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             testFileStorage: fileStorage,
             testMalwareScanner: malwareScanner,
             testMalwareScanTimeout: malwareScanTimeout,
+            testAgentModel: agentModel,
+            testAgentRunOptions: agentRunOptions,
             provisionWolverineStorage: provisionWolverineStorage);
         return await PrepareAsync(factory);
     }
@@ -151,10 +163,13 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         FileStorage? fileStorage = null,
         IMalwareScanner? malwareScanner = null,
         TimeSpan? malwareScanTimeout = null,
-        string? aal = null)
+        string? aal = null,
+        IAgentModel? agentModel = null,
+        AgentRunOptions? agentRunOptions = null)
     {
         var factory = await CreateAsync(
-            actorUserId, correlationId, fileStorage, malwareScanner, malwareScanTimeout, aal);
+            actorUserId, correlationId, fileStorage, malwareScanner, malwareScanTimeout, aal,
+            agentModel, agentRunOptions);
         return await SeedAuthenticatedActorAndReturnAsync(factory);
     }
 
@@ -277,6 +292,38 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.co/auth/v1");
         builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
         builder.UseSetting("SUPABASE_AUTH_PUBLISHABLE_KEY", "test-publishable-key");
+        // Composição do agente em modo teste: a seção AgentRun decide na partida
+        // se um provider existe (fail-closed quando ausente). O endpoint de
+        // exemplo é HTTPS (loopback é rejeitado pela validação) e nunca é
+        // alcançado — o fake de IAgentModel intercepta antes do HttpClient.
+        if (_testAgentRunOptions is { } agentRunOptions)
+        {
+            if (agentRunOptions.Provider is not null)
+            {
+                builder.UseSetting("AgentRun:Provider", agentRunOptions.Provider);
+            }
+
+            if (agentRunOptions.Endpoint is not null)
+            {
+                builder.UseSetting("AgentRun:Endpoint", agentRunOptions.Endpoint.ToString());
+            }
+
+            if (agentRunOptions.ApiKey is not null)
+            {
+                builder.UseSetting("AgentRun:ApiKey", agentRunOptions.ApiKey);
+            }
+
+            if (agentRunOptions.Model is not null)
+            {
+                builder.UseSetting("AgentRun:Model", agentRunOptions.Model);
+            }
+
+            if (agentRunOptions.Timeout != default)
+            {
+                builder.UseSetting("AgentRun:Timeout", agentRunOptions.Timeout.ToString());
+            }
+        }
+
         // Segredos de teste sem valor real; o webhook valida assinatura
         // HMAC com estas chaves nos testes de integração.
         builder.UseSetting("META_WHATSAPP_PHONE_NUMBER_ID", "111111111111111");
@@ -308,6 +355,13 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             if (_testMalwareScanTimeout is { } malwareScanTimeout)
             {
                 services.PostConfigure<MalwareScannerOptions>(options => options.Timeout = malwareScanTimeout);
+            }
+            if (_testAgentModel is not null)
+            {
+                // Padrão do IMalwareScanner: o fake substitui o model composto
+                // (que exige provider configurado) sem tocar no runner.
+                services.RemoveAll<IAgentModel>();
+                services.AddSingleton(_testAgentModel);
             }
             if (_useJwtBearer)
             {

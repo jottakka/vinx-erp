@@ -17,7 +17,8 @@ public enum AgentJourneyScope
 /// TurnLimit é fixado em 1 nesta versão: exigir mais de 1 depende de revisão de
 /// política quando houver loop aprovado. ModelSelection nula significa que o
 /// provedor ainda não foi atribuído (#135); o runner falha fechado com
-/// provider_not_configured.
+/// provider_not_configured. SourcesRequired e RequiredOutputFields alimentam o
+/// contrato do gate de saída; os defaults mantêm o comportamento histórico.
 /// </summary>
 public sealed record AgentTaskProfile(
     string ProfileId,
@@ -28,7 +29,9 @@ public sealed record AgentTaskProfile(
     TimeSpan Timeout,
     int TurnLimit,
     int MaxTotalTokens,
-    IReadOnlyList<string> AllowedTools)
+    IReadOnlyList<string> AllowedTools,
+    bool SourcesRequired = false,
+    IReadOnlySet<string>? RequiredOutputFields = null)
 {
     /// <summary>
     /// Constrói o perfil já validado; lança <see cref="ArgumentException"/>
