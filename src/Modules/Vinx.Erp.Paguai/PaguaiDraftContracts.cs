@@ -33,7 +33,7 @@ public sealed record PaguaiDraft(
     DateTimeOffset CreatedAt
 );
 
-/// <summary>Transporta valores Paguai como texto decimal exato, aceitando número legado na leitura.</summary>
+/// <summary>Transporta valores Paguai como texto decimal exato; número JSON é rejeitado.</summary>
 public sealed class PaguaiAmountJsonConverter : JsonConverter<decimal>
 {
     public override decimal Read(
@@ -42,25 +42,21 @@ public sealed class PaguaiAmountJsonConverter : JsonConverter<decimal>
         JsonSerializerOptions options
     )
     {
-        if (reader.TokenType == JsonTokenType.Number && reader.TryGetDecimal(out var number))
-        {
-            return number;
-        }
-
         if (
             reader.TokenType == JsonTokenType.String
+            && reader.GetString() is { } text
             && decimal.TryParse(
-                reader.GetString(),
+                text,
                 NumberStyles.AllowDecimalPoint,
                 CultureInfo.InvariantCulture,
-                out var text
+                out var amount
             )
         )
         {
-            return text;
+            return amount;
         }
 
-        throw new JsonException("Paguai amount must be a decimal number or string.");
+        throw new JsonException("Paguai amount must be an exact decimal string.");
     }
 
     public override void Write(

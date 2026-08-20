@@ -40,12 +40,12 @@
 
 ### Task 2: Implement the backend decimal contract
 
-**Files:** `src/Foundation/Vinx.Erp.Foundation/Domain/PaguaiRequest.cs`, `src/Foundation/Vinx.Erp.Foundation/Persistence/Configurations/PaguaiRequestConfiguration.cs`, `src/Hosts/Vinx.Erp.ApiHost/Models/CreatePaguaiDraftRequest.cs`, `src/Modules/Vinx.Erp.Paguai/PaguaiDraftContracts.cs`, `src/Modules/Vinx.Erp.Paguai/PaguaiDraftHttpContract.cs`, `src/Modules/Vinx.Erp.Paguai/PaguaiDraftService.cs`, `src/Hosts/Vinx.Erp.ApiHost/Controllers/PaguaiController.cs`, `src/Hosts/Vinx.Erp.ApiHost/Constants/ApiConstants.cs`.
+**Files:** `src/Foundation/Vinx.Erp.Foundation/Domain/PaguaiRequest.cs`, `src/Foundation/Vinx.Erp.Foundation/Persistence/Configurations/PaguaiRequestConfiguration.cs`, `src/Hosts/Vinx.Erp.ApiHost/Models/CreatePaguaiDraftRequest.cs`, `src/Modules/Vinx.Erp.Paguai/PaguaiDraftContracts.cs`, `src/Modules/Vinx.Erp.Paguai/PaguaiDraftService.cs`, `src/Hosts/Vinx.Erp.ApiHost/Controllers/PaguaiController.cs`, `src/Hosts/Vinx.Erp.ApiHost/Constants/ApiConstants.cs`.
 
 - [x] Replace `AmountMinor: long` with `Amount: decimal` and replace the JSON field with `amount`.
 - [x] Validate `0.01m <= amount <= 9999999999999999.99m` and reject a scale greater than two without rounding.
 - [x] Configure EF/Npgsql as `numeric(18,2)` and include a fixed-scale `amount` in the canonical idempotency hash and replay projection.
-- [x] Make the strict parser use `TryGetDecimal` and apply the same scale/range rules.
+- [x] Bind the amount exclusively through the exact decimal string converter; numeric JSON tokens are rejected, and the unused module-level strict parser was removed.
 - [x] Keep authorization, RLS, audit redaction, concurrency, and state behavior unchanged.
 
 ### Task 3: Update persistence artifacts

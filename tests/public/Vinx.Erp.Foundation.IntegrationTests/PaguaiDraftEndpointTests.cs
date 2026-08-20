@@ -461,6 +461,33 @@ public sealed class PaguaiDraftEndpointTests
     }
 
     [Fact]
+    public async Task Draft_creation_rejects_a_numeric_amount()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var numericAmount = JsonSerializer.Serialize(
+            new
+            {
+                companyId = scenario.CompanyId,
+                requestId = Guid.NewGuid(),
+                title = "Office supplies",
+                description = "Replacement printer paper",
+                amount = 1250.25m,
+                currency = "BRL",
+                dueDate = new DateOnly(2026, 9, 1),
+                beneficiaryDisplayName = "Fornecedor Demo",
+                proofRequirement = "required",
+            }
+        );
+        using var response = await factory.CreateClient().PostAsync(
+            "/paguai/requests",
+            new StringContent(numericAmount, Encoding.UTF8, "application/json")
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Draft_creation_rejects_invalid_currency_due_date_and_proof_requirement()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();

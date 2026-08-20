@@ -90,7 +90,7 @@ public sealed class OpenApiInferenceContractPinTests
         var amount = draft.GetProperty("properties").GetProperty("amount");
         Assert.Equal("string", amount.GetProperty("type").GetString());
         Assert.Equal(
-            "^\\d+(?:\\.\\d{1,2})?$",
+            "^\\d+\\.\\d{2}$",
             amount.GetProperty("pattern").GetString()
         );
         Assert.Equal(9_999_999_999_999_999.99m, amount.GetProperty("maximum").GetDecimal());
