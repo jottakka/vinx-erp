@@ -22,6 +22,11 @@ import {
 import { PageHeader } from "../../shared/ui/page-header";
 import { useSession } from "../auth/session-provider";
 import {
+  amountToCents,
+  canonicalAmount,
+  maximumAmountCents,
+} from "./paguai-amount";
+import {
   createPaguaiDraftClient,
   type PaguaiDraft,
   type PaguaiDraftError,
@@ -60,8 +65,6 @@ function message(error: PaguaiDraftError) {
   )[error];
 }
 
-const maximumAmountCents = 999_999_999_999_999_999n;
-
 function amountFromReais(value: string): string | null {
   const trimmed = value.trim();
   let normalized: string;
@@ -78,13 +81,9 @@ function amountFromReais(value: string): string | null {
   } else {
     return null;
   }
-  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
-  const [whole, fraction = ""] = normalized.split(".");
-  const normalizedWhole = BigInt(whole).toString();
-  const normalizedFraction = fraction.padEnd(2, "0");
-  const cents = BigInt(`${normalizedWhole}${normalizedFraction}`);
-  if (cents <= 0n || cents > maximumAmountCents) return null;
-  return `${normalizedWhole}.${normalizedFraction}`;
+  const cents = amountToCents(normalized);
+  if (cents === null || cents <= 0n || cents > maximumAmountCents) return null;
+  return canonicalAmount(normalized);
 }
 
 function formatAmount(amount: string) {

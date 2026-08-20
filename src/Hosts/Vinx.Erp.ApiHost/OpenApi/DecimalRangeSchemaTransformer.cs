@@ -1,12 +1,18 @@
 using System.Globalization;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi;
-using Vinx.Erp.ApiHost.Validation;
+using Vinx.Erp.Paguai;
 
 namespace Vinx.Erp.ApiHost.OpenApi;
 
-/// <summary>Publica os limites da validação decimal no schema OpenAPI.</summary>
+/// <summary>
+/// Publica o contrato decimal do Paguai no schema OpenAPI: propriedades
+/// serializadas pelo <see cref="PaguaiAmountJsonConverter"/> viram texto com
+/// padrão e limites de <see cref="PaguaiAmountRules"/>, tanto no request
+/// quanto na resposta — a inferência nativa documentaria número.
+/// </summary>
 public sealed class DecimalRangeSchemaTransformer : IOpenApiSchemaTransformer
 {
     public Task TransformAsync(
@@ -22,11 +28,12 @@ public sealed class DecimalRangeSchemaTransformer : IOpenApiSchemaTransformer
 
         foreach (var property in context.JsonTypeInfo.Properties)
         {
-            var range = property
-                .AttributeProvider?.GetCustomAttributes(typeof(DecimalRangeAttribute), false)
-                .OfType<DecimalRangeAttribute>()
-                .FirstOrDefault();
-            if (range is null)
+            var serializesPaguaiAmount = property
+                .AttributeProvider?.GetCustomAttributes(typeof(JsonConverterAttribute), false)
+                .OfType<JsonConverterAttribute>()
+                .Any(attribute => attribute.ConverterType == typeof(PaguaiAmountJsonConverter))
+                == true;
+            if (!serializesPaguaiAmount)
             {
                 continue;
             }
@@ -38,8 +45,12 @@ public sealed class DecimalRangeSchemaTransformer : IOpenApiSchemaTransformer
             {
                 propertySchema.Type = JsonSchemaType.String;
                 propertySchema.Pattern = @"^\d+(?:\.\d{1,2})?$";
-                propertySchema.Minimum = range.Minimum.ToString(CultureInfo.InvariantCulture);
-                propertySchema.Maximum = range.Maximum.ToString(CultureInfo.InvariantCulture);
+                propertySchema.Minimum = PaguaiAmountRules.Minimum.ToString(
+                    CultureInfo.InvariantCulture
+                );
+                propertySchema.Maximum = PaguaiAmountRules.Maximum.ToString(
+                    CultureInfo.InvariantCulture
+                );
             }
         }
 

@@ -1,15 +1,14 @@
 import { z } from "zod";
+import { amountToCents, maximumAmountCents } from "./paguai-amount";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const draftsPath = "/paguai/requests";
-const maximumAmountCents = 999_999_999_999_999_999n;
 const amountSchema = z
   .string()
   .regex(/^\d+(?:\.\d{1,2})?$/)
   .refine((amount) => {
-    const [whole, fraction = ""] = amount.split(".");
-    const cents = BigInt(`${BigInt(whole)}${fraction.padEnd(2, "0")}`);
-    return cents > 0n && cents <= maximumAmountCents;
+    const cents = amountToCents(amount);
+    return cents !== null && cents > 0n && cents <= maximumAmountCents;
   });
 
 const draftSchema = z
