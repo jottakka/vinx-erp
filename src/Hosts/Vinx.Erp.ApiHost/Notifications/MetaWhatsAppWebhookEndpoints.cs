@@ -98,9 +98,11 @@ public static class MetaWhatsAppWebhookEndpoints
         }
 
         List<ProviderStatus>? statuses;
+        List<InboundWhatsAppImage>? inboundImages;
         try
         {
             statuses = ParseStatuses(rawBody);
+            inboundImages = ParseInboundImages(rawBody);
         }
         catch (JsonException)
         {
@@ -116,7 +118,81 @@ public static class MetaWhatsAppWebhookEndpoints
             await RecordAsync(database, status, request.HttpContext.RequestAborted);
         }
 
+        if (inboundImages.Count > 0)
+        {
+            // Somente imagens inbound (#140); demais tipos seguem ignorados.
+            var ingress = request.HttpContext.RequestServices.GetRequiredService<
+                InboundWhatsAppIngressService
+            >();
+            foreach (var image in inboundImages)
+            {
+                await ingress.RecordAsync(image, request.HttpContext.RequestAborted);
+            }
+        }
+
         return Results.Json(new { code = "accepted" });
+    }
+
+    private static List<InboundWhatsAppImage> ParseInboundImages(byte[] rawBody)
+    {
+        using var document = JsonDocument.Parse(rawBody);
+        var images = new List<InboundWhatsAppImage>();
+        if (!document.RootElement.TryGetProperty("entry", out var entries))
+        {
+            return images;
+        }
+
+        foreach (var entry in entries.EnumerateArray())
+        {
+            if (!entry.TryGetProperty("changes", out var changes))
+            {
+                continue;
+            }
+
+            foreach (var change in changes.EnumerateArray())
+            {
+                if (
+                    !change.TryGetProperty("value", out var value)
+                    || !value.TryGetProperty("messages", out var messages)
+                )
+                {
+                    continue;
+                }
+
+                foreach (var message in messages.EnumerateArray())
+                {
+                    if (
+                        !message.TryGetProperty("type", out var type)
+                        || type.GetString() != "image"
+                        || !message.TryGetProperty("id", out var id)
+                        || id.GetString() is not { Length: > 0 } messageId
+                        || !message.TryGetProperty("from", out var from)
+                        || from.GetString() is not { Length: > 0 } waId
+                        || !message.TryGetProperty("image", out var image)
+                        || !image.TryGetProperty("id", out var mediaIdElement)
+                        || mediaIdElement.GetString() is not { Length: > 0 } mediaId
+                    )
+                    {
+                        continue;
+                    }
+
+                    string? caption = null;
+                    if (
+                        image.TryGetProperty("caption", out var captionElement)
+                        && captionElement.ValueKind == JsonValueKind.String
+                        && captionElement.GetString() is { Length: > 0 } rawCaption
+                    )
+                    {
+                        var trimmed = rawCaption.Trim();
+                        caption = trimmed.Length > 1000 ? trimmed[..1000] : trimmed;
+                    }
+
+                    images.Add(new InboundWhatsAppImage(messageId, waId, mediaId, caption));
+                }
+            }
+        }
+
+        return images;
     }
 
     private static List<ProviderStatus> ParseStatuses(byte[] rawBody)

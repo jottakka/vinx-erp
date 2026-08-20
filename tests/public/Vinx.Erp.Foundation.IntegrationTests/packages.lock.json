@@ -1041,6 +1041,7 @@
         "dependencies": {
           "Microsoft.EntityFrameworkCore": "[10.0.10, )",
           "Npgsql": "[10.0.3, )",
+          "Vinx.Erp.AI": "[1.0.0, )",
           "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },

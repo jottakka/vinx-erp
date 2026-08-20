@@ -120,6 +120,22 @@ builder.Services.AddScoped<NotificationProviderResolver>();
 builder.Services.AddScoped<INotificationProvider, InAppNotificationProvider>();
 builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
+builder.Services.AddScoped<InboundWhatsAppInteractionService>();
+builder
+    .Services.AddOptions<InboundWhatsAppAiOptions>()
+    .Bind(builder.Configuration.GetSection(InboundWhatsAppAiOptions.SectionName))
+    .Validate(
+        options =>
+            // Tudo-ou-nada no espírito do Meta WhatsApp: ausente mantém o
+            // worker de pé (cada imagem falha fechada como ai_unconfigured);
+            // presente-porém-parcial é erro de deploy e derruba o boot.
+            options.ValidateConfiguration() is null,
+        "Inbound WhatsApp AI profiles are invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<InboundWhatsAppAiOptions>>().Value
+);
 builder
     .Services.AddOptions<MetaWhatsAppOptions>()
     .Bind(builder.Configuration)
@@ -147,6 +163,28 @@ builder
     );
 builder
     .Services.AddHttpClient(
+        InboundWhatsAppInteractionService.TextHttpClientName,
+        (serviceProvider, client) =>
+            client.Timeout = serviceProvider
+                .GetRequiredService<IOptions<InboundWhatsAppAiOptions>>()
+                .Value.Text.Timeout
+    )
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
+    );
+builder
+    .Services.AddHttpClient(
+        InboundWhatsAppInteractionService.VisionHttpClientName,
+        (serviceProvider, client) =>
+            client.Timeout = serviceProvider
+                .GetRequiredService<IOptions<InboundWhatsAppAiOptions>>()
+                .Value.Vision.Timeout
+    )
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
+    );
+builder
+    .Services.AddHttpClient(
         SupabaseAdminOwnerInvitationClient.HttpClientName,
         client => client.Timeout = TimeSpan.FromSeconds(10)
     )
@@ -168,6 +206,7 @@ builder.Host.UseWolverine(options =>
     options.Discovery.DisableConventionalDiscovery(true);
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<NotificationDeliveryRequestedHandler>();
+    options.Discovery.IncludeType<InboundWhatsAppImageReceivedHandler>();
     options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
     options
         .PersistMessagesWithPostgresql(workerDataSource, schemaName: "vinx_wolverine_worker")
@@ -177,6 +216,7 @@ builder.Host.UseWolverine(options =>
         );
     options.ListenToPostgresqlQueue("owner-invitation-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("notification-delivery").UseDurableInbox();
+    options.ListenToPostgresqlQueue("whatsapp-inbound").UseDurableInbox();
 });
 builder.Services.AddOpenTelemetry();
 builder.Services.AddHealthChecks();
