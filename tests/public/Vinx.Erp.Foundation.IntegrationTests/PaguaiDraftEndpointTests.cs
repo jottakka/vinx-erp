@@ -317,6 +317,21 @@ public sealed class PaguaiDraftEndpointTests
     }
 
     [Fact]
+    public async Task Draft_creation_rejects_amount_above_the_json_safe_transport_limit()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var response = await factory.CreateClient().PostAsJsonAsync(
+            "/paguai/requests",
+            NewRequest(scenario.CompanyId, Guid.NewGuid())
+                with
+            { AmountMinor = 9_007_199_254_740_992L }
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Draft_creation_rejects_invalid_currency_due_date_and_proof_requirement()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();

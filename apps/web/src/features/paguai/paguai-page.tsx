@@ -185,7 +185,11 @@ export function PaguaiPage({
     const amountMinor = amountMinorFromReais(
       String(data.get("amountReais") ?? ""),
     );
-    if (amountMinor === null) {
+    const proofRequirement = String(data.get("proofRequirement") ?? "");
+    if (
+      amountMinor === null ||
+      (proofRequirement !== "optional" && proofRequirement !== "required")
+    ) {
       setError(400);
       resultRef.current?.focus();
       return;
@@ -201,9 +205,7 @@ export function PaguaiPage({
       currency: "BRL",
       dueDate: String(data.get("dueDate") ?? ""),
       beneficiaryDisplayName: String(data.get("beneficiaryDisplayName") ?? ""),
-      proofRequirement: String(data.get("proofRequirement") ?? "required") as
-        | "optional"
-        | "required",
+      proofRequirement: proofRequirement as "optional" | "required",
     });
     if (companyIdRef.current !== submittedCompanyId) return;
     setStatus("idle");
@@ -297,9 +299,12 @@ export function PaguaiPage({
                       label="Comprovante"
                       name="proofRequirement"
                       select
-                      defaultValue="required"
+                      defaultValue=""
                       required
                     >
+                      <MenuItem value="" disabled>
+                        Selecione
+                      </MenuItem>
                       <MenuItem value="required">Obrigatório</MenuItem>
                       <MenuItem value="optional">Opcional</MenuItem>
                     </TextField>

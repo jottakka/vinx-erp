@@ -69,6 +69,27 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // Falha fechado: reverter destruiria campos financeiros de rascunhos
+            // existentes e deixaria recibos paguai.draft.create com hash
+            // incompatível com o payload pós-downgrade.
+            migrationBuilder.Sql(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM paguai.requests)
+                        OR EXISTS (
+                            SELECT 1
+                            FROM foundation.idempotency_records
+                            WHERE command_name = 'paguai.draft.create'
+                        )
+                    THEN
+                        RAISE EXCEPTION 'AddPaguaiFinancialDraft Down requires empty paguai.requests and no paguai.draft.create idempotency receipts';
+                    END IF;
+                END
+                $$;
+                """
+            );
+
             migrationBuilder.Sql(
                 "ALTER TABLE paguai.requests DROP CONSTRAINT ck_paguai_requests_currency_brl;"
             );

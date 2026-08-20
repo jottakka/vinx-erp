@@ -199,6 +199,10 @@ describe("PaguaiPage", () => {
     if (!dueDate) throw new Error("due date input missing");
     fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
     await user.type(beneficiary, "Fornecedor Demo");
+    await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Obrigatório" }),
+    );
     await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
@@ -217,5 +221,45 @@ describe("PaguaiPage", () => {
     expect(
       screen.getByRole("heading", { name: "Novo papel", level: 2 }),
     ).toBeVisible();
+  });
+
+  it("blocks draft creation without an explicit proof requirement selection", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn();
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    render(
+      <VinxThemeProvider>
+        <SessionProvider gateway={gateway}>
+          <PaguaiPage draftClient={draftClient} />
+        </SessionProvider>
+      </VinxThemeProvider>,
+    );
+
+    const title = await screen.findByRole("textbox", { name: "Título" });
+    const description = screen.getByRole("textbox", { name: "Descrição" });
+    const amount = screen.getByRole("textbox", { name: "Valor (R$)" });
+    const dueDate = document.querySelector<HTMLInputElement>(
+      'input[name="dueDate"]',
+    );
+    const beneficiary = screen.getByRole("textbox", {
+      name: "Beneficiário (informativo)",
+    });
+    await user.type(title, "Novo papel");
+    await user.type(description, "Descrição do rascunho");
+    await user.type(amount, "1.250,00");
+    if (!dueDate) throw new Error("due date input missing");
+    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+    await user.type(beneficiary, "Fornecedor Demo");
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    expect(create).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("heading", { name: "Novo papel", level: 2 }),
+    ).toBeNull();
   });
 });

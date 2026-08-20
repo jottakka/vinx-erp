@@ -25,4 +25,3 @@
 5. Update public integration/schema tests and BDD manifest.
 6. Update the typed web client and page with centavo conversion and display formatting.
 7. Update durable Paguai/OpenAPI documentation and run the public verification gate.
-

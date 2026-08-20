@@ -1,6 +1,5 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi;
@@ -53,8 +52,10 @@ public sealed class AllowedValuesSchemaTransformer : IOpenApiSchemaTransformer
             }
 
             propertySchema.Enum = allowedValues
-                .Values.OfType<string>()
-                .Select(value => (JsonNode)JsonValue.Create(value)!)
+                .Values.Where(value => value is not null)
+                .Select(value =>
+                    JsonSerializer.SerializeToNode(value, context.JsonTypeInfo.Options)!
+                )
                 .ToList();
         }
 
