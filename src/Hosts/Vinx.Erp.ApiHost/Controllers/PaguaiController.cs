@@ -100,6 +100,7 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
             !IsTrimmed(model.Title)
             || !IsTrimmed(model.Description)
             || !IsTrimmed(model.BeneficiaryDisplayName)
+            || !PaguaiAmountRules.IsValid(model.Amount)
             || model.DueDate == default
         )
         {
@@ -119,6 +120,10 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
             PaguaiDraftState.Forbidden => ApiControllerError.Error(
                 "capability_denied",
                 StatusCodes.Status403Forbidden
+            ),
+            PaguaiDraftState.Invalid => ApiControllerError.Error(
+                "invalid_request",
+                StatusCodes.Status400BadRequest
             ),
             PaguaiDraftState.IdempotencyConflict => ApiControllerError.Error(
                 "idempotency_conflict",

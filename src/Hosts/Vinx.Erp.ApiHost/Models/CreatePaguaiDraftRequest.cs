@@ -1,6 +1,5 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
-using Vinx.Erp.ApiHost.Constants;
 using Vinx.Erp.ApiHost.Validation;
 using Vinx.Erp.Paguai;
 
@@ -28,8 +27,9 @@ public sealed class CreatePaguaiDraftRequest
     public string Description { get; init; } = string.Empty;
 
     [Required]
-    [Range(1, ApiConstants.MaximumAmountMinor)]
-    public long AmountMinor { get; init; }
+    [DecimalRange("0.01", "9999999999999999.99")]
+    [JsonConverter(typeof(PaguaiAmountJsonConverter))]
+    public decimal Amount { get; init; }
 
     [Required]
     [AllowedValues("BRL")]
@@ -53,7 +53,7 @@ public sealed class CreatePaguaiDraftRequest
             RequestId,
             Title,
             Description,
-            AmountMinor,
+            Amount,
             Currency,
             DueDate,
             BeneficiaryDisplayName,

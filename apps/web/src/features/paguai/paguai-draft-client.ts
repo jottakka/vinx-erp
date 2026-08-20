@@ -1,7 +1,15 @@
 import { z } from "zod";
+import { amountToCents, maximumAmountCents } from "./paguai-amount";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const draftsPath = "/paguai/requests";
+const amountSchema = z
+  .string()
+  .regex(/^\d+(?:\.\d{1,2})?$/)
+  .refine((amount) => {
+    const cents = amountToCents(amount);
+    return cents !== null && cents > 0n && cents <= maximumAmountCents;
+  });
 
 const draftSchema = z
   .object({
@@ -10,9 +18,7 @@ const draftSchema = z
     requestId: z.uuid(),
     title: z.string().trim().min(1).max(200),
     description: z.string().trim().min(1).max(4000),
-    amountMinor: z
-      .union([z.number().int().positive(), z.string().regex(/^\d+$/)])
-      .transform(String),
+    amount: amountSchema,
     currency: z.literal("BRL"),
     dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     beneficiaryDisplayName: z.string().trim().min(1).max(200),
@@ -34,7 +40,7 @@ export type CreatePaguaiDraftInput = Pick<
   | "requestId"
   | "title"
   | "description"
-  | "amountMinor"
+  | "amount"
   | "currency"
   | "dueDate"
   | "beneficiaryDisplayName"
@@ -140,10 +146,7 @@ export function createPaguaiDraftClient(
         const response = await request(
           draftsPath,
           {
-            body: JSON.stringify(input).replace(
-              `"amountMinor":"${input.amountMinor}"`,
-              `"amountMinor":${input.amountMinor}`,
-            ),
+            body: JSON.stringify(input),
             headers: {
               Accept: "application/json",
               "Content-Type": "application/json",
