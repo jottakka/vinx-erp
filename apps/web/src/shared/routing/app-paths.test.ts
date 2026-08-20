@@ -25,6 +25,12 @@ describe("app route catalog", () => {
         navigation: true,
         path: "/pessoas",
       },
+      {
+        group: "support",
+        label: "Administração",
+        navigation: false,
+        path: "/administracao",
+      },
       { group: "support", label: "Ajuda", navigation: true, path: "/ajuda" },
     ]);
   });

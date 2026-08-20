@@ -26,6 +26,12 @@ export const appRouteCatalog = [
   },
   { group: "modules", label: "Kanban", navigation: true, path: "/kanban" },
   { group: "modules", label: "Pessoas", navigation: true, path: "/pessoas" },
+  {
+    group: "support",
+    label: "Administração",
+    navigation: false,
+    path: "/administracao",
+  },
   { group: "support", label: "Ajuda", navigation: true, path: "/ajuda" },
 ] as const satisfies readonly AppRouteCatalogEntry[];
 
