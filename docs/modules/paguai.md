@@ -2,14 +2,22 @@
 
 > A descoberta da issue [#45](https://github.com/jottakka/vinx-erp/issues/45) continua canônica para o domínio financeiro futuro. A issue #227 entrega apenas o recorte abaixo e substitui, para esse recorte, a antiga afirmação de que este documento não cria contrato técnico.
 
-## MVP #227 — metadados de rascunho
+## MVP #227 — rascunho financeiro mínimo
 
-O MVP persiste somente `id`, `companyId`, `requestId`, `title`, `description`,
-`state: "rascunho"`, `version: 1` e `createdAt`. Não representa valor, moeda,
-vencimento, beneficiário, documento, cobrança ou pagamento. Também não oferece
+O MVP persiste `id`, `companyId`, `requestId`, `title`, `description`,
+`amountMinor`, `currency`, `dueDate`, `beneficiaryDisplayName`,
+`proofRequirement`, `state: "rascunho"`, `version: 1` e `createdAt`.
+`amountMinor` é um inteiro positivo de centavos (`bigint` no PostgreSQL e
+`long` no C#), sem escala decimal excedente. A moeda é sempre `BRL`; `dueDate`
+usa `date`/`DateOnly` e JSON `YYYY-MM-DD`. `beneficiaryDisplayName` é texto
+informativo aparado de 1 a 200 caracteres e não é uma identificação autoritativa.
+`proofRequirement` exige escolha explícita entre `optional` e `required`.
+
+Este corte não representa documento binário, cobrança ou pagamento. Também não oferece
 edição, remoção, envio, conferência, aprovação, devolução, cancelamento,
 integração de provedor, PIX, cartão, WhatsApp, MCP, outbox ou automação.
-Esses comportamentos permanecem bloqueados até as decisões de #45.
+O estado permanece sempre `rascunho`; esses comportamentos permanecem bloqueados
+até as decisões de #45.
 
 O módulo Paguai mantém DTOs, validação, hash e SQL parametrizado fora do
 domínio de negócio Foundation. Ele usa o único `FoundationDbContext` injetado
@@ -31,9 +39,14 @@ idempotência. O mesmo `requestId` com o mesmo hash retorna o resultado já
 persistido sem nova auditoria; hash diferente recebe `409` e auditoria de
 negação. Criação bem-sucedida grava solicitação, recibo Foundation e auditoria
 `paguai.draft.create`/`paguai_request` com metadados `{}` no mesmo commit. Não
-se registra título, descrição, corpo ou tokens em logs/auditoria. Leitura exige
+se registra título, descrição, valor, vencimento, beneficiário, comprovante,
+corpo ou tokens em logs/auditoria. Leitura exige
 membership e `paguai.draft.read`; lista limita ao solicitante e detalhe fora do
 escopo retorna `resource_not_found`.
+
+A migration do corte remove os rascunhos antigos de `paguai.requests` e os
+registros de idempotência de `paguai.draft.create` antes de adicionar as novas
+colunas `NOT NULL`. O banco aplica `CHECK (currency = 'BRL')`.
 
 Qualquer PR futuro de comportamento Paguai registra `docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
 

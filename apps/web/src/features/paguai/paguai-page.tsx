@@ -60,6 +60,36 @@ function message(error: PaguaiDraftError) {
   )[error];
 }
 
+function amountMinorFromReais(value: string): string | null {
+  const trimmed = value.trim();
+  const commaIndex = trimmed.indexOf(",");
+  const dotParts = trimmed.split(".");
+  const normalized =
+    commaIndex >= 0
+      ? trimmed.replace(/\./g, "").replace(",", ".")
+      : dotParts.length === 2 && dotParts[1].length <= 2
+        ? trimmed
+        : trimmed.replace(/\./g, "");
+  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
+  const [whole, fraction = ""] = normalized.split(".");
+  const minor = BigInt(`${whole}${fraction.padEnd(2, "0")}`);
+  if (minor <= 0n || minor > 9223372036854775807n) return null;
+  return minor.toString();
+}
+
+function formatAmountMinor(amountMinor: string) {
+  const digits = amountMinor;
+  const whole = digits.slice(0, -2) || "0";
+  const fraction = digits.slice(-2).padStart(2, "0");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `R$ ${grouped},${fraction}`;
+}
+
+function formatDueDate(dueDate: string) {
+  const [year, month, day] = dueDate.split("-");
+  return `${day}/${month}/${year}`;
+}
+
 export function PaguaiPage({
   draftClient = client,
 }: {
@@ -83,6 +113,10 @@ export function PaguaiPage({
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const titleId = useId();
   const descriptionId = useId();
+  const amountId = useId();
+  const dueDateId = useId();
+  const beneficiaryId = useId();
+  const proofRequirementId = useId();
   const resultRef = useRef<HTMLDivElement>(null);
   const companyIdRef = useRef(companyId);
 
@@ -148,6 +182,18 @@ export function PaguaiPage({
     const form = event.currentTarget;
     const submittedCompanyId = companyId;
     const data = new FormData(form);
+    const amountMinor = amountMinorFromReais(
+      String(data.get("amountReais") ?? ""),
+    );
+    const proofRequirement = String(data.get("proofRequirement") ?? "");
+    if (
+      amountMinor === null ||
+      (proofRequirement !== "optional" && proofRequirement !== "required")
+    ) {
+      setError(400);
+      resultRef.current?.focus();
+      return;
+    }
     setStatus("submitting");
     setError(null);
     const result = await draftClient.create({
@@ -155,6 +201,11 @@ export function PaguaiPage({
       requestId,
       title: String(data.get("title") ?? ""),
       description: String(data.get("description") ?? ""),
+      amountMinor,
+      currency: "BRL",
+      dueDate: String(data.get("dueDate") ?? ""),
+      beneficiaryDisplayName: String(data.get("beneficiaryDisplayName") ?? ""),
+      proofRequirement: proofRequirement as "optional" | "required",
     });
     if (companyIdRef.current !== submittedCompanyId) return;
     setStatus("idle");
@@ -185,7 +236,7 @@ export function PaguaiPage({
     <Stack spacing={3}>
       <PageHeader
         title="Paguai"
-        description="Rascunhos de solicitações. Este MVP registra somente metadados; não cria cobrança ou pagamento."
+        description="Rascunhos de solicitações financeiras. O MVP não cria cobrança ou pagamento."
       />
       {!companies.length ? (
         <Alert severity="info">Nenhuma empresa tem acesso ao Paguai.</Alert>
@@ -219,6 +270,44 @@ export function PaguaiPage({
                       name="title"
                       required
                     />
+                    <TextField
+                      id={amountId}
+                      inputMode="decimal"
+                      label="Valor (R$)"
+                      name="amountReais"
+                      placeholder="1.250,00"
+                      required
+                    />
+                    <TextField
+                      id={dueDateId}
+                      label="Vencimento"
+                      name="dueDate"
+                      slotProps={{
+                        htmlInput: { min: "0001-01-01", type: "date" },
+                      }}
+                      required
+                    />
+                    <TextField
+                      id={beneficiaryId}
+                      label="Beneficiário (informativo)"
+                      name="beneficiaryDisplayName"
+                      slotProps={{ htmlInput: { maxLength: 200 } }}
+                      required
+                    />
+                    <TextField
+                      id={proofRequirementId}
+                      label="Comprovante"
+                      name="proofRequirement"
+                      select
+                      defaultValue=""
+                      required
+                    >
+                      <MenuItem value="" disabled>
+                        Selecione
+                      </MenuItem>
+                      <MenuItem value="required">Obrigatório</MenuItem>
+                      <MenuItem value="optional">Opcional</MenuItem>
+                    </TextField>
                     <TextField
                       id={descriptionId}
                       slotProps={{ htmlInput: { maxLength: 4000 } }}
@@ -258,11 +347,24 @@ export function PaguaiPage({
                   <Typography color="text.secondary">
                     Estado: {selected.state} · versão {selected.version}
                   </Typography>
-                  <Typography color="text.secondary">
-                    Criado em {new Date(selected.createdAt).toLocaleString()}
+                  <Typography>
+                    {formatAmountMinor(selected.amountMinor)}
+                  </Typography>
+                  <Typography>
+                    Vencimento: {formatDueDate(selected.dueDate)}
+                  </Typography>
+                  <Typography>
+                    Beneficiário: {selected.beneficiaryDisplayName}{" "}
+                    (informativo)
+                  </Typography>
+                  <Typography>
+                    Comprovante:{" "}
+                    {selected.proofRequirement === "required"
+                      ? "obrigatório"
+                      : "opcional"}
                   </Typography>
                   <Typography color="text.secondary">
-                    Identificador da solicitação: {selected.requestId}
+                    Criado em {new Date(selected.createdAt).toLocaleString()}
                   </Typography>
                 </Stack>
               </CardContent>
@@ -298,6 +400,12 @@ export function PaguaiPage({
                       </Typography>
                       <Typography color="text.secondary">
                         {draft.state} · versão {draft.version}
+                      </Typography>
+                      <Typography>
+                        {formatAmountMinor(draft.amountMinor)}
+                      </Typography>
+                      <Typography color="text.secondary">
+                        Vencimento: {formatDueDate(draft.dueDate)}
                       </Typography>
                     </CardContent>
                   </CardActionArea>

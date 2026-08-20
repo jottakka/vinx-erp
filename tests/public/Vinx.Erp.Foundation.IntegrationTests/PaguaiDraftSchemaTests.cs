@@ -31,10 +31,10 @@ public sealed class PaguaiDraftSchemaTests
                 VALUES (@company_id, @group_id, 'Company', @requester_id, @requester_id, @request_id, clock_timestamp(), clock_timestamp(), 1);
                 INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at, row_version)
                 VALUES (@second_company_id, @group_id, 'Second company', @requester_id, @requester_id, @request_id, clock_timestamp(), clock_timestamp(), 1);
-                INSERT INTO paguai.requests (id, company_id, requester_user_id, request_id, title, description)
-                VALUES (@draft_id, @company_id, @requester_id, @request_id, 'Office supplies', 'Paper');
-                INSERT INTO paguai.requests (id, company_id, requester_user_id, request_id, title, description)
-                VALUES (@second_draft_id, @second_company_id, @requester_id, @second_request_id, 'Second office supplies', 'Second paper');
+                INSERT INTO paguai.requests (id, company_id, requester_user_id, request_id, title, description, amount_minor, currency, due_date, beneficiary_display_name, proof_requirement)
+                VALUES (@draft_id, @company_id, @requester_id, @request_id, 'Office supplies', 'Paper', 125000, 'BRL', DATE '2026-09-01', 'Fornecedor Demo', 'required');
+                INSERT INTO paguai.requests (id, company_id, requester_user_id, request_id, title, description, amount_minor, currency, due_date, beneficiary_display_name, proof_requirement)
+                VALUES (@second_draft_id, @second_company_id, @requester_id, @second_request_id, 'Second office supplies', 'Second paper', 9000, 'BRL', DATE '2026-09-02', 'Beneficiário Teste', 'optional');
                 """,
                 administrator
             )

@@ -860,6 +860,16 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<long>("AmountMinor")
+                        .HasColumnType("bigint")
+                        .HasColumnName("amount_minor");
+
+                    b.Property<string>("BeneficiaryDisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("text")
+                        .HasColumnName("beneficiary_display_name");
+
                     b.Property<Guid>("CompanyId")
                         .HasColumnType("uuid")
                         .HasColumnName("company_id");
@@ -869,11 +879,27 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("text")
+                        .HasColumnName("currency");
+
                     b.Property<string>("Description")
                         .IsRequired()
                         .HasMaxLength(4000)
                         .HasColumnType("character varying(4000)")
                         .HasColumnName("description");
+
+                    b.Property<DateOnly>("DueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("due_date");
+
+                    b.Property<string>("ProofRequirement")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("text")
+                        .HasColumnName("proof_requirement");
 
                     b.Property<Guid>("RequestId")
                         .HasColumnType("uuid")
@@ -901,7 +927,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_requests");
 
-                    b.ToTable("requests", "paguai");
+                    b.ToTable("requests", "paguai", t =>
+                    {
+                        t.HasCheckConstraint("ck_paguai_requests_currency_brl", "currency = 'BRL'");
+                    });
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Role", b =>

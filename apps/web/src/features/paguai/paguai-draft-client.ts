@@ -10,6 +10,13 @@ const draftSchema = z
     requestId: z.uuid(),
     title: z.string().trim().min(1).max(200),
     description: z.string().trim().min(1).max(4000),
+    amountMinor: z
+      .union([z.number().int().positive(), z.string().regex(/^\d+$/)])
+      .transform(String),
+    currency: z.literal("BRL"),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    beneficiaryDisplayName: z.string().trim().min(1).max(200),
+    proofRequirement: z.enum(["optional", "required"]),
     state: z.literal("rascunho"),
     version: z.literal(1),
     createdAt: z.string().datetime({ offset: true }),
@@ -21,6 +28,18 @@ const antiforgerySchema = z
   .strict();
 
 export type PaguaiDraft = z.infer<typeof draftSchema>;
+export type CreatePaguaiDraftInput = Pick<
+  PaguaiDraft,
+  | "companyId"
+  | "requestId"
+  | "title"
+  | "description"
+  | "amountMinor"
+  | "currency"
+  | "dueDate"
+  | "beneficiaryDisplayName"
+  | "proofRequirement"
+>;
 export type PaguaiDraftError =
   | 400
   | 401
@@ -106,7 +125,7 @@ export function createPaguaiDraftClient(
       }
     },
     async create(
-      input: Omit<PaguaiDraft, "id" | "state" | "version" | "createdAt">,
+      input: CreatePaguaiDraftInput,
     ): Promise<PaguaiResult<PaguaiDraft>> {
       try {
         const tokenResponse = await request(
@@ -121,7 +140,10 @@ export function createPaguaiDraftClient(
         const response = await request(
           draftsPath,
           {
-            body: JSON.stringify(input),
+            body: JSON.stringify(input).replace(
+              `"amountMinor":"${input.amountMinor}"`,
+              `"amountMinor":${input.amountMinor}`,
+            ),
             headers: {
               Accept: "application/json",
               "Content-Type": "application/json",

@@ -96,7 +96,12 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
         CancellationToken cancellationToken
     )
     {
-        if (!IsTrimmed(model.Title) || !IsTrimmed(model.Description))
+        if (
+            !IsTrimmed(model.Title)
+            || !IsTrimmed(model.Description)
+            || !IsTrimmed(model.BeneficiaryDisplayName)
+            || model.DueDate == default
+        )
         {
             return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
         }

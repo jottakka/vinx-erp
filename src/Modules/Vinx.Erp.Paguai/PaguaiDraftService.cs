@@ -79,6 +79,11 @@ public sealed class PaguaiDraftService(
                 RequestId = command.RequestId,
                 Title = command.Title,
                 Description = command.Description,
+                AmountMinor = command.AmountMinor,
+                Currency = command.Currency,
+                DueDate = command.DueDate,
+                BeneficiaryDisplayName = command.BeneficiaryDisplayName,
+                ProofRequirement = command.ProofRequirement,
                 State = "rascunho",
                 Version = 1,
             };
@@ -431,6 +436,11 @@ public sealed class PaguaiDraftService(
             request.RequestId,
             request.Title,
             request.Description,
+            request.AmountMinor,
+            request.Currency,
+            request.DueDate,
+            request.BeneficiaryDisplayName,
+            request.ProofRequirement,
             request.State,
             request.Version,
             request.CreatedAt
@@ -465,6 +475,11 @@ public sealed class PaguaiDraftService(
                 requestId = command.RequestId,
                 title = command.Title,
                 description = command.Description,
+                amountMinor = command.AmountMinor,
+                currency = command.Currency,
+                dueDate = command.DueDate,
+                beneficiaryDisplayName = command.BeneficiaryDisplayName,
+                proofRequirement = command.ProofRequirement,
             }
         );
         return Convert

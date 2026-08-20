@@ -31,7 +31,18 @@ public sealed class OpenApiInferenceContractPinTests
 
         var schema = JsonSchemaOf(requestBody);
         Assert.Equal(
-            new[] { "companyId", "description", "requestId", "title" },
+            new[]
+            {
+                "amountMinor",
+                "beneficiaryDisplayName",
+                "companyId",
+                "currency",
+                "description",
+                "dueDate",
+                "proofRequirement",
+                "requestId",
+                "title",
+            },
             RequiredOf(schema).Order()
         );
         AssertClosedObject(schema);
@@ -43,6 +54,13 @@ public sealed class OpenApiInferenceContractPinTests
         var description = schema.GetProperty("properties").GetProperty("description");
         Assert.Equal(1, description.GetProperty("minLength").GetInt32());
         Assert.Equal(4000, description.GetProperty("maxLength").GetInt32());
+        var currency = schema.GetProperty("properties").GetProperty("currency");
+        Assert.Equal(new[] { "BRL" }, EnumOf(currency));
+        var proofRequirement = schema.GetProperty("properties").GetProperty("proofRequirement");
+        Assert.Equal(new[] { "optional", "required" }, EnumOf(proofRequirement));
+        var amountMinor = schema.GetProperty("properties").GetProperty("amountMinor");
+        Assert.Equal(9_007_199_254_740_991L, amountMinor.GetProperty("maximum").GetInt64());
+        Assert.Equal(1L, amountMinor.GetProperty("minimum").GetInt64());
     }
 
     [Fact]
@@ -208,6 +226,14 @@ public sealed class OpenApiInferenceContractPinTests
     private static IEnumerable<string> RequiredOf(JsonElement schema)
     {
         foreach (var entry in schema.GetProperty("required").EnumerateArray())
+        {
+            yield return entry.GetString()!;
+        }
+    }
+
+    private static IEnumerable<string> EnumOf(JsonElement property)
+    {
+        foreach (var entry in property.GetProperty("enum").EnumerateArray())
         {
             yield return entry.GetString()!;
         }
