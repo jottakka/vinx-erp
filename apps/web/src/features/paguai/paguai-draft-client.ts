@@ -1,7 +1,15 @@
 import { z } from "zod";
+import { amountToCents, maximumAmountCents } from "./paguai-amount";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const draftsPath = "/paguai/requests";
+const amountSchema = z
+  .string()
+  .regex(/^\d+(?:\.\d{1,2})?$/)
+  .refine((amount) => {
+    const cents = amountToCents(amount);
+    return cents !== null && cents > 0n && cents <= maximumAmountCents;
+  });
 
 const draftSchema = z
   .object({
@@ -10,6 +18,11 @@ const draftSchema = z
     requestId: z.uuid(),
     title: z.string().trim().min(1).max(200),
     description: z.string().trim().min(1).max(4000),
+    amount: amountSchema,
+    currency: z.literal("BRL"),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    beneficiaryDisplayName: z.string().trim().min(1).max(200),
+    proofRequirement: z.enum(["optional", "required"]),
     state: z.literal("rascunho"),
     version: z.literal(1),
     createdAt: z.string().datetime({ offset: true }),
@@ -21,6 +34,18 @@ const antiforgerySchema = z
   .strict();
 
 export type PaguaiDraft = z.infer<typeof draftSchema>;
+export type CreatePaguaiDraftInput = Pick<
+  PaguaiDraft,
+  | "companyId"
+  | "requestId"
+  | "title"
+  | "description"
+  | "amount"
+  | "currency"
+  | "dueDate"
+  | "beneficiaryDisplayName"
+  | "proofRequirement"
+>;
 export type PaguaiDraftError =
   | 400
   | 401
@@ -106,7 +131,7 @@ export function createPaguaiDraftClient(
       }
     },
     async create(
-      input: Omit<PaguaiDraft, "id" | "state" | "version" | "createdAt">,
+      input: CreatePaguaiDraftInput,
     ): Promise<PaguaiResult<PaguaiDraft>> {
       try {
         const tokenResponse = await request(

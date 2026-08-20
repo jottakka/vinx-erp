@@ -8,4 +8,5 @@ internal static class ApiConstants
 
     /// <summary>Policy de rate limit das rotas protegidas da API.</summary>
     public const string ProtectedRateLimitPolicy = "foundation";
+
 }

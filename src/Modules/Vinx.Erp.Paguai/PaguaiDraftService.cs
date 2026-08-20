@@ -13,7 +13,7 @@ using Vinx.Erp.Foundation.Persistence.Configurations;
 
 namespace Vinx.Erp.Paguai;
 
-/// <summary>Persiste somente metadados de rascunho Paguai; não executa fluxo financeiro.</summary>
+/// <summary>Persiste rascunhos Paguai e seus campos financeiros mínimos; não executa fluxo financeiro.</summary>
 public sealed class PaguaiDraftService(
     FoundationDbContext database,
     CapabilityEvaluator capabilityEvaluator,
@@ -37,6 +37,12 @@ public sealed class PaguaiDraftService(
         CancellationToken cancellationToken
     )
     {
+        if (!PaguaiAmountRules.IsValid(command.Amount))
+        {
+            return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
+        }
+
+        command = command with { Amount = PaguaiAmountRules.Canonicalize(command.Amount) };
         var hash = ComputePayloadHash(command);
         try
         {
@@ -63,7 +69,7 @@ public sealed class PaguaiDraftService(
             if (existing is not null)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                if (!string.Equals(existing.PayloadHash, hash, StringComparison.Ordinal))
+                if (!PayloadHashMatches(existing.PayloadHash, command, hash))
                 {
                     return await AuditedConflictAsync(actor, command.CompanyId, cancellationToken);
                 }
@@ -79,6 +85,11 @@ public sealed class PaguaiDraftService(
                 RequestId = command.RequestId,
                 Title = command.Title,
                 Description = command.Description,
+                Amount = command.Amount,
+                Currency = command.Currency,
+                DueDate = command.DueDate,
+                BeneficiaryDisplayName = command.BeneficiaryDisplayName,
+                ProofRequirement = command.ProofRequirement,
                 State = "rascunho",
                 Version = 1,
             };
@@ -278,7 +289,7 @@ public sealed class PaguaiDraftService(
                 return PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
             }
 
-            return string.Equals(existing.PayloadHash, hash, StringComparison.Ordinal)
+            return PayloadHashMatches(existing.PayloadHash, command, hash)
                 ? DeserializeReplay(existing.ResultJson)
                 : await AuditedConflictAsync(actor, command.CompanyId, cancellationToken);
         }
@@ -431,15 +442,79 @@ public sealed class PaguaiDraftService(
             request.RequestId,
             request.Title,
             request.Description,
+            request.Amount,
+            request.Currency,
+            request.DueDate,
+            request.BeneficiaryDisplayName,
+            request.ProofRequirement,
             request.State,
             request.Version,
             request.CreatedAt
         );
 
-    private static PaguaiDraftResult DeserializeReplay(string resultJson) =>
-        JsonSerializer.Deserialize<PaguaiDraft>(resultJson) is { } draft
-            ? new PaguaiDraftResult(PaguaiDraftState.Replay, draft)
-            : PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
+    private static PaguaiDraftResult DeserializeReplay(string resultJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (
+                root.TryGetProperty(nameof(PaguaiDraft.Amount), out _)
+                && JsonSerializer.Deserialize<PaguaiDraft>(resultJson) is { } draft
+            )
+            {
+                return new PaguaiDraftResult(PaguaiDraftState.Replay, draft);
+            }
+
+            if (
+                root.TryGetProperty(nameof(LegacyPaguaiDraft.AmountMinor), out _)
+                && JsonSerializer.Deserialize<LegacyPaguaiDraft>(resultJson) is { } legacy
+                && legacy.AmountMinor > 0
+            )
+            {
+                return new PaguaiDraftResult(
+                    PaguaiDraftState.Replay,
+                    new PaguaiDraft(
+                        legacy.Id,
+                        legacy.CompanyId,
+                        legacy.RequestId,
+                        legacy.Title,
+                        legacy.Description,
+                        legacy.AmountMinor / 100m,
+                        legacy.Currency,
+                        legacy.DueDate,
+                        legacy.BeneficiaryDisplayName,
+                        legacy.ProofRequirement,
+                        legacy.State,
+                        legacy.Version,
+                        legacy.CreatedAt
+                    )
+                );
+            }
+        }
+        catch (JsonException)
+        {
+            // Corrupt receipts are reported as unavailable by the caller.
+        }
+
+        return PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
+    }
+
+    private sealed record LegacyPaguaiDraft(
+        Guid Id,
+        Guid CompanyId,
+        Guid RequestId,
+        string Title,
+        string Description,
+        long AmountMinor,
+        string Currency,
+        DateOnly DueDate,
+        string BeneficiaryDisplayName,
+        string ProofRequirement,
+        string State,
+        int Version,
+        DateTimeOffset CreatedAt
+    );
 
     private static bool IsUniqueViolation(DbUpdateException exception)
     {
@@ -465,12 +540,49 @@ public sealed class PaguaiDraftService(
                 requestId = command.RequestId,
                 title = command.Title,
                 description = command.Description,
+                amount = command.Amount,
+                currency = command.Currency,
+                dueDate = command.DueDate,
+                beneficiaryDisplayName = command.BeneficiaryDisplayName,
+                proofRequirement = command.ProofRequirement,
             }
         );
-        return Convert
-            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
-            .ToLowerInvariant();
+        return HashCanonicalPayload(canonical);
     }
+
+    private static string ComputeLegacyPayloadHash(CreateDraftCommand command)
+    {
+        var canonical = JsonSerializer.Serialize(
+            new
+            {
+                companyId = command.CompanyId,
+                requestId = command.RequestId,
+                title = command.Title,
+                description = command.Description,
+                amountMinor = decimal.ToInt64(command.Amount * 100m),
+                currency = command.Currency,
+                dueDate = command.DueDate,
+                beneficiaryDisplayName = command.BeneficiaryDisplayName,
+                proofRequirement = command.ProofRequirement,
+            }
+        );
+        return HashCanonicalPayload(canonical);
+    }
+
+    private static bool PayloadHashMatches(
+        string existingHash,
+        CreateDraftCommand command,
+        string currentHash
+    ) =>
+        string.Equals(existingHash, currentHash, StringComparison.Ordinal)
+        || string.Equals(
+            existingHash,
+            ComputeLegacyPayloadHash(command),
+            StringComparison.Ordinal
+        );
+
+    private static string HashCanonicalPayload(string canonical) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
 
     private Task ApplyContextAsync(
         ActorContext actor,

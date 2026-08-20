@@ -31,7 +31,17 @@ public sealed class OpenApiInferenceContractPinTests
 
         var schema = JsonSchemaOf(requestBody);
         Assert.Equal(
-            ["companyId", "description", "requestId", "title"],
+            [
+                "amount",
+                "beneficiaryDisplayName",
+                "companyId",
+                "currency",
+                "description",
+                "dueDate",
+                "proofRequirement",
+                "requestId",
+                "title",
+            ],
             RequiredOf(schema).Order()
         );
         AssertClosedObject(schema);
@@ -43,6 +53,47 @@ public sealed class OpenApiInferenceContractPinTests
         var description = schema.GetProperty("properties").GetProperty("description");
         Assert.Equal(1, description.GetProperty("minLength").GetInt32());
         Assert.Equal(4000, description.GetProperty("maxLength").GetInt32());
+        var currency = schema.GetProperty("properties").GetProperty("currency");
+        Assert.Equal(new[] { "BRL" }, EnumOf(currency));
+        var proofRequirement = schema.GetProperty("properties").GetProperty("proofRequirement");
+        Assert.Equal(new[] { "optional", "required" }, EnumOf(proofRequirement));
+        var amount = schema.GetProperty("properties").GetProperty("amount");
+        Assert.Equal("string", amount.GetProperty("type").GetString());
+        Assert.Equal(
+            "^\\d+(?:\\.\\d{1,2})?$",
+            amount.GetProperty("pattern").GetString()
+        );
+        Assert.Equal(9_999_999_999_999_999.99m, amount.GetProperty("maximum").GetDecimal());
+        Assert.Equal(0.01m, amount.GetProperty("minimum").GetDecimal());
+    }
+
+    [Fact]
+    public async Task Paguai_response_schema_pins_the_decimal_string_amount()
+    {
+        using var document = await LoadDocumentAsync();
+        var created = document.RootElement
+            .GetProperty("paths")
+            .GetProperty("/paguai/requests")
+            .GetProperty("post")
+            .GetProperty("responses")
+            .GetProperty("201")
+            .GetProperty("content")
+            .GetProperty("application/json")
+            .GetProperty("schema");
+        Assert.Equal("#/components/schemas/PaguaiDraft", created.GetProperty("$ref").GetString());
+
+        var draft = document.RootElement
+            .GetProperty("components")
+            .GetProperty("schemas")
+            .GetProperty("PaguaiDraft");
+        var amount = draft.GetProperty("properties").GetProperty("amount");
+        Assert.Equal("string", amount.GetProperty("type").GetString());
+        Assert.Equal(
+            "^\\d+\\.\\d{2}$",
+            amount.GetProperty("pattern").GetString()
+        );
+        Assert.Equal(9_999_999_999_999_999.99m, amount.GetProperty("maximum").GetDecimal());
+        Assert.Equal(0.01m, amount.GetProperty("minimum").GetDecimal());
     }
 
     [Fact]
@@ -210,6 +261,14 @@ sourceArray.Order(),
     private static IEnumerable<string> RequiredOf(JsonElement schema)
     {
         foreach (var entry in schema.GetProperty("required").EnumerateArray())
+        {
+            yield return entry.GetString()!;
+        }
+    }
+
+    private static IEnumerable<string> EnumOf(JsonElement property)
+    {
+        foreach (var entry in property.GetProperty("enum").EnumerateArray())
         {
             yield return entry.GetString()!;
         }

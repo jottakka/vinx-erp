@@ -96,7 +96,13 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
         CancellationToken cancellationToken
     )
     {
-        if (!IsTrimmed(model.Title) || !IsTrimmed(model.Description))
+        if (
+            !IsTrimmed(model.Title)
+            || !IsTrimmed(model.Description)
+            || !IsTrimmed(model.BeneficiaryDisplayName)
+            || !PaguaiAmountRules.IsValid(model.Amount)
+            || model.DueDate == default
+        )
         {
             return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
         }
@@ -114,6 +120,10 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
             PaguaiDraftState.Forbidden => ApiControllerError.Error(
                 "capability_denied",
                 StatusCodes.Status403Forbidden
+            ),
+            PaguaiDraftState.Invalid => ApiControllerError.Error(
+                "invalid_request",
+                StatusCodes.Status400BadRequest
             ),
             PaguaiDraftState.IdempotencyConflict => ApiControllerError.Error(
                 "idempotency_conflict",

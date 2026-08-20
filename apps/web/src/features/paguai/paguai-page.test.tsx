@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
@@ -17,6 +17,11 @@ const draft = {
   requestId: "22222222-2222-4222-8222-222222222222",
   title: "Papel",
   description: "Papel para impressora",
+  amount: "1250.00",
+  currency: "BRL" as const,
+  dueDate: "2026-09-01",
+  beneficiaryDisplayName: "Fornecedor Demo",
+  proofRequirement: "required" as const,
   state: "rascunho" as const,
   version: 1 as const,
   createdAt: "2026-08-16T12:00:00.000+00:00",
@@ -49,7 +54,7 @@ const gateway: MockSessionGateway = {
 };
 
 describe("PaguaiPage", () => {
-  it("renders the selected draft detail with only the MVP metadata", async () => {
+  it("renders the selected draft detail with the financial fields", async () => {
     const user = userEvent.setup();
     const draftClient = {
       create: async () => ({ ok: true as const, value: draft }),
@@ -74,9 +79,11 @@ describe("PaguaiPage", () => {
     ).toBeVisible();
     expect(screen.getByText("Papel para impressora")).toBeVisible();
     expect(screen.getByText("Estado: rascunho · versão 1")).toBeVisible();
+    expect(screen.getAllByText("R$ 1.250,00").length).toBeGreaterThanOrEqual(1);
     expect(
-      screen.getByText(`Identificador da solicitação: ${draft.requestId}`),
-    ).toBeVisible();
+      screen.getAllByText("Vencimento: 01/09/2026").length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Beneficiário: Fornecedor Demo/)).toBeVisible();
   });
 
   it("clears company A drafts before company B fails to load", async () => {
@@ -179,8 +186,23 @@ describe("PaguaiPage", () => {
 
     const title = await screen.findByRole("textbox", { name: "Título" });
     const description = screen.getByRole("textbox", { name: "Descrição" });
+    const amount = screen.getByRole("textbox", { name: "Valor (R$)" });
+    const dueDate = document.querySelector<HTMLInputElement>(
+      'input[name="dueDate"]',
+    );
+    const beneficiary = screen.getByRole("textbox", {
+      name: "Beneficiário (informativo)",
+    });
     await user.type(title, "Novo papel");
     await user.type(description, "Descrição do rascunho");
+    await user.type(amount, "1.250,00");
+    if (!dueDate) throw new Error("due date input missing");
+    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+    await user.type(beneficiary, "Fornecedor Demo");
+    await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Obrigatório" }),
+    );
     await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
@@ -190,9 +212,102 @@ describe("PaguaiPage", () => {
       companyId,
       description: "Descrição do rascunho",
       title: "Novo papel",
+      amount: "1250.00",
+      currency: "BRL",
+      dueDate: expect.any(String),
+      beneficiaryDisplayName: "Fornecedor Demo",
+      proofRequirement: "required",
     });
     expect(
       screen.getByRole("heading", { name: "Novo papel", level: 2 }),
     ).toBeVisible();
+  });
+
+  it("blocks draft creation without an explicit proof requirement selection", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn();
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    render(
+      <VinxThemeProvider>
+        <SessionProvider gateway={gateway}>
+          <PaguaiPage draftClient={draftClient} />
+        </SessionProvider>
+      </VinxThemeProvider>,
+    );
+
+    const title = await screen.findByRole("textbox", { name: "Título" });
+    const description = screen.getByRole("textbox", { name: "Descrição" });
+    const amount = screen.getByRole("textbox", { name: "Valor (R$)" });
+    const dueDate = document.querySelector<HTMLInputElement>(
+      'input[name="dueDate"]',
+    );
+    const beneficiary = screen.getByRole("textbox", {
+      name: "Beneficiário (informativo)",
+    });
+    await user.type(title, "Novo papel");
+    await user.type(description, "Descrição do rascunho");
+    await user.type(amount, "1.250,00");
+    if (!dueDate) throw new Error("due date input missing");
+    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+    await user.type(beneficiary, "Fornecedor Demo");
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    expect(create).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("heading", { name: "Novo papel", level: 2 }),
+    ).toBeNull();
+  });
+
+  it("rejects malformed Brazilian amount grouping before creating", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn();
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    render(
+      <VinxThemeProvider>
+        <SessionProvider gateway={gateway}>
+          <PaguaiPage draftClient={draftClient} />
+        </SessionProvider>
+      </VinxThemeProvider>,
+    );
+
+    await user.type(
+      await screen.findByRole("textbox", { name: "Título" }),
+      "Novo papel",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Descrição" }),
+      "Descrição",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Valor (R$)" }),
+      "1.2,34",
+    );
+    const dueDate = document.querySelector<HTMLInputElement>(
+      'input[name="dueDate"]',
+    );
+    if (!dueDate) throw new Error("due date input missing");
+    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+    await user.type(
+      screen.getByRole("textbox", { name: "Beneficiário (informativo)" }),
+      "Fornecedor Demo",
+    );
+    await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Obrigatório" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    expect(create).not.toHaveBeenCalled();
+    expect(screen.getByText("Revise os campos obrigatórios.")).toBeVisible();
   });
 });
