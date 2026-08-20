@@ -12,25 +12,41 @@ public sealed class MetaWhatsAppInboundWebhookTests
     private const string WebhookPath = "/foundation/notifications/whatsapp/webhook";
     // Segredo de teste configurado no factory; nenhum valor real.
     private const string AppSecret = "test-meta-app-secret";
+    private const string ChannelPhoneNumberId = "111111111111111";
+    private const string SenderWaId = "556198132901";
 
     [Fact]
-    public async Task Signed_image_message_creates_a_pending_inbound_row()
+    public async Task Signed_image_message_creates_a_pending_admitted_inbound_row()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await NotificationIntentSeed.CreateCompanyWithRecipientAsync(factory);
+        await NotificationIntentSeed.SeedContactAsync(
+            factory,
+            seed.CompanyId,
+            seed.RecipientUserId,
+            $"+{SenderWaId}",
+            isValidated: true
+        );
         using var client = factory.CreateClient();
 
         using var response = await PostSignedAsync(
             client,
-            ImagePayload("wamid.in.1", "556198132901", "1938", "isto é um recibo")
+            ImagePayload("wamid.in.1", SenderWaId, "1938", "isto é um recibo")
         );
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var row = Assert.Single(await NotificationIntentSeed.ReadInboundRowsAsync(factory));
         Assert.Equal("wamid.in.1", row.MessageId);
-        Assert.Equal("556198132901", row.WaId);
+        Assert.Equal(ChannelPhoneNumberId, row.PhoneNumberId);
+        Assert.Equal(SenderWaId, row.WaId);
+        Assert.Equal("image", row.MessageType);
         Assert.Equal("1938", row.MediaId);
         Assert.Equal("isto é um recibo", row.Caption);
         Assert.Equal("pending", row.Status);
+        Assert.Equal("admitted", row.ResolutionState);
+        Assert.Equal(seed.RecipientUserId, row.ResolvedUserId);
+        Assert.Equal(seed.CompanyId, row.ResolvedCompanyId);
+        Assert.NotNull(row.ResolvedMembershipId);
         Assert.Null(row.ReplyMessageId);
         Assert.Null(row.FailureReason);
     }
@@ -40,7 +56,7 @@ public sealed class MetaWhatsAppInboundWebhookTests
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         using var client = factory.CreateClient();
-        var payload = ImagePayload("wamid.in.2", "556198132901", "1939", null);
+        var payload = ImagePayload("wamid.in.2", SenderWaId, "1939", null);
 
         using (var first = await PostSignedAsync(client, payload))
         {
@@ -57,7 +73,7 @@ public sealed class MetaWhatsAppInboundWebhookTests
     }
 
     [Fact]
-    public async Task Non_image_messages_are_ignored_without_any_row()
+    public async Task Non_media_messages_are_ignored_without_any_row()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         using var client = factory.CreateClient();
@@ -72,6 +88,7 @@ public sealed class MetaWhatsAppInboundWebhookTests
                   "changes": [
                     {
                       "value": {
+                        "metadata": { "phone_number_id": "111111111111111" },
                         "messages": [
                           {
                             "id": "wamid.in.text",
@@ -127,6 +144,7 @@ public sealed class MetaWhatsAppInboundWebhookTests
               "changes": [
                 {
                   "value": {
+                    "metadata": { "phone_number_id": "{{ChannelPhoneNumberId}}" },
                     "messages": [
                       {
                         "id": "{{messageId}}",

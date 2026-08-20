@@ -98,11 +98,11 @@ public static class MetaWhatsAppWebhookEndpoints
         }
 
         List<ProviderStatus>? statuses;
-        List<InboundWhatsAppImage>? inboundImages;
+        InboundWhatsAppMedia? inboundMedia;
         try
         {
             statuses = ParseStatuses(rawBody);
-            inboundImages = ParseInboundImages(rawBody);
+            inboundMedia = ParseInboundMedia(rawBody);
         }
         catch (JsonException)
         {
@@ -118,28 +118,39 @@ public static class MetaWhatsAppWebhookEndpoints
             await RecordAsync(database, status, request.HttpContext.RequestAborted);
         }
 
-        if (inboundImages.Count > 0)
+        if (inboundMedia.Images.Count > 0 || inboundMedia.Documents.Count > 0)
         {
-            // Somente imagens inbound (#140); demais tipos seguem ignorados.
+            // Somente mídia inbound (imagem/documento, #272); demais tipos
+            // seguem ignorados.
             var ingress = request.HttpContext.RequestServices.GetRequiredService<
                 InboundWhatsAppIngressService
             >();
-            foreach (var image in inboundImages)
+            foreach (var image in inboundMedia.Images)
             {
                 await ingress.RecordAsync(image, request.HttpContext.RequestAborted);
+            }
+            foreach (var document in inboundMedia.Documents)
+            {
+                await ingress.RecordAsync(document, request.HttpContext.RequestAborted);
             }
         }
 
         return Results.Json(new { code = "accepted" });
     }
 
-    private static List<InboundWhatsAppImage> ParseInboundImages(byte[] rawBody)
+    private sealed record InboundWhatsAppMedia(
+        List<InboundWhatsAppImage> Images,
+        List<InboundWhatsAppDocument> Documents
+    );
+
+    private static InboundWhatsAppMedia ParseInboundMedia(byte[] rawBody)
     {
-        using var document = JsonDocument.Parse(rawBody);
         var images = new List<InboundWhatsAppImage>();
+        var documents = new List<InboundWhatsAppDocument>();
+        using var document = JsonDocument.Parse(rawBody);
         if (!document.RootElement.TryGetProperty("entry", out var entries))
         {
-            return images;
+            return new InboundWhatsAppMedia(images, documents);
         }
 
         foreach (var entry in entries.EnumerateArray())
@@ -159,17 +170,31 @@ public static class MetaWhatsAppWebhookEndpoints
                     continue;
                 }
 
+                // Canal estável do value: sem phone_number_id a mídia não
+                // avança (identidade e idempotência dependem do canal).
+                string? phoneNumberId = null;
+                if (
+                    value.TryGetProperty("metadata", out var metadata)
+                    && metadata.TryGetProperty("phone_number_id", out var phoneNumberIdElement)
+                    && phoneNumberIdElement.ValueKind == JsonValueKind.String
+                    && phoneNumberIdElement.GetString() is { Length: > 0 } rawPhoneNumberId
+                )
+                {
+                    phoneNumberId = rawPhoneNumberId.Trim();
+                }
+
                 foreach (var message in messages.EnumerateArray())
                 {
                     if (
                         !message.TryGetProperty("type", out var type)
-                        || type.GetString() != "image"
+                        || type.GetString() is not ("image" or "document")
                         || !message.TryGetProperty("id", out var id)
                         || id.GetString() is not { Length: > 0 } messageId
                         || !message.TryGetProperty("from", out var from)
                         || from.GetString() is not { Length: > 0 } waId
-                        || !message.TryGetProperty("image", out var image)
-                        || !image.TryGetProperty("id", out var mediaIdElement)
+                        || phoneNumberId is null
+                        || !message.TryGetProperty(type.GetString()!, out var media)
+                        || !media.TryGetProperty("id", out var mediaIdElement)
                         || mediaIdElement.GetString() is not { Length: > 0 } mediaId
                     )
                     {
@@ -178,21 +203,34 @@ public static class MetaWhatsAppWebhookEndpoints
 
                     string? caption = null;
                     if (
-                        image.TryGetProperty("caption", out var captionElement)
+                        media.TryGetProperty("caption", out var captionElement)
                         && captionElement.ValueKind == JsonValueKind.String
                         && captionElement.GetString() is { Length: > 0 } rawCaption
                     )
                     {
                         var trimmed = rawCaption.Trim();
-                        caption = trimmed.Length > 1000 ? trimmed[..1000] : trimmed;
+                        caption = trimmed.Length == 0
+                            ? null
+                            : trimmed.Length > 1000
+                                ? trimmed[..1000]
+                                : trimmed;
                     }
 
-                    images.Add(new InboundWhatsAppImage(messageId, waId, mediaId, caption));
+                    if (type.GetString() == "image")
+                    {
+                        images.Add(new InboundWhatsAppImage(messageId, phoneNumberId, waId, mediaId, caption));
+                    }
+                    else
+                    {
+                        documents.Add(
+                            new InboundWhatsAppDocument(messageId, phoneNumberId, waId, mediaId, caption)
+                        );
+                    }
                 }
             }
         }
 
-        return images;
+        return new InboundWhatsAppMedia(images, documents);
     }
 
     private static List<ProviderStatus> ParseStatuses(byte[] rawBody)

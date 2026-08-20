@@ -37,6 +37,17 @@ public sealed class MetaWhatsAppOptions
         && !string.IsNullOrWhiteSpace(WebAppBaseUrl);
 
     /// <summary>
+    /// Canal inbound conhecido: em deploy de número único, a admissão de
+    /// mídia só avança quando o <c>phone_number_id</c> do webhook é
+    /// exatamente o número configurado (chave estável de idempotência).
+    /// Sem número configurado a admissão falha fechada.
+    /// </summary>
+    public bool IsKnownInboundChannel(string? phoneNumberId) =>
+        !string.IsNullOrWhiteSpace(PhoneNumberId)
+        && phoneNumberId is not null
+        && string.Equals(phoneNumberId.Trim(), PhoneNumberId.Trim(), StringComparison.Ordinal);
+
+    /// <summary>
     /// O envio é opcional no boot do worker (que atende filas independentes):
     /// sem o conjunto completo o provider falha fechado por entrega, sem
     /// chamada externa e sem confirmação falsa.
