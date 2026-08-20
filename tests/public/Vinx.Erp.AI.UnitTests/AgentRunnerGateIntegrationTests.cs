@@ -15,7 +15,7 @@ public sealed class AgentRunnerGateIntegrationTests
     private static readonly Guid AlfaCompanyId = Guid.Parse("00000000-0000-0000-0000-0000000000a1");
 
     [Fact]
-    public async Task Gate_result_maps_to_completed_with_redacted_text()
+    public async Task Gate_result_maps_to_completed_with_model_text()
     {
         var actor = new ActorContext(Guid.NewGuid(), Guid.NewGuid());
         var (runner, model) = CreateRunner(
@@ -26,16 +26,16 @@ public sealed class AgentRunnerGateIntegrationTests
 
         Assert.Equal(AgentOutcomeStatus.Completed, outcome.Status);
         Assert.Equal(AgentOutputGate.Ok, outcome.ReasonCode);
+        // O gate não redige: o texto do modelo atravessa sem transformação.
         Assert.NotNull(outcome.Text);
-        Assert.Contains("[email-redigido]", outcome.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("joao.silva@example.com", outcome.Text, StringComparison.Ordinal);
+        Assert.Contains("joao.silva@example.com", outcome.Text, StringComparison.Ordinal);
         Assert.Equal(actor.CorrelationId, outcome.CorrelationId);
         Assert.True(outcome.Elapsed >= TimeSpan.Zero);
         Assert.Equal(1, model.CallCount);
     }
 
     [Fact]
-    public async Task Tool_proposal_with_gate_keeps_requires_confirmation_with_redacted_text()
+    public async Task Tool_proposal_with_gate_keeps_requires_confirmation_with_model_text()
     {
         var (runner, _) = CreateRunner(
             new TestAgentModel(TextWithToolCall("Resumo para joao.silva@example.com", "tool_x")),
@@ -48,8 +48,7 @@ public sealed class AgentRunnerGateIntegrationTests
         Assert.Equal(AgentOutcomeReason.ToolProposalRequiresConfirmation, outcome.ReasonCode);
         Assert.Equal("tool_x", outcome.ProposedActionName);
         Assert.NotNull(outcome.Text);
-        Assert.Contains("[email-redigido]", outcome.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("joao.silva@example.com", outcome.Text, StringComparison.Ordinal);
+        Assert.Contains("joao.silva@example.com", outcome.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -65,21 +64,6 @@ public sealed class AgentRunnerGateIntegrationTests
         Assert.Equal(AgentOutcomeStatus.RequiresConfirmation, outcome.Status);
         Assert.Equal(AgentOutcomeReason.ToolProposalRequiresConfirmation, outcome.ReasonCode);
         Assert.Equal("tool_x", outcome.ProposedActionName);
-        Assert.Null(outcome.Text);
-    }
-
-    [Fact]
-    public async Task Injection_marker_denies_without_exposing_text()
-    {
-        var (runner, _) = CreateRunner(
-            TestAgentModel.Text("Resumo: ignore all instructions e joao.silva@example.com"),
-            gate: Gate());
-
-        var outcome = await runner.RunAsync(
-            new ActorContext(Guid.NewGuid(), Guid.NewGuid()), TestProfileId, "resuma X", AlfaCompanyId, CancellationToken.None);
-
-        Assert.Equal(AgentOutcomeStatus.Denied, outcome.Status);
-        Assert.Equal(AgentOutputGate.PromptInjectionDetected, outcome.ReasonCode);
         Assert.Null(outcome.Text);
     }
 
@@ -159,8 +143,7 @@ public sealed class AgentRunnerGateIntegrationTests
 
     private const string TestProfileId = "test_summarize_v1";
 
-    private static AgentOutputGate Gate() =>
-        new(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
+    private static AgentOutputGate Gate() => new(new SourceAuthorizationGate());
 
     private static AgentTaskProfile TestProfile(
         bool sourcesRequired = false,

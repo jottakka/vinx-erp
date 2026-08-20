@@ -29,9 +29,6 @@ public sealed class AgentRunOptions
     /// <summary>Latência máxima aceita para a execução; deve ser positiva.</summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>Hosts cujos links permanecem no texto redigido; demais viram [link-removido].</summary>
-    public IReadOnlyList<string> AllowedLinkHosts { get; set; } = [];
-
     /// <summary>
     /// Valida os invariantes; lança <see cref="InvalidOperationException"/> com
     /// mensagem segura que nunca ecoa endpoint, modelo e muito menos a chave.
@@ -41,11 +38,6 @@ public sealed class AgentRunOptions
         if (Timeout <= TimeSpan.Zero)
         {
             throw new InvalidOperationException("Agent timeout must be positive.");
-        }
-
-        if (AllowedLinkHosts.Any(host => string.IsNullOrWhiteSpace(host)))
-        {
-            throw new InvalidOperationException("Agent allowed link hosts must be non-empty host names.");
         }
 
         if (string.IsNullOrWhiteSpace(Provider))

@@ -12,8 +12,8 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Vinx.Erp.ApiHost;
-using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.ApiHost.Agent;
+using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.ApiHost.Models;
 using Vinx.Erp.ApiHost.OpenApi;
@@ -346,8 +346,8 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 app.MapBrowserBffSessionEndpoints();
-app.MapMetaWhatsAppWebhookEndpoints();
 app.MapAgentRunSurface();
+app.MapMetaWhatsAppWebhookEndpoints();
 app.MapControllers();
 var foundation = app.MapGroup("/foundation")
     .RequireAuthorization()

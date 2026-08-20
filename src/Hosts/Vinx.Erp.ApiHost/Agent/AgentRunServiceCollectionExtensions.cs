@@ -50,7 +50,6 @@ internal static class AgentRunServiceCollectionExtensions
 
         services.AddScoped<IAgentContextResolver, AgentContextResolver>();
         services.AddSingleton<SourceAuthorizationGate>();
-        services.AddSingleton(serviceProvider => CreateRedactor(serviceProvider));
         services.AddSingleton<AgentOutputGate>();
 
         AgentModelSelection? selection = null;
@@ -100,15 +99,6 @@ internal static class AgentRunServiceCollectionExtensions
         }
 
         return string.IsNullOrWhiteSpace(options.Provider) || !string.IsNullOrWhiteSpace(options.ApiKey);
-    }
-
-    private static SensitiveOutputRedactor CreateRedactor(IServiceProvider serviceProvider)
-    {
-        var allowedLinkHosts = serviceProvider
-            .GetRequiredService<IOptions<AgentRunOptions>>()
-            .Value.AllowedLinkHosts;
-        return new SensitiveOutputRedactor(
-            new HashSet<string>(allowedLinkHosts ?? [], StringComparer.OrdinalIgnoreCase));
     }
 
     private static IChatClient CreateProviderChatClient(

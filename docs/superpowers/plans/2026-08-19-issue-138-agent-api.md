@@ -1,5 +1,13 @@
 # Agente — API supervisionada (#138) Implementation Plan
 
+> **Revisão pós-#256 `2026-08-19.2`:** o #256 removeu `SensitiveOutputRedactor`
+> e a lista de injeção PT/EN por decisão do dono (gate só com determinístico
+> 100%: schema, fontes, grounding). Consequências aplicadas nesta fatia: sem
+> `AllowedLinkHosts` nas options, sem redator na DI, `gated.RedactedText` →
+> `gated.Text` (texto do modelo sem transformação). PII/injeção, quando
+> exigidas por canal, serão detector não determinístico futuro. O texto abaixo
+> preserva o plano original para histórico.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** expor `POST /agent/runs` autenticado para execução supervisionada de leitura/resumo/extração/rascunho não persistido, consumindo o mesmo núcleo (contexto #132, providers #135, guardrails #136) com idempotência por `requestId`, auditoria e respostas tipadas.

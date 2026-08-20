@@ -62,8 +62,7 @@ public sealed class AgentRunCompositionTests
             ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Endpoint", "https://api.example.com/v1/"),
             ("AgentRun:Model", "approved-model"),
-            ("AgentRun:ApiKey", "test-api-key"),
-            ("AgentRun:AllowedLinkHosts:0", "docs.vinx.example"));
+            ("AgentRun:ApiKey", "test-api-key"));
 
         var services = CreateBaseServices();
         services.AddAgentRunSurface(configuration);

@@ -23,7 +23,7 @@ public sealed class AgentEndpointTests
         "Resumo do dia: pedido 214 faturado e enviado para " + EmailInText + " às 14h.";
 
     [Fact]
-    public async Task Valid_run_returns_result_with_redacted_text_and_correlation()
+    public async Task Valid_run_returns_result_with_model_text_and_correlation()
     {
         var model = ControlledAgentModel.Text(ModelText);
         await using var factory = await CreateConfiguredFactoryAsync(model);
@@ -36,9 +36,8 @@ public sealed class AgentEndpointTests
         var result = await ReadResponseAsync(response);
         Assert.Equal("result", result.Status);
         Assert.Equal("ok", result.ReasonCode);
-        // O texto liberado é sempre o redigido: o endereço nunca chega ao canal.
-        Assert.Contains("[email-redigido]", result.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain(EmailInText, result.Text, StringComparison.Ordinal);
+        // O gate não redige: o texto do modelo chega ao canal sem transformação.
+        Assert.Contains(EmailInText, result.Text, StringComparison.Ordinal);
         Assert.Null(result.Sources);
         Assert.NotEqual(Guid.Empty, result.CorrelationId);
         Assert.Equal(
@@ -214,9 +213,9 @@ public sealed class AgentEndpointTests
         Assert.Equal("agent.run", record.CommandName);
         Assert.Equal(request.RequestId, record.RequestId);
         Assert.Equal(scenario.AlfaCompanyId, record.CompanyId);
-        // O replay devolve exatamente o ResultJson seguro persistido.
-        Assert.Contains("[email-redigido]", record.ResultJson, StringComparison.Ordinal);
-        Assert.DoesNotContain(EmailInText, record.ResultJson, StringComparison.Ordinal);
+        // O replay devolve exatamente o ResultJson seguro persistido (texto
+        // do modelo; sem prompt) — o gate não redige.
+        Assert.Contains(EmailInText, record.ResultJson, StringComparison.Ordinal);
         Assert.DoesNotContain("resuma o expediente", record.ResultJson, StringComparison.Ordinal);
         Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "agent.run").ToListAsync());
     }

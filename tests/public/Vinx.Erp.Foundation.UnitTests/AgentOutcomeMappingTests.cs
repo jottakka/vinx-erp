@@ -17,19 +17,19 @@ public sealed class AgentOutcomeMappingTests
         new(status, reasonCode, text, proposedActionName, CorrelationId, TimeSpan.FromMilliseconds(5));
 
     [Fact]
-    public void Completed_maps_to_200_result_preserving_redacted_text()
+    public void Completed_maps_to_200_result_preserving_text()
     {
         var result = AgentExecutionApplicationService.MapOutcome(Outcome(
             AgentOutcomeStatus.Completed,
             AgentOutcomeReason.Completed,
-            "Resumo aprovado com [email-redigido] preservado."));
+            "Resumo aprovado com fonte citada."));
 
         Assert.NotNull(result.Response);
         Assert.Null(result.ErrorCode);
         Assert.Equal(StatusCodes.Status200OK, result.HttpStatusCode);
         Assert.Equal(AgentRunStatus.Result, result.Response.Status);
         Assert.Equal(AgentOutcomeReason.Completed, result.Response.ReasonCode);
-        Assert.Equal("Resumo aprovado com [email-redigido] preservado.", result.Response.Text);
+        Assert.Equal("Resumo aprovado com fonte citada.", result.Response.Text);
         Assert.Equal(CorrelationId, result.Response.CorrelationId);
     }
 
@@ -69,7 +69,7 @@ public sealed class AgentOutcomeMappingTests
         var result = AgentExecutionApplicationService.MapOutcome(Outcome(
             AgentOutcomeStatus.RequiresConfirmation,
             AgentOutcomeReason.ToolProposalRequiresConfirmation,
-            "Texto redigido que NÃO viaja no v1.",
+            "Texto do modelo que NÃO viaja no v1.",
             proposedActionName: "summarize_document"));
 
         Assert.NotNull(result.Response);

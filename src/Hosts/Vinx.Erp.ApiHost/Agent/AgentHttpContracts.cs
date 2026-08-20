@@ -5,7 +5,7 @@ namespace Vinx.Erp.ApiHost.Agent;
 /// <summary>Status possíveis de uma execução de agente na fronteira HTTP.</summary>
 public static class AgentRunStatus
 {
-    /// <summary>Execução concluída com texto redigido.</summary>
+    /// <summary>Execução concluída com o texto do modelo.</summary>
     public const string Result = "result";
 
     /// <summary>Execução pendente de esclarecimento do usuário.</summary>
@@ -30,7 +30,7 @@ public sealed record AgentRunSourceRef(string Reference);
 /// <summary>Corpo aceito de POST /agent/runs; o cliente envia somente jornada, mensagem, requestId e empresa quando exigida.</summary>
 public sealed record AgentRunHttpRequest(Guid RequestId, string Journey, string Message, Guid? CompanyId);
 
-/// <summary>Resposta tipada de uma execução; texto somente o redigido, sem prompt, resposta bruta ou PII.</summary>
+/// <summary>Resposta tipada de uma execução; texto somente o do modelo liberado pelo gate, sem prompt ou resposta bruta.</summary>
 public sealed record AgentRunHttpResponse(
     string Status,
     string? ReasonCode,

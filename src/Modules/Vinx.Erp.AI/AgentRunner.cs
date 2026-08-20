@@ -12,8 +12,8 @@ namespace Vinx.Erp.AI;
 /// de modelo no máximo, toda falha é fail-closed. Stateless: nenhum estado
 /// sobrevive entre chamadas. Tool call volta como proposta que exige
 /// confirmação — o runner não executa nada. Com gate de saída configurado, a
-/// resposta do modelo só chega ao canal via decisão do gate (texto sempre
-/// redigido); sem gate, o comportamento é o histórico. Nunca loga prompt,
+/// resposta do modelo só chega ao canal via decisão do gate (o gate não
+/// redige); sem gate, o comportamento é o histórico. Nunca loga prompt,
 /// resposta ou PII.
 /// </summary>
 public sealed class AgentRunner(
@@ -101,7 +101,7 @@ public sealed class AgentRunner(
             .FirstOrDefault();
 
         // 6. Gate de saída: só roda quando houve resposta; o texto liberado é
-        // sempre o redigido e o contrato vem do perfil aprovado.
+        // o do modelo (o gate não redige) e o contrato vem do perfil aprovado.
         if (outputGate is not null)
         {
             var gated = outputGate.Evaluate(new AgentOutputGateRequest(
@@ -111,7 +111,7 @@ public sealed class AgentRunner(
                 profile.SourcesRequired));
 
             // Proposta de tool domina o desfecho do gate: segue exigindo
-            // confirmação, com o texto que o gate liberou (redigido).
+            // confirmação, com o texto que o gate liberou.
             if (toolCall is not null)
             {
                 return Finish(
@@ -119,7 +119,7 @@ public sealed class AgentRunner(
                     AgentOutcomeReason.ToolProposalRequiresConfirmation,
                     actor,
                     stopwatch,
-                    text: gated.RedactedText,
+                    text: gated.Text,
                     proposedActionName: toolCall.Name);
             }
 
@@ -131,7 +131,7 @@ public sealed class AgentRunner(
                 AgentOutputGateStatus.ValidationError => AgentOutcomeStatus.Invalid,
                 _ => throw new ArgumentOutOfRangeException(nameof(gated.Status), gated.Status, "Unsupported output gate status."),
             };
-            return Finish(gatedStatus, gated.ReasonCode, actor, stopwatch, text: gated.RedactedText);
+            return Finish(gatedStatus, gated.ReasonCode, actor, stopwatch, text: gated.Text);
         }
 
         if (toolCall is not null)

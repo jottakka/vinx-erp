@@ -103,7 +103,7 @@ public sealed class AgentExecutionApplicationService(
 
     /// <summary>
     /// Mapeamento puro desfecho do runner → resposta tipada + status HTTP. O
-    /// texto viaja somente o redigido; requires_confirmation não expõe texto
+    /// o texto viaja o liberado pelo gate (sem redação); requires_confirmation não expõe texto
     /// nem a ação proposta (opaca em v1); fontes estruturadas não existem em v1
     /// e seguem nulas. 5xx viram envelope com código estável da fronteira: 503
     /// expõe provider_not_configured quando é exatamente esse reason, senão
