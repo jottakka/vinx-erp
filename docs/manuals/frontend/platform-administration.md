@@ -13,9 +13,13 @@ O navegador usa apenas caminhos BFF same-origin (`credentials`, `mode`
 ou armazenamento local. Para cada POST, obtém um antiforgery transitório em
 memória e o envia uma única vez como `X-CSRF-TOKEN`. Não existe retry
 automático nem inserção otimista: cada tentativa nova usa um `requestId`
-fresco, e somente após resultado ambíguo (falha de rede, `5xx`, abort ou
-resposta de sucesso ilegível) o formulário é travado e oferecido um retry
-explícito que reusa o mesmo `requestId` e o mesmo payload, preservando a
+fresco. Durante a submissão, os campos ficam travados e um status acessível
+(`role="status"` + `aria-busy`) anuncia "Criando organização…". Falhas
+ocorridas antes do disparo do comando (por exemplo, no GET de antiforgery)
+são definitivas e apenas exibem erro genérico. Somente falhas sinalizadas
+internamente com `mayHaveCommitted` — rede, `5xx` ou abort após o disparo, ou
+sucesso `200/201` com corpo ilegível — travam o formulário e oferecem um
+retry explícito que reusa o mesmo `requestId` e o mesmo payload, preservando a
 idempotência do servidor.
 
 A negação `403 {"code":"mfa_assurance_required"}` entra em estado terminal: a

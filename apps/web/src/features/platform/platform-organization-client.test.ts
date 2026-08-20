@@ -417,6 +417,24 @@ describe("createPlatformOrganizationClient", () => {
     });
   });
 
+  it("marks a network failure after provision dispatch as potentially committed", async () => {
+    const fetchImplementation = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === antiforgeryPath)
+        return new Response(JSON.stringify({ requestToken: "fresh-token" }));
+      throw new Error("secret socket details");
+    });
+
+    const result = await createPlatformOrganizationClient(
+      fetchImplementation,
+    ).provision(validCommand());
+
+    expect(result).toEqual({
+      error: { kind: "network", mayHaveCommitted: true },
+      ok: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
   it("maps network failures without exposing exception text", async () => {
     const client = createPlatformOrganizationClient(
       vi.fn().mockRejectedValue(new Error("secret socket details")),

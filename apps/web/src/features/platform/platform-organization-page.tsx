@@ -24,18 +24,26 @@ import {
 } from "./platform-organization-client";
 
 const organizationFormSchema = z.object({
-  groupName: z.string().trim().min(1, "Informe um nome válido.").max(200),
-  companyName: z.string().trim().min(1, "Informe um nome válido.").max(200),
+  groupName: z
+    .string()
+    .trim()
+    .min(1, "Informe um nome válido.")
+    .max(200, "Informe um nome com até 200 caracteres."),
+  companyName: z
+    .string()
+    .trim()
+    .min(1, "Informe um nome válido.")
+    .max(200, "Informe um nome com até 200 caracteres."),
   ownerDisplayName: z
     .string()
     .trim()
     .min(1, "Informe um nome válido.")
-    .max(200),
+    .max(200, "Informe um nome com até 200 caracteres."),
   ownerEmail: z
     .string()
     .trim()
     .min(1, "Informe um e-mail válido.")
-    .max(320)
+    .max(320, "Informe um e-mail com até 320 caracteres.")
     .email("Informe um e-mail válido."),
 });
 
@@ -225,7 +233,7 @@ export function PlatformOrganizationPage({
     );
   }
 
-  const inputsLocked = mfaBlocked || Boolean(attempt);
+  const inputsLocked = mfaBlocked || Boolean(attempt) || mutation.isPending;
 
   return (
     <Stack spacing={3}>
@@ -275,6 +283,7 @@ export function PlatformOrganizationPage({
       <Card component="section" variant="outlined">
         <CardContent>
           <Stack
+            aria-busy={mutation.isPending}
             component="form"
             noValidate
             onSubmit={form.handleSubmit(reserve)}
@@ -316,6 +325,17 @@ export function PlatformOrganizationPage({
             >
               Criar organização
             </Button>
+            {mutation.isPending ? (
+              <Stack
+                direction="row"
+                role="status"
+                spacing={1}
+                sx={{ alignItems: "center" }}
+              >
+                <CircularProgress aria-label="Criando organização" size={20} />
+                Criando organização…
+              </Stack>
+            ) : null}
             {attempt && !mutation.isPending ? (
               <Button onClick={retry} variant="outlined">
                 Tentar novamente
@@ -357,12 +377,9 @@ function isAuthorizationFailure(failure: PlatformOrganizationFailure): boolean {
 }
 
 function isAmbiguous(failure: PlatformOrganizationFailure): boolean {
-  return (
-    failure.kind === "network" ||
-    failure.kind === "unavailable" ||
-    failure.kind === "aborted" ||
-    failure.mayHaveCommitted === true
-  );
+  // Somente falhas sinalizadas com mayHaveCommitted podem ter chegado ao
+  // servidor; falhas de antiforgery ou de validação local são definitivas.
+  return failure.mayHaveCommitted === true;
 }
 
 function isCurrentOperation(

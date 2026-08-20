@@ -277,7 +277,10 @@ describe("PlatformOrganizationPage", () => {
     const user = userEvent.setup();
     const provision = vi
       .fn<PlatformOrganizationGateway["provision"]>()
-      .mockResolvedValueOnce({ error: { kind: "network" }, ok: false })
+      .mockResolvedValueOnce({
+        error: { kind: "network", mayHaveCommitted: true },
+        ok: false,
+      })
       .mockResolvedValueOnce({
         invitationStatus: "pending_delivery",
         ok: true,
@@ -474,5 +477,92 @@ describe("PlatformOrganizationPage", () => {
       screen.queryByRole("button", { name: "Tentar novamente" }),
     ).toBeNull();
     expect(gateway.provision).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a pre-dispatch transport failure as definitive", async () => {
+    const user = userEvent.setup();
+    const provision = vi
+      .fn<PlatformOrganizationGateway["provision"]>()
+      .mockResolvedValueOnce({
+        error: { kind: "network" },
+        ok: false,
+      })
+      .mockResolvedValueOnce({
+        invitationStatus: "pending_delivery",
+        ok: true,
+        state: "created",
+      });
+    const gateway = createGateway({ provision });
+    renderPage({ gateway });
+
+    await fillValidForm(user);
+    await submit(user);
+
+    expect(
+      await screen.findByText("Não foi possível criar a organização."),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Nome do grupo")).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: "Tentar novamente" }),
+    ).toBeNull();
+
+    await submit(user);
+
+    expect(
+      await screen.findByText(
+        "Organização criada. Convite pendente de entrega.",
+      ),
+    ).toBeVisible();
+    expect(provision.mock.calls[1]?.[0].requestId).not.toBe(
+      provision.mock.calls[0]?.[0].requestId,
+    );
+  });
+
+  it("locks inputs and announces progress while the request is pending", async () => {
+    const user = userEvent.setup();
+    const provision = deferred<PlatformOrganizationProvisionResult>();
+    const gateway = createGateway({
+      provision: vi.fn().mockReturnValue(provision.promise),
+    });
+    renderPage({ gateway });
+
+    await fillValidForm(user);
+    await submit(user);
+
+    expect(await screen.findByText("Criando organização…")).toBeVisible();
+    expect(screen.getByRole("status")).toBeVisible();
+    expect(screen.getByLabelText("Nome do grupo")).toBeDisabled();
+    const submitButton = screen.getByRole("button", {
+      name: "Criar organização",
+    });
+    expect(submitButton).toBeDisabled();
+
+    provision.resolve({
+      invitationStatus: "pending_delivery",
+      ok: true,
+      state: "created",
+    });
+
+    expect(
+      await screen.findByText(
+        "Organização criada. Convite pendente de entrega.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Nome do grupo")).toBeEnabled();
+  });
+
+  it("shows a Portuguese message for oversized fields", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway();
+    renderPage({ gateway });
+
+    await screen.findByLabelText("Nome do grupo");
+    await user.type(screen.getByLabelText("Nome do grupo"), "a".repeat(201));
+    await submit(user);
+
+    expect(
+      await screen.findByText("Informe um nome com até 200 caracteres."),
+    ).toBeVisible();
+    expect(gateway.provision).not.toHaveBeenCalled();
   });
 });

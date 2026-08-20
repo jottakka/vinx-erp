@@ -126,10 +126,10 @@ export function createPlatformOrganizationClient(
     } catch (reason) {
       const aborted = isAbort(reason, init.signal);
       return {
+        // Falha de transporte depois do disparo é ambígua mesmo sem abort:
+        // o comando pode ter chegado ao servidor.
         failure: failure(aborted ? "aborted" : "network", {
-          ...(aborted && mayHaveCommittedOnAbort
-            ? { mayHaveCommitted: true }
-            : {}),
+          ...(mayHaveCommittedOnAbort ? { mayHaveCommitted: true } : {}),
         }),
       };
     }
