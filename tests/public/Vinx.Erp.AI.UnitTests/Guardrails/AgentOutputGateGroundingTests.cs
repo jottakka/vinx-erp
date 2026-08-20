@@ -22,7 +22,7 @@ public sealed class AgentOutputGateGroundingTests
         Assert.Equal(AgentOutputGateStatus.Result, result.Status);
         Assert.Equal("ok", result.ReasonCode);
         Assert.Equal(AgentPolicyVersion.Current, result.PolicyVersion);
-        Assert.NotNull(result.RedactedText);
+        Assert.NotNull(result.Text);
 
         // Somente a fonte da empresa do contexto chega ao canal.
         var source = Assert.Single(result.AuthorizedSources);
@@ -47,7 +47,7 @@ public sealed class AgentOutputGateGroundingTests
 
         Assert.Equal(AgentOutputGateStatus.Denied, result.Status);
         Assert.Equal("cross_tenant_source", result.ReasonCode);
-        Assert.Null(result.RedactedText);
+        Assert.Null(result.Text);
         Assert.Empty(result.AuthorizedSources);
         Assert.Equal(AgentPolicyVersion.Current, result.PolicyVersion);
 
@@ -69,7 +69,7 @@ public sealed class AgentOutputGateGroundingTests
         Assert.Equal("no_authorized_source", result.ReasonCode);
 
         // Abstenção: o texto nunca chega ao canal como fato.
-        Assert.Null(result.RedactedText);
+        Assert.Null(result.Text);
         Assert.Empty(result.AuthorizedSources);
         Assert.DoesNotContain("sem fontes", result.ToString(), StringComparison.Ordinal);
     }
@@ -88,7 +88,7 @@ public sealed class AgentOutputGateGroundingTests
         Assert.Equal(AgentOutputGateStatus.NeedsClarification, result.Status);
         Assert.Equal("low_confidence", result.ReasonCode);
         Assert.Equal(0.5, AgentOutputGate.MinimumConfidence);
-        Assert.Null(result.RedactedText);
+        Assert.Null(result.Text);
         Assert.Empty(result.AuthorizedSources);
         Assert.DoesNotContain("incerto", result.ToString(), StringComparison.Ordinal);
     }
@@ -103,7 +103,7 @@ public sealed class AgentOutputGateGroundingTests
 
         Assert.Equal(AgentOutputGateStatus.NeedsClarification, result.Status);
         Assert.Equal("no_evidence", result.ReasonCode);
-        Assert.Null(result.RedactedText);
+        Assert.Null(result.Text);
         Assert.Empty(result.AuthorizedSources);
     }
 
@@ -121,12 +121,11 @@ public sealed class AgentOutputGateGroundingTests
         // Sem confiança reportada não há base para abster: a resposta fundamentada passa.
         Assert.Equal(AgentOutputGateStatus.Result, result.Status);
         Assert.Equal("ok", result.ReasonCode);
-        Assert.NotNull(result.RedactedText);
+        Assert.NotNull(result.Text);
         Assert.Single(result.AuthorizedSources);
     }
 
-    private static AgentOutputGate Gate() =>
-        new(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
+    private static AgentOutputGate Gate() => new(new SourceAuthorizationGate());
 
     private static AgentModelResponse Response(string? text, IReadOnlyList<AgentCitedSource> sources, double? confidence) => new(
         Text: text,

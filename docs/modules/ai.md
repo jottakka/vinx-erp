@@ -111,8 +111,9 @@ texto; imagem direta é canonicalizada (decode → teto de pixels → strip de
 metadados → re-encode) — o provider nunca recebe bytes originais. Saída é
 JSON estrito com fonte/página/confiança e `untrusted: true`: texto de
 documento é dado, nunca instrução. Allowlist de classificação/consentimento
-(default deny) roda antes de qualquer raster/OCR; classe que exige redação é
-rejeitada até #136.
+(default deny) roda antes de qualquer raster/OCR; classe que exige redação
+permanece rejeitada — o contrato de saída (#136) não redige, e redação
+futura será por detector não determinístico decidido por canal.
 
 A leitura é **efêmera**: nenhum contexto, cache ou resposta é retido entre
 execuções; falhas (limite, timeout cooperativo, provider, schema) viram
@@ -130,28 +131,32 @@ fail-closed; os testes desta fatia usam fontes sintéticas controladas.
 
 ## Contrato de saída
 
-`AgentOutputGate` valida e redige a resposta normalizada do modelo
+`AgentOutputGate` valida a resposta normalizada do modelo
 (`AgentModelResponse`) em ordem FIXA: contrato estrutural por jornada
 (`AgentOutputContract`, campo obrigatório ausente ou desconhecido reprova,
-JSON inválido falha fechado), injeção de prompt (lista fechada de marcadores
-PT/EN como defesa-em-profundidade — nega suspeito, nunca autoriza),
-autorização de fontes contra o contexto (fonte de outra empresa nega;
-somente fontes da empresa do contexto passam), grounding e confiança
-(fontes exigidas sem autorizada, confiança abaixo do piso 0,5 ou resposta
-sem texto e sem fontes abstém) e redação determinística ao final (o texto
-liberado é sempre o redigido; a redação nunca altera o desfecho). Reason
-codes estáveis: `ok`, `schema_invalid`, `prompt_injection_detected`,
-`cross_tenant_source`, `no_authorized_source`, `low_confidence` e
-`no_evidence`. Negações e abstenções não expõem texto nem fontes; a
-proposta de tool segue como estado puro (`HasToolProposal`) em qualquer
-desfecho, sem caminho de execução.
+JSON inválido falha fechado), autorização de fontes contra o contexto (fonte
+de outra empresa nega; somente fontes da empresa do contexto passam) e
+grounding/confiança (fontes exigidas sem autorizada, confiança abaixo do
+piso 0,5 ou resposta sem texto e sem fontes abstém). Reason codes estáveis:
+`ok`, `schema_invalid`, `cross_tenant_source`, `no_authorized_source`,
+`low_confidence` e `no_evidence`. Negações e abstenções não expõem texto nem
+fontes; a proposta de tool segue como estado puro (`HasToolProposal`) em
+qualquer desfecho, sem caminho de execução.
+
+O texto do caminho `ok` é o do modelo, sem transformação: o gate NÃO redige
+conteúdo (CPF/CNPJ, banco, médico, links) nem detecta injeção de prompt por
+lista de termos. Essas verificações não são confiáveis como regex/lista
+fechada numa única linguagem — cobrem fração mínima do problema e geram
+falso positivo em numeração operacional; quando um canal exigir redação de
+PII ou triagem de injeção, será por detector não determinístico
+(serviço/modelo) decidido por canal em #138+, nunca por padrão fixo aqui.
 
 Toda decisão registra a política vigente `AgentPolicyVersion.Current`
-(`2026-08-19.1`); mudança de marcadores de injeção, categorias de redação ou
-piso de confiança exige nova versão datada. A política é pura e stateless
-por chamada. Nenhum host chama o gate nesta fatia: a costura com a
-resposta do provider e o canal supervisionado fica para a API (#138). Nada
-aqui promete canal, provider ou execução de ferramenta.
+(`2026-08-19.2`); mudança das regras do gate ou do piso de confiança exige
+nova versão datada. A política é pura e stateless por chamada. Nenhum host
+chama o gate nesta fatia: a costura com a resposta do provider e o canal
+supervisionado fica para a API (#138). Nada aqui promete canal, provider ou
+execução de ferramenta.
 
 ## Ownership
 
@@ -179,7 +184,7 @@ Foundation. O adapter não compartilha resposta entre atores ou empresas.
    visão e a política de egress; #135 completa os demais adapters previstos;
 4. #134 normaliza PDF/imagem `clean` em contexto verificado, consumindo o
    perfil de visão;
-5. #136 valida e redige a saída real;
+5. #136 valida a saída real;
 6. #138 conecta contexto, provider, guardrails e aprovação numa API
    supervisionada.
 
@@ -192,12 +197,14 @@ não atende.
 
 `2.3` — mudança intencional sobre a 2.2: adiciona o contrato de saída
 validado (#136) — `AgentOutputGate` com ordem fixa (contrato estrutural,
-injeção de prompt, autorização de fontes, grounding/confiança, redação
-determinística) versionado por `AgentPolicyVersion` (`2026-08-19.1`);
-negações e abstenções não expõem texto nem fontes. A 2.2 permanece vigente
-no que descreve: a API hospedada do DeepSeek é text-only, o perfil DeepSeek
-rejeita imagem antes de HTTP, e conteúdo de dados fora do perfil é
-rejeitado deterministicamente em vez de descartado em silêncio.
+autorização de fontes, grounding/confiança) versionado por
+`AgentPolicyVersion` (`2026-08-19.2`); negações e abstenções não expõem
+texto nem fontes; o gate não redige conteúdo nem detecta injeção — redação
+de PII e triagem de injeção, quando exigidas por canal, serão detector não
+determinístico em #138+. A 2.2 permanece vigente no que descreve: a API
+hospedada do DeepSeek é text-only, o perfil DeepSeek rejeita imagem antes de
+HTTP, e conteúdo de dados fora do perfil é rejeitado deterministicamente em
+vez de descartado em silêncio.
 
 ## Deletion strategy
 

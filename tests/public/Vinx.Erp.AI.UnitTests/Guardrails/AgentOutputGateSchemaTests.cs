@@ -13,7 +13,7 @@ public sealed class AgentOutputGateSchemaTests
     [Fact]
     public void Valid_structured_response_returns_result_with_authorized_sources()
     {
-        var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
+        var gate = new AgentOutputGate(new SourceAuthorizationGate());
         var authorizedSource = new AgentCitedSource("fonte-1", AlfaCompanyId);
         var response = new AgentModelResponse(
             Text: "Resumo enviado para contato@example.com",
@@ -27,23 +27,22 @@ public sealed class AgentOutputGateSchemaTests
         Assert.Equal(AgentOutputGateStatus.Result, result.Status);
         Assert.Equal("ok", result.ReasonCode);
         Assert.Equal(AgentPolicyVersion.Current, result.PolicyVersion);
-        Assert.Equal("2026-08-19.1", result.PolicyVersion);
+        Assert.Equal("2026-08-19.2", result.PolicyVersion);
 
         // A fonte da empresa do contexto chega ao canal; a de outra empresa agora nega (fatia de grounding).
         var source = Assert.Single(result.AuthorizedSources);
         Assert.Equal(authorizedSource, source);
         Assert.DoesNotContain(BetaCompanyId.ToString(), result.ToString(), StringComparison.Ordinal);
 
-        // O texto liberado já passa pelo redator: e-mail vira marcador fixo.
-        Assert.NotNull(result.RedactedText);
-        Assert.Contains("[email-redigido]", result.RedactedText!);
-        Assert.DoesNotContain("example.com", result.RedactedText!, StringComparison.Ordinal);
+        // O texto liberado é o do modelo, sem transformação: o gate não redige conteúdo.
+        Assert.NotNull(result.Text);
+        Assert.Equal("Resumo enviado para contato@example.com", result.Text);
     }
 
     [Fact]
     public void Invalid_schema_blocks_text_from_channel()
     {
-        var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
+        var gate = new AgentOutputGate(new SourceAuthorizationGate());
         var response = new AgentModelResponse(
             Text: "resumo com dado sensivel",
             StructuredJson: "{ invalido",
@@ -55,7 +54,7 @@ public sealed class AgentOutputGateSchemaTests
 
         Assert.Equal(AgentOutputGateStatus.ValidationError, result.Status);
         Assert.Equal("schema_invalid", result.ReasonCode);
-        Assert.Null(result.RedactedText);
+        Assert.Null(result.Text);
         Assert.Empty(result.AuthorizedSources);
         Assert.Equal(AgentPolicyVersion.Current, result.PolicyVersion);
 
@@ -67,7 +66,7 @@ public sealed class AgentOutputGateSchemaTests
     [Fact]
     public void Tool_proposal_flag_is_preserved_regardless_of_status()
     {
-        var gate = new AgentOutputGate(new SourceAuthorizationGate(), new SensitiveOutputRedactor(new HashSet<string>()));
+        var gate = new AgentOutputGate(new SourceAuthorizationGate());
         // Fonte autorizada presente para não cair em no_evidence (regra de fatia posterior).
         var accepted = new AgentModelResponse(
             Text: null,

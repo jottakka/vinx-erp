@@ -1,5 +1,16 @@
 # Agente — guardrails de saída (#136) Implementation Plan
 
+> **Revisão 2026-08-19.2 (decisão do dono, pós-revisão do PR #256):** a
+> redação determinística (`SensitiveOutputRedactor`) e a lista fechada de
+> injeção PT/EN (`InjectionMarkers`) foram REMOVIDAS da fatia. Padrão fixo
+> por linguagem cobre fração mínima do problema e gera falso positivo em
+> numeração operacional; o gate mantém somente o que é determinístico e
+> 100% verificável: validação de schema, autorização de fontes
+> (cross-tenant) e grounding/confiança/abstenção. Redação de PII e triagem
+> de injeção, quando exigidas por canal, serão detector NÃO determinístico
+> (serviço/modelo), decidido em #138+. O texto abaixo preserva o plano
+> original para histórico.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** impedir que a saída do modelo seja tratada como verdade: um gate determinístico valida schema, autoriza fontes, redige conteúdo sensível, exige grounding e trata prompt injection antes de qualquer canal (UI/WhatsApp/MCP) mostrar o resultado.
