@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Vinx.Erp.AI.Guardrails;
 using Vinx.Erp.Foundation.Identity;
 
 namespace Vinx.Erp.AI;
@@ -10,17 +11,23 @@ namespace Vinx.Erp.AI;
 /// entrada, resolução de contexto confiável, seleção de provider e UMA chamada
 /// de modelo no máximo, toda falha é fail-closed. Stateless: nenhum estado
 /// sobrevive entre chamadas. Tool call volta como proposta que exige
-/// confirmação — o runner não executa nada. Nunca loga prompt, resposta ou PII.
+/// confirmação — o runner não executa nada. Com gate de saída configurado, a
+/// resposta do modelo só chega ao canal via decisão do gate (o gate não
+/// redige); sem gate, o comportamento é o histórico. Nunca loga prompt,
+/// resposta ou PII.
 /// </summary>
 public sealed class AgentRunner(
     IAgentContextResolver contextResolver,
     IAgentModel? model,
     ILogger<AgentRunner> logger,
-    Func<string, AgentTaskProfile?>? profileCatalog = null)
+    Func<string, AgentTaskProfile?>? profileCatalog = null,
+    AgentOutputGate? outputGate = null)
 {
     private const string Operation = "run";
     private const string Module = "Vinx.Erp.AI";
     private const string ExecutionLogTemplate = "Agent execution {Operation} {Module} {Result} {Reason} {ElapsedMs}";
+
+    private static readonly IReadOnlySet<string> NoRequiredOutputFields = new HashSet<string>();
 
     private readonly Func<string, AgentTaskProfile?> lookupProfile = profileCatalog ?? LookupInCatalog;
 
@@ -92,6 +99,41 @@ public sealed class AgentRunner(
             .SelectMany(messageContent => messageContent.Contents)
             .OfType<FunctionCallContent>()
             .FirstOrDefault();
+
+        // 6. Gate de saída: só roda quando houve resposta; o texto liberado é
+        // o do modelo (o gate não redige) e o contrato vem do perfil aprovado.
+        if (outputGate is not null)
+        {
+            var gated = outputGate.Evaluate(new AgentOutputGateRequest(
+                resolution.Context!,
+                ToModelResponse(response, toolCall is not null),
+                new AgentOutputContract(profile!.Journey, profile.RequiredOutputFields ?? NoRequiredOutputFields),
+                profile.SourcesRequired));
+
+            // Proposta de tool domina o desfecho do gate: segue exigindo
+            // confirmação, com o texto que o gate liberou.
+            if (toolCall is not null)
+            {
+                return Finish(
+                    AgentOutcomeStatus.RequiresConfirmation,
+                    AgentOutcomeReason.ToolProposalRequiresConfirmation,
+                    actor,
+                    stopwatch,
+                    text: gated.Text,
+                    proposedActionName: toolCall.Name);
+            }
+
+            var gatedStatus = gated.Status switch
+            {
+                AgentOutputGateStatus.Result => AgentOutcomeStatus.Completed,
+                AgentOutputGateStatus.NeedsClarification => AgentOutcomeStatus.NeedsClarification,
+                AgentOutputGateStatus.Denied => AgentOutcomeStatus.Denied,
+                AgentOutputGateStatus.ValidationError => AgentOutcomeStatus.Invalid,
+                _ => throw new ArgumentOutOfRangeException(nameof(gated.Status), gated.Status, "Unsupported output gate status."),
+            };
+            return Finish(gatedStatus, gated.ReasonCode, actor, stopwatch, text: gated.Text);
+        }
+
         if (toolCall is not null)
         {
             return Finish(
@@ -103,6 +145,27 @@ public sealed class AgentRunner(
         }
 
         return Finish(AgentOutcomeStatus.Completed, AgentOutcomeReason.Completed, actor, stopwatch, text: response.Text);
+    }
+
+    /// <summary>
+    /// Mapeamento único ChatResponse → AgentModelResponse (v1): primeiro texto,
+    /// proposta de tool pela presença de FunctionCallContent, sem JSON
+    /// estruturado, sem fontes citadas e sem confiança — as regras completas
+    /// permanecem no gate.
+    /// </summary>
+    private static AgentModelResponse ToModelResponse(ChatResponse response, bool hasToolProposal)
+    {
+        var firstText = response.Messages
+            .SelectMany(messageContent => messageContent.Contents)
+            .OfType<TextContent>()
+            .FirstOrDefault();
+
+        return new AgentModelResponse(
+            firstText?.Text,
+            StructuredJson: null,
+            CitedSources: [],
+            Confidence: null,
+            HasToolProposal: hasToolProposal);
     }
 
     private AgentOutcome Finish(

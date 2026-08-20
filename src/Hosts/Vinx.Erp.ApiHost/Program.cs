@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Vinx.Erp.ApiHost;
+using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.ApiHost.Models;
@@ -165,6 +166,9 @@ builder.Services.AddSingleton<IMalwareScanner>(serviceProvider =>
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddScoped<PaguaiDraftService>();
 builder.Services.AddScoped<AtendimentoCardService>();
+// Superfície do agente: options validadas on-start, gates e provider decididos
+// na composição; sem provider configurado o runner falha fechado.
+builder.Services.AddAgentRunSurface(builder.Configuration);
 builder
     .Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false)
     .AddJsonOptions(options =>
@@ -342,6 +346,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 app.MapBrowserBffSessionEndpoints();
+app.MapAgentRunSurface();
 app.MapMetaWhatsAppWebhookEndpoints();
 app.MapControllers();
 var foundation = app.MapGroup("/foundation")
