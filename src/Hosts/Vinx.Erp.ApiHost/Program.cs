@@ -316,6 +316,7 @@ builder.Services.AddOpenApi(options =>
     options.AddOperationTransformer<CsrfHeaderOperationTransformer>();
     options.AddOperationTransformer<SecurityRequirementsOperationTransformer>();
     options.AddSchemaTransformer<SerializerContractSchemaTransformer>();
+    options.AddSchemaTransformer<AllowedValuesSchemaTransformer>();
 });
 
 var app = builder.Build();
