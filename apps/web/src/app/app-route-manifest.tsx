@@ -1,4 +1,5 @@
 import type { SvgIconComponent } from "@mui/icons-material";
+import AdminPanelSettingsOutlinedIcon from "@mui/icons-material/AdminPanelSettingsOutlined";
 import GroupsOutlinedIcon from "@mui/icons-material/GroupsOutlined";
 import HelpOutlinedIcon from "@mui/icons-material/HelpOutlined";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
@@ -14,6 +15,7 @@ import { AtendimentoPage } from "../features/atendimento/atendimento-page";
 import { NotificationsPage } from "../features/notifications/notifications-page";
 import { PaguaiPage } from "../features/paguai/paguai-page";
 import { PeoplePage } from "../features/people/people-page";
+import { PlatformOrganizationPage } from "../features/platform/platform-organization-page";
 import {
   type AppRouteCatalogEntry,
   agentPath,
@@ -71,6 +73,10 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
   "/pessoas": {
     icon: GroupsOutlinedIcon,
     render: () => <PeoplePage />,
+  },
+  "/administracao": {
+    icon: AdminPanelSettingsOutlinedIcon,
+    render: () => <PlatformOrganizationPage />,
   },
 };
 
