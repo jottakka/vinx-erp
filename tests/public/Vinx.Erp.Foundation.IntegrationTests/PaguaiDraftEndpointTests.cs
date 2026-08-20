@@ -30,6 +30,11 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal(request.RequestId, ReadGuid(root, "requestId"));
         Assert.Equal("Office supplies", root.GetProperty("title").GetString());
         Assert.Equal("Replacement printer paper", root.GetProperty("description").GetString());
+        Assert.Equal(125000, root.GetProperty("amountMinor").GetInt64());
+        Assert.Equal("BRL", root.GetProperty("currency").GetString());
+        Assert.Equal("2026-09-01", root.GetProperty("dueDate").GetString());
+        Assert.Equal("Fornecedor Demo", root.GetProperty("beneficiaryDisplayName").GetString());
+        Assert.Equal("required", root.GetProperty("proofRequirement").GetString());
         Assert.Equal("rascunho", root.GetProperty("state").GetString());
         Assert.Equal(1, root.GetProperty("version").GetInt32());
     }
@@ -213,7 +218,17 @@ public sealed class PaguaiDraftEndpointTests
         var schema = applicationJson.GetProperty("schema");
         Assert.Equal("object", schema.GetProperty("type").GetString());
         Assert.Equal(
-            ["companyId", "description", "requestId", "title"],
+            [
+                "amountMinor",
+                "beneficiaryDisplayName",
+                "companyId",
+                "currency",
+                "description",
+                "dueDate",
+                "proofRequirement",
+                "requestId",
+                "title",
+            ],
             schema
                 .GetProperty("required")
                 .EnumerateArray()
@@ -228,6 +243,14 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal(
             4000,
             properties.GetProperty("description").GetProperty("maxLength").GetInt32()
+        );
+        Assert.Equal("int64", properties.GetProperty("amountMinor").GetProperty("format").GetString());
+        Assert.Equal("BRL", properties.GetProperty("currency").GetProperty("enum")[0].GetString());
+        Assert.Equal("date", properties.GetProperty("dueDate").GetProperty("format").GetString());
+        Assert.Equal(200, properties.GetProperty("beneficiaryDisplayName").GetProperty("maxLength").GetInt32());
+        Assert.Equal(
+            ["optional", "required"],
+            properties.GetProperty("proofRequirement").GetProperty("enum").EnumerateArray().Select(value => value.GetString())
         );
         Assert.Contains(
             operation.GetProperty("parameters").EnumerateArray(),
@@ -276,6 +299,52 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal("{}", auditEvent.MetadataJson);
         Assert.Null(auditEvent.Reason);
         Assert.Equal(factory.ActorUserId, auditEvent.ActorUserId);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task Draft_creation_rejects_non_positive_amount(long amountMinor)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var response = await factory.CreateClient().PostAsJsonAsync(
+            "/paguai/requests",
+            NewRequest(scenario.CompanyId, Guid.NewGuid()) with { AmountMinor = amountMinor }
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Draft_creation_rejects_invalid_currency_due_date_and_proof_requirement()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+
+        var invalidCurrency = NewRequest(scenario.CompanyId, Guid.NewGuid()) with { Currency = "USD" };
+        var invalidProof = NewRequest(scenario.CompanyId, Guid.NewGuid()) with { ProofRequirement = "unknown" };
+        var invalidDueDate = new
+        {
+            companyId = scenario.CompanyId,
+            requestId = Guid.NewGuid(),
+            title = "Office supplies",
+            description = "Replacement printer paper",
+            amountMinor = 125000L,
+            currency = "BRL",
+            dueDate = "2026-02-30",
+            beneficiaryDisplayName = "Fornecedor Demo",
+            proofRequirement = "required",
+        };
+
+        using var currencyResponse = await client.PostAsJsonAsync("/paguai/requests", invalidCurrency);
+        using var proofResponse = await client.PostAsJsonAsync("/paguai/requests", invalidProof);
+        using var dueDateResponse = await client.PostAsJsonAsync("/paguai/requests", invalidDueDate);
+
+        Assert.Equal(HttpStatusCode.BadRequest, currencyResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, proofResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, dueDateResponse.StatusCode);
     }
 
     [Fact]
@@ -343,7 +412,17 @@ public sealed class PaguaiDraftEndpointTests
     }
 
     private static DraftRequest NewRequest(Guid companyId, Guid requestId) =>
-        new(companyId, requestId, "Office supplies", "Replacement printer paper");
+        new(
+            companyId,
+            requestId,
+            "Office supplies",
+            "Replacement printer paper",
+            125000,
+            "BRL",
+            new DateOnly(2026, 9, 1),
+            "Fornecedor Demo",
+            "required"
+        );
 
     private static Guid ReadGuid(JsonElement root, string propertyName)
     {
@@ -525,7 +604,12 @@ public sealed class PaguaiDraftEndpointTests
         Guid CompanyId,
         Guid RequestId,
         string Title,
-        string Description
+        string Description,
+        long AmountMinor,
+        string Currency,
+        DateOnly DueDate,
+        string BeneficiaryDisplayName,
+        string ProofRequirement
     );
 
     private sealed record Scenario(Guid CompanyId, Guid ForeignCompanyId);

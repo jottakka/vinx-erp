@@ -9,6 +9,11 @@ const draft = {
   requestId,
   title: "Papel",
   description: "Papel para impressora",
+  amountMinor: "125000",
+  currency: "BRL" as const,
+  dueDate: "2026-09-01",
+  beneficiaryDisplayName: "Fornecedor Demo",
+  proofRequirement: "required" as const,
   state: "rascunho",
   version: 1,
   createdAt: "2026-08-16T12:00:00.000+00:00",
@@ -29,6 +34,11 @@ describe("Paguai draft client", () => {
       requestId,
       title: draft.title,
       description: draft.description,
+      amountMinor: draft.amountMinor,
+      currency: draft.currency,
+      dueDate: draft.dueDate,
+      beneficiaryDisplayName: draft.beneficiaryDisplayName,
+      proofRequirement: draft.proofRequirement,
     });
 
     expect(result).toEqual({ ok: true, value: draft });
@@ -44,6 +54,7 @@ describe("Paguai draft client", () => {
         method: "POST",
       }),
     ]);
+    expect(JSON.parse(String(calls[1][1].body)).amountMinor).toBe(125000);
   });
 
   it("rejects an unexpected response rather than exposing it to the page", async () => {

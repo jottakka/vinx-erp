@@ -4,7 +4,12 @@ public sealed record CreateDraftCommand(
     Guid CompanyId,
     Guid RequestId,
     string Title,
-    string Description
+    string Description,
+    long AmountMinor,
+    string Currency,
+    DateOnly DueDate,
+    string BeneficiaryDisplayName,
+    string ProofRequirement
 );
 
 public sealed record PaguaiDraft(
@@ -13,6 +18,11 @@ public sealed record PaguaiDraft(
     Guid RequestId,
     string Title,
     string Description,
+    long AmountMinor,
+    string Currency,
+    DateOnly DueDate,
+    string BeneficiaryDisplayName,
+    string ProofRequirement,
     string State,
     int Version,
     DateTimeOffset CreatedAt

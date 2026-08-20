@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Vinx.Erp.Foundation.Identity;
 
@@ -18,6 +19,11 @@ public static class PaguaiDraftHttpContract
         "requestId",
         "title",
         "description",
+        "amountMinor",
+        "currency",
+        "dueDate",
+        "beneficiaryDisplayName",
+        "proofRequirement",
     ];
 
     public static bool TryParse(JsonElement body, out CreateDraftCommand command)
@@ -43,6 +49,12 @@ public static class PaguaiDraftHttpContract
             || !fields["requestId"].TryGetGuid(out var requestId)
             || fields["title"].ValueKind is not JsonValueKind.String
             || fields["description"].ValueKind is not JsonValueKind.String
+            || fields["amountMinor"].ValueKind is not JsonValueKind.Number
+            || !fields["amountMinor"].TryGetInt64(out var amountMinor)
+            || fields["currency"].ValueKind is not JsonValueKind.String
+            || fields["dueDate"].ValueKind is not JsonValueKind.String
+            || fields["beneficiaryDisplayName"].ValueKind is not JsonValueKind.String
+            || fields["proofRequirement"].ValueKind is not JsonValueKind.String
         )
         {
             return false;
@@ -50,17 +62,42 @@ public static class PaguaiDraftHttpContract
 
         var title = fields["title"].GetString()!;
         var description = fields["description"].GetString()!;
+        var currency = fields["currency"].GetString()!;
+        var dueDateText = fields["dueDate"].GetString()!;
+        var beneficiaryDisplayName = fields["beneficiaryDisplayName"].GetString()!;
+        var proofRequirement = fields["proofRequirement"].GetString()!;
         if (
             companyId == Guid.Empty
             || requestId == Guid.Empty
+            || amountMinor <= 0
             || !IsTrimmedText(title, 1, 200)
             || !IsTrimmedText(description, 1, 4_000)
+            || !string.Equals(currency, "BRL", StringComparison.Ordinal)
+            || !DateOnly.TryParseExact(
+                dueDateText,
+                "yyyy-MM-dd",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var dueDate
+            )
+            || !IsTrimmedText(beneficiaryDisplayName, 1, 200)
+            || (proofRequirement is not "optional" and not "required")
         )
         {
             return false;
         }
 
-        command = new CreateDraftCommand(companyId, requestId, title, description);
+        command = new CreateDraftCommand(
+            companyId,
+            requestId,
+            title,
+            description,
+            amountMinor,
+            currency,
+            dueDate,
+            beneficiaryDisplayName,
+            proofRequirement
+        );
         return true;
     }
 
