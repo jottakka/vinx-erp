@@ -54,5 +54,3 @@ app.MapMcp("/mcp")
     .RequireAuthorization()
     .RequireRateLimiting(McpRateLimitPolicy);
 app.Run();
-
-public partial class Program;

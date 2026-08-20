@@ -20,6 +20,7 @@ import {
   useState,
 } from "react";
 import { PageHeader } from "../../shared/ui/page-header";
+import { hasCompanyCapability } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
   amountToCents,
@@ -35,18 +36,6 @@ import {
 const client = createPaguaiDraftClient();
 const capabilityNames = ["paguai.draft.read", "paguai.draft.create"] as const;
 type PaguaiDraftClient = ReturnType<typeof createPaguaiDraftClient>;
-
-function hasCompanyCapability(
-  company: {
-    capabilities: readonly { name: string; scopes: readonly string[] }[];
-  },
-  name: string,
-) {
-  return company.capabilities.some(
-    (capability) =>
-      capability.name === name && capability.scopes.includes("Company"),
-  );
-}
 
 function message(error: PaguaiDraftError) {
   return (
@@ -151,9 +140,7 @@ export function PaguaiPage({
     if (
       !companyId ||
       !hasCompanyCapability(
-        companies.find((company) => company.companyId === companyId) ?? {
-          capabilities: [],
-        },
+        companies.find((company) => company.companyId === companyId),
         "paguai.draft.read",
       )
     ) {
@@ -232,9 +219,7 @@ export function PaguaiPage({
   const canCreate =
     !!companyId &&
     hasCompanyCapability(
-      companies.find((company) => company.companyId === companyId) ?? {
-        capabilities: [],
-      },
+      companies.find((company) => company.companyId === companyId),
       "paguai.draft.create",
     );
   return (

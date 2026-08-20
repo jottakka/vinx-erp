@@ -85,7 +85,7 @@ public sealed class AgentRunnerIsolationTests
             TimeSpan.FromSeconds(30),
             turnLimit: 1,
             maxTotalTokens: 8_000,
-            allowedTools: Array.Empty<string>());
+            allowedTools: []);
         var resolver = new SequenceContextResolver(SequenceContextResolver.Resolved(companyId));
         var model = TestAgentModel.Text(responseText);
         var runner = new AgentRunner(

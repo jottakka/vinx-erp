@@ -209,21 +209,14 @@ public sealed class RequestCorrelationHeaderTests
     private static Guid GetCorrelationId(HttpResponseMessage response) =>
         AssertValidCorrelationId(response);
 
-    private sealed class RequestCorrelationApiFactory : WebApplicationFactory<Program>
+    private sealed class RequestCorrelationApiFactory(
+        bool exposeFailureEndpoint = false,
+        bool exposeNoContentEndpoint = false,
+        bool exposeScopeEndpoint = false) : WebApplicationFactory<Program>
     {
-        private readonly bool _exposeFailureEndpoint;
-        private readonly bool _exposeNoContentEndpoint;
-        private readonly bool _exposeScopeEndpoint;
-
-        public RequestCorrelationApiFactory(
-            bool exposeFailureEndpoint = false,
-            bool exposeNoContentEndpoint = false,
-            bool exposeScopeEndpoint = false)
-        {
-            _exposeFailureEndpoint = exposeFailureEndpoint;
-            _exposeNoContentEndpoint = exposeNoContentEndpoint;
-            _exposeScopeEndpoint = exposeScopeEndpoint;
-        }
+        private readonly bool _exposeFailureEndpoint = exposeFailureEndpoint;
+        private readonly bool _exposeNoContentEndpoint = exposeNoContentEndpoint;
+        private readonly bool _exposeScopeEndpoint = exposeScopeEndpoint;
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {

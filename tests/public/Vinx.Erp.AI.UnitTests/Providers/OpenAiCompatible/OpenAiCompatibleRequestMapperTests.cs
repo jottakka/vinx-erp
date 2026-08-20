@@ -143,7 +143,7 @@ public sealed class OpenAiCompatibleRequestMapperTests
     public void Image_bytes_within_the_caps_are_admitted_and_counted()
     {
         var mapped = OpenAiCompatibleRequestMapper.Map(
-            Vision(), [ImageMessage(new byte[] { 1, 2, 3 }, new byte[] { 4, 5, 6 })], null);
+            Vision(), [ImageMessage([1, 2, 3], [4, 5, 6])], null);
 
         var contents = Assert.Single(mapped.Messages).Contents;
         Assert.Equal(2, contents.OfType<DataContent>().Count());
@@ -155,7 +155,7 @@ public sealed class OpenAiCompatibleRequestMapperTests
     public void Image_on_a_text_only_profile_is_rejected_before_http()
     {
         Assert.Throws<OpenAiCompatibleRequestValidationException>(
-            () => OpenAiCompatibleRequestMapper.Map(Approved(), [ImageMessage(new byte[] { 1, 2, 3 })], null));
+            () => OpenAiCompatibleRequestMapper.Map(Approved(), [ImageMessage([1, 2, 3])], null));
     }
 
     [Fact]
@@ -190,7 +190,7 @@ public sealed class OpenAiCompatibleRequestMapperTests
         var profile = Vision(o => o.MaxImagesPerRequest = 1);
 
         Assert.Throws<OpenAiCompatibleRequestValidationException>(
-            () => OpenAiCompatibleRequestMapper.Map(profile, [ImageMessage(new byte[] { 1 }, new byte[] { 2 })], null));
+            () => OpenAiCompatibleRequestMapper.Map(profile, [ImageMessage([1], [2])], null));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public sealed class OpenAiCompatibleRequestMapperTests
         var profile = Vision(o => o.MaxImageBytesPerImage = 2);
 
         Assert.Throws<OpenAiCompatibleRequestValidationException>(
-            () => OpenAiCompatibleRequestMapper.Map(profile, [ImageMessage(new byte[] { 1, 2, 3 })], null));
+            () => OpenAiCompatibleRequestMapper.Map(profile, [ImageMessage([1, 2, 3])], null));
     }
 
     [Fact]
@@ -209,7 +209,7 @@ public sealed class OpenAiCompatibleRequestMapperTests
         var profile = Vision(o => o.MaxImageBytesPerRequest = 10);
 
         Assert.Throws<OpenAiCompatibleRequestValidationException>(
-            () => OpenAiCompatibleRequestMapper.Map(profile, [ImageMessage(new byte[] { 1, 2, 3, 4, 5, 6 }, new byte[] { 7, 8, 9, 10, 11 })], null));
+            () => OpenAiCompatibleRequestMapper.Map(profile, [ImageMessage([1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11])], null));
     }
 
     [Fact]
@@ -218,7 +218,7 @@ public sealed class OpenAiCompatibleRequestMapperTests
         var profile = Vision(o => o.EstimatedTokensPerImage = 100_000);
 
         Assert.Throws<OpenAiCompatibleRequestValidationException>(
-            () => OpenAiCompatibleRequestMapper.Map(profile, [ImageMessage(new byte[] { 1 })], null));
+            () => OpenAiCompatibleRequestMapper.Map(profile, [ImageMessage([1])], null));
     }
 
     [Fact]

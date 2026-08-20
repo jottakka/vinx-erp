@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { PageHeader } from "../../shared/ui/page-header";
+import { hasCompanyCapability } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
   createEmployeeDirectoryClient,
@@ -88,11 +89,7 @@ export function PeoplePage({
   const eligibleCompanies = useMemo(
     () =>
       (bootstrap?.companies ?? []).filter((company) =>
-        company.capabilities.some(
-          (capability) =>
-            capability.name === employeeCapability &&
-            capability.scopes.includes("Company"),
-        ),
+        hasCompanyCapability(company, employeeCapability),
       ),
     [bootstrap],
   );

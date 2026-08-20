@@ -29,6 +29,7 @@ public sealed class ApiHostPlatformTests
     private const string SensitiveFailure = "sensitive-platform-failure";
     private const string RateLimitTestScheme = "rate-limit-test";
     private const string RateLimitSubjectHeader = "X-Test-Rate-Limit-Subject";
+    private static readonly string[] expected = new[] { "email", "password" };
 
     [Theory]
     [InlineData("FOUNDATION_RUNTIME_CONNECTION", "")]
@@ -318,7 +319,7 @@ public sealed class ApiHostPlatformTests
             requestBody.GetProperty("content").GetProperty("application/json").GetProperty("schema")
         );
         Assert.Equal(
-            new[] { "email", "password" },
+            expected,
             schema
                 .GetProperty("required")
                 .EnumerateArray()
@@ -326,7 +327,7 @@ public sealed class ApiHostPlatformTests
                 .ToArray()
         );
         Assert.Equal(
-            new[] { "email", "password" },
+            expected,
             schema
                 .GetProperty("properties")
                 .EnumerateObject()
@@ -358,7 +359,7 @@ public sealed class ApiHostPlatformTests
                 .GetProperty("schema")
         );
         Assert.Equal(
-            new[] { "companyId", "displayName", "email", "requestId" },
+            ["companyId", "displayName", "email", "requestId"],
             schema.GetProperty("required").EnumerateArray().Select(x => x.GetString()).Order()
         );
         Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
@@ -373,7 +374,7 @@ public sealed class ApiHostPlatformTests
                     .GetProperty("schema")
             );
             Assert.Equal(
-                new[] { "employeeId", "membershipId", "userId" },
+                ["employeeId", "membershipId", "userId"],
                 output.GetProperty("required").EnumerateArray().Select(x => x.GetString()).Order()
             );
             Assert.False(output.GetProperty("additionalProperties").GetBoolean());
@@ -677,30 +678,21 @@ public sealed class ApiHostPlatformTests
         return null;
     }
 
-    private sealed class ApiHostPlatformFactory : WebApplicationFactory<Program>
+    private sealed class ApiHostPlatformFactory(
+        IReadOnlyDictionary<string, string>? overrides = null,
+        string environment = "Development",
+        bool exposeFailureEndpoint = false,
+        bool exposeRateLimitedEndpoint = false,
+        bool authenticateRateLimitedEndpoint = false
+        ) : WebApplicationFactory<Program>
     {
-        private readonly IReadOnlyDictionary<string, string> _overrides;
-        private readonly string _environment;
-        private readonly bool _exposeFailureEndpoint;
-        private readonly bool _exposeRateLimitedEndpoint;
-        private readonly bool _authenticateRateLimitedEndpoint;
+        private readonly IReadOnlyDictionary<string, string> _overrides = overrides ?? new Dictionary<string, string>();
+        private readonly string _environment = environment;
+        private readonly bool _exposeFailureEndpoint = exposeFailureEndpoint;
+        private readonly bool _exposeRateLimitedEndpoint = exposeRateLimitedEndpoint;
+        private readonly bool _authenticateRateLimitedEndpoint = authenticateRateLimitedEndpoint;
         private string? _dataProtectionKeyDirectory;
         private string? _dataProtectionCertificatePath;
-
-        public ApiHostPlatformFactory(
-            IReadOnlyDictionary<string, string>? overrides = null,
-            string environment = "Development",
-            bool exposeFailureEndpoint = false,
-            bool exposeRateLimitedEndpoint = false,
-            bool authenticateRateLimitedEndpoint = false
-        )
-        {
-            _overrides = overrides ?? new Dictionary<string, string>();
-            _environment = environment;
-            _exposeFailureEndpoint = exposeFailureEndpoint;
-            _exposeRateLimitedEndpoint = exposeRateLimitedEndpoint;
-            _authenticateRateLimitedEndpoint = authenticateRateLimitedEndpoint;
-        }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {

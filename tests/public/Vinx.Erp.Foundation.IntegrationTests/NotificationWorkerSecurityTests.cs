@@ -33,8 +33,10 @@ public sealed class NotificationWorkerSecurityTests
             NullLogger<WorkerHostTypes.NotificationDeliveryRequestedHandler>.Instance
         );
 
-        var emptyDelivery = new Envelope(new NotificationDeliveryRequested(Guid.Empty));
-        emptyDelivery.CorrelationId = Guid.NewGuid().ToString("D");
+        var emptyDelivery = new Envelope(new NotificationDeliveryRequested(Guid.Empty))
+        {
+            CorrelationId = Guid.NewGuid().ToString("D")
+        };
         var missingCorrelation = new Envelope(new NotificationDeliveryRequested(Guid.NewGuid()));
 
         await Assert.ThrowsAsync<WorkerHostTypes.NotificationDeliveryDeadLetterException>(() =>

@@ -680,14 +680,14 @@ public sealed class DocumentUploadService(
             && record.RequestId == requestId,
             cancellationToken);
 
-    private Task AcquireConfirmationLockAsync(
+    private Task<int> AcquireConfirmationLockAsync(
         long lockKey,
         CancellationToken cancellationToken) =>
         database.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_lock({lockKey})",
             cancellationToken);
 
-    private Task ReleaseConfirmationLockAsync(
+    private Task<int> ReleaseConfirmationLockAsync(
         long lockKey,
         CancellationToken cancellationToken) =>
         database.Database.ExecuteSqlInterpolatedAsync(
@@ -711,15 +711,8 @@ public sealed class DocumentUploadService(
         T result) =>
         new(Guid.NewGuid(), companyId, actorUserId, commandName, requestId, payloadHash, JsonSerializer.Serialize(result));
 
-    private async Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken)
-    {
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.company_id', {companyId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)", cancellationToken);
-    }
+    private Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken) =>
+        FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
 
     private static string ComputeIntentPayloadHash(CreateDocumentUploadIntentCommand command) =>
         ComputeHash(JsonSerializer.Serialize(new IntentIdempotencyPayload(

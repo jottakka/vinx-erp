@@ -739,7 +739,7 @@ public sealed class SessionMigrationTests
                       AND NOT granted)
                 """, observer);
             command.Parameters.AddWithValue("backend_pid", blockedBackendProcessId);
-            if ((bool)(await command.ExecuteScalarAsync() ?? false))
+            if ((bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false))
             {
                 return;
             }
@@ -823,7 +823,7 @@ public sealed class SessionMigrationTests
                       AND lock.mode = 'AccessExclusiveLock'
                       AND lock.granted) AS locked_relations
                 """, administrator);
-            if ((bool)(await command.ExecuteScalarAsync() ?? false))
+            if ((bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false))
             {
                 return;
             }

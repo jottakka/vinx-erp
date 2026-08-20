@@ -59,22 +59,19 @@ public sealed class FoundationBootstrapService(
         return AuthorizationResult<FoundationBootstrapResponse>.Success(
             new FoundationBootstrapResponse(
                 new FoundationBootstrapUser(profile.Value!.UserId, profile.Value.DisplayName),
-                snapshot
+                [.. snapshot
                     .Value!.Companies.Select(company => new FoundationBootstrapCompany(
                         company.MembershipId,
                         company.CompanyId,
                         company.CompanyName,
-                        company
+                        [.. company
                             .Capabilities.Select(capability => new FoundationBootstrapCapability(
                                 capability.Name,
-                                capability
+                                [.. capability
                                     .Scopes.OrderBy(scope => scope)
-                                    .Select(scope => scope.ToString())
-                                    .ToArray()
-                            ))
-                            .ToArray()
-                    ))
-                    .ToArray(),
+                                    .Select(scope => scope.ToString())]
+                            ))]
+                    ))],
                 _effectiveFlags,
                 new FoundationBootstrapPlatform(
                     platform.State is PlatformOperatorAccessState.Allowed

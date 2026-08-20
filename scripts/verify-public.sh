@@ -10,6 +10,8 @@ npm --workspace apps/web run build
 npm run test:no-direct-supabase
 dotnet tool restore
 dotnet restore --locked-mode
+dotnet format analyzers --severity warn --verify-no-changes
+dotnet format style --severity warn --verify-no-changes
 dotnet format whitespace --verify-no-changes
 dotnet build --no-restore
 ./scripts/verify-foundation-database.sh

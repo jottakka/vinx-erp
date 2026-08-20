@@ -432,7 +432,7 @@ public sealed class PaguaiDraftService(
             .OrderByDescending(request => request.CreatedAt)
             .ThenByDescending(request => request.Id)
             .ToListAsync(cancellationToken);
-        return requests.Select(ToDraft).ToList();
+        return [.. requests.Select(ToDraft)];
     }
 
     private static PaguaiDraft ToDraft(PaguaiRequest request) =>
@@ -584,23 +584,13 @@ public sealed class PaguaiDraftService(
     private static string HashCanonicalPayload(string canonical) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
 
-    private async Task ApplyContextAsync(
+    private Task ApplyContextAsync(
         ActorContext actor,
         Guid companyId,
         CancellationToken cancellationToken
-    )
-    {
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)",
-            cancellationToken
-        );
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.company_id', {companyId.ToString()}, true)",
-            cancellationToken
-        );
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {actor.CorrelationId.ToString()}, true)",
-            cancellationToken
-        );
-    }
+    ) => FoundationRlsContext.ApplyCommandAsync(
+        database.Database,
+        actor,
+        companyId,
+        cancellationToken);
 }

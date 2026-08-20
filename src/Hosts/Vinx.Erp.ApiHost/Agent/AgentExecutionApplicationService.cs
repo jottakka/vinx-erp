@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.AI;
 using Vinx.Erp.Foundation.Audit;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
@@ -327,15 +328,8 @@ public sealed class AgentExecutionApplicationService(
             && record.RequestId == requestId,
             cancellationToken);
 
-    private async Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken)
-    {
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.company_id', {companyId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)", cancellationToken);
-    }
+    private Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken) =>
+        FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
 
     // Hash do payload normalizado (jornada/mensagem com trim + empresa); o
     // registro persiste somente o hash, nunca a mensagem.

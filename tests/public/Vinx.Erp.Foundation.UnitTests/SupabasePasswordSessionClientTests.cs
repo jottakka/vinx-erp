@@ -22,7 +22,7 @@ public sealed class SupabasePasswordSessionClientTests
             Assert.Equal("https://project.supabase.co/auth/v1/token?grant_type=password", request.RequestUri!.AbsoluteUri);
             Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal("{\"email\":\"person@example.test\",\"password\":\"correct-horse-battery-staple\"}",
-                request.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+                request.Content.ReadAsStringAsync(_).GetAwaiter().GetResult());
             Assert.Equal(PublishableKey, request.Headers.GetValues("apikey").Single());
             Assert.Null(request.Headers.Authorization);
 

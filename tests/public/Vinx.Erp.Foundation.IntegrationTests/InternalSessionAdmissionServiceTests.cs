@@ -266,7 +266,7 @@ public sealed class InternalSessionAdmissionServiceTests
             var firstAttempt = (UserId: firstUserId, Source: AuditSource.Web, CorrelationId: firstCorrelationId, Admission: attempts[0]);
             var secondAttempt = (UserId: secondUserId, Source: AuditSource.Mcp, CorrelationId: secondCorrelationId, Admission: attempts[1]);
             var allAttempts = new[] { firstAttempt, secondAttempt };
-            var admitted = Assert.Single(allAttempts, attempt => attempt.Admission.Result.State == SessionAdmissionState.Admitted);
+            var (UserId, Source, CorrelationId, Admission) = Assert.Single(allAttempts, attempt => attempt.Admission.Result.State == SessionAdmissionState.Admitted);
             var denied = Assert.Single(allAttempts, attempt => attempt.Admission.Result.State == SessionAdmissionState.Denied);
 
             Assert.Equal("session_identity_mismatch", denied.Admission.Result.Reason);
@@ -276,8 +276,8 @@ public sealed class InternalSessionAdmissionServiceTests
             var success = Assert.Single(audits, audit => audit.Action == "identity_session_admitted");
             var denial = Assert.Single(audits, audit => audit.Action == "identity_session_admission_denied");
 
-            Assert.Equal(admitted.UserId, session.UserId);
-            Assert.Equal(admitted.UserId, success.ActorUserId);
+            Assert.Equal(UserId, session.UserId);
+            Assert.Equal(UserId, success.ActorUserId);
             Assert.Equal(session.Id, success.ResourceId);
             Assert.Equal(denied.UserId, denial.ActorUserId);
             Assert.Equal(denied.Source, denial.Source);
@@ -669,7 +669,7 @@ public sealed class InternalSessionAdmissionServiceTests
             BindingFlags.Instance | BindingFlags.NonPublic)!;
         var task = (Task<SessionAdmissionResult>)method.Invoke(
             service,
-            [userId, proof, source, correlationId, CancellationToken.None, new Exception("Test unique replay")])!;
+            [userId, proof, source, correlationId, new Exception("Test unique replay"), CancellationToken.None])!;
         var result = await task;
         return new AdmissionAttempt(result, logs.Entries.ToArray());
     }

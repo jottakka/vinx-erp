@@ -1,5 +1,4 @@
 using JasperFx.CodeGeneration;
-using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Vinx.Erp.Foundation.Platform;
 using Wolverine;
@@ -55,18 +54,20 @@ public sealed class OwnerInvitationDeliveryRequestedHandler(
             );
         }
 
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
         logger.LogInformation(
             "Worker provider delivery {Operation} {Module} {Result}",
             Operation,
             Module,
             result.Finalized ? result.Status : "replay"
         );
+#pragma warning restore CA1873
     }
 
     internal static async ValueTask PersistRedactedWorkerDeadLetterAsync(
         IWolverineRuntime runtime,
         IEnvelopeLifecycle lifecycle,
-        Exception exception,
+        Exception _,
         string exceptionType,
         string exceptionMessage
     )
@@ -77,9 +78,7 @@ public sealed class OwnerInvitationDeliveryRequestedHandler(
 
         // PostgreSQL's durable receiver stamps diagnostic headers after the normal interceptor
         // hook. This Worker has one message store, so persist directly only after redaction.
-        runtime
-            .Services.GetRequiredService<WorkerDeadLetterRedactionInterceptor>()
-            .RedactEnvelope(envelope);
+        WorkerDeadLetterRedactionInterceptor.RedactEnvelope(envelope);
         await runtime.Storage.Inbox.MoveToDeadLetterStorageAsync(
             envelope,
             new WorkerOwnerInvitationDeadLetterException(exceptionType, exceptionMessage)

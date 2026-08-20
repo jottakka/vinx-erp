@@ -270,8 +270,8 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
     {
         if ((!allowEmpty && string.IsNullOrWhiteSpace(providerKey))
             || providerKey.Contains("..", StringComparison.Ordinal)
-            || providerKey.StartsWith("/", StringComparison.Ordinal)
-            || providerKey.EndsWith("/", StringComparison.Ordinal)
+            || providerKey.StartsWith('/')
+            || providerKey.EndsWith('/')
             || providerKey.Contains('\\'))
         {
             throw new ArgumentException("Storage object key is invalid.", nameof(providerKey));

@@ -79,13 +79,14 @@ test("authenticated shell keeps accessible landmarks and semantic colors across 
   expect(results.violations).toEqual([]);
 });
 
-test("Scenario: Authorized user visits preparation modules, chooses themes and restores mobile navigation focus", async ({
+test("Scenario: Authorized user visits modules, chooses themes and restores mobile navigation focus", async ({
   page,
 }) => {
   await enterHome(page);
   const homeModuleSection = page
     .getByRole("heading", { name: "Estrutura em evolução" })
     .locator("xpath=ancestor::section[1]");
+  const sidebar = page.getByRole("navigation", { name: "Navegação lateral" });
 
   for (const [name, path] of [
     ["Paguai", "/paguai"],
@@ -96,13 +97,7 @@ test("Scenario: Authorized user visits preparation modules, chooses themes and r
     await homeModuleSection.getByRole("link", { name }).click();
     await expect(page).toHaveURL(new RegExp(`${path}$`));
     await expect(page.getByRole("heading", { name })).toBeVisible();
-    await expect(
-      page
-        .getByRole("main")
-        .locator("header")
-        .getByText("Módulo em preparação", { exact: true }),
-    ).toBeVisible();
-    await page.getByRole("link", { name: "Voltar ao Início" }).click();
+    await sidebar.getByRole("link", { name: "Início" }).click();
     await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
   }
 

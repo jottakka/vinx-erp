@@ -57,7 +57,7 @@ public sealed class NotificationIntentConcurrencyTests
         Assert.Equal(2, intents.Count);
         Assert.Equal(
             ["in_app", "whatsapp"],
-            intents.Select(intent => intent.Channel).Order().ToArray()
+            [.. intents.Select(intent => intent.Channel).Order()]
         );
         var messages = await NotificationIntentSeed.ReadNotificationMessagesAsync(factory);
         Assert.Equal(2, messages.Count);

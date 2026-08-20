@@ -15,12 +15,7 @@ internal sealed class FakeAuthorizedDocumentSource(Func<Guid, AuthorizedDocument
     public Task<AuthorizedDocument> OpenReadAsync(Guid fileRecordId, CancellationToken cancellationToken)
     {
         OpenAttempts++;
-        var document = resolver(fileRecordId);
-        if (document is null)
-        {
-            throw new InvalidOperationException("denied by the fake boundary");
-        }
-
+        var document = resolver(fileRecordId) ?? throw new InvalidOperationException("denied by the fake boundary");
         return Task.FromResult(document);
     }
 

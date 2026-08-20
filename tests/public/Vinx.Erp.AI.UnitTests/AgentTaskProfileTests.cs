@@ -25,7 +25,7 @@ public sealed class AgentTaskProfileTests
             timeout: ApprovedTimeout,
             turnLimit: ApprovedTurnLimit,
             maxTotalTokens: ApprovedBudget,
-            allowedTools: Array.Empty<string>());
+            allowedTools: []);
 
         Assert.Equal(AgentTaskProfileCatalog.ReadOnlySummarizeProfileId, profile.ProfileId);
         Assert.Equal("summarize", profile.Journey);
@@ -216,7 +216,7 @@ public sealed class AgentTaskProfileTests
             timeout ?? ApprovedTimeout,
             turnLimit,
             maxTotalTokens,
-            allowedTools ?? Array.Empty<string>());
+            allowedTools ?? []);
 
     private static void AssertProfileRejected(AgentTaskProfile profile, string expectedParamName)
     {

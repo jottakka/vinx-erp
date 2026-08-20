@@ -46,7 +46,7 @@ public sealed class NotificationIntentOutboxTests
         Assert.All(intents, intent => Assert.Equal(0, intent.AttemptCount));
         Assert.Equal(
             ["in_app", "whatsapp"],
-            intents.Select(intent => intent.Channel).Order().ToArray()
+            [.. intents.Select(intent => intent.Channel).Order()]
         );
 
         var messages = await NotificationIntentSeed.ReadNotificationMessagesAsync(factory);

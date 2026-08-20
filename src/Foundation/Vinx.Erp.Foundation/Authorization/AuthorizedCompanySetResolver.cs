@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
-using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 
 namespace Vinx.Erp.Foundation.Authorization;
@@ -182,12 +181,37 @@ public sealed class AuthorizedCompanySetResolver(
     );
 }
 
-internal static class FoundationRlsContext
+/// <summary>Aplica os contextos RLS transacionais usados pelos serviços do Foundation.</summary>
+public static class FoundationRlsContext
 {
+    /// <summary>
+    /// Aplica ator, empresa opcional e correlação ao contexto RLS local da transação atual.
+    /// </summary>
+    public static async Task ApplyCommandAsync(
+        DatabaseFacade database,
+        ActorContext actor,
+        Guid? companyId,
+        CancellationToken cancellationToken
+    )
+    {
+        await database.ExecuteSqlInterpolatedAsync(
+            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)",
+            cancellationToken
+        );
+        await database.ExecuteSqlInterpolatedAsync(
+            $"SELECT set_config('app.company_id', {companyId?.ToString() ?? string.Empty}, true)",
+            cancellationToken
+        );
+        await database.ExecuteSqlInterpolatedAsync(
+            $"SELECT set_config('app.correlation_id', {actor.CorrelationId.ToString()}, true)",
+            cancellationToken
+        );
+    }
+
     /// <summary>
     /// Aplica identidade do ator e limpa contextos de empresa da transação atual.
     /// </summary>
-    public static async Task ApplyActorAsync(
+    internal static async Task ApplyActorAsync(
         DatabaseFacade database,
         ActorContext actor,
         CancellationToken cancellationToken
@@ -214,7 +238,7 @@ internal static class FoundationRlsContext
             cancellationToken
         );
         await database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)",
+            $"SELECT set_config('app.correlation_id', {actor.CorrelationId.ToString()}, true)",
             cancellationToken
         );
     }
@@ -222,7 +246,7 @@ internal static class FoundationRlsContext
     /// <summary>
     /// Define empresa atual usada pelas policies de isolamento da transação.
     /// </summary>
-    public static Task ApplyCompanyAsync(
+    internal static Task ApplyCompanyAsync(
         DatabaseFacade database,
         Guid companyId,
         CancellationToken cancellationToken
@@ -235,7 +259,7 @@ internal static class FoundationRlsContext
     /// <summary>
     /// Define conjunto de empresas autorizado para leitura RLS na transação atual.
     /// </summary>
-    public static async Task ApplyAuthorizedReadAsync(
+    internal static async Task ApplyAuthorizedReadAsync(
         DatabaseFacade database,
         IReadOnlySet<Guid> companyIds,
         CancellationToken cancellationToken

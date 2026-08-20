@@ -117,7 +117,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
             // Normaliza e valida o schema da resposta antes de devolver.
             _ = OpenAiCompatibleResponseMapper.ToResult(response, correlationId);
-            response.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+            response.AdditionalProperties ??= [];
             response.AdditionalProperties["CorrelationId"] = correlationId;
             return response;
         }

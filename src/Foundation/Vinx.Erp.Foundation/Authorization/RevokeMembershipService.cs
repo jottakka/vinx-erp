@@ -99,12 +99,14 @@ public sealed class RevokeMembershipService(
                         "{}"), cancellationToken);
                     await database.SaveChangesAsync(cancellationToken);
                     await transaction.CommitAsync(cancellationToken);
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                     logger.LogInformation(
                         "Membership revocation {Operation} {Module} {Result} {Reason}",
                         Operation,
                         Module,
                         "revoked",
                         "active_membership_revoked");
+#pragma warning restore CA1873
                     return AuthorizationResult<RevokeMembershipResult>.Success(result);
                 }
             }
@@ -298,15 +300,8 @@ public sealed class RevokeMembershipService(
         return AuthorizationResult<RevokeMembershipResult>.Failure(AuthorizationErrorCode.AuditUnavailable);
     }
 
-    private async Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken)
-    {
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.company_id', {companyId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)", cancellationToken);
-    }
+    private Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken) =>
+        FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
 
     private static string ComputePayloadHash(RevokeMembershipCommand command)
     {

@@ -33,10 +33,7 @@ public sealed class FileRecord : SoftDeletableEntity, ICompanyScoped
         ArgumentException.ThrowIfNullOrWhiteSpace(classification);
         ArgumentException.ThrowIfNullOrWhiteSpace(origin);
         ArgumentOutOfRangeException.ThrowIfNegative(sizeBytes);
-        if (retentionUntil <= DateTimeOffset.UtcNow)
-        {
-            throw new ArgumentOutOfRangeException(nameof(retentionUntil));
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(retentionUntil, DateTimeOffset.UtcNow);
 
         CompanyId = companyId;
         UploaderMembershipId = uploaderMembershipId;
@@ -79,7 +76,9 @@ public sealed class FileRecord : SoftDeletableEntity, ICompanyScoped
     /// <summary>Momento UTC do scan durável; bind de <c>MalwareScanVerdict.ScannedAtUtc</c>.</summary>
     public DateTimeOffset? ScannedAtUtc { get; private set; }
 
+#pragma warning disable CA1822 // A propriedade faz parte do contrato de entidade e é lida por instâncias nos testes e mapeamentos.
     public bool IsQuarantined => true;
+#pragma warning restore CA1822
     public Company Company { get; private set; } = null!;
     public Membership UploaderMembership { get; private set; } = null!;
 

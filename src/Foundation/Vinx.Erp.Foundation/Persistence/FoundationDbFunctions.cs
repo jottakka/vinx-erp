@@ -132,12 +132,7 @@ internal static class FoundationDbFunctions
                     FROM foundation.provision_platform_organization({requestId}, {groupName}, {companyName}, {ownerDisplayName}, {ownerEmail}, {payloadHash})
                     """)
                 .SingleOrDefaultAsync(cancellationToken)
-        );
-        if (row is null)
-        {
-            throw new InvalidOperationException("Organization provisioning did not return a result.");
-        }
-
+        ) ?? throw new InvalidOperationException("Organization provisioning did not return a result.");
         return new ProvisionedOrganization(
             MapProvisioningState(row.Status),
             row.GroupId,
@@ -185,12 +180,7 @@ internal static class FoundationDbFunctions
                     FROM foundation.create_employee_directory_entry({requestId}, {companyId}, {displayName}, {email}, {payloadHash})
                     """)
                 .SingleOrDefaultAsync(cancellationToken)
-        );
-        if (row is null)
-        {
-            throw new InvalidOperationException("Employee directory function returned no result.");
-        }
-
+        ) ?? throw new InvalidOperationException("Employee directory function returned no result.");
         return new EmployeeDirectoryEntry(
             MapEmployeeState(row.Status),
             row.EmployeeId,

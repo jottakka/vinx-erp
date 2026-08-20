@@ -124,6 +124,7 @@ public sealed class NotificationDeliveryWorkerService(
             ("outcome", outcome)
         );
         metrics.RecordOutcome(claim.Channel!, finalization.Status);
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
         logger.LogInformation(
             "Notification delivery {Operation} {Module} {Result} {Reason}",
             Operation,
@@ -131,6 +132,7 @@ public sealed class NotificationDeliveryWorkerService(
             finalization.Status,
             finalization.Finalized ? outcome : "already_final"
         );
+#pragma warning restore CA1873
         return finalization;
     }
 

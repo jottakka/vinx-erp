@@ -25,14 +25,13 @@ public sealed class OpenApiInferenceContractPinTests
 
         Assert.True(requestBody.GetProperty("required").GetBoolean());
         Assert.Equal(
-            new[] { "application/json" },
+            ["application/json"],
             MediaTypesOf(requestBody).Order()
         );
 
         var schema = JsonSchemaOf(requestBody);
         Assert.Equal(
-            new[]
-            {
+            [
                 "amount",
                 "beneficiaryDisplayName",
                 "companyId",
@@ -42,7 +41,7 @@ public sealed class OpenApiInferenceContractPinTests
                 "proofRequirement",
                 "requestId",
                 "title",
-            },
+            ],
             RequiredOf(schema).Order()
         );
         AssertClosedObject(schema);
@@ -108,13 +107,13 @@ public sealed class OpenApiInferenceContractPinTests
             .GetProperty("requestBody");
 
         Assert.Equal(
-            new[] { "application/json" },
+            ["application/json"],
             MediaTypesOf(requestBody).Order()
         );
 
         var schema = JsonSchemaOf(requestBody);
         Assert.Equal(
-            new[] { "email", "password" },
+            ["email", "password"],
             RequiredOf(schema).Order()
         );
         AssertClosedObject(schema);
@@ -139,7 +138,7 @@ public sealed class OpenApiInferenceContractPinTests
 
         var requestSchema = JsonSchemaOf(post.GetProperty("requestBody"));
         Assert.Equal(
-            new[] { "companyId", "displayName", "email", "requestId" },
+            ["companyId", "displayName", "email", "requestId"],
             RequiredOf(requestSchema).Order()
         );
         AssertClosedObject(requestSchema);
@@ -164,7 +163,7 @@ public sealed class OpenApiInferenceContractPinTests
             .GetProperty("schemas")
             .GetProperty("EmployeeDirectoryCreatedResponse");
         Assert.Equal(
-            new[] { "employeeId", "membershipId", "userId" },
+            ["employeeId", "membershipId", "userId"],
             RequiredOf(created).Order()
         );
         AssertClosedObject(created);
@@ -172,6 +171,8 @@ public sealed class OpenApiInferenceContractPinTests
         AssertUuid(created.GetProperty("properties").GetProperty("membershipId"));
         AssertUuid(created.GetProperty("properties").GetProperty("userId"));
     }
+
+    private static readonly string[] sourceArray = new[] { "companyId", "column", "expectedVersion", "requestId" };
 
     [Fact]
     public async Task Atendimento_mutations_pin_the_inferred_request_contracts()
@@ -181,7 +182,7 @@ public sealed class OpenApiInferenceContractPinTests
 
         var create = RequestSchemaOf(paths, "/atendimento/cards");
         Assert.Equal(
-            new[] { "companyId", "description", "requestId", "title" },
+            ["companyId", "description", "requestId", "title"],
             RequiredOf(create).Order()
         );
         AssertClosedObject(create);
@@ -204,7 +205,7 @@ public sealed class OpenApiInferenceContractPinTests
 
         var assign = RequestSchemaOf(paths, "/atendimento/cards/{id}/assign");
         Assert.Equal(
-            new[] { "assigneeMembershipId", "companyId", "expectedVersion", "requestId" },
+            ["assigneeMembershipId", "companyId", "expectedVersion", "requestId"],
             RequiredOf(assign).Order()
         );
         AssertClosedObject(assign);
@@ -215,7 +216,7 @@ public sealed class OpenApiInferenceContractPinTests
 
         var move = RequestSchemaOf(paths, "/atendimento/cards/{id}/move");
         Assert.Equal(
-            new[] { "companyId", "column", "expectedVersion", "requestId" }.Order(),
+sourceArray.Order(),
             RequiredOf(move).Order()
         );
         AssertClosedObject(move);
@@ -248,7 +249,7 @@ public sealed class OpenApiInferenceContractPinTests
     {
         var requestBody = paths.GetProperty(path).GetProperty("post").GetProperty("requestBody");
         Assert.Equal(
-            new[] { "application/json" },
+            ["application/json"],
             MediaTypesOf(requestBody).Order()
         );
         return JsonSchemaOf(requestBody);

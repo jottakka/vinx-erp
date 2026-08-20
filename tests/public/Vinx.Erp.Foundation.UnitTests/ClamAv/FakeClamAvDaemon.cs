@@ -68,7 +68,7 @@ public sealed class FakeClamAvDaemon : IDisposable
 
     public string Endpoint => $"127.0.0.1:{Port}";
 
-    public IReadOnlyList<FakeClamAvConnection> Connections => new ReadOnlyCollection<FakeClamAvConnection>(recorded.ToArray());
+    public IReadOnlyList<FakeClamAvConnection> Connections => new ReadOnlyCollection<FakeClamAvConnection>([.. recorded]);
 
     /// <summary>Aguarda o registro de uma conexão que satisfaça o predicado (o registro pode ocorrer após o reply).</summary>
     public async Task<FakeClamAvConnection> WaitForConnectionAsync(

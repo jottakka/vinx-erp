@@ -8,16 +8,11 @@ namespace Vinx.Erp.AI.UnitTests;
 /// registra as mensagens e a selection recebidas. Fábricas cobrem os modos
 /// texto, tool call, exceção e atraso sensível ao token (timeout/cancelamento).
 /// </summary>
-public sealed class TestAgentModel : IAgentModel
+public sealed class TestAgentModel(params ChatResponse[] responses) : IAgentModel
 {
-    private readonly Queue<ChatResponse> responses;
+    private readonly Queue<ChatResponse> responses = new Queue<ChatResponse>(responses);
     private readonly Exception? exception;
     private readonly TimeSpan delay;
-
-    public TestAgentModel(params ChatResponse[] responses)
-    {
-        this.responses = new Queue<ChatResponse>(responses);
-    }
 
     private TestAgentModel(Exception exception)
         : this()
@@ -41,7 +36,7 @@ public sealed class TestAgentModel : IAgentModel
 
     public static TestAgentModel ToolCall(string toolName) => new(new ChatResponse(new ChatMessage(
         ChatRole.Assistant,
-        new AIContent[] { new FunctionCallContent("call_1", toolName, new Dictionary<string, object?>()) })));
+        [new FunctionCallContent("call_1", toolName, new Dictionary<string, object?>())])));
 
     public static TestAgentModel Throwing(Exception exception) => new(exception);
 

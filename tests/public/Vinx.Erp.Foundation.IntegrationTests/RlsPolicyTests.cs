@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
+using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
 
@@ -7,6 +9,65 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 
 public sealed class RlsPolicyTests
 {
+    [Fact]
+    public async Task Runtime_command_context_is_transaction_local_and_handles_optional_company()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var (companyA, companyB) = await SeedTwoCompaniesAsync(fixture);
+        var actor = new ActorContext(Guid.NewGuid(), Guid.NewGuid());
+
+        await using var runtime = fixture.CreateRuntimeDbContext();
+        await using (var transaction = await runtime.Database.BeginTransactionAsync())
+        {
+            await FoundationRlsContext.ApplyCommandAsync(
+                runtime.Database,
+                actor,
+                companyA.Id,
+                CancellationToken.None);
+
+            var visibleCompanies = await runtime.Companies.AsNoTracking().ToListAsync();
+            var company = Assert.Single(visibleCompanies);
+            Assert.Equal(companyA.Id, company.Id);
+            Assert.DoesNotContain(visibleCompanies, company => company.Id == companyB.Id);
+
+            var userSetting = await runtime.Database.SqlQuery<string>(
+                $"SELECT current_setting('app.user_id', true) AS \"Value\"").SingleAsync();
+            var companySetting = await runtime.Database.SqlQuery<string>(
+                $"SELECT current_setting('app.company_id', true) AS \"Value\"").SingleAsync();
+            var correlationSetting = await runtime.Database.SqlQuery<string>(
+                $"SELECT current_setting('app.correlation_id', true) AS \"Value\"").SingleAsync();
+
+            Assert.Equal(actor.UserId.ToString(), userSetting);
+            Assert.Equal(companyA.Id.ToString(), companySetting);
+            Assert.Equal(actor.CorrelationId.ToString(), correlationSetting);
+        }
+
+        await using (var resetTransaction = await runtime.Database.BeginTransactionAsync())
+        {
+            Assert.Null(await runtime.Database.SqlQuery<string?>(
+                $"SELECT current_setting('app.user_id', true) AS \"Value\"").SingleAsync());
+            Assert.Null(await runtime.Database.SqlQuery<string?>(
+                $"SELECT current_setting('app.company_id', true) AS \"Value\"").SingleAsync());
+            Assert.Null(await runtime.Database.SqlQuery<string?>(
+                $"SELECT current_setting('app.correlation_id', true) AS \"Value\"").SingleAsync());
+        }
+
+        await using var nullCompanyTransaction = await runtime.Database.BeginTransactionAsync();
+        await FoundationRlsContext.ApplyCommandAsync(
+            runtime.Database,
+            actor,
+            null,
+            CancellationToken.None);
+
+        Assert.Empty(await runtime.Companies.AsNoTracking().ToListAsync());
+        Assert.Equal(
+            string.Empty,
+            await runtime.Database.SqlQuery<string>(
+                $"SELECT current_setting('app.company_id', true) AS \"Value\"").SingleAsync());
+    }
+
     [Fact]
     public async Task Runtime_query_without_company_context_returns_zero_membership_rows()
     {
@@ -57,7 +118,8 @@ public sealed class RlsPolicyTests
 
         var visibleCompanies = await runtime.Companies.AsNoTracking().ToListAsync();
 
-        Assert.Collection(visibleCompanies, company => Assert.Equal(companyA.Id, company.Id));
+        var company = Assert.Single(visibleCompanies);
+        Assert.Equal(companyA.Id, company.Id);
         Assert.DoesNotContain(visibleCompanies, company => company.Id == companyB.Id);
     }
 

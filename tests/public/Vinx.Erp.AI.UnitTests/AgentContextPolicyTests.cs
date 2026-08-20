@@ -102,10 +102,9 @@ public sealed class AgentContextPolicyTests
             Guid.NewGuid(),
             AlfaCompanyId,
             "Alfa",
-            new[]
-            {
+            [
                 new EffectiveCapability(AgentCapabilities.Read, new HashSet<CapabilityScope> { CapabilityScope.Self }),
-            });
+            ]);
 
         var resolution = AgentPolicy.EvaluateContext(
             Snapshot(selfScoped),
@@ -185,7 +184,7 @@ public sealed class AgentContextPolicyTests
         bool includeReadCapability = true)
     {
         var capabilities = includeReadCapability
-            ? new[] { ReadCapability() }
+            ? [ReadCapability()]
             : Array.Empty<EffectiveCapability>();
         return new MembershipCapabilitySummary(Guid.NewGuid(), companyId, companyName, capabilities);
     }

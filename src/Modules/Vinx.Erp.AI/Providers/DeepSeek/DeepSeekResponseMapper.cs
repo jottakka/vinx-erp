@@ -17,18 +17,11 @@ public enum DeepSeekFailureKind
 /// Falha classificada do provider. A mensagem é fixa e redacted e a cadeia
 /// pública não carrega causa bruta: somente kind e status HTTP.
 /// </summary>
-public sealed class DeepSeekProviderException : Exception
+public sealed class DeepSeekProviderException(DeepSeekFailureKind kind, int? httpStatusCode = null) : Exception(FormatMessage(kind, httpStatusCode))
 {
-    public DeepSeekProviderException(DeepSeekFailureKind kind, int? httpStatusCode = null)
-        : base(FormatMessage(kind, httpStatusCode))
-    {
-        Kind = kind;
-        HttpStatusCode = httpStatusCode;
-    }
+    public DeepSeekFailureKind Kind { get; } = kind;
 
-    public DeepSeekFailureKind Kind { get; }
-
-    public int? HttpStatusCode { get; }
+    public int? HttpStatusCode { get; } = httpStatusCode;
 
     private static string FormatMessage(DeepSeekFailureKind kind, int? httpStatusCode) =>
         httpStatusCode is int status
@@ -75,10 +68,9 @@ public static class DeepSeekResponseMapper
             return new DeepSeekChatResult(
                 result.CorrelationId,
                 result.FinalText,
-                result.ToolProposals
+                [.. result.ToolProposals
                     .Select(proposal => new DeepSeekToolProposal(
-                        proposal.CallId, proposal.Name, proposal.Arguments))
-                    .ToList(),
+                        proposal.CallId, proposal.Name, proposal.Arguments))],
                 result.FinishReason,
                 new DeepSeekUsage(result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.TotalTokens));
         }

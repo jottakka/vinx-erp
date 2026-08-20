@@ -182,7 +182,7 @@ public sealed class BootstrapEndpointTests
 
         Assert.False(Assert.Single(first.Flags).Value);
         Assert.Equal("release.dashboard", Assert.Single(first.Flags).Key);
-        Assert.Equal(first.Flags.ToArray(), second.Flags.ToArray());
+        Assert.Equal(first.Flags.ToArray(), [.. second.Flags]);
         Assert.False(Assert.Single(second.Flags).Value);
     }
 

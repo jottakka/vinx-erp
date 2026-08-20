@@ -160,14 +160,14 @@ public sealed class ApprovalsMigrationTests
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
         await fixture.MigrateAsync();
-        var scope = await SeedApprovalScopeAsync(fixture);
+        var (CompanyId, ActorId) = await SeedApprovalScopeAsync(fixture);
 
         await using var administrator = await fixture.OpenAdministratorConnectionAsync();
         var partialConsumption = await Assert.ThrowsAsync<PostgresException>(() =>
             InsertApprovalAsync(
                 administrator,
-                scope.CompanyId,
-                scope.ActorId,
+                CompanyId,
+                ActorId,
                 Guid.NewGuid(),
                 Guid.NewGuid(),
                 Guid.NewGuid(),
@@ -180,8 +180,8 @@ public sealed class ApprovalsMigrationTests
         var consumedAndDeleted = await Assert.ThrowsAsync<PostgresException>(() =>
             InsertApprovalAsync(
                 administrator,
-                scope.CompanyId,
-                scope.ActorId,
+                CompanyId,
+                ActorId,
                 Guid.NewGuid(),
                 Guid.NewGuid(),
                 Guid.NewGuid(),
@@ -189,7 +189,7 @@ public sealed class ApprovalsMigrationTests
                 confirmationRequestId: Guid.NewGuid(),
                 resultJson: "{}",
                 deletedAt: DateTimeOffset.UtcNow,
-                deletedByUserId: scope.ActorId,
+                deletedByUserId: ActorId,
                 deletedReason: FoundationApproval.VetoReason));
 
         Assert.Equal(PostgresErrorCodes.CheckViolation, consumedAndDeleted.SqlState);
@@ -202,13 +202,13 @@ public sealed class ApprovalsMigrationTests
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
         await fixture.MigrateAsync();
-        var scope = await SeedApprovalScopeAsync(fixture);
+        var (CompanyId, ActorId) = await SeedApprovalScopeAsync(fixture);
 
         await using var administrator = await fixture.OpenAdministratorConnectionAsync();
         await InsertApprovalAsync(
             administrator,
-            scope.CompanyId,
-            scope.ActorId,
+            CompanyId,
+            ActorId,
             Guid.NewGuid(),
             Guid.NewGuid(),
             Guid.NewGuid());
@@ -216,8 +216,8 @@ public sealed class ApprovalsMigrationTests
         var liveActorCollision = await Assert.ThrowsAsync<PostgresException>(() =>
             InsertApprovalAsync(
                 administrator,
-                scope.CompanyId,
-                scope.ActorId,
+                CompanyId,
+                ActorId,
                 Guid.NewGuid(),
                 Guid.NewGuid(),
                 Guid.NewGuid()));
@@ -228,8 +228,8 @@ public sealed class ApprovalsMigrationTests
         var confirmationRequestId = Guid.NewGuid();
         await InsertApprovalAsync(
             administrator,
-            scope.CompanyId,
-            scope.ActorId,
+            CompanyId,
+            ActorId,
             Guid.NewGuid(),
             Guid.NewGuid(),
             Guid.NewGuid(),
@@ -240,8 +240,8 @@ public sealed class ApprovalsMigrationTests
         var confirmationRequestCollision = await Assert.ThrowsAsync<PostgresException>(() =>
             InsertApprovalAsync(
                 administrator,
-                scope.CompanyId,
-                scope.ActorId,
+                CompanyId,
+                ActorId,
                 Guid.NewGuid(),
                 Guid.NewGuid(),
                 Guid.NewGuid(),

@@ -200,7 +200,7 @@ public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
         _started = false;
     }
 
-    private async Task ExecuteBootstrapAsync(NpgsqlConnection connection)
+    private static async Task ExecuteBootstrapAsync(NpgsqlConnection connection)
     {
         await using var stream = typeof(FoundationPostgresFixture).Assembly
             .GetManifestResourceStream(BootstrapResourceName)

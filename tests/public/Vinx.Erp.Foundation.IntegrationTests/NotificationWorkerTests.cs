@@ -193,6 +193,8 @@ public sealed class NotificationWorkerTests
         Assert.Equal(0, FakeNotificationProvider.Calls);
     }
 
+    private static readonly string[] collection = new[] { "delivered", "provider_in_flight" };
+
     [Fact]
     public async Task Concurrent_worker_services_produce_one_delivery_and_one_provider_call()
     {
@@ -226,7 +228,7 @@ public sealed class NotificationWorkerTests
         var loser = Assert.Single(results, result => !result.Finalized);
         Assert.Contains(
             loser.Status,
-            new[] { "delivered", "provider_in_flight" }
+            collection
         );
         var state = await NotificationIntentSeed.ReadDeliveryAsync(factory, deliveryId);
         Assert.Equal("delivered", state.Status);

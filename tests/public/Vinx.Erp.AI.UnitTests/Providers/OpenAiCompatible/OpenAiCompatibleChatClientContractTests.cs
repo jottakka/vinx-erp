@@ -358,7 +358,7 @@ public sealed class OpenAiCompatibleChatClientContractTests
     {
         var handler = new TestProviderHandler((request, _) =>
         {
-            var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().Result).RootElement;
+            var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync(_).Result).RootElement;
             var messages = body.GetProperty("messages");
             var prompt = messages[messages.GetArrayLength() - 1].GetProperty("content").GetString();
             return Task.FromResult(TestProviderHandler.JsonResponse(

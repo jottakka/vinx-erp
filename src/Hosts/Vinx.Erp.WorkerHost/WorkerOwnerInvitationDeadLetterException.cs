@@ -5,8 +5,11 @@ namespace Vinx.Erp.WorkerHost;
 /// <summary>
 /// Classifica o descarte terminal de uma entrega de convite por motivo, sem persistir detalhes internos.
 /// </summary>
-internal sealed class WorkerOwnerInvitationDeadLetterException
-    : Exception,
+internal sealed class WorkerOwnerInvitationDeadLetterException(
+    string exceptionType,
+    string exceptionMessage
+    )
+        : Exception,
         IDeadLetterExceptionInfo
 {
     public const string InvalidExceptionType = "owner_invitation_delivery_invalid";
@@ -14,16 +17,7 @@ internal sealed class WorkerOwnerInvitationDeadLetterException
         "owner_invitation_delivery_retry_exhausted";
     public const string UnexpectedExceptionType = "owner_invitation_delivery_unexpected";
 
-    public WorkerOwnerInvitationDeadLetterException(
-        string exceptionType,
-        string exceptionMessage
-    )
-    {
-        ExceptionType = exceptionType;
-        ExceptionMessage = exceptionMessage;
-    }
+    public string ExceptionType { get; } = exceptionType;
 
-    public string ExceptionType { get; }
-
-    public string ExceptionMessage { get; }
+    public string ExceptionMessage { get; } = exceptionMessage;
 }

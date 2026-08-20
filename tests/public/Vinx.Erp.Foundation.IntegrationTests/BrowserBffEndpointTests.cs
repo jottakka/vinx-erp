@@ -22,7 +22,7 @@ public sealed class BrowserBffEndpointTests
         Assert.True(response.Headers.CacheControl?.NoStore);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal(
-            new[] { "requestToken" },
+            ["requestToken"],
             document.RootElement.EnumerateObject().Select(property => property.Name));
         var requestToken = document.RootElement.GetProperty("requestToken").GetString();
         Assert.False(string.IsNullOrWhiteSpace(requestToken));

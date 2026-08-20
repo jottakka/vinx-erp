@@ -143,12 +143,7 @@ public sealed class DocumentContextAccessTests
     {
         public Task<AuthorizedDocument> OpenReadAsync(Guid fileRecordId, CancellationToken cancellationToken)
         {
-            var document = resolver(fileRecordId);
-            if (document is null)
-            {
-                throw new InvalidOperationException("denied");
-            }
-
+            var document = resolver(fileRecordId) ?? throw new InvalidOperationException("denied");
             return Task.FromResult(document);
         }
     }

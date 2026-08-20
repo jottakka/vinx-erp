@@ -11,6 +11,7 @@ public sealed class AuthorizationTelemetry
     private static readonly Counter<long> AuditUnavailableCounter =
         Meter.CreateCounter<long>(AuditUnavailableCounterName);
 
+#pragma warning disable CA1822 // A instância é injetada pelos serviços para preservar o contrato de telemetria.
     internal void RecordAuditUnavailable(AuthorizationOperation operation, AuditUnavailablePhase phase)
     {
         AuditUnavailableCounter.Add(
@@ -18,6 +19,7 @@ public sealed class AuthorizationTelemetry
             new KeyValuePair<string, object?>("operation", ToTagValue(operation)),
             new KeyValuePair<string, object?>("phase", ToTagValue(phase)));
     }
+#pragma warning restore CA1822
 
     private static string ToTagValue(AuthorizationOperation operation) => operation switch
     {

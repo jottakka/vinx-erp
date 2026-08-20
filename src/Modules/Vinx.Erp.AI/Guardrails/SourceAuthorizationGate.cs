@@ -17,6 +17,7 @@ public sealed record SourceAuthorizationResult(
 public sealed class SourceAuthorizationGate
 {
     /// <summary>Separa fontes autorizadas das de outra empresa; removidas sinalizam violação.</summary>
+#pragma warning disable CA1822 // A classe é injetada como política de saída; preservar o contrato instanciável evita quebrar consumidores.
     public SourceAuthorizationResult Authorize(
         AgentExecutionContext context,
         IReadOnlyList<AgentCitedSource> citedSources)
@@ -40,4 +41,5 @@ public sealed class SourceAuthorizationGate
 
         return new SourceAuthorizationResult(authorized, removed, removed.Count > 0);
     }
+#pragma warning restore CA1822
 }

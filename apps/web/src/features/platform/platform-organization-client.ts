@@ -1,14 +1,17 @@
 import { z } from "zod";
+import {
+  isCanonicalUuid,
+  readCorrelationId,
+  readErrorCode,
+} from "../../shared/http/bff-response";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const provisioningPath = "/foundation/platform/organizations";
-const correlationHeaderName = "X-Correlation-ID";
 const antiforgeryHeaderName = "X-CSRF-TOKEN";
-const canonicalUuidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const emptyUuid = "00000000-0000-0000-0000-000000000000";
 
-const canonicalUuidSchema = z.string().refine(isCanonicalUuid);
+const canonicalUuidSchema = z
+  .string()
+  .refine((value) => isCanonicalUuid(value));
 const provisionCommandSchema = z
   .object({
     requestId: canonicalUuidSchema,
@@ -317,36 +320,4 @@ function isAbort(
     signal?.aborted === true ||
     (reason instanceof Error && reason.name === "AbortError")
   );
-}
-
-function isCanonicalUuid(value: string): boolean {
-  return value !== emptyUuid && canonicalUuidPattern.test(value);
-}
-
-function readCorrelationId(response: Response): string | undefined {
-  const value = response.headers.get(correlationHeaderName);
-  return value && isCanonicalUuid(value) ? value : undefined;
-}
-
-async function readErrorCode<T extends z.ZodType>(
-  response: Response,
-  schema: T,
-): Promise<z.infer<T> | undefined> {
-  if (
-    !response.headers
-      .get("Content-Type")
-      ?.toLowerCase()
-      .startsWith("application/json")
-  ) {
-    return undefined;
-  }
-
-  try {
-    const parsed = schema.safeParse(
-      ((await response.json()) as { code?: unknown }).code,
-    );
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
 }

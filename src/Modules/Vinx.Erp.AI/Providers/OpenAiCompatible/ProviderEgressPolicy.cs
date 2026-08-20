@@ -184,7 +184,7 @@ public static class ProviderEgressPolicy
             "2001:db8::/32",   // documentação
         ];
 
-        return prohibited.Select(ParseNetwork).ToArray();
+        return [.. prohibited.Select(ParseNetwork)];
 
         static (byte[] Network, int PrefixLength) ParseNetwork(string cidr)
         {
