@@ -18,6 +18,7 @@
     <ProjectReference Include="../../../src/Hosts/Vinx.Erp.WorkerHost/Vinx.Erp.WorkerHost.csproj">
       <Aliases>workerhost</Aliases>
     </ProjectReference>
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.AI/Vinx.Erp.AI.csproj" />
     <ProjectReference Include="../../../src/Modules/Vinx.Erp.Atendimento/Vinx.Erp.Atendimento.csproj" />
   </ItemGroup>
 </Project>

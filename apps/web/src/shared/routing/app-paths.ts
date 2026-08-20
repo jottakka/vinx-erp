@@ -11,6 +11,12 @@ export type AppRouteCatalogEntry = {
 
 export const appRouteCatalog = [
   { group: "workspace", label: "Início", navigation: true, path: "/" },
+  {
+    group: "workspace",
+    label: "Notificações",
+    navigation: true,
+    path: "/notificacoes",
+  },
   { group: "modules", label: "Paguai", navigation: true, path: "/paguai" },
   {
     group: "modules",
@@ -20,6 +26,12 @@ export const appRouteCatalog = [
   },
   { group: "modules", label: "Kanban", navigation: true, path: "/kanban" },
   { group: "modules", label: "Pessoas", navigation: true, path: "/pessoas" },
+  {
+    group: "support",
+    label: "Administração",
+    navigation: false,
+    path: "/administracao",
+  },
   { group: "support", label: "Ajuda", navigation: true, path: "/ajuda" },
 ] as const satisfies readonly AppRouteCatalogEntry[];
 

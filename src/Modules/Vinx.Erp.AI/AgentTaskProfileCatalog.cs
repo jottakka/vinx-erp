@@ -31,22 +31,29 @@ public sealed class AgentTaskProfileCatalog
         return Profiles.TryGetValue(profileId, out profile);
     }
 
-    private static IReadOnlyDictionary<string, AgentTaskProfile> CreateProfiles()
-    {
-        var readOnlySummarize = AgentTaskProfile.CreateValidated(
+    /// <summary>
+    /// Cria o perfil aprovado com a seleção de provider decidida no servidor:
+    /// valores do catálogo + seleção informada. Seleção nula deixa o runner
+    /// fail-closed em provider_not_configured (comportamento atual, #135).
+    /// </summary>
+    public static AgentTaskProfile CreateApprovedProfile(AgentModelSelection? modelSelection) =>
+        CreateReadOnlySummarize(modelSelection);
+
+    private static IReadOnlyDictionary<string, AgentTaskProfile> CreateProfiles() =>
+        new Dictionary<string, AgentTaskProfile>
+        {
+            [ReadOnlySummarizeProfileId] = CreateReadOnlySummarize(modelSelection: null),
+        };
+
+    private static AgentTaskProfile CreateReadOnlySummarize(AgentModelSelection? modelSelection) =>
+        AgentTaskProfile.CreateValidated(
             ReadOnlySummarizeProfileId,
             "summarize",
             AgentJourneyScope.Company,
             AgentCapabilities.Read,
-            modelSelection: null,
+            modelSelection,
             timeout: TimeSpan.FromSeconds(30),
             turnLimit: 1,
             maxTotalTokens: 8_000,
             allowedTools: Array.Empty<string>());
-
-        return new Dictionary<string, AgentTaskProfile>
-        {
-            [readOnlySummarize.ProfileId] = readOnlySummarize,
-        };
-    }
 }

@@ -11,6 +11,15 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
+    <!-- O serviço de aplicação usa AgentRunner/AgentOutcome (módulo AI); a fonte é
+         copiada por Compile Include porque referenciar o ApiHost traria todo o host. -->
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.AI/Vinx.Erp.AI.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentHttpContracts.cs" Link="Agent/AgentHttpContracts.cs" />
+    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentExecutionApplicationService.cs" Link="Agent/AgentExecutionApplicationService.cs" />
+    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentRunOptions.cs" Link="Agent/AgentRunOptions.cs" />
+    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentRunServiceCollectionExtensions.cs" Link="Agent/AgentRunServiceCollectionExtensions.cs" />
     <ProjectReference Include="../../../src/Modules/Vinx.Erp.Notifications/Vinx.Erp.Notifications.csproj" />
   </ItemGroup>
 </Project>

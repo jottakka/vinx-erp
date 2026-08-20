@@ -1,4 +1,6 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Vinx.Erp.AI;
+using Vinx.Erp.Foundation.Identity;
 using Xunit;
 
 namespace Vinx.Erp.AI.UnitTests;
@@ -138,6 +140,61 @@ public sealed class AgentTaskProfileTests
                 setter!.ReturnParameter.GetRequiredCustomModifiers(),
                 modifier => modifier.Name == "IsExternalInit");
         }
+    }
+
+    [Fact]
+    public void Gate_fields_default_to_off_for_existing_construction()
+    {
+        // Compat retrógrada: quem constrói com os nove campos históricos não
+        // exige fontes nem campos de saída.
+        var profile = BuildProfile();
+
+        Assert.False(profile.SourcesRequired);
+        Assert.Null(profile.RequiredOutputFields);
+    }
+
+    [Fact]
+    public void CreateApprovedProfile_carries_catalog_values_with_server_side_selection()
+    {
+        var selection = new AgentModelSelection("openai-compatible", "modelo-aprovado");
+        var profile = AgentTaskProfileCatalog.CreateApprovedProfile(selection);
+
+        Assert.Equal(AgentTaskProfileCatalog.ReadOnlySummarizeProfileId, profile.ProfileId);
+        Assert.Equal("summarize", profile.Journey);
+        Assert.Equal(AgentJourneyScope.Company, profile.Scope);
+        Assert.Equal(AgentCapabilities.Read, profile.RequiredCapabilityName);
+        Assert.Equal(selection, profile.ModelSelection);
+        Assert.Equal(ApprovedTimeout, profile.Timeout);
+        Assert.Equal(ApprovedTurnLimit, profile.TurnLimit);
+        Assert.Equal(ApprovedBudget, profile.MaxTotalTokens);
+        Assert.Empty(profile.AllowedTools);
+        Assert.False(profile.SourcesRequired);
+        Assert.Null(profile.RequiredOutputFields);
+    }
+
+    [Fact]
+    public async Task CreateApprovedProfile_without_selection_keeps_provider_not_configured()
+    {
+        // Sem seleção server-side o runner continua fail-closed: o modelo
+        // registrado não é chamado (#135).
+        var profile = AgentTaskProfileCatalog.CreateApprovedProfile(modelSelection: null);
+        Assert.Null(profile.ModelSelection);
+
+        var resolver = new SequenceContextResolver(SequenceContextResolver.Resolved(Guid.NewGuid()));
+        var model = TestAgentModel.Text("Resumo Alfa");
+        var runner = new AgentRunner(resolver, model, NullLogger<AgentRunner>.Instance);
+
+        var outcome = await runner.RunAsync(
+            new ActorContext(Guid.NewGuid(), Guid.NewGuid()),
+            profile.ProfileId,
+            "resuma X",
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        Assert.Equal(AgentOutcomeStatus.Unavailable, outcome.Status);
+        Assert.Equal(AgentOutcomeReason.ProviderNotConfigured, outcome.ReasonCode);
+        Assert.Equal(1, resolver.CallCount);
+        Assert.Equal(0, model.CallCount);
     }
 
     private static AgentTaskProfile BuildProfile(

@@ -1,7 +1,9 @@
 import type { SvgIconComponent } from "@mui/icons-material";
+import AdminPanelSettingsOutlinedIcon from "@mui/icons-material/AdminPanelSettingsOutlined";
 import GroupsOutlinedIcon from "@mui/icons-material/GroupsOutlined";
 import HelpOutlinedIcon from "@mui/icons-material/HelpOutlined";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
+import NotificationsOutlinedIcon from "@mui/icons-material/NotificationsOutlined";
 import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import ScienceOutlinedIcon from "@mui/icons-material/ScienceOutlined";
 import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
@@ -10,8 +12,10 @@ import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import { Skeleton, Stack } from "@mui/material";
 import { lazy, type ReactElement, Suspense } from "react";
 import { AtendimentoPage } from "../features/atendimento/atendimento-page";
+import { NotificationsPage } from "../features/notifications/notifications-page";
 import { PaguaiPage } from "../features/paguai/paguai-page";
 import { PeoplePage } from "../features/people/people-page";
+import { PlatformOrganizationPage } from "../features/platform/platform-organization-page";
 import {
   type AppRouteCatalogEntry,
   agentPath,
@@ -46,6 +50,10 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
     icon: HomeOutlinedIcon,
     render: (navigationLinks) => <HomePage navigationLinks={navigationLinks} />,
   },
+  "/notificacoes": {
+    icon: NotificationsOutlinedIcon,
+    render: () => <NotificationsPage />,
+  },
   "/ajuda": {
     icon: HelpOutlinedIcon,
     render: (navigationLinks) => <HelpPage navigationLinks={navigationLinks} />,
@@ -65,6 +73,10 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
   "/pessoas": {
     icon: GroupsOutlinedIcon,
     render: () => <PeoplePage />,
+  },
+  "/administracao": {
+    icon: AdminPanelSettingsOutlinedIcon,
+    render: () => <PlatformOrganizationPage />,
   },
 };
 

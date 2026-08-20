@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Platform;
+using Vinx.Erp.Notifications;
 using Wolverine;
 using Wolverine.Persistence.Durability;
 
@@ -40,6 +41,15 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
                 envelope.Message = redactedNotification;
                 envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
                     redactedNotification,
+                    SerializerOptions
+                );
+                envelope.Headers.Clear();
+                break;
+            case InboundWhatsAppImageReceived:
+                var redactedInbound = new InboundWhatsAppImageReceived(Guid.Empty);
+                envelope.Message = redactedInbound;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
+                    redactedInbound,
                     SerializerOptions
                 );
                 envelope.Headers.Clear();

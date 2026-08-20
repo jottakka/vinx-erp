@@ -50,6 +50,18 @@ export function HelpPage({ navigationLinks }: HelpPageProps) {
       </Stack>
       <Stack component="section" spacing={1}>
         <Typography component="h2" variant="h6">
+          Notificações
+        </Typography>
+        <Typography color="text.secondary">
+          O ícone de notificações no cabeçalho mostra quantos alertas in-app
+          você ainda não leu. Cada notificação identifica a empresa de origem;
+          marcar como lida somente organiza a sua caixa e não altera nenhuma
+          solicitação. Quando existir um próximo passo, o botão "Abrir origem"
+          leva à tela correspondente.
+        </Typography>
+      </Stack>
+      <Stack component="section" spacing={1}>
+        <Typography component="h2" variant="h6">
           Aparência e densidade
         </Typography>
         <Typography color="text.secondary">

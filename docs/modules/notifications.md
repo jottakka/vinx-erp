@@ -6,6 +6,40 @@ funções SQL e o serviço produtor permanecem na Foundation (ver
 `docs/modules/foundation.md`, seção de notificações); este módulo não possui
 schema próprio nem migrations.
 
+## Inbox in-app (#94)
+
+A leitura da inbox é pessoal por membership ativa, não por capability: um
+intent in-app é visível quando `channel = 'in_app'`, `status = 'delivered'`,
+o destinatário é o próprio ator autenticado e a empresa de origem segue
+presente em `foundation.current_actor_memberships()` (membership e empresa
+sem exclusão). Revogação de membership ou exclusão da empresa remove o item
+da lista e do contador na consulta seguinte, sem mutar a linha.
+
+O estado de leitura vive na própria linha de intenção (`read_at`,
+`read_by_user_id`), com CHECKs que garantem par preenchido, canal `in_app`,
+leitor igual ao destinatário e `status = 'delivered'`. A marcação é
+idempotente: somente a primeira transição efetiva grava e audita
+`notification.inbox.read` (identificadores opacos, sem corpo/template);
+repetição retorna o mesmo resultado sem nova auditoria.
+
+Três funções `SECURITY DEFINER` no schema `notifications` (dono
+`vinx_notifications_owner`, EXECUTE somente para `vinx_runtime`) compõem a
+fronteira: `list_inbox_notifications` (keyset `(created_at DESC, id DESC)`,
+janela `limit + 1`, cursor tipado decodificado no serviço C#),
+`count_unread_inbox_notifications` e `mark_inbox_notification_read`. O
+escopo de empresa é recalculado no servidor a cada chamada; nenhum
+parâmetro do cliente amplia o conjunto visível. A migration
+`AddNotificationInboxReadState` concede EXECUTE de
+`foundation.current_actor_memberships()` ao owner de notificações via
+`vinx_authorization_owner`.
+
+A resposta HTTP expõe somente campos allowlistados (`id`, `companyId`,
+`source`, `event`, `createdAt`, `readAt`, `action`); `source`/`event`/`action`
+vêm de mapas fechados por chave completa em `NotificationInboxPresentation`
+— chaves desconhecidas rendem `Sistema`/`null`/`null` e nunca ecoam
+`event_key` ou `deep_link_selector` brutos. Estados pendentes ou falhos do
+worker não listam nem são marcáveis.
+
 ## Ownership
 
 - Fronteira `INotificationProvider` (`Delivered|Rejected|Ambiguous`,
@@ -43,6 +77,25 @@ curso). O webhook público no ApiHost valida `X-Hub-Signature-256` sobre os
 bytes brutos antes de qualquer parse e grava eventos insert-only por
 `(message_id, event_type)` sem correlação com o negócio; `read` não é
 confirmação humana. Runbook: `docs/runbooks/whatsapp-outbound.md`.
+
+## Inbound imagem → OCR → IA (#140 subsete)
+
+`Providers/Meta/InboundWhatsAppInteractionService` orquestra o subsete
+automatizado do #140: o webhook (mesmo endpoint do W3) passa a ler também
+`messages[]` e aceita somente `type=image` com id de mídia; o ingress
+(`InboundWhatsAppIngressService` no ApiHost) deduplica por `message_id`
+(`notifications.record_inbound_whatsapp_message`) e publica
+`InboundWhatsAppImageReceived` na fila durável `whatsapp-inbound` na mesma
+transação (padrão do outbox transacional). O worker faz claim idempotente
+(`claim/complete/fail_inbound_whatsapp_message`), baixa a mídia em duas fases,
+canonicaliza (EXIF descartado, tetos de pixel/byte), transcreve pelo perfil
+de visão (`DocumentVisionOcr` do módulo AI — conteúdo sempre tratado como
+dado), compõe um turno único no perfil de texto e responde em texto na
+janela de 24h (`MetaWhatsAppReplyMapper`, cap 4096). Perfis `InboundWhatsAppAi`
+são tudo-ou-nada: ausentes, cada imagem falha fechada (`ai_unconfigured`);
+parciais derrubam o boot. Falhas terminais carregam motivo estável
+(`failure_reason`); transitivas seguem retry 1s/5s/30s e DLQ redigida
+(`whatsapp_inbound_*`). Runbook: `docs/runbooks/whatsapp-inbound.md`.
 
 ## Deletion strategy
 
