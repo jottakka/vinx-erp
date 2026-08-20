@@ -48,6 +48,8 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
         Assert.Equal(firstMessage.Metadata, replayMessage.Metadata);
     }
 
+    private static readonly int[] collection = new[] { 200, 409, 503 };
+
     [Fact]
     public async Task Concurrent_requests_with_the_same_request_id_produce_one_creation_and_replays()
     {
@@ -82,7 +84,7 @@ public sealed class PlatformOrganizationProvisioningOutboxTests
             result =>
                 Assert.Contains(
                     (int)result.StatusCode,
-                    new[] { 200, 409, 503 }
+                    collection
                 )
         );
         Assert.Equal(createdCount, await CountDurableInvitationMessagesAsync(factory));

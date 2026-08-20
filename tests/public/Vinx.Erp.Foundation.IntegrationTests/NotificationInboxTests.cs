@@ -27,8 +27,8 @@ public sealed class NotificationInboxTests
         Assert.NotNull(result.Page);
         Assert.Equal(2, result.Page!.Items.Count);
         Assert.Equal(
-            new[] { betaCompanyId, alfaCompanyId },
-            result.Page.Items.Select(item => item.CompanyId).ToArray()
+            [betaCompanyId, alfaCompanyId],
+            [.. result.Page.Items.Select(item => item.CompanyId)]
         );
         foreach (var item in result.Page.Items)
         {
@@ -275,6 +275,17 @@ public sealed class NotificationInboxTests
         Assert.Equal(1, await NotificationInboxSeed.CountReadAuditsAsync(factory, deliveryId));
     }
 
+    private static readonly string[] ExpectedItemKeys =
+    [
+        "action",
+        "companyId",
+        "createdAt",
+        "event",
+        "id",
+        "readAt",
+        "source",
+    ];
+
     [Fact]
     public async Task Inbox_item_payload_exposes_only_allowlisted_fields()
     {
@@ -294,16 +305,7 @@ public sealed class NotificationInboxTests
         using var document = JsonDocument.Parse(payload);
         var item = document.RootElement.GetProperty("items").EnumerateArray().Single();
         Assert.Equal(
-            new[]
-            {
-                "action",
-                "companyId",
-                "createdAt",
-                "event",
-                "id",
-                "readAt",
-                "source",
-            },
+            ExpectedItemKeys,
             item.EnumerateObject().Select(property => property.Name).OrderBy(name => name).ToArray()
         );
         Assert.DoesNotContain("template", payload, StringComparison.OrdinalIgnoreCase);
@@ -415,6 +417,8 @@ public sealed class NotificationInboxTests
         );
     }
 
+    private static readonly string[] ExpectedEnvelopeKeys = ["items", "nextCursor"];
+
     private static async Task AssertEnvelopeKeysAsync(HttpResponseMessage response)
     {
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -423,7 +427,7 @@ public sealed class NotificationInboxTests
             .Select(property => property.Name)
             .OrderBy(name => name)
             .ToArray();
-        Assert.Equal(new[] { "items", "nextCursor" }, rootKeys);
+        Assert.Equal(ExpectedEnvelopeKeys, rootKeys);
     }
 
     private static async Task AssertErrorCodeAsync(HttpResponseMessage response, string code)

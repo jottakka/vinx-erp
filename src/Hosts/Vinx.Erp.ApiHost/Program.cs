@@ -191,21 +191,19 @@ builder
     );
 builder.Services.AddSupabaseJwtAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddBrowserBffSession(builder.Configuration, builder.Environment);
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy(
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy(
         PlatformOperatorAuthorization.PolicyName,
         policy =>
             policy.RequireAuthenticatedUser().AddRequirements(new PlatformOperatorRequirement())
-    );
-    options.AddPolicy(
+    )
+    .AddPolicy(
         PlatformOperatorAuthorization.MfaAssurancePolicyName,
         policy =>
             policy
                 .RequireAuthenticatedUser()
                 .AddRequirements(new PlatformOperatorRequirement(requiresMfaAssurance: true))
     );
-});
 builder.Services.AddScoped<IAuthorizationHandler, PlatformOperatorAuthorizationHandler>();
 builder.Services.AddSingleton<
     IAuthorizationMiddlewareResultHandler,
@@ -752,7 +750,6 @@ internal sealed class FoundationDatabaseOptions
     public string ConnectionString { get; set; } = string.Empty;
 }
 
-public partial class Program;
 
 internal static class PlatformOrganizationHttpContract
 {

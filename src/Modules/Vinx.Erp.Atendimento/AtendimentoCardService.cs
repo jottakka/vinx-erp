@@ -565,25 +565,15 @@ public sealed class AtendimentoCardService(
         return current is null ? Mutation.ResourceNotFound() : Mutation.IntegrityConflict(current);
     }
 
-    private async Task SetContextAsync(
+    private Task SetContextAsync(
         ActorContext actor,
         Guid companyId,
         CancellationToken cancellationToken
-    )
-    {
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)",
-            cancellationToken
-        );
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.company_id', {companyId.ToString()}, true)",
-            cancellationToken
-        );
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)",
-            cancellationToken
-        );
-    }
+    ) => FoundationRlsContext.ApplyCommandAsync(
+        database.Database,
+        actor,
+        companyId,
+        cancellationToken);
 
     private Task AppendAuditAsync(
         ActorContext actor,
@@ -621,7 +611,7 @@ public sealed class AtendimentoCardService(
             .Where(card => card.CompanyId == companyId)
             .OrderBy(card => card.CreatedAt)
             .ToListAsync(cancellationToken);
-        return cards.Select(ToResponse).ToList();
+        return [.. cards.Select(ToResponse)];
     }
 
     private async Task<AtendimentoCardResponse?> FindCardAsync(
@@ -807,6 +797,7 @@ public sealed class AtendimentoCardService(
         };
 
     private void LogInformation(string result, string reason) =>
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
         logger.LogInformation(
             "Atendimento {Operation} {Module} {Result} {Reason}",
             Operation,
@@ -814,6 +805,7 @@ public sealed class AtendimentoCardService(
             result,
             reason
         );
+#pragma warning restore CA1873
 
     private void LogUnavailable(Exception? exception, string reason) =>
         logger.LogError(

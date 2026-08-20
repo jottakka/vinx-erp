@@ -38,7 +38,7 @@ internal sealed class ClamAvDaemonClient(string host, int port) : IAsyncDisposab
     private const int ChunkSize = 64 * 1024;
     private const int MaxReplyBytes = 1024;
 
-    private static readonly byte[] StreamTerminator = new byte[] { 0, 0, 0, 0 };
+    private static readonly byte[] StreamTerminator = [0, 0, 0, 0];
 
     private readonly byte[] chunkPrefix = new byte[4];
     private TcpClient? scanConnection;

@@ -1,13 +1,16 @@
 import { z } from "zod";
+import {
+  isCanonicalUuid,
+  readCorrelationId,
+  readErrorCode,
+} from "../../shared/http/bff-response";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
-const correlationHeaderName = "X-Correlation-ID";
 const antiforgeryHeaderName = "X-CSRF-TOKEN";
-const canonicalUuidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const emptyUuid = "00000000-0000-0000-0000-000000000000";
 
-const canonicalUuidSchema = z.string().refine(isCanonicalUuid);
+const canonicalUuidSchema = z
+  .string()
+  .refine((value) => isCanonicalUuid(value));
 const directoryItemSchema = z
   .object({
     employeeId: canonicalUuidSchema,
@@ -295,7 +298,9 @@ async function normalizeFailure(
       return failure("forbidden", options);
     case 409: {
       const code =
-        operation === "create" ? await readConflictCode(response) : undefined;
+        operation === "create"
+          ? await readErrorCode(response, conflictCodeSchema)
+          : undefined;
       return code ? failure(code, options) : failure("protocol", options);
     }
     case 429:
@@ -340,33 +345,4 @@ function isAbort(
     signal?.aborted === true ||
     (reason instanceof Error && reason.name === "AbortError")
   );
-}
-
-function isCanonicalUuid(value: string): boolean {
-  return value !== emptyUuid && canonicalUuidPattern.test(value);
-}
-
-function readCorrelationId(response: Response): string | undefined {
-  const value = response.headers.get(correlationHeaderName);
-  return value && isCanonicalUuid(value) ? value : undefined;
-}
-
-async function readConflictCode(response: Response) {
-  if (
-    !response.headers
-      .get("Content-Type")
-      ?.toLowerCase()
-      .startsWith("application/json")
-  ) {
-    return undefined;
-  }
-
-  try {
-    const parsed = conflictCodeSchema.safeParse(
-      ((await response.json()) as { code?: unknown }).code,
-    );
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
 }

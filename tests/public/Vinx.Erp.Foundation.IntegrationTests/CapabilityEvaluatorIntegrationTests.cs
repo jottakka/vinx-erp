@@ -106,7 +106,7 @@ public sealed class CapabilityEvaluatorIntegrationTests
         return new EvaluatorScenario(company.Id, membership.Id);
     }
 
-    private static Task SetCompanyContextAsync(FoundationDbContext database, Guid companyId) =>
+    private static Task<int> SetCompanyContextAsync(FoundationDbContext database, Guid companyId) =>
         database.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT set_config('app.company_id', {companyId.ToString()}, true)");
 

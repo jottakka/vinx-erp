@@ -55,6 +55,7 @@ public sealed class InboundWhatsAppInteractionService(
 
         if (!claim.Claimed)
         {
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
             logger.LogInformation(
                 "Inbound interaction {Operation} {Module} {Result} {Reason}",
                 Operation,
@@ -62,6 +63,7 @@ public sealed class InboundWhatsAppInteractionService(
                 claim.Status,
                 "replay"
             );
+#pragma warning restore CA1873
             return;
         }
 
@@ -200,6 +202,7 @@ public sealed class InboundWhatsAppInteractionService(
         if (send.Kind == NotificationProviderResultKind.Delivered && send.MessageId is not null)
         {
             var completed = await CompleteAsync(inboundMessageId, send.MessageId, cancellationToken);
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
             logger.LogInformation(
                 "Inbound interaction {Operation} {Module} {Result} {Reason}",
                 Operation,
@@ -207,6 +210,7 @@ public sealed class InboundWhatsAppInteractionService(
                 completed ? "completed" : "replay",
                 "replied"
             );
+#pragma warning restore CA1873
             return;
         }
 

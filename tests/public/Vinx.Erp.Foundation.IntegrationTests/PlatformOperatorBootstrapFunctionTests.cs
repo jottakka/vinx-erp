@@ -192,7 +192,7 @@ public sealed class PlatformOperatorBootstrapFunctionTests
 
         var results = await RunConcurrentAsync(
             fixture,
-            Enumerable.Range(0, 8).Select(_ => request).ToArray()
+            [.. Enumerable.Range(0, 8).Select(_ => request)]
         );
 
         Assert.Equal(1, results.Count(result => result.Status == "created"));

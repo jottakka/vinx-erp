@@ -16,6 +16,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class EmployeeDirectoryEndpointTests
 {
     private const string CreateCapability = "foundation.employees.create";
+    private static readonly string[] sourceArray = new[] { "employeeId", "membershipId", "userId" };
 
     [Fact]
     public async Task Create_creates_local_user_membership_and_employee_without_external_access()
@@ -688,7 +689,7 @@ public sealed class EmployeeDirectoryEndpointTests
         var root = document.RootElement;
         Assert.Equal(JsonValueKind.Object, root.ValueKind);
         Assert.Equal(
-            new[] { "employeeId", "membershipId", "userId" }.Order(),
+sourceArray.Order(),
             root.EnumerateObject().Select(property => property.Name).Order()
         );
         foreach (

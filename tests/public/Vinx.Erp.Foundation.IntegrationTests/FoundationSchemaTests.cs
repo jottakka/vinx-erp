@@ -254,7 +254,7 @@ public sealed class FoundationSchemaTests
             names.Add(reader.GetString(0));
         }
 
-        return names.ToArray();
+        return [.. names];
     }
 
     [Fact]

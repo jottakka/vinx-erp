@@ -10,7 +10,7 @@ public static class DocumentUploadPolicy
     public const int MaxClassificationLength = 100;
     public const int MaxOriginLength = 100;
 
-    private static readonly IReadOnlyDictionary<string, string[]> MimeExtensions =
+    private static readonly Dictionary<string, string[]> MimeExtensions =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
             ["application/pdf"] = [".pdf"],

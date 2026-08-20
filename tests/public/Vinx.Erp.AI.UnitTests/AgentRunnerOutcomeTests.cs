@@ -24,7 +24,7 @@ public sealed class AgentRunnerOutcomeTests
         // existe mecanismo de execução; AllowedTools vazio do catálogo já
         // garantido na Task 2.
         var parameters = typeof(IAgentModel).GetMethod(nameof(IAgentModel.GetResponseAsync))!.GetParameters();
-        Assert.Equal(new[] { "messages", "selection", "cancellationToken" }, parameters.Select(parameter => parameter.Name));
+        Assert.Equal(["messages", "selection", "cancellationToken"], parameters.Select(parameter => parameter.Name));
     }
 
     [Fact]
@@ -125,5 +125,5 @@ public sealed class AgentRunnerOutcomeTests
         timeout ?? TimeSpan.FromSeconds(30),
         turnLimit: 1,
         maxTotalTokens: 8_000,
-        allowedTools: Array.Empty<string>());
+        allowedTools: []);
 }

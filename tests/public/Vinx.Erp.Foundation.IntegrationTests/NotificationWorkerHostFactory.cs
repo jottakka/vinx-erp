@@ -14,7 +14,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 
 internal sealed class FileLogger(string path) : ILogger
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 

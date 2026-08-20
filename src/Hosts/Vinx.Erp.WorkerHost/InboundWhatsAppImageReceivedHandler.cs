@@ -1,5 +1,4 @@
 using JasperFx.CodeGeneration;
-using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
@@ -43,18 +42,20 @@ public sealed class InboundWhatsAppImageReceivedHandler(
             );
         }
 
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
         logger.LogInformation(
             "Inbound WhatsApp interaction {Operation} {Module} {Result}",
             "whatsapp_inbound_interaction",
             "notifications",
             "processed"
         );
+#pragma warning restore CA1873
     }
 
     internal static async ValueTask PersistRedactedWorkerDeadLetterAsync(
         IWolverineRuntime runtime,
         IEnvelopeLifecycle lifecycle,
-        Exception exception,
+        Exception _,
         string exceptionType,
         string exceptionMessage
     )
@@ -65,9 +66,7 @@ public sealed class InboundWhatsAppImageReceivedHandler(
 
         // Persist only after redaction; the diagnostic headers stamped by the
         // durable receiver are dropped with the envelope rewrite.
-        runtime
-            .Services.GetRequiredService<WorkerDeadLetterRedactionInterceptor>()
-            .RedactEnvelope(envelope);
+        WorkerDeadLetterRedactionInterceptor.RedactEnvelope(envelope);
         await runtime.Storage.Inbox.MoveToDeadLetterStorageAsync(
             envelope,
             new InboundWhatsAppDeadLetterException(exceptionType, exceptionMessage)

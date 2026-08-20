@@ -1,10 +1,11 @@
 import { z } from "zod";
+import {
+  readCorrelationId,
+  readErrorCode,
+} from "../../shared/http/bff-response";
 import type { BootstrapSnapshot } from "./session-contract";
 
 const foundationBootstrapPath = "/foundation/bootstrap";
-const correlationHeaderName = "X-Correlation-ID";
-const canonicalUuidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const bootstrapSnapshotSchema = z.object({
   user: z.object({
@@ -88,7 +89,7 @@ export function createFoundationBootstrapClient(
       return failure(isAbort(reason, signal) ? "aborted" : "network");
     }
 
-    const correlationId = readCorrelationId(response);
+    const correlationId = readCorrelationId(response, { allowEmpty: true });
     if (response.status === 401) {
       return failure("anonymous", { correlationId, status: 401 });
     }
@@ -96,7 +97,7 @@ export function createFoundationBootstrapClient(
       return failure("rate_limited", { correlationId, status: 429 });
     }
     if (response.status === 503) {
-      const code = await readUnavailableCode(response);
+      const code = await readErrorCode(response, unavailableCodeSchema);
       if (signal?.aborted) {
         return failure("aborted");
       }
@@ -156,31 +157,4 @@ function isAbort(
     signal?.aborted === true ||
     (reason instanceof Error && reason.name === "AbortError")
   );
-}
-
-function readCorrelationId(response: Response): string | undefined {
-  const value = response.headers.get(correlationHeaderName);
-  return value && canonicalUuidPattern.test(value) ? value : undefined;
-}
-
-async function readUnavailableCode(
-  response: Response,
-): Promise<FoundationBootstrapUnavailableCode | undefined> {
-  if (
-    !response.headers
-      .get("Content-Type")
-      ?.toLowerCase()
-      .startsWith("application/json")
-  ) {
-    return undefined;
-  }
-
-  try {
-    const parsed = unavailableCodeSchema.safeParse(
-      ((await response.json()) as { code?: unknown }).code,
-    );
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
 }

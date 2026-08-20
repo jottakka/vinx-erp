@@ -125,6 +125,7 @@ public sealed class AuditTransactionTests
         ];
         private readonly ConcurrentQueue<IReadOnlyDictionary<string, string>> _measurements = new();
         private readonly MeterListener _listener = new();
+        private static readonly string[] collection = new[] { "operation", "phase" };
 
         public AuthorizationTelemetryCollector()
         {
@@ -154,7 +155,7 @@ public sealed class AuditTransactionTests
             Assert.All(_measurements, measurement =>
             {
                 Assert.Equal(2, measurement.Count);
-                Assert.All(measurement.Keys, key => Assert.Contains(key, new[] { "operation", "phase" }));
+                Assert.All(measurement.Keys, key => Assert.Contains(key, collection));
                 Assert.Contains(measurement["operation"], ApprovedOperations);
                 Assert.Contains(measurement["phase"], new[]
                 {

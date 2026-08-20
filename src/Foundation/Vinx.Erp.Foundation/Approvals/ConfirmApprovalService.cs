@@ -79,12 +79,14 @@ public sealed class ConfirmApprovalService(
                     await transaction.RollbackAsync(cancellationToken);
                     if (MatchesReplay(approval, command, payloadHash))
                     {
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                         logger.LogInformation(
                             "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
                             Operation,
                             Module,
                             "replayed",
                             "same_confirmation_request_replayed");
+#pragma warning restore CA1873
                         return AuthorizationResult<ConfirmApprovalResult>.Success(
                             new ConfirmApprovalResult(approval.Id, approval.ProposalId, ConfirmApprovalOutcome.Replay));
                     }
@@ -140,12 +142,14 @@ public sealed class ConfirmApprovalService(
                             "{}"), cancellationToken);
                         await database.SaveChangesAsync(cancellationToken);
                         await transaction.CommitAsync(cancellationToken);
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                         logger.LogInformation(
                             "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
                             Operation,
                             Module,
                             "claimed",
                             "single_use_approval_claimed");
+#pragma warning restore CA1873
                         return AuthorizationResult<ConfirmApprovalResult>.Success(result);
                     }
 
@@ -283,12 +287,14 @@ public sealed class ConfirmApprovalService(
                         null,
                         "{}"), cancellationToken);
                     await transaction.CommitAsync(cancellationToken);
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                     logger.LogInformation(
                         "Veto de aprovação {Operation} {Module} {Result} {Reason}",
                         Operation,
                         Module,
                         "vetoed",
                         "approval_vetoed");
+#pragma warning restore CA1873
                     return AuthorizationResult<VetoApprovalResult>.Success(
                         new VetoApprovalResult(command.ApprovalId, command.ProposalId, VetoApprovalOutcome.Vetoed));
                 }
@@ -430,12 +436,14 @@ public sealed class ConfirmApprovalService(
 
     private AuthorizationResult<ConfirmApprovalResult> ProposalUnavailable(string reason)
     {
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
         logger.LogInformation(
             "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
             Operation,
             Module,
             "unavailable",
             reason);
+#pragma warning restore CA1873
         return AuthorizationResult<ConfirmApprovalResult>.Failure(AuthorizationErrorCode.ProposalUnavailable);
     }
 
@@ -465,12 +473,14 @@ public sealed class ConfirmApprovalService(
             await transaction.CommitAsync(cancellationToken);
             if (denial == AuthorizationErrorCode.ProposalConflict && IsExpectedSingleUseConflict(reason))
             {
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                 logger.LogInformation(
                     "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
                     Operation,
                     Module,
                     "denied",
                     reason);
+#pragma warning restore CA1873
             }
             else
             {
@@ -570,13 +580,6 @@ public sealed class ConfirmApprovalService(
     private static bool IsExpectedSingleUseConflict(string reason) =>
         reason is "proposal_already_consumed" or "proposal_claim_lost";
 
-    private async Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken)
-    {
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.company_id', {companyId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)", cancellationToken);
-    }
+    private Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken) =>
+        FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
 }

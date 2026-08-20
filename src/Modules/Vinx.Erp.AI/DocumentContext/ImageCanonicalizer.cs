@@ -34,12 +34,7 @@ public static class ImageCanonicalizer
         }
 
         // Recurso nativo: descarte determinístico.
-        using var bitmap = decoded;
-        if (bitmap is null)
-        {
-            throw new DocumentContextValidationException("image could not be decoded");
-        }
-
+        using var bitmap = decoded ?? throw new DocumentContextValidationException("image could not be decoded");
         if ((long)bitmap.Width * bitmap.Height > limits.MaxPixelsPerPage)
         {
             throw new DocumentContextValidationException("image exceeds the approved pixel limit");

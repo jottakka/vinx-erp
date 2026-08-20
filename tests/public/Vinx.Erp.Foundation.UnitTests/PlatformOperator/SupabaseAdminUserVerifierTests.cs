@@ -4,7 +4,7 @@ using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Platform;
 using Xunit;
 
-namespace Vinx.Erp.Foundation.UnitTests.Platform;
+namespace Vinx.Erp.Foundation.UnitTests.PlatformOperator;
 
 public sealed class SupabaseAdminUserVerifierTests
 {

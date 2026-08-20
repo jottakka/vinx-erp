@@ -86,13 +86,15 @@ public sealed class InternalSessionAdmissionService(
                 "{}"), cancellationToken);
             await database.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
             logger.LogInformation(EventTemplate, Operation, Module, "admitted", "new_session");
+#pragma warning restore CA1873
             return SessionAdmissionResult.Admitted();
         }
         catch (DbUpdateException exception) when (IsUniqueViolation(exception))
         {
             database.ChangeTracker.Clear();
-            return await ResolveUniqueRaceAsync(userId, proof, source, correlationId, cancellationToken, exception);
+            return await ResolveUniqueRaceAsync(userId, proof, source, correlationId, exception, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -110,8 +112,8 @@ public sealed class InternalSessionAdmissionService(
         ExternalIdentityProof proof,
         AuditSource source,
         Guid correlationId,
-        CancellationToken cancellationToken,
-        Exception exception)
+        Exception exception,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -212,7 +214,9 @@ public sealed class InternalSessionAdmissionService(
                 reason,
                 "{}"), cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
             logger.Log(logLevel, EventTemplate, Operation, Module, "denied", reason);
+#pragma warning restore CA1873
             return SessionAdmissionResult.Denied(reason);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

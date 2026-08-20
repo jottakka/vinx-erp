@@ -8,14 +8,9 @@ namespace Vinx.Erp.ApiHost.Filters;
 /// efetivamente lidos (inclusive chunked) e rewinding do corpo para o model binder.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method)]
-public sealed class StrictJsonBodyAttribute : Attribute, IAsyncResourceFilter
+public sealed class StrictJsonBodyAttribute(int maximumBytes) : Attribute, IAsyncResourceFilter
 {
-    private readonly int _maximumBytes;
-
-    public StrictJsonBodyAttribute(int maximumBytes)
-    {
-        _maximumBytes = maximumBytes;
-    }
+    private readonly int _maximumBytes = maximumBytes;
 
     public async Task OnResourceExecutionAsync(
         ResourceExecutingContext context,

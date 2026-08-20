@@ -123,14 +123,7 @@ public sealed class AgentRunner(
                     proposedActionName: toolCall.Name);
             }
 
-            var gatedStatus = gated.Status switch
-            {
-                AgentOutputGateStatus.Result => AgentOutcomeStatus.Completed,
-                AgentOutputGateStatus.NeedsClarification => AgentOutcomeStatus.NeedsClarification,
-                AgentOutputGateStatus.Denied => AgentOutcomeStatus.Denied,
-                AgentOutputGateStatus.ValidationError => AgentOutcomeStatus.Invalid,
-                _ => throw new ArgumentOutOfRangeException(nameof(gated.Status), gated.Status, "Unsupported output gate status."),
-            };
+            var gatedStatus = MapOutputGateStatus(gated.Status);
             return Finish(gatedStatus, gated.ReasonCode, actor, stopwatch, text: gated.Text);
         }
 
@@ -203,10 +196,21 @@ public sealed class AgentRunner(
                 logger.LogError(exception, ExecutionLogTemplate, Operation, Module, result, outcome.ReasonCode, elapsedMs);
                 break;
             default:
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                 logger.LogInformation(ExecutionLogTemplate, Operation, Module, result, outcome.ReasonCode, elapsedMs);
+#pragma warning restore CA1873
                 break;
         }
     }
+
+    private static AgentOutcomeStatus MapOutputGateStatus(AgentOutputGateStatus status) => status switch
+    {
+        AgentOutputGateStatus.Result => AgentOutcomeStatus.Completed,
+        AgentOutputGateStatus.NeedsClarification => AgentOutcomeStatus.NeedsClarification,
+        AgentOutputGateStatus.Denied => AgentOutcomeStatus.Denied,
+        AgentOutputGateStatus.ValidationError => AgentOutcomeStatus.Invalid,
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unsupported output gate status."),
+    };
 
     private static AgentOutcomeStatus MapResolutionStatus(AgentContextResolutionStatus status) => status switch
     {

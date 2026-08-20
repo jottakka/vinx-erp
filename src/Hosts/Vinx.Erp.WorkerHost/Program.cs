@@ -240,7 +240,6 @@ static bool IsAllowedSupabaseUri(string value, IHostEnvironment environment) =>
         || (environment.IsDevelopment() && uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)
     );
 
-public partial class Program;
 
 internal sealed class WorkerDatabaseOptions
 {

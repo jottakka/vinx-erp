@@ -65,18 +65,20 @@ public sealed class NotificationDeliveryRequestedHandler(
             );
         }
 
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
         logger.LogInformation(
             "Notification delivery {Operation} {Module} {Result}",
             Operation,
             Module,
             result.Finalized ? result.Status : "replay"
         );
+#pragma warning restore CA1873
     }
 
     internal static async ValueTask PersistRedactedWorkerDeadLetterAsync(
         IWolverineRuntime runtime,
         IEnvelopeLifecycle lifecycle,
-        Exception exception,
+        Exception _,
         string exceptionType,
         string exceptionMessage
     )
@@ -87,9 +89,7 @@ public sealed class NotificationDeliveryRequestedHandler(
 
         // Persist only after redaction; the diagnostic headers stamped by the
         // durable receiver are dropped with the envelope rewrite.
-        runtime
-            .Services.GetRequiredService<WorkerDeadLetterRedactionInterceptor>()
-            .RedactEnvelope(envelope);
+        WorkerDeadLetterRedactionInterceptor.RedactEnvelope(envelope);
         runtime
             .Services.GetRequiredService<NotificationDeliveryMetrics>()
             .RecordDeadLetter(exceptionType);

@@ -21,7 +21,9 @@ public sealed record DocumentSegment(
     string Text)
 {
     /// <summary>Marca estrutural: conteúdo extraído não é instrução.</summary>
+#pragma warning disable CA1822 // O marcador pertence ao contrato de segmento e deve permanecer acessível na instância.
     public bool Untrusted => true;
+#pragma warning restore CA1822
 }
 
 /// <summary>Estado do contexto: pronto ou exige esclarecimento (falha segura).</summary>

@@ -221,15 +221,8 @@ public sealed class RoleAssignmentService(
         return AuthorizationResult<AssignRoleToMembershipResult>.Failure(AuthorizationErrorCode.AuditUnavailable);
     }
 
-    private async Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken)
-    {
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.company_id', {companyId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)", cancellationToken);
-    }
+    private Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken) =>
+        FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
 
     private static string ComputePayloadHash(AssignRoleToMembershipCommand command)
     {

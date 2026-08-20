@@ -25,7 +25,7 @@ internal static class TestDocumentFixtures
     }
 
     public static byte[] PdfWithoutText(int pages, double width = 595, double height = 842) =>
-        BuildPdf(width, height, Enumerable.Repeat<string?>(null, pages).ToArray());
+        BuildPdf(width, height, [.. Enumerable.Repeat<string?>(null, pages)]);
 
     public static byte[] MinimalPdf(params string?[] pageTexts) =>
         BuildPdf(595, 842, pageTexts);

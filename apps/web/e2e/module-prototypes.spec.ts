@@ -1,14 +1,14 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { installBffSession, signIn } from "./support/bff-session";
+
+test.beforeEach(async ({ page }) => {
+  await installBffSession(page);
+});
 
 async function enterHome(page: Page) {
   await page.goto("/login");
-  await expect(
-    page.getByRole("heading", {
-      name: "Entrada do ambiente de desenvolvimento",
-    }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Entrar" }).click();
+  await signIn(page);
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
 }

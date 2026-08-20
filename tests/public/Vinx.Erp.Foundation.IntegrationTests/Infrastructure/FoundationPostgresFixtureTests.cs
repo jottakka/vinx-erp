@@ -338,6 +338,11 @@ public sealed class FoundationPostgresFixtureTests
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
     }
 
+    private static readonly string[] value = new[]
+        {
+            "vinx_audit_owner", "vinx_identity_owner", "vinx_migrator", "vinx_runtime"
+        };
+
     [Fact]
     public async Task StartAsync_creates_the_four_non_superuser_roles_and_migrator_can_set_isolated_owners()
     {
@@ -347,10 +352,7 @@ public sealed class FoundationPostgresFixtureTests
         await using var connection = await fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
             "SELECT rolname FROM pg_roles WHERE rolname = ANY (@roles) ORDER BY rolname", connection);
-        command.Parameters.AddWithValue("roles", new[]
-        {
-            "vinx_audit_owner", "vinx_identity_owner", "vinx_migrator", "vinx_runtime"
-        });
+        command.Parameters.AddWithValue("roles", value);
 
         await using var reader = await command.ExecuteReaderAsync();
         var roles = new List<string>();
@@ -373,10 +375,7 @@ public sealed class FoundationPostgresFixtureTests
             WHERE rolname = ANY (@roles)
             ORDER BY rolname
             """, connection);
-        attributesCommand.Parameters.AddWithValue("roles", new[]
-        {
-            "vinx_audit_owner", "vinx_identity_owner", "vinx_migrator", "vinx_runtime"
-        });
+        attributesCommand.Parameters.AddWithValue("roles", value);
 
         await using var attributesReader = await attributesCommand.ExecuteReaderAsync();
         var attributes = new List<(
@@ -479,7 +478,7 @@ public sealed class FoundationPostgresFixtureTests
         await using var stream = client.GetStream();
         var request = new byte[8];
         await stream.ReadExactlyAsync(request);
-        await stream.WriteAsync(new byte[] { (byte)'H' });
+        await stream.WriteAsync("H"u8.ToArray());
         await stream.FlushAsync();
     }
 

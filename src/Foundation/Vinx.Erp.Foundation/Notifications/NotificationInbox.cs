@@ -70,7 +70,7 @@ public static partial class NotificationInboxCursor
     public static string Encode(DateTimeOffset createdAt, Guid id) =>
         ToBase64UrlString(
             Encoding.ASCII.GetBytes(
-                $"v1.{(createdAt.UtcTicks - EpochTicks) / TimeSpan.TicksPerMicrosecond}.{id.ToString()}"
+                $"v1.{(createdAt.UtcTicks - EpochTicks) / TimeSpan.TicksPerMicrosecond}.{id}"
             )
         );
 

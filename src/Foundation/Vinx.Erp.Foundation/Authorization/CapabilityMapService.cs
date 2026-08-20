@@ -112,15 +112,8 @@ public sealed class CapabilityMapService(
         return AuthorizationResult<IReadOnlyList<EffectiveCapability>>.Failure(AuthorizationErrorCode.AuditUnavailable);
     }
 
-    private async Task ApplyContextAsync(ActorContext actor, Guid? companyId, CancellationToken cancellationToken)
-    {
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.company_id', {(companyId?.ToString() ?? string.Empty)}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)", cancellationToken);
-    }
+    private Task ApplyContextAsync(ActorContext actor, Guid? companyId, CancellationToken cancellationToken) =>
+        FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
 
     internal static IQueryable<CapabilityGrant> CreateCapabilityGrantQuery(
         FoundationDbContext database,
@@ -137,13 +130,12 @@ public sealed class CapabilityMapService(
         select new CapabilityGrant(capability.Name, grant.Scope);
 
     internal static IReadOnlyList<EffectiveCapability> ProjectEffectiveCapabilities(IEnumerable<CapabilityGrant> grants) =>
-        grants
+        [.. grants
             .GroupBy(grant => grant.Name, StringComparer.Ordinal)
             .OrderBy(group => group.Key, StringComparer.Ordinal)
             .Select(group => new EffectiveCapability(
                 group.Key,
-                new HashSet<CapabilityScope>(group.Select(grant => grant.Scope))))
-            .ToArray();
+                new HashSet<CapabilityScope>(group.Select(grant => grant.Scope))))];
 
     internal sealed record CapabilityGrant(string Name, CapabilityScope Scope);
 }

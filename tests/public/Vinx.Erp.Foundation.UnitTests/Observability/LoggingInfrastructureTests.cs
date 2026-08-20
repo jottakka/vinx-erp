@@ -71,7 +71,9 @@ public sealed class LoggingInfrastructureTests
             }
 
             await arrived.Task;
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
             logger.LogInformation("request {RequestPath}", context.Request.Path);
+#pragma warning restore CA1873
         });
         var pipeline = app.Build();
 
@@ -126,10 +128,12 @@ public sealed class LoggingInfrastructureTests
         await pipeline(context);
     }
 
+    private static readonly string[] expected = ["CorrelationId"];
+
     private static Guid GetCorrelationId(CapturedLogEntry entry)
     {
         var scope = Assert.Single(entry.Scopes.OfType<IReadOnlyDictionary<string, object?>>());
-        Assert.Equal(new[] { "CorrelationId" }, scope.Keys);
+        Assert.Equal(expected, scope.Keys);
         return Assert.IsType<Guid>(scope["CorrelationId"]);
     }
 
@@ -138,7 +142,7 @@ public sealed class LoggingInfrastructureTests
         private readonly ConcurrentQueue<CapturedLogEntry> entries = new();
         private IExternalScopeProvider scopeProvider = new LoggerExternalScopeProvider();
 
-        public IReadOnlyCollection<CapturedLogEntry> Entries => entries.ToArray();
+        public IReadOnlyCollection<CapturedLogEntry> Entries => [.. entries];
 
         public ILogger CreateLogger(string categoryName) => new CapturingLogger(this);
 

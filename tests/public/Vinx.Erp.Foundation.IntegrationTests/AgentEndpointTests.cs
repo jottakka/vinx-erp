@@ -529,13 +529,10 @@ public sealed class AgentEndpointTests
     /// perfil aprovado) e registro das selections recebidas — seguro para
     /// chamadas concorrentes (fila e registro thread-safe). Nenhum HTTP.
     /// </summary>
-    private sealed class ControlledAgentModel : IAgentModel
+    private sealed class ControlledAgentModel(params ChatResponse[] responses) : IAgentModel
     {
-        private readonly ConcurrentQueue<ChatResponse> responses;
+        private readonly ConcurrentQueue<ChatResponse> responses = new ConcurrentQueue<ChatResponse>(responses);
         private int callCount;
-
-        public ControlledAgentModel(params ChatResponse[] responses) =>
-            this.responses = new ConcurrentQueue<ChatResponse>(responses);
 
         public TimeSpan? Delay { get; init; }
 
@@ -547,7 +544,7 @@ public sealed class AgentEndpointTests
 
         public static ControlledAgentModel ToolCall(string toolName) => new(new ChatResponse(new ChatMessage(
             ChatRole.Assistant,
-            new AIContent[] { new FunctionCallContent("call_1", toolName, new Dictionary<string, object?>()) })));
+            [new FunctionCallContent("call_1", toolName, new Dictionary<string, object?>())])));
 
         public static ControlledAgentModel Delayed(TimeSpan delay) => new(TextResponse("resposta atrasada"))
         {

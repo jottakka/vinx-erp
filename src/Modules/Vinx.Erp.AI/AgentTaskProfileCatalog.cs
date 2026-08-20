@@ -39,7 +39,7 @@ public sealed class AgentTaskProfileCatalog
     public static AgentTaskProfile CreateApprovedProfile(AgentModelSelection? modelSelection) =>
         CreateReadOnlySummarize(modelSelection);
 
-    private static IReadOnlyDictionary<string, AgentTaskProfile> CreateProfiles() =>
+    private static Dictionary<string, AgentTaskProfile> CreateProfiles() =>
         new Dictionary<string, AgentTaskProfile>
         {
             [ReadOnlySummarizeProfileId] = CreateReadOnlySummarize(modelSelection: null),
@@ -55,5 +55,5 @@ public sealed class AgentTaskProfileCatalog
             timeout: TimeSpan.FromSeconds(30),
             turnLimit: 1,
             maxTotalTokens: 8_000,
-            allowedTools: Array.Empty<string>());
+            allowedTools: []);
 }

@@ -1,11 +1,12 @@
 import { z } from "zod";
+import {
+  readCorrelationId,
+  readErrorCode,
+} from "../../shared/http/bff-response";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const browserSessionPath = "/foundation/identity/browser-session";
-const correlationHeaderName = "X-Correlation-ID";
 const antiforgeryHeaderName = "X-CSRF-TOKEN";
-const canonicalUuidPattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const credentialsSchema = z
   .object({
@@ -204,7 +205,7 @@ export function createBrowserSessionClient(
 }
 
 function success(response: Response): BrowserSessionOperationResult {
-  const correlationId = readCorrelationId(response);
+  const correlationId = readCorrelationId(response, { allowEmpty: true });
   return correlationId ? { ok: true, correlationId } : { ok: true };
 }
 
@@ -212,8 +213,8 @@ async function normalizeFailure(
   response: Response,
   signal?: AbortSignal,
 ): Promise<BrowserSessionFailureResult> {
-  const correlationId = readCorrelationId(response);
-  const code = await readDocumentedErrorCode(response);
+  const correlationId = readCorrelationId(response, { allowEmpty: true });
+  const code = await readErrorCode(response, documentedErrorCodeSchema);
   if (signal?.aborted) {
     return failure("aborted");
   }
@@ -270,31 +271,4 @@ function isAbort(
     signal?.aborted === true ||
     (reason instanceof Error && reason.name === "AbortError")
   );
-}
-
-function readCorrelationId(response: Response): string | undefined {
-  const value = response.headers.get(correlationHeaderName);
-  return value && canonicalUuidPattern.test(value) ? value : undefined;
-}
-
-async function readDocumentedErrorCode(
-  response: Response,
-): Promise<BrowserSessionErrorCode | undefined> {
-  if (
-    !response.headers
-      .get("Content-Type")
-      ?.toLowerCase()
-      .startsWith("application/json")
-  ) {
-    return undefined;
-  }
-
-  try {
-    const parsed = documentedErrorCodeSchema.safeParse(
-      ((await response.json()) as { code?: unknown }).code,
-    );
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
 }

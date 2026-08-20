@@ -41,7 +41,7 @@ public sealed class NotificationsController(NotificationInboxService service)
         {
             NotificationInboxState.Listed => Ok(
                 new NotificationInboxPageResponse(
-                    result.Page!.Items.Select(ToItemResponse).ToList(),
+                    [.. result.Page!.Items.Select(ToItemResponse)],
                     result.Page.NextCursor
                 )
             ),

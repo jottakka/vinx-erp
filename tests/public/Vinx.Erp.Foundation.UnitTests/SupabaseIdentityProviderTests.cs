@@ -167,7 +167,9 @@ public sealed class SupabaseIdentityProviderTests
     }
 
     [Theory]
+#pragma warning disable xUnit1045 // Claim[] é intencional: os casos verificam metadados de Claim que string[] não preservaria.
     [MemberData(nameof(InvalidAmrClaims))]
+#pragma warning restore xUnit1045
     public void Try_get_external_identity_proof_rejects_malformed_or_ambiguous_amr_claims(Claim[] amrClaims)
     {
         var claims = ValidClaims();

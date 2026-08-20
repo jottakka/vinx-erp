@@ -579,6 +579,8 @@ public sealed class AtendimentoCardEndpointTests
         Assert.True(IsNullableSchema(conflictProperties.GetProperty("current")));
     }
 
+    private static readonly string[] sourceArray = new[] { "anyOf", "oneOf" };
+
     private static bool IsNullableSchema(JsonElement schema)
     {
         if (
@@ -589,7 +591,7 @@ public sealed class AtendimentoCardEndpointTests
             return true;
         }
 
-        return new[] { "anyOf", "oneOf" }.Any(composition =>
+        return sourceArray.Any(composition =>
             schema.TryGetProperty(composition, out var alternatives)
             && alternatives
                 .EnumerateArray()
@@ -655,13 +657,13 @@ public sealed class AtendimentoCardEndpointTests
         );
         var capabilityNames =
             grantedCapabilities.Length == 0
-                ? new[]
-                {
+                ?
+                [
                     KnownCapabilities.ServiceDeskTicketReadQueue,
                     KnownCapabilities.ServiceDeskTicketCreate,
                     KnownCapabilities.ServiceDeskTicketAssign,
                     KnownCapabilities.ServiceDeskTicketMove,
-                }
+                ]
                 : grantedCapabilities;
         var capabilities = await administrator
             .Capabilities.Where(capability => capabilityNames.Contains(capability.Name))

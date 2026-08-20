@@ -617,15 +617,9 @@ public sealed class RevokeMembershipServiceIntegrationTests
         public void Dispose() => _listener.Dispose();
     }
 
-    private sealed class RevocationLogCapture : ILoggerProvider, ILogger
+    private sealed class RevocationLogCapture(string categoryName) : ILoggerProvider, ILogger
     {
-        private readonly string _categoryName;
-
-        public RevocationLogCapture(string categoryName)
-        {
-            _categoryName = categoryName;
-        }
-
+        private readonly string _categoryName = categoryName;
         private readonly List<CapturedLog> _entries = [];
         private readonly Lock _entriesLock = new();
 

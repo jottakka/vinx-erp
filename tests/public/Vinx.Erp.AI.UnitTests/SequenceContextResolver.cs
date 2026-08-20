@@ -8,15 +8,10 @@ namespace Vinx.Erp.AI.UnitTests;
 /// concorrentes). Helper <see cref="Resolved"/> constrói resolução de sucesso
 /// com contexto mínimo da empresa informada.
 /// </summary>
-public sealed class SequenceContextResolver : IAgentContextResolver
+public sealed class SequenceContextResolver(params AgentContextResolution[] resolutions) : IAgentContextResolver
 {
-    private readonly Queue<AgentContextResolution> resolutions;
-    private readonly object gate = new();
-
-    public SequenceContextResolver(params AgentContextResolution[] resolutions)
-    {
-        this.resolutions = new Queue<AgentContextResolution>(resolutions);
-    }
+    private readonly Queue<AgentContextResolution> resolutions = new Queue<AgentContextResolution>(resolutions);
+    private readonly Lock gate = new();
 
     public int CallCount { get; private set; }
 

@@ -67,7 +67,7 @@ public sealed class BrowserBffSessionClaimBoundaryTests
         {
             using var document = JsonDocument.Parse(claim.Value);
             Assert.Equal(
-                new[] { "method", "timestamp" },
+                ["method", "timestamp"],
                 document.RootElement.EnumerateObject().Select(property => property.Name));
             Assert.DoesNotContain("provider_session_metadata", claim.Value, StringComparison.Ordinal);
         });

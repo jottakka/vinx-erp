@@ -19,18 +19,11 @@ public enum OpenAiCompatibleFailureKind
 /// pública não carrega causa bruta (Exception.ToString() percorreria o body
 /// do provider): somente kind, status HTTP e correlation seguro.
 /// </summary>
-public sealed class OpenAiCompatibleProviderException : Exception
+public sealed class OpenAiCompatibleProviderException(OpenAiCompatibleFailureKind kind, int? httpStatusCode = null) : Exception(FormatMessage(kind, httpStatusCode))
 {
-    public OpenAiCompatibleProviderException(OpenAiCompatibleFailureKind kind, int? httpStatusCode = null)
-        : base(FormatMessage(kind, httpStatusCode))
-    {
-        Kind = kind;
-        HttpStatusCode = httpStatusCode;
-    }
+    public OpenAiCompatibleFailureKind Kind { get; } = kind;
 
-    public OpenAiCompatibleFailureKind Kind { get; }
-
-    public int? HttpStatusCode { get; }
+    public int? HttpStatusCode { get; } = httpStatusCode;
 
     private static string FormatMessage(OpenAiCompatibleFailureKind kind, int? httpStatusCode) =>
         httpStatusCode is int status

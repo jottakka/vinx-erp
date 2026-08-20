@@ -150,12 +150,14 @@ public sealed class PrepareApprovalService(
                         "{}"), cancellationToken);
                     await database.SaveChangesAsync(cancellationToken);
                     await transaction.CommitAsync(cancellationToken);
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                     logger.LogInformation(
                         "Preparação de aprovação {Operation} {Module} {Result} {Reason}",
                         Operation,
                         Module,
                         "prepared",
                         "durable_approval_created");
+#pragma warning restore CA1873
                     return AuthorizationResult<PrepareApprovalResult>.Success(result);
                 }
             }
@@ -251,12 +253,14 @@ public sealed class PrepareApprovalService(
                 "{}"), cancellationToken);
         }
 
+#pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
         logger.LogInformation(
             "Varredura de expiração de aprovações {Operation} {Module} {Result} {Reason}",
             Operation,
             Module,
             "expired",
             "expired_live_proposals_terminalized");
+#pragma warning restore CA1873
     }
 
     private async Task<AuthorizationResult<PrepareApprovalResult>> ReturnAuditedDenialAsync(
@@ -362,15 +366,8 @@ public sealed class PrepareApprovalService(
         return AuthorizationResult<PrepareApprovalResult>.Failure(AuthorizationErrorCode.AuditUnavailable);
     }
 
-    private async Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken)
-    {
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {actor.UserId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.company_id', {companyId.ToString()}, true)", cancellationToken);
-        await database.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.correlation_id', {new CorrelationContext(actor.CorrelationId).CorrelationId.ToString()}, true)", cancellationToken);
-    }
+    private Task ApplyContextAsync(ActorContext actor, Guid companyId, CancellationToken cancellationToken) =>
+        FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
 
     private static string ComputeIdempotencyHash(PrepareApprovalCommand command, string payloadHash) =>
         CanonicalPayloadHasher.ComputeHash(JsonSerializer.SerializeToElement(new

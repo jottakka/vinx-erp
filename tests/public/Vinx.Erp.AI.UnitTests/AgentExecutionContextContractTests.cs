@@ -63,25 +63,24 @@ public sealed class AgentExecutionContextContractTests
             Guid.NewGuid(),
             AlfaCompanyId,
             "Alfa",
-            new[]
-            {
+            [
                 new EffectiveCapability(
                     AgentCapabilities.Read,
                     new HashSet<CapabilityScope> { CapabilityScope.Company }),
                 new EffectiveCapability(
                     "reports.export",
                     new HashSet<CapabilityScope> { CapabilityScope.Self, CapabilityScope.Company }),
-            });
+            ]);
 
         var context = ResolveContext(membership);
 
-        Assert.Equal(new[] { AgentCapabilities.Read, "reports.export" }, context.Capabilities.Order());
+        Assert.Equal([AgentCapabilities.Read, "reports.export"], context.Capabilities.Order());
     }
 
     private static AgentExecutionContext ResolveContext(MembershipCapabilitySummary? membership = null)
     {
         var resolution = AgentPolicy.EvaluateContext(
-            new ActorAuthorizationSnapshot(new[] { membership ?? AlfaMembership() }),
+            new ActorAuthorizationSnapshot([membership ?? AlfaMembership()]),
             new AgentContextRequest(
                 new ActorContext(Guid.NewGuid(), Guid.NewGuid()),
                 ReadProfile(),
@@ -96,12 +95,11 @@ public sealed class AgentExecutionContextContractTests
             Guid.NewGuid(),
             AlfaCompanyId,
             "Alfa",
-            new[]
-            {
+            [
                 new EffectiveCapability(
                     AgentCapabilities.Read,
                     new HashSet<CapabilityScope> { CapabilityScope.Company }),
-            });
+            ]);
 
     private static AgentTaskProfile ReadProfile()
     {

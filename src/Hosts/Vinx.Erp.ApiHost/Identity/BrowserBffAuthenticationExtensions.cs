@@ -95,10 +95,10 @@ internal static class BrowserBffAuthenticationExtensions
                     },
                 };
             });
-        services.AddAuthorization(options =>
-            options.AddPolicy(
+        services.AddAuthorizationBuilder()
+            .AddPolicy(
                 BrowserSessionPolicyName,
-                policy => policy.RequireAuthenticatedUser().AddRequirements(new BrowserBffSessionRequirement())));
+                policy => policy.RequireAuthenticatedUser().AddRequirements(new BrowserBffSessionRequirement()));
         services.AddSingleton<IAuthorizationHandler, BrowserBffSessionAuthorizationHandler>();
 
         services.AddHttpClient<SupabasePasswordSessionClient>((serviceProvider, client) =>
@@ -175,6 +175,7 @@ internal sealed class BrowserBffSessionAuthorizationHandler
     }
 }
 
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
 internal sealed class BrowserBffAntiforgeryRequiredMetadata(bool cookieAuthenticatedOnly = false)
     : Attribute, IAntiforgeryRequiredMetadata
 {

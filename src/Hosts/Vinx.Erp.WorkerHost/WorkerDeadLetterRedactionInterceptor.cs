@@ -32,7 +32,7 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
     /// Redige por tipo de mensagem: o corpo vira o registro vazio do próprio
     /// tipo e os headers diagnósticos são descartados antes da DLQ.
     /// </summary>
-    internal void RedactEnvelope(Envelope envelope)
+    internal static void RedactEnvelope(Envelope envelope)
     {
         switch (envelope.Message)
         {

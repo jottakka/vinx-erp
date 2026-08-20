@@ -8,6 +8,7 @@ namespace Vinx.Erp.Foundation.UnitTests.ClamAv;
 public sealed class ClamAvDaemonClientTests
 {
     private const int ChunkSize = 64 * 1024;
+    private static readonly int[] expected = [1024, 1024];
 
     [Fact]
     public async Task Version_reply_parses_engine_and_signature_versions()
@@ -143,7 +144,7 @@ public sealed class ClamAvDaemonClientTests
             candidate => candidate.Command == "zINSTREAM", TimeSpan.FromSeconds(5));
         Assert.False(connection.TerminatorSeen);
         Assert.True(connection.ClientAborted);
-        Assert.Equal(new[] { 1024, 1024 }, connection.ChunkSizes);
+        Assert.Equal(expected, connection.ChunkSizes);
         Assert.Equal(2048, connection.TotalBytes);
     }
 
@@ -172,16 +173,10 @@ public sealed class ClamAvDaemonClientTests
     }
 
     /// <summary>Stream de teste que entrega payloads grandes em leituras fixas (para streaming em múltiplos chunks).</summary>
-    private sealed class ChunkedSourceStream : Stream
+    private sealed class ChunkedSourceStream(int totalBytes, int bytesPerRead) : Stream
     {
-        private readonly int bytesPerRead;
-        private long remaining;
-
-        public ChunkedSourceStream(int totalBytes, int bytesPerRead)
-        {
-            this.bytesPerRead = bytesPerRead;
-            remaining = totalBytes;
-        }
+        private readonly int bytesPerRead = bytesPerRead;
+        private long remaining = totalBytes;
 
         public override bool CanRead => true;
 

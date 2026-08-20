@@ -150,7 +150,7 @@ public sealed class AgentRunnerTests
     {
         var profile = TestProfile();
         var selection = profile.ModelSelection!;
-        var (runner, resolver, model) = CreateRunner(
+        var (runner, _, model) = CreateRunner(
             new SequenceContextResolver(SequenceContextResolver.Resolved(AlfaCompanyId)),
             TestAgentModel.Text("Resumo Alfa"),
             profile);
@@ -219,7 +219,7 @@ public sealed class AgentRunnerTests
         timeout ?? TimeSpan.FromSeconds(30),
         turnLimit: 1,
         maxTotalTokens: 8_000,
-        allowedTools: Array.Empty<string>());
+        allowedTools: []);
 
     private static (AgentRunner Runner, SequenceContextResolver Resolver, TestAgentModel Model) CreateRunner(
         SequenceContextResolver resolver,

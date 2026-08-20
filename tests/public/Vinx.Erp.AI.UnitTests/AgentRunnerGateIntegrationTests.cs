@@ -156,7 +156,7 @@ public sealed class AgentRunnerGateIntegrationTests
         TimeSpan.FromSeconds(30),
         TurnLimit: 1,
         MaxTotalTokens: 8_000,
-        AllowedTools: Array.Empty<string>(),
+        AllowedTools: [],
         SourcesRequired: sourcesRequired,
         RequiredOutputFields: requiredOutputFields);
 
@@ -177,9 +177,8 @@ public sealed class AgentRunnerGateIntegrationTests
 
     private static ChatResponse TextWithToolCall(string text, string toolName) => new(new ChatMessage(
         ChatRole.Assistant,
-        new AIContent[]
-        {
+        [
             new TextContent(text),
             new FunctionCallContent("call_1", toolName, new Dictionary<string, object?>()),
-        }));
+        ]));
 }
