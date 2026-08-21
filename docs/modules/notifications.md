@@ -110,9 +110,7 @@ documentos publicam `InboundWhatsAppDocumentReceived` em
 admitidas permanecem `pending` com o estado de resolução fechado — são
 evidência, não fila de retrabalho.
 
-## Inbound extração tipada de fatura (#272 PR3)
-
-Após a quarentena limpa, o mesmo processamento extrai o candidato tipado:
+## Inbound extração tipada de fatura (#272 PR3)Após a quarentena limpa, o mesmo processamento extrai o candidato tipado:
 PDF usa a camada de texto local (`DocumentTextExtractor`); sem camada =
 `no_text_layer`. Um turno único do perfil de texto (`InboundInvoiceExtractor`,
 contrato JSON estrito de 4 chaves, transcrição/legenda como dado rotulado)
@@ -126,6 +124,13 @@ silenciosos e sem arredondamento; needs_review não é falha da mensagem. O
 pre-check `notifications.inbound_document_actor_is_allowed` fecha
 membership/capability antes de qualquer download ou chamada de IA. Sem
 mutação Pagaí e sem resposta automática nesta fatia (PR4 e decisões do #272).
+A integração Pagaí (#272 PR4) é sempre requerida por um ator autenticado:
+`POST /paguai/requests/from-document` lê o candidato por
+`notifications.read_inbound_whatsapp_invoice_candidate` (escopo de membership),
+revalida a gramática do valor e cria o rascunho único por documento
+(`source_inbound_message_id` UNIQUE em `paguai.requests`; idempotente por ator
+com RequestId = id da admissão), com title/description/proofRequirement
+explícitos. Manifesto: `docs/verification/272d-paguai-draft-from-document-test-cases.md`.
 
 ## Inbound documento seguro (#272 PR2)
 

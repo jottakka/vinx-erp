@@ -909,6 +909,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("requester_user_id");
 
+                    b.Property<Guid?>("SourceInboundMessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_inbound_message_id");
+
                     b.Property<string>("State")
                         .IsRequired()
                         .HasColumnType("text")

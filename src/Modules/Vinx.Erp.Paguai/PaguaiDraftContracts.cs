@@ -14,6 +14,19 @@ public sealed record CreateDraftCommand(
     string Currency,
     DateOnly DueDate,
     string BeneficiaryDisplayName,
+    string ProofRequirement,
+    Guid? SourceInboundMessageId = null
+);
+
+/// <summary>
+/// Comando de rascunho a partir de um documento inbound: title/description/proof
+/// são sempre explícitos porque a fatura não os garante.
+/// </summary>
+public sealed record CreateDraftFromDocumentCommand(
+    Guid CompanyId,
+    Guid InboundMessageId,
+    string Title,
+    string Description,
     string ProofRequirement
 );
 

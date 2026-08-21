@@ -79,6 +79,61 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
         };
     }
 
+    [HttpPost("requests/from-document")]
+    [PaguaiAntiforgeryRequiredMetadata]
+    [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
+    [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> CreateFromDocument(
+        [FromBody] CreatePaguaiDraftFromDocumentRequest model,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!IsTrimmed(model.Title) || !IsTrimmed(model.Description))
+        {
+            return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
+        }
+
+        var actor = HttpContext.GetRequiredActorContext();
+        var result = await service.CreateFromInboundDocumentAsync(
+            actor,
+            model.ToCommand(),
+            cancellationToken
+        );
+        return result.State switch
+        {
+            PaguaiDraftState.Created => CreatedAtAction(
+                nameof(Detail),
+                new { id = result.Draft!.Id, companyId = result.Draft.CompanyId },
+                result.Draft
+            ),
+            PaguaiDraftState.Replay => Ok(result.Draft),
+            PaguaiDraftState.Forbidden => ApiControllerError.Error(
+                "capability_denied",
+                StatusCodes.Status403Forbidden
+            ),
+            PaguaiDraftState.Invalid => ApiControllerError.Error(
+                "invalid_request",
+                StatusCodes.Status400BadRequest
+            ),
+            PaguaiDraftState.IdempotencyConflict => ApiControllerError.Error(
+                "idempotency_conflict",
+                StatusCodes.Status409Conflict
+            ),
+            _ => ApiControllerError.Error(
+                "paguai_unavailable",
+                StatusCodes.Status503ServiceUnavailable
+            ),
+        };
+    }
+
     [HttpPost("requests")]
     [PaguaiAntiforgeryRequiredMetadata]
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
