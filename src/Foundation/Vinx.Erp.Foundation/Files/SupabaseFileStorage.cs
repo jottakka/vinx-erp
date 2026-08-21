@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Buffers;
 using System.Text.Json;
 using System.Globalization;
@@ -66,6 +67,32 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
     {
         var inspection = await InspectObjectAsync(providerKey, cancellationToken);
         return inspection.Metadata;
+    }
+
+    public async Task UploadObjectAsync(
+        string providerKey,
+        ReadOnlyMemory<byte> content,
+        string contentType,
+        CancellationToken cancellationToken)
+    {
+        ValidateObjectKey(providerKey);
+        if (content.Length <= 0 || content.Length > DocumentUploadPolicy.MaxSizeBytes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(content));
+        }
+        if (string.IsNullOrWhiteSpace(contentType))
+        {
+            throw new ArgumentException("Content type is required.", nameof(contentType));
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, ObjectPath(string.Empty, providerKey))
+        {
+            Content = new ReadOnlyMemoryContent(content)
+        };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        request.Headers.Add("x-upsert", "false");
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
     }
 
     public async Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken)

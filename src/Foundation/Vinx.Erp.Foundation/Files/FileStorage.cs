@@ -27,6 +27,16 @@ public interface FileStorage
         string providerKey,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Upload server-side do conteúdo completo para o container privado
+    /// (worker com bytes em mãos); a chave permanece imutável após a escrita.
+    /// </summary>
+    Task UploadObjectAsync(
+        string providerKey,
+        ReadOnlyMemory<byte> content,
+        string contentType,
+        CancellationToken cancellationToken);
+
     Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken);
 
     Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken);

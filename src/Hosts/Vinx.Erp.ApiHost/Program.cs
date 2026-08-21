@@ -136,6 +136,10 @@ builder.Host.UseWolverine(options =>
         .PublishMessage<InboundWhatsAppImageReceived>()
         .ToPostgresqlQueue("whatsapp-inbound")
         .UseDurableOutbox();
+    options
+        .PublishMessage<InboundWhatsAppDocumentReceived>()
+        .ToPostgresqlQueue("whatsapp-inbound-documents")
+        .UseDurableOutbox();
 });
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();

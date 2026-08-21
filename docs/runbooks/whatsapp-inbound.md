@@ -36,7 +36,7 @@ falha fechada com `ai_unconfigured`; presente-porém-parcial derruba o boot
 
 | Estado | Significado | Ação |
 | --- | --- | --- |
-| `admitted` | exatamente um usuário/empresa/membership ativa | imagem segue ao processamento; documento aguarda PR2 |
+| `admitted` | exatamente um usuário/empresa/membership ativa | imagem segue ao processamento; documento segue à quarentena (PR2) |
 | `unbound` | nenhum contato do número no tenant | nada a fazer (remetente desconhecido) |
 | `unverified` | contato existe sem `is_validated` | política de vinculação pendente de aprovação |
 | `ambiguous` | número com múltiplas identidades ativas | nunca escolher automaticamente; requires decisão |
@@ -44,6 +44,28 @@ falha fechada com `ai_unconfigured`; presente-porém-parcial derruba o boot
 
 Linhas não admitidas permanecem `pending` com o estado de resolução fechado —
 são evidência durável da decisão, não fila de retrabalho.
+
+## Documento seguro (#272 PR2)
+
+Documento admitido é processado na fila `whatsapp-inbound-documents`:
+download (teto 25 MiB) → allowlist MIME pdf/jpeg/png → parse e teto de 20
+páginas (PDF) → scan ClamAV → upload em quarentena privada → registro atômico
+com re-check de membership/capability (`foundation.files.upload`) e auditoria.
+
+Variáveis adicionais do worker: `SUPABASE_STORAGE_URL` +
+`SUPABASE_STORAGE_SERVICE_ROLE_KEY` (ausentes = `document_storage_unavailable`
+fechado) e `MalwareScanner:ClamAvEndpoint` (ausente = `document_scan_unavailable`
+fechado).
+
+Motivos terminais de documento (`failure_reason`):
+
+| Motivo | Significado | Ação |
+| --- | --- | --- |
+| `media_unavailable` | documento rejeitado/expirado no Graph | usuário reenvia |
+| `document_rejected` | MIME fora da allowlist, bytes acima do teto, PDF inválido/>20 páginas ou malware detectado | usuário reenvia arquivo válido |
+| `document_scan_unavailable` | ClamAV não configurado/indisponível | configurar endpoint e reenviar |
+| `document_storage_unavailable` | Supabase Storage não configurado/indisponível | configurar storage e reenviar |
+| `capability_missing` | remetente sem `foundation.files.upload` ou membership revogada no processamento | revisar papel do remetente |
 
 ## Provisionamento
 

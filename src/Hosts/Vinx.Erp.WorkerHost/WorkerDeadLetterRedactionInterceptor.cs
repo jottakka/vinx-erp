@@ -54,6 +54,15 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
                 );
                 envelope.Headers.Clear();
                 break;
+            case InboundWhatsAppDocumentReceived:
+                var redactedDocument = new InboundWhatsAppDocumentReceived(Guid.Empty);
+                envelope.Message = redactedDocument;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
+                    redactedDocument,
+                    SerializerOptions
+                );
+                envelope.Headers.Clear();
+                break;
             default:
                 var redactedMessage = new OwnerInvitationDeliveryRequested(Guid.Empty);
                 envelope.Message = redactedMessage;
