@@ -1,8 +1,13 @@
 import { z } from "zod";
 import {
+  bffFailure,
+  fetchSameOriginBff,
+  isAbortError,
   isCanonicalUuid,
+  readAntiforgeryTokenBff,
   readCorrelationId,
   readErrorCode,
+  type SameOriginInit,
 } from "../../shared/http/bff-response";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
@@ -20,9 +25,6 @@ const provisionCommandSchema = z
     ownerDisplayName: z.string().trim().min(1).max(200),
     ownerEmail: z.string().trim().min(1).max(320).email(),
   })
-  .strict();
-const antiforgeryResponseSchema = z
-  .object({ requestToken: z.string().min(1) })
   .strict();
 const provisionResponseSchema = z
   .object({
@@ -96,9 +98,6 @@ export type PlatformOrganizationGateway = {
 type FetchResult =
   | { response: Response }
   | { failure: PlatformOrganizationFailureResult };
-type SameOriginRequestInit = RequestInit & {
-  mayHaveCommittedOnAbort?: boolean;
-};
 type Operation = "antiforgery" | "provision";
 
 /**
@@ -110,32 +109,21 @@ export function createPlatformOrganizationClient(
 ): PlatformOrganizationGateway {
   async function fetchSameOrigin(
     path: string,
-    { mayHaveCommittedOnAbort = false, ...init }: SameOriginRequestInit = {},
+    { mayHaveCommittedOnAbort = false, ...init }: SameOriginInit = {},
   ): Promise<FetchResult> {
-    if (init.signal?.aborted) {
-      return { failure: failure("aborted") };
-    }
-
-    try {
-      return {
-        response: await fetchImplementation(path, {
-          ...init,
-          cache: "no-store",
-          credentials: "same-origin",
-          mode: "same-origin",
-          redirect: "error",
-        }),
-      };
-    } catch (reason) {
-      const aborted = isAbort(reason, init.signal);
-      return {
+    return fetchSameOriginBff(
+      fetchImplementation,
+      path,
+      { ...init, mayHaveCommittedOnAbort },
+      (kind, details) => ({
         // Falha de transporte depois do disparo é ambígua mesmo sem abort:
         // o comando pode ter chegado ao servidor.
-        failure: failure(aborted ? "aborted" : "network", {
-          ...(mayHaveCommittedOnAbort ? { mayHaveCommitted: true } : {}),
-        }),
-      };
-    }
+        failure: failure(
+          kind,
+          details.mayHaveCommittedOnAbort ? { mayHaveCommitted: true } : {},
+        ),
+      }),
+    );
   }
 
   async function getAntiforgery(
@@ -143,30 +131,17 @@ export function createPlatformOrganizationClient(
   ): Promise<
     { ok: true; requestToken: string } | PlatformOrganizationFailureResult
   > {
-    const result = await fetchSameOrigin(antiforgeryPath, {
-      headers: { Accept: "application/json" },
-      method: "GET",
+    return readAntiforgeryTokenBff(
+      async (init) => {
+        const result = await fetchSameOrigin(antiforgeryPath, init);
+        return "response" in result
+          ? { response: result.response }
+          : result.failure;
+      },
+      (kind, status) => failure(kind, status === undefined ? {} : { status }),
+      (response) => normalizeFailure(response, "antiforgery", signal),
       signal,
-    });
-    if ("failure" in result) {
-      return result.failure;
-    }
-    if (!result.response.ok) {
-      return normalizeFailure(result.response, "antiforgery", signal);
-    }
-
-    try {
-      const parsed = antiforgeryResponseSchema.safeParse(
-        await result.response.json(),
-      );
-      return parsed.success
-        ? { ok: true, requestToken: parsed.data.requestToken }
-        : failure("protocol", { status: result.response.status });
-    } catch (reason) {
-      return failure(isAbort(reason, signal) ? "aborted" : "protocol", {
-        status: result.response.status,
-      });
-    }
+    );
   }
 
   async function provision(
@@ -224,7 +199,7 @@ export function createPlatformOrganizationClient(
           }
         : { ok: true, state, invitationStatus: parsed.data.invitationStatus };
     } catch (reason) {
-      return isAbort(reason, signal)
+      return isAbortError(reason, signal)
         ? failure("aborted", {
             correlationId,
             mayHaveCommitted: true,
@@ -299,25 +274,5 @@ function failure(
   kind: PlatformOrganizationFailure["kind"],
   options: Omit<PlatformOrganizationFailure, "kind"> = {},
 ): PlatformOrganizationFailureResult {
-  return {
-    ok: false,
-    error: {
-      kind,
-      ...(options.status === undefined ? {} : { status: options.status }),
-      ...(options.correlationId === undefined
-        ? {}
-        : { correlationId: options.correlationId }),
-      ...(options.mayHaveCommitted ? { mayHaveCommitted: true as const } : {}),
-    },
-  };
-}
-
-function isAbort(
-  reason: unknown,
-  signal: AbortSignal | null | undefined,
-): boolean {
-  return (
-    signal?.aborted === true ||
-    (reason instanceof Error && reason.name === "AbortError")
-  );
+  return bffFailure<PlatformOrganizationFailure>(kind, options);
 }

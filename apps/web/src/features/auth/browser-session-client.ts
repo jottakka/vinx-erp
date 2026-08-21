@@ -1,5 +1,8 @@
 import { z } from "zod";
 import {
+  bffFailure,
+  fetchSameOriginBff,
+  readAntiforgeryTokenBff,
   readCorrelationId,
   readErrorCode,
 } from "../../shared/http/bff-response";
@@ -13,9 +16,6 @@ const credentialsSchema = z
     email: z.string().trim().min(1).max(320),
     password: z.string().min(1).max(1024),
   })
-  .strict();
-const antiforgeryResponseSchema = z
-  .object({ requestToken: z.string().min(1) })
   .strict();
 const documentedErrorCodeSchema = z.enum([
   "identity_gate_unavailable",
@@ -86,53 +86,25 @@ export function createBrowserSessionClient(
     if (path !== antiforgeryPath && path !== browserSessionPath) {
       return { failure: failure("protocol") };
     }
-    if (init.signal?.aborted) {
-      return { failure: failure("aborted") };
-    }
-
-    try {
-      return {
-        response: await fetchImplementation(path, {
-          ...init,
-          cache: "no-store",
-          credentials: "same-origin",
-          mode: "same-origin",
-          redirect: "error",
-        }),
-      };
-    } catch (reason) {
-      return {
-        failure: failure(isAbort(reason, init.signal) ? "aborted" : "network"),
-      };
-    }
+    return fetchSameOriginBff(fetchImplementation, path, init, (kind) => ({
+      failure: failure(kind),
+    }));
   }
 
   async function getAntiforgery(
     signal?: AbortSignal,
   ): Promise<AntiforgeryResult> {
-    const result = await fetchSameOrigin(antiforgeryPath, {
-      headers: { Accept: "application/json" },
-      method: "GET",
+    return readAntiforgeryTokenBff(
+      async (init) => {
+        const result = await fetchSameOrigin(antiforgeryPath, init);
+        return "response" in result
+          ? { response: result.response }
+          : result.failure;
+      },
+      (kind) => failure(kind),
+      (response) => normalizeFailure(response, signal),
       signal,
-    });
-    if ("failure" in result) {
-      return result.failure;
-    }
-
-    if (!result.response.ok) {
-      return normalizeFailure(result.response, signal);
-    }
-
-    try {
-      const parsed = antiforgeryResponseSchema.safeParse(
-        await result.response.json(),
-      );
-      return parsed.success
-        ? { ok: true, requestToken: parsed.data.requestToken }
-        : failure("protocol");
-    } catch (reason) {
-      return failure(isAbort(reason, signal) ? "aborted" : "protocol");
-    }
+    );
   }
 
   async function mutate(
@@ -250,25 +222,5 @@ function failure(
   kind: BrowserSessionErrorKind,
   options: Omit<BrowserSessionFailure, "kind"> = {},
 ): BrowserSessionFailureResult {
-  return {
-    ok: false,
-    error: {
-      kind,
-      ...(options.status === undefined ? {} : { status: options.status }),
-      ...(options.code === undefined ? {} : { code: options.code }),
-      ...(options.correlationId === undefined
-        ? {}
-        : { correlationId: options.correlationId }),
-    },
-  };
-}
-
-function isAbort(
-  reason: unknown,
-  signal: AbortSignal | null | undefined,
-): boolean {
-  return (
-    signal?.aborted === true ||
-    (reason instanceof Error && reason.name === "AbortError")
-  );
+  return bffFailure<BrowserSessionFailure>(kind, options);
 }

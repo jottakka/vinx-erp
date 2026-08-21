@@ -1,5 +1,8 @@
 import { z } from "zod";
 import {
+  bffFailure,
+  fetchSameOriginBff,
+  isAbortError,
   readCorrelationId,
   readErrorCode,
 } from "../../shared/http/bff-response";
@@ -71,23 +74,17 @@ export function createFoundationBootstrapClient(
   async function load(
     signal?: AbortSignal,
   ): Promise<FoundationBootstrapLoadResult> {
-    if (signal?.aborted) {
-      return failure("aborted");
+    const result = await fetchSameOriginBff(
+      fetchImplementation,
+      foundationBootstrapPath,
+      { method: "GET", signal },
+      (kind) => ({ failure: failure(kind) }),
+    );
+    if ("failure" in result) {
+      return result.failure;
     }
 
-    let response: Response;
-    try {
-      response = await fetchImplementation(foundationBootstrapPath, {
-        cache: "no-store",
-        credentials: "same-origin",
-        method: "GET",
-        mode: "same-origin",
-        redirect: "error",
-        signal,
-      });
-    } catch (reason) {
-      return failure(isAbort(reason, signal) ? "aborted" : "network");
-    }
+    const response = result.response;
 
     const correlationId = readCorrelationId(response, { allowEmpty: true });
     if (response.status === 401) {
@@ -122,7 +119,7 @@ export function createFoundationBootstrapClient(
         ? { ok: true, snapshot, correlationId }
         : { ok: true, snapshot };
     } catch (reason) {
-      return failure(isAbort(reason, signal) ? "aborted" : "protocol", {
+      return failure(isAbortError(reason, signal) ? "aborted" : "protocol", {
         correlationId,
         status: response.status,
       });
@@ -136,25 +133,5 @@ function failure(
   kind: FoundationBootstrapFailure["kind"],
   options: Omit<FoundationBootstrapFailure, "kind"> = {},
 ): FoundationBootstrapLoadResult {
-  return {
-    ok: false,
-    error: {
-      kind,
-      ...(options.status === undefined ? {} : { status: options.status }),
-      ...(options.code === undefined ? {} : { code: options.code }),
-      ...(options.correlationId === undefined
-        ? {}
-        : { correlationId: options.correlationId }),
-    },
-  };
-}
-
-function isAbort(
-  reason: unknown,
-  signal: AbortSignal | null | undefined,
-): boolean {
-  return (
-    signal?.aborted === true ||
-    (reason instanceof Error && reason.name === "AbortError")
-  );
+  return bffFailure<FoundationBootstrapFailure>(kind, options);
 }
