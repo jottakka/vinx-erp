@@ -13,6 +13,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Vinx.Erp.ApiHost;
 using Vinx.Erp.ApiHost.Agent;
+using Vinx.Erp.ApiHost.Contracts;
 using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.ApiHost.Models;
@@ -20,6 +21,7 @@ using Vinx.Erp.ApiHost.OpenApi;
 using Vinx.Erp.Atendimento;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
+using Vinx.Erp.Foundation.Configuration;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Bootstrap;
 using Vinx.Erp.Foundation.Domain;
@@ -42,7 +44,7 @@ var builder = WebApplication.CreateBuilder(args);
 const string ProtectedRateLimitPolicy = ApiConstants.ProtectedRateLimitPolicy;
 const string BrowserSessionLoginRateLimitPolicy = "browser-session-login";
 const int MaximumEmployeeDirectoryRequestBodyBytes = 8 * 1024;
-builder.Logging.AddVinxLogging();
+builder.AddVinxHostDefaults();
 builder
     .Services.AddOptions<FoundationDatabaseOptions>()
     .Bind(builder.Configuration)
@@ -79,15 +81,8 @@ builder
     .Bind(builder.Configuration)
     .Validate(
         options =>
-            options.BaseUri is { IsAbsoluteUri: true } baseUri
-            && (
-                baseUri.Scheme == Uri.UriSchemeHttps
-                || (
-                    builder.Environment.IsDevelopment()
-                    && baseUri.Scheme == Uri.UriSchemeHttp
-                    && baseUri.IsLoopback
-                )
-            ),
+            options.BaseUri is { } baseUri
+            && AllowedUriPolicy.IsAllowedHttp(baseUri.ToString(), builder.Environment),
         "Supabase Storage URL must use HTTPS, except loopback HTTP in Development."
     )
     .Validate(
@@ -244,7 +239,6 @@ builder.Services.AddScoped<FileStorage>(serviceProvider =>
 );
 builder.Services.AddSingleton<AuthorizationTelemetry>();
 builder.Services.AddProblemDetails();
-builder.Services.AddHealthChecks();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -771,23 +765,13 @@ internal static class PlatformOrganizationHttpContract
     )
     {
         command = null!;
-        if (body.ValueKind is not System.Text.Json.JsonValueKind.Object)
+        if (!StrictJsonFieldSet.TryReadExact(body, Fields, out var values))
         {
             return false;
         }
 
-        var values = new Dictionary<string, System.Text.Json.JsonElement>(StringComparer.Ordinal);
-        foreach (var property in body.EnumerateObject())
-        {
-            if (!Fields.Contains(property.Name) || !values.TryAdd(property.Name, property.Value))
-            {
-                return false;
-            }
-        }
-
         if (
-            values.Count != Fields.Count
-            || !values["requestId"].TryGetGuid(out var requestId)
+            !values["requestId"].TryGetGuid(out var requestId)
             || values["groupName"].ValueKind is not System.Text.Json.JsonValueKind.String
             || values["companyName"].ValueKind is not System.Text.Json.JsonValueKind.String
             || values["ownerDisplayName"].ValueKind is not System.Text.Json.JsonValueKind.String
@@ -824,15 +808,10 @@ internal static class EmployeeDirectoryHttpContract
     )
     {
         command = null!;
-        if (body.ValueKind is not System.Text.Json.JsonValueKind.Object)
+        if (!StrictJsonFieldSet.TryReadExact(body, Fields, out var values))
             return false;
-        var values = new Dictionary<string, System.Text.Json.JsonElement>(StringComparer.Ordinal);
-        foreach (var property in body.EnumerateObject())
-            if (!Fields.Contains(property.Name) || !values.TryAdd(property.Name, property.Value))
-                return false;
         if (
-            values.Count != Fields.Count
-            || !values["requestId"].TryGetGuid(out var requestId)
+            !values["requestId"].TryGetGuid(out var requestId)
             || !values["companyId"].TryGetGuid(out var companyId)
             || values["displayName"].ValueKind is not System.Text.Json.JsonValueKind.String
             || values["email"].ValueKind is not System.Text.Json.JsonValueKind.String

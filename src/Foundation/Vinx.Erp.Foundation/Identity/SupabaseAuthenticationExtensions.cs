@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Vinx.Erp.Foundation.Configuration;
 
 namespace Vinx.Erp.Foundation.Identity;
 
@@ -35,7 +36,7 @@ public static class SupabaseAuthenticationExtensions
         services.AddOptions<SupabaseAuthOptions>()
             .Bind(configuration)
             .Validate(
-                options => IsAllowedProviderUri(options.Issuer, environment),
+                options => AllowedUriPolicy.IsAllowedHttp(options.Issuer, environment),
                 "Supabase Auth issuer must use HTTPS, except loopback HTTP in Development.")
             .Validate(options => !string.IsNullOrWhiteSpace(options.Audience), "Supabase Auth audience must be configured.")
             .ValidateOnStart();
@@ -60,9 +61,4 @@ public static class SupabaseAuthenticationExtensions
         services.AddAuthorization();
         return services;
     }
-
-    private static bool IsAllowedProviderUri(string value, IHostEnvironment environment) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri)
-        && (uri.Scheme == Uri.UriSchemeHttps
-            || (environment.IsDevelopment() && uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback));
 }

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Vinx.Erp.Foundation.Configuration;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
@@ -17,7 +18,7 @@ using Wolverine.Persistence.Durability;
 using Wolverine.Postgresql;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Logging.AddVinxLogging();
+builder.AddVinxHostDefaults();
 builder
     .Services.AddOptions<WorkerDatabaseOptions>()
     .Bind(builder.Configuration)
@@ -30,7 +31,7 @@ builder
     .Services.AddOptions<SupabaseAuthOptions>()
     .Bind(builder.Configuration)
     .Validate(
-        options => IsAllowedSupabaseUri(options.Issuer, builder.Environment),
+        options => AllowedUriPolicy.IsAllowedHttp(options.Issuer, builder.Environment),
         "Supabase Auth issuer is invalid."
     )
     .Validate(
@@ -69,7 +70,7 @@ builder
         "Supabase Admin service role key must be configured."
     )
     .Validate(
-        options => IsAllowedSupabaseUri(options.InviteRedirectUrl, builder.Environment),
+        options => AllowedUriPolicy.IsAllowedHttp(options.InviteRedirectUrl, builder.Environment),
         "Supabase invitation redirect URL is invalid."
     )
     .Validate(
@@ -104,7 +105,14 @@ builder.Services.AddSingleton(serviceProvider =>
 var workerConnectionString = builder.Configuration[
     WorkerDatabaseOptions.ConnectionStringConfigurationKey
 ];
-var workerDataSource = NpgsqlDataSource.Create(workerConnectionString ?? string.Empty);
+// Fail-fast explícito antes do fallback com string vazia: a validação
+// on-start exige o mesmo valor, mas aqui a falha ocorre na composição.
+if (string.IsNullOrWhiteSpace(workerConnectionString))
+{
+    throw new InvalidOperationException("Worker database connection must be configured.");
+}
+
+var workerDataSource = NpgsqlDataSource.Create(workerConnectionString);
 builder.Services.AddSingleton(workerDataSource);
 builder.Services.AddDbContext<FoundationDbContext>(
     (serviceProvider, options) =>
@@ -218,8 +226,7 @@ builder.Host.UseWolverine(options =>
     options.ListenToPostgresqlQueue("notification-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound").UseDurableInbox();
 });
-builder.Services.AddOpenTelemetry();
-builder.Services.AddHealthChecks();
+
 
 var app = builder.Build();
 app.MapHealthChecks("/health");
@@ -230,15 +237,6 @@ if (args.FirstOrDefault() is "db-apply" or "db-assert")
 
 app.Run();
 return 0;
-
-static bool IsAllowedSupabaseUri(string value, IHostEnvironment environment) =>
-    Uri.TryCreate(value, UriKind.Absolute, out var uri)
-    && string.IsNullOrEmpty(uri.UserInfo)
-    && string.IsNullOrEmpty(uri.Fragment)
-    && (
-        uri.Scheme == Uri.UriSchemeHttps
-        || (environment.IsDevelopment() && uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)
-    );
 
 
 internal sealed class WorkerDatabaseOptions

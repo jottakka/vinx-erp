@@ -9,9 +9,7 @@ using Vinx.Erp.McpHost;
 
 var builder = WebApplication.CreateBuilder(args);
 const string McpRateLimitPolicy = "mcp";
-builder.Logging.AddVinxLogging();
-builder.Services.AddOpenTelemetry();
-builder.Services.AddHealthChecks();
+builder.AddVinxHostDefaults();
 builder.Services.AddSupabaseJwtAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddRateLimiter(options =>
 {
