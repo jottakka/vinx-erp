@@ -83,7 +83,9 @@ versionado + defaults fracos do `config.toml`) como PRs empilhados `codex/*`, um
 por responsabilidade, seguindo `AGENTS.md` (fatia vertical única revisável,
 <=25 arquivos, alvo 800 linhas manuais).
 
-## Resolução aplicada nesta worktree (PR draft)
+## Resolução aplicada nesta worktree
+
+PR draft: https://github.com/jottakka/vinx-erp/pull/277
 
 Cada ponto do handoff foi tratado como segue:
 
