@@ -4,21 +4,25 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Vinx.Erp.AI.DocumentContext;
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Persistence;
 
 namespace Vinx.Erp.Notifications.Providers.Meta;
 
 /// <summary>
-/// Fatia de documento seguro (#272 PR2): baixa o documento admitido da Meta,
-/// valida MIME/bytes/páginas, faz o scan antimalware e armazena em quarentena
-/// privada antes de registrar a admissão durável — sem OCR, sem Pagaí e sem
-/// resposta automática. Falha fechada com motivos estáveis.
+/// Fatia de documento seguro (#272 PR2) com extração tipada (#272 PR3):
+/// baixa o documento admitido da Meta, valida MIME/bytes/páginas, faz o scan
+/// antimalware, armazena em quarentena privada e extrai o candidato tipado
+/// de fatura (`candidate` ou `needs_review`, sem defaults silenciosos, sem
+/// arredondamento e sem mutação Pagaí) antes de registrar a admissão
+/// durável. Sem resposta automática. Falha fechada com motivos estáveis.
 /// </summary>
 public sealed class InboundWhatsAppDocumentService(
     FoundationDbContext database,
     IHttpClientFactory httpClientFactory,
     MetaWhatsAppOptions metaOptions,
+    InboundWhatsAppAiOptions aiOptions,
     FileStorage storage,
     IMalwareScanner malwareScanner,
     IOptions<MalwareScannerOptions> malwareScannerOptions,
@@ -29,6 +33,10 @@ public sealed class InboundWhatsAppDocumentService(
     private const string Module = "notifications";
 
     private static readonly DocumentContextLimits PdfLimits = new();
+    private static readonly System.Text.RegularExpressions.Regex PaguaiAmountGrammar = new(
+        "^[0-9]+(\\.[0-9]+)?$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant
+    );
     private static readonly HashSet<string> AllowedMimeTypes = new(
         ["application/pdf", "image/jpeg", "image/png"],
         StringComparer.Ordinal
@@ -39,6 +47,14 @@ public sealed class InboundWhatsAppDocumentService(
         var claim = await ClaimAsync(inboundMessageId, cancellationToken);
         if (claim is null)
         {
+            return;
+        }
+
+        if (!await ActorIsAllowedAsync(inboundMessageId, cancellationToken))
+        {
+            // Membership revogada ou capability ausente já no início: nada é
+            // baixado, escaneado ou extraído para este remetente.
+            await FailLoggedAsync(inboundMessageId, "capability_missing");
             return;
         }
 
@@ -102,6 +118,11 @@ public sealed class InboundWhatsAppDocumentService(
             );
         }
 
+        // Extração tipada (#272 PR3): needs_review não é falha da mensagem —
+        // o documento admitido carrega o resultado fechado da extração.
+        var candidate = await ExtractCandidateAsync(media, claim.Caption, cancellationToken);
+        await RecordCandidateAsync(inboundMessageId, candidate, cancellationToken);
+
         var completion = await CompleteAsync(
             inboundMessageId,
             media.MediaType,
@@ -121,14 +142,18 @@ public sealed class InboundWhatsAppDocumentService(
         }
     }
 
-    private sealed record DocumentClaim(string MediaId, Guid ResolvedCompanyId);
+    private sealed record DocumentClaim(
+        string MediaId,
+        string? Caption,
+        Guid ResolvedCompanyId
+    );
 
     private async Task<DocumentClaim?> ClaimAsync(Guid inboundMessageId, CancellationToken cancellationToken)
     {
         var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT status, claimed, media_id, resolved_company_id FROM "
+            "SELECT status, claimed, media_id, caption, resolved_company_id FROM "
             + "notifications.claim_inbound_whatsapp_document(@inbound_id)";
         var inboundId = command.CreateParameter();
         inboundId.ParameterName = "inbound_id";
@@ -152,7 +177,11 @@ public sealed class InboundWhatsAppDocumentService(
                 return null;
             }
 
-            return new DocumentClaim(reader.GetString(2), reader.GetGuid(3));
+            return new DocumentClaim(
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetGuid(4)
+            );
         }
         catch (PostgresException exception)
             when (
@@ -293,6 +322,169 @@ public sealed class InboundWhatsAppDocumentService(
         AddParameter(command, "inbound_id", inboundMessageId);
         AddParameter(command, "failure_reason", reason);
         await command.ExecuteNonQueryAsync(CancellationToken.None);
+    }
+
+    private sealed record InvoiceCandidate(
+        string State,
+        string? BeneficiaryName,
+        string? Amount,
+        string? DueDate,
+        string? DocumentNumber,
+        string? NeedsReviewReason
+    );
+
+    /// <summary>
+    /// Extração fechada: PDF usa a camada de texto local (sem camada =
+    /// needs_review); imagem passa pelo OCR de visão. Sem perfis de IA o
+    /// resultado é needs_review — o documento permanece admitido.
+    /// </summary>
+    private async Task<InvoiceCandidate> ExtractCandidateAsync(
+        MetaWhatsAppMedia media,
+        string? caption,
+        CancellationToken cancellationToken
+    )
+    {
+        string? text;
+        if (media.MediaType == "application/pdf")
+        {
+            using var stream = new MemoryStream(media.Bytes);
+            var pages = DocumentTextExtractor.Extract(stream, PdfLimits, cancellationToken);
+            text = string.Join(
+                '\n',
+                pages.Where(page => page.HasTextLayer && page.Text.Length > 0).Select(page => page.Text)
+            );
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return NeedsReview("no_text_layer");
+            }
+        }
+        else
+        {
+            if (!aiOptions.IsConfigured)
+            {
+                return NeedsReview("extraction_unavailable");
+            }
+
+            var limits = aiOptions.CreateDocumentLimits();
+            var canonical = ImageCanonicalizer.Canonicalize(media.Bytes, limits);
+            var vision = new DocumentVisionOcr(
+                new OpenAiCompatibleChatClient(
+                    aiOptions.Vision,
+                    httpClientFactory.CreateClient(InboundWhatsAppInteractionService.VisionHttpClientName)
+                )
+            );
+            var page = await vision.TranscribePageAsync(canonical.Bytes, canonical.MediaType, cancellationToken);
+            text = page.Text;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return NeedsReview("no_text_layer");
+            }
+        }
+
+        if (!aiOptions.IsConfigured)
+        {
+            return NeedsReview("extraction_unavailable");
+        }
+
+        var extractor = new InboundInvoiceExtractor(
+            new OpenAiCompatibleChatClient(
+                aiOptions.Text,
+                httpClientFactory.CreateClient(InboundWhatsAppInteractionService.TextHttpClientName)
+            )
+        );
+        ExtractedInvoiceData data;
+        try
+        {
+            data = await extractor.ExtractAsync(text!, caption, cancellationToken);
+        }
+        catch (InboundWhatsAppPermanentException)
+        {
+            return NeedsReview("extraction_unavailable");
+        }
+
+        return CloseCandidate(data);
+
+        InvoiceCandidate NeedsReview(string reason) =>
+            new("needs_review", null, null, null, null, reason);
+    }
+
+    private static InvoiceCandidate CloseCandidate(ExtractedInvoiceData data)
+    {
+        var amount = data.Amount is { Length: > 0 } ? data.Amount.Trim() : null;
+        var beneficiary = data.BeneficiaryName is { Length: > 0 } ? data.BeneficiaryName.Trim() : null;
+        var dueDate = data.DueDate is { Length: > 0 } ? data.DueDate.Trim() : null;
+
+        // Gramática decimal do Pagaí como texto: sem símbolo, sem sinal e sem
+        // arredondamento — valor fora da gramática vira revisão, nunca ajuste.
+        if (amount is null)
+        {
+            return new InvoiceCandidate("needs_review", null, null, null, null, "missing_amount");
+        }
+
+        if (!PaguaiAmountGrammar.IsMatch(amount))
+        {
+            return new InvoiceCandidate("needs_review", null, null, null, null, "invalid_amount");
+        }
+
+        if (beneficiary is null)
+        {
+            return new InvoiceCandidate("needs_review", null, null, null, null, "missing_beneficiary");
+        }
+
+        if (dueDate is null || !DateOnly.TryParseExact(dueDate, "yyyy-MM-dd", out _))
+        {
+            return new InvoiceCandidate("needs_review", null, null, null, null, "missing_due_date");
+        }
+
+        var documentNumber = data.DocumentNumber is { Length: > 0 } ? data.DocumentNumber.Trim() : null;
+        return new InvoiceCandidate("candidate", beneficiary, amount, dueDate, documentNumber, null);
+    }
+
+    private async Task RecordCandidateAsync(
+        Guid inboundMessageId,
+        InvoiceCandidate candidate,
+        CancellationToken cancellationToken
+    )
+    {
+        var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT notifications.record_inbound_whatsapp_invoice_candidate("
+            + "@inbound_id, @state, @beneficiary_name, @amount, @currency, @due_date, "
+            + "@document_number, @needs_review_reason)";
+        AddParameter(command, "inbound_id", inboundMessageId);
+        AddParameter(command, "state", candidate.State);
+        AddParameter(command, "beneficiary_name", candidate.BeneficiaryName is null ? DBNull.Value : candidate.BeneficiaryName);
+        AddParameter(command, "amount", candidate.Amount is null ? DBNull.Value : candidate.Amount);
+        AddParameter(command, "currency", candidate.Amount is null ? DBNull.Value : "BRL");
+        AddParameter(
+            command,
+            "due_date",
+            DateOnly.TryParseExact(candidate.DueDate, "yyyy-MM-dd", out var parsed)
+                ? parsed
+                : DBNull.Value
+        );
+        AddParameter(
+            command,
+            "document_number",
+            candidate.DocumentNumber is null ? DBNull.Value : candidate.DocumentNumber
+        );
+        AddParameter(
+            command,
+            "needs_review_reason",
+            candidate.NeedsReviewReason is null ? DBNull.Value : candidate.NeedsReviewReason
+        );
+        await command.ExecuteScalarAsync(cancellationToken);
+    }
+
+    private async Task<bool> ActorIsAllowedAsync(Guid inboundMessageId, CancellationToken cancellationToken)
+    {
+        var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT notifications.inbound_document_actor_is_allowed(@inbound_id)";
+        AddParameter(command, "inbound_id", inboundMessageId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 
     private async Task<System.Data.Common.DbConnection> OpenConnectionAsync(

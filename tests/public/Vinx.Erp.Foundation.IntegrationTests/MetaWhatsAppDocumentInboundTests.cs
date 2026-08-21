@@ -44,7 +44,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
         var seed = await SeedAdmittedSenderAsync(factory);
         await SeedFilesUploadCapabilityAsync(factory, seed.CompanyId, seed.RecipientUserId);
         var pdf = MinimalPdf.OnePage("RECIBO 250 REAIS");
-        var storage = new RecordingFileStorage();
+        var storage = new InMemoryFileStorage();
         var meta = new FakeInboundMetaHandler();
         meta.AddMedia("media.doc.q1", pdf, "application/pdf");
         using var client = factory.CreateClient();
@@ -87,7 +87,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var seed = await SeedAdmittedSenderAsync(factory);
         await SeedFilesUploadCapabilityAsync(factory, seed.CompanyId, seed.RecipientUserId);
-        var storage = new RecordingFileStorage();
+        var storage = new InMemoryFileStorage();
         var meta = new FakeInboundMetaHandler();
         meta.AddMedia("media.doc.txt", "not-a-pdf"u8.ToArray(), "text/plain");
         using var client = factory.CreateClient();
@@ -130,7 +130,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
         await using var worker = new NotificationWorkerHostFactory(
             factory.Fixture.WorkerConnectionString,
             metaGraphHandler: meta,
-            testFileStorage: new RecordingFileStorage(),
+            testFileStorage: new InMemoryFileStorage(),
             testMalwareScanner: new ControlledVerdictScanner(MalwareScanStatus.Clean)
         );
         using var _ = worker.CreateClient();
@@ -150,7 +150,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var seed = await SeedAdmittedSenderAsync(factory);
         await SeedFilesUploadCapabilityAsync(factory, seed.CompanyId, seed.RecipientUserId);
-        var storage = new RecordingFileStorage();
+        var storage = new InMemoryFileStorage();
         var meta = new FakeInboundMetaHandler();
         meta.AddMedia("media.doc.mal", MinimalPdf.OnePage("x"), "application/pdf");
         using var client = factory.CreateClient();
@@ -192,7 +192,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
         await using var worker = new NotificationWorkerHostFactory(
             factory.Fixture.WorkerConnectionString,
             metaGraphHandler: meta,
-            testFileStorage: new RecordingFileStorage(),
+            testFileStorage: new InMemoryFileStorage(),
             testMalwareScanner: new ControlledVerdictScanner(MalwareScanStatus.Unavailable)
         );
         using var _ = worker.CreateClient();
@@ -250,7 +250,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
         await using var worker = new NotificationWorkerHostFactory(
             factory.Fixture.WorkerConnectionString,
             metaGraphHandler: meta,
-            testFileStorage: new RecordingFileStorage(),
+            testFileStorage: new InMemoryFileStorage(),
             testMalwareScanner: new ControlledVerdictScanner(MalwareScanStatus.Clean)
         );
         using var _ = worker.CreateClient();
@@ -271,7 +271,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var seed = await SeedAdmittedSenderAsync(factory);
         await SeedFilesUploadCapabilityAsync(factory, seed.CompanyId, seed.RecipientUserId);
-        var storage = new RecordingFileStorage();
+        var storage = new InMemoryFileStorage();
         var meta = new FakeInboundMetaHandler();
         meta.AddMedia("media.doc.once", MinimalPdf.OnePage("x"), "application/pdf");
         using var client = factory.CreateClient();
@@ -359,7 +359,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
         return seed;
     }
 
-    private static async Task SeedFilesUploadCapabilityAsync(
+    internal static async Task SeedFilesUploadCapabilityAsync(
         FoundationApiFactory factory,
         Guid companyId,
         Guid userId
@@ -523,6 +523,8 @@ public sealed class MetaWhatsAppDocumentInboundTests
         $"sha256:{Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()}";
 
     /// <summary>PDF mínimo válido com camada de texto (parseável pelo PdfPig).</summary>
+    internal static byte[] PdfOnePage(string text) => MinimalPdf.OnePage(text);
+
     private static class MinimalPdf
     {
         public static byte[] OnePage(string text)
@@ -572,9 +574,9 @@ public sealed class MetaWhatsAppDocumentInboundTests
         }
     }
 
-    private sealed record UploadedObject(string Key, byte[] Content, string ContentType);
+    internal sealed record UploadedObject(string Key, byte[] Content, string ContentType);
 
-    private sealed class RecordingFileStorage : FileStorage
+    internal sealed class InMemoryFileStorage : FileStorage
     {
         private readonly Lock _gate = new();
         private readonly List<UploadedObject> _uploaded = [];
@@ -640,7 +642,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
             throw new NotSupportedException();
     }
 
-    private sealed class ControlledVerdictScanner(MalwareScanStatus status) : IMalwareScanner
+    internal class ControlledVerdictScanner(MalwareScanStatus status) : IMalwareScanner
     {
         public Task<MalwareScanVerdict> ScanAsync(
             MalwareScanRequest request,
@@ -658,4 +660,6 @@ public sealed class MetaWhatsAppDocumentInboundTests
                 )
             );
     }
+
+    internal sealed class CleanScanner() : ControlledVerdictScanner(MalwareScanStatus.Clean);
 }

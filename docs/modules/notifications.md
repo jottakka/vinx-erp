@@ -110,6 +110,23 @@ documentos publicam `InboundWhatsAppDocumentReceived` em
 admitidas permanecem `pending` com o estado de resolução fechado — são
 evidência, não fila de retrabalho.
 
+## Inbound extração tipada de fatura (#272 PR3)
+
+Após a quarentena limpa, o mesmo processamento extrai o candidato tipado:
+PDF usa a camada de texto local (`DocumentTextExtractor`); sem camada =
+`no_text_layer`. Um turno único do perfil de texto (`InboundInvoiceExtractor`,
+contrato JSON estrito de 4 chaves, transcrição/legenda como dado rotulado)
+produz `ExtractedInvoiceData` e o fechamento determinístico em
+`notifications.record_inbound_whatsapp_invoice_candidate` grava
+`candidate` (beneficiário + valor como texto da gramática decimal do Pagaí +
+BRL + vencimento + número opcionais) ou `needs_review` com motivo estável
+(`missing_amount`, `invalid_amount`, `missing_beneficiary`,
+`missing_due_date`, `no_text_layer`, `extraction_unavailable`). Sem defaults
+silenciosos e sem arredondamento; needs_review não é falha da mensagem. O
+pre-check `notifications.inbound_document_actor_is_allowed` fecha
+membership/capability antes de qualquer download ou chamada de IA. Sem
+mutação Pagaí e sem resposta automática nesta fatia (PR4 e decisões do #272).
+
 ## Inbound documento seguro (#272 PR2)
 
 `Providers/Meta/InboundWhatsAppDocumentService` processa a fila
