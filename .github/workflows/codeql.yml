@@ -1,12 +1,21 @@
 name: CodeQL analysis
 
+# CodeQL em repositório privado exige GitHub Advanced Security (ou Code
+# Security) habilitado, e o job nem inicia com o spending limit de Actions
+# esgotado (anotação do check: "recent account payments have failed or your
+# spending limit needs to be increased"). Por isso não disparamos em
+# pull_request: sem GHAS/licenciamento o job falharia em todo PR com status
+# vermelho garantido. Reabilitar o trigger de PR quando ambos estiverem
+# resolvidos em Settings → Code security e Billing & plans — e, antes de
+# confiar em push/schedule, validar as duas linguagens com um smoke run
+# manual (workflow_dispatch): a leg csharp/autobuild ainda não rodou neste
+# repositório.
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   schedule:
     - cron: "30 1 * * 3"
+  workflow_dispatch:
 
 permissions:
   contents: read

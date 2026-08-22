@@ -119,11 +119,21 @@ Cada ponto do handoff foi tratado como segue:
    Supabase continua funcionando), `enable_confirmations=true` (e-mails caem
    no Inbucket local) e `secure_password_change=true`. **Produção fora deste
    repositório deve espelhar os mesmos valores.**
-7. **CI** — novos `.github/workflows/codeql.yml` (C# + JS/TS, agendado) e
-   `.github/dependabot.yml` (nuget, npm e github-actions, agrupados e semanais);
-   `private-quality.yml` alinhado às actions v5. **Secret scanning**: habilitar
-   exige GitHub Advanced Security neste repositório privado (a API retornou 422
-   "not available"); ação do proprietário em Settings → Code security.
+7. **CI** — novos `.github/workflows/codeql.yml` (C# + JS/TS; dispara em
+   push para `main`, agendamento semanal e `workflow_dispatch` — **não** em
+   `pull_request`: ver abaixo) e `.github/dependabot.yml` (nuget, npm e
+   github-actions, agrupados e semanais); `private-quality.yml` alinhado às
+   actions v5. **Secret scanning**: habilitar exige GitHub Advanced Security
+   neste repositório privado (a API retornou 422 "not available"); ação do
+   proprietário em Settings → Code security.
+   **Estado real da CI (verificado 2026-08-22):** todos os workflows falham
+   ao iniciar com a anotação "The job was not started because recent account
+   payments have failed or your spending limit needs to be increased" —
+   Actions está indisponível no repositório desde ~2026-08-09 (último run
+   verde 2026-08-08). CodeQL em repositório privado exige, além do billing
+   resolvido, GHAS/Code Security habilitado. Reabilitar o trigger de PR e
+   fazer um smoke run manual (workflow_dispatch) quando ambos estiverem
+   resolvidos em Settings → Billing & plans e Settings → Code security.
 8. **RLS** — verificado como já versionado em migração EF (sem mudança).
 
 ### Verificação executada localmente
@@ -133,7 +143,8 @@ Cada ponto do handoff foi tratado como segue:
 - Web: `vitest` 317/317, `biome check` limpo, `tsc -b && vite build` ok.
 - `dotnet format analyzers/style/whitespace --verify-no-changes`: conformes.
 - Não executados aqui (exigem Docker/Banco): testes de integração e
-  `verify-public.sh` completo — a CI do PR os cobre.
+  `verify-public.sh` completo — com o billing de Actions indisponível
+  (item 7), estes ficam pendentes de execução local pelo revisor.
 
 ## Comando de start
 

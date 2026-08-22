@@ -89,7 +89,7 @@ export type TransportFailureFactory<R> = (
 export async function fetchSameOriginBff<R>(
   fetchImplementation: typeof fetch,
   path: string,
-  init: SameOriginInit,
+  { mayHaveCommittedOnAbort = false, ...init }: SameOriginInit,
   fail: TransportFailureFactory<R>,
 ): Promise<{ response: Response } | R> {
   if (init.signal?.aborted) {
@@ -113,7 +113,7 @@ export async function fetchSameOriginBff<R>(
     const wasAborted = isAbortError(reason, init.signal);
     return fail(wasAborted ? "aborted" : "network", {
       wasAborted,
-      mayHaveCommittedOnAbort: init.mayHaveCommittedOnAbort === true,
+      mayHaveCommittedOnAbort,
     });
   }
 }
