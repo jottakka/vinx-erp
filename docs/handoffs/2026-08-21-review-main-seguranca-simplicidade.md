@@ -139,8 +139,10 @@ Cada ponto do handoff foi tratado como segue:
 ### Verificação executada localmente
 
 - `dotnet build`: 0 erros, 0 warnings.
-- `dotnet test` Foundation.UnitTests (285), ArchitectureTests (21), BDD (5): todos verdes.
-- Web: `vitest` 317/317, `biome check` limpo, `tsc -b && vite build` ok.
+- `dotnet test` Foundation.UnitTests (311, incl. 26 de AllowedUriPolicyTests
+  adicionados na revisão), ArchitectureTests (21), BDD (5): todos verdes.
+- Web: `vitest` 326/326 (incl. 9 casos diretos dos helpers de
+  `bff-response`), `biome check` limpo, `tsc -b && vite build` ok.
 - `dotnet format analyzers/style/whitespace --verify-no-changes`: conformes.
 - Não executados aqui (exigem Docker/Banco): testes de integração e
   `verify-public.sh` completo — com o billing de Actions indisponível
