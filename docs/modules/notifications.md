@@ -103,13 +103,60 @@ message_id)` na mesma transação:
   O casamento usa somente o `wa_id`; o vínculo `phone_number_id → empresa`
   aguarda a mesma política.
 
-Somente imagens admitidas publicam `InboundWhatsAppImageReceived` na fila
-durável `whatsapp-inbound` (o subsete #140 abaixo passou a exigir remetente
-admitido). Documentos admitidos ficam duráveis em `pending` sem consumidor:
-download, quarentena, OCR e integração Pagaí pertencem aos PRs seguintes
-(#272), e nenhuma resposta automática é enviada para documentos nesta fatia.
-Linhas não admitidas permanecem `pending` com o estado de resolução fechado
-— são evidência, não fila de retrabalho.
+Somente mensagens admitidas publicam na fila durável: imagens publicam
+`InboundWhatsAppImageReceived` em `whatsapp-inbound` (subsete #140 abaixo) e
+documentos publicam `InboundWhatsAppDocumentReceived` em
+`whatsapp-inbound-documents` (fatia de documento seguro abaixo). Linhas não
+admitidas permanecem `pending` com o estado de resolução fechado — são
+evidência, não fila de retrabalho.
+
+## Inbound extração tipada de fatura (#272 PR3)Após a quarentena limpa, o mesmo processamento extrai o candidato tipado:
+PDF usa a camada de texto local (`DocumentTextExtractor`); sem camada =
+`no_text_layer`. Um turno único do perfil de texto (`InboundInvoiceExtractor`,
+contrato JSON estrito de 4 chaves, transcrição/legenda como dado rotulado)
+produz `ExtractedInvoiceData` e o fechamento determinístico em
+`notifications.record_inbound_whatsapp_invoice_candidate` grava
+`candidate` (beneficiário + valor como texto da gramática decimal do Pagaí +
+BRL + vencimento + número opcionais) ou `needs_review` com motivo estável
+(`missing_amount`, `invalid_amount`, `missing_beneficiary`,
+`missing_due_date`, `no_text_layer`, `extraction_unavailable`). Sem defaults
+silenciosos e sem arredondamento; needs_review não é falha da mensagem. O
+pre-check `notifications.inbound_document_actor_is_allowed` fecha
+membership/capability antes de qualquer download ou chamada de IA. Sem
+mutação Pagaí e sem resposta automática nesta fatia (PR4 e decisões do #272).
+A integração Pagaí (#272 PR4) é sempre requerida por um ator autenticado:
+`POST /paguai/requests/from-document` lê o candidato por
+`notifications.read_inbound_whatsapp_invoice_candidate` (escopo de membership),
+revalida a gramática do valor e cria o rascunho único por documento
+(`source_inbound_message_id` UNIQUE em `paguai.requests`; idempotente por ator
+com RequestId = id da admissão), com title/description/proofRequirement
+explícitos. Manifesto: `docs/verification/272d-paguai-draft-from-document-test-cases.md`.
+
+## Inbound documento seguro (#272 PR2)
+
+`Providers/Meta/InboundWhatsAppDocumentService` processa a fila
+`whatsapp-inbound-documents` com o claim dedicado
+`notifications.claim_inbound_whatsapp_document` (recusa linhas que não são
+documentos admitidos): download pela `MetaWhatsAppMediaClient` com o teto de
+bytes do `DocumentUploadPolicy` (25 MiB), allowlist de MIME
+(pdf/jpeg/png), parse e teto de 20 páginas de PDF pelo `DocumentTextExtractor`
+(PdfPig), scan antimalware pelo `IMalwareScanner` (ClamAV; sem endpoint o
+worker sobe fail-closed com `BlockedMalwareScanner`) e upload server-side em
+quarentena privada (`FileStorage.UploadObjectAsync`, chave
+`quarantine/whatsapp/{companyId}/{inboundId}`, container privado do Supabase;
+sem configuração o worker sobe com `BlockedFileStorage`). O registro final é
+atômico em `notifications.complete_inbound_whatsapp_document` (SECURITY
+DEFINER): re-verifica membership ativa e capability `foundation.files.upload`
+(company) do remetente resolvido, insere
+`notifications.inbound_whatsapp_documents` (ids, MIME, bytes, checksum
+sha256, páginas, veredito do scan, provider key) e audita
+`notification.whatsapp_document.admitted` com identificadores opacos. Falhas
+terminais usam motivos estáveis: `media_unavailable`, `document_rejected`
+(MIME/bytes/páginas/malware), `document_scan_unavailable`,
+`document_storage_unavailable`, `capability_missing`. Sem OCR, sem extração e
+sem resposta automática nesta fatia (PRs seguintes). Grant de DML da fila em
+`infra/database/grant-wolverine-runtime.sql` (por nome, inclui
+`wolverine_queue_whatsapp_inbound_documents`).
 
 ## Inbound imagem → OCR → IA (#140 subsete)
 

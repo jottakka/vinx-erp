@@ -1,4 +1,5 @@
 using JasperFx;
+using System.Net.Http.Headers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -121,6 +122,63 @@ builder.Services.AddScoped<INotificationProvider, InAppNotificationProvider>();
 builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
 builder.Services.AddScoped<InboundWhatsAppInteractionService>();
+builder.Services.AddScoped<InboundWhatsAppDocumentService>();
+// Storage privado condicionado por configuração (padrão do antimalware):
+// sem SUPABASE_STORAGE_* o worker sobe e o fluxo de documentos falha fechado
+// (BlockedFileStorage); configurado ativa o adapter Supabase.
+builder
+    .Services.AddOptions<Vinx.Erp.Foundation.Files.SupabaseStorageOptions>()
+    .Bind(builder.Configuration)
+    .Validate(
+        options =>
+            (string.IsNullOrWhiteSpace(options.ServiceRoleKey) && options.BaseUri is null)
+            || (
+                !string.IsNullOrWhiteSpace(options.ServiceRoleKey)
+                && options.BaseUri is { IsAbsoluteUri: true } baseUri
+                && (
+                    baseUri.Scheme == Uri.UriSchemeHttps
+                    || (builder.Environment.IsDevelopment() && baseUri.Scheme == Uri.UriSchemeHttp && baseUri.IsLoopback)
+                )
+            ),
+        "Supabase Storage options must be absent or fully configured with an HTTPS URL and service role key."
+    )
+    .ValidateOnStart();
+builder
+    .Services.AddHttpClient<Vinx.Erp.Foundation.Files.SupabaseFileStorage>(
+        (serviceProvider, client) =>
+        {
+            var storage = serviceProvider
+                .GetRequiredService<
+                    IOptions<Vinx.Erp.Foundation.Files.SupabaseStorageOptions>
+                >()
+                .Value;
+            client.BaseAddress = storage.BaseUri;
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                storage.ServiceRoleKey
+            );
+            client.DefaultRequestHeaders.Add("apikey", storage.ServiceRoleKey);
+        }
+    )
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        // O header customizado apikey não pode atravessar redirects para outra origem.
+        new SocketsHttpHandler { AllowAutoRedirect = false }
+    );
+builder.Services.AddScoped<Vinx.Erp.Foundation.Files.FileStorage, WorkerFileStorage>();
+// Engine antimalware condicionada por configuração: sem "MalwareScanner:ClamAvEndpoint"
+// o worker permanece fail-closed (BlockedMalwareScanner); endpoint válido ativa o clamd.
+builder
+    .Services.AddOptions<Vinx.Erp.Foundation.Files.MalwareScannerOptions>()
+    .Bind(builder.Configuration.GetSection("MalwareScanner"))
+    .Validate(
+        options => options.Timeout > TimeSpan.Zero
+            && options.MaxScanBytes > 0
+            && (string.IsNullOrWhiteSpace(options.ClamAvEndpoint)
+                || Vinx.Erp.Foundation.Files.MalwareScannerOptions.TryParseEndpoint(options.ClamAvEndpoint, out _, out _)),
+        "Malware scanner options must define a positive timeout and byte limit, plus a 'host:port' ClamAV endpoint when set."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton<Vinx.Erp.Foundation.Files.IMalwareScanner, WorkerMalwareScanner>();
 builder
     .Services.AddOptions<InboundWhatsAppAiOptions>()
     .Bind(builder.Configuration.GetSection(InboundWhatsAppAiOptions.SectionName))
@@ -207,6 +265,7 @@ builder.Host.UseWolverine(options =>
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<NotificationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppImageReceivedHandler>();
+    options.Discovery.IncludeType<InboundWhatsAppDocumentReceivedHandler>();
     options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
     options
         .PersistMessagesWithPostgresql(workerDataSource, schemaName: "vinx_wolverine_worker")
@@ -217,6 +276,7 @@ builder.Host.UseWolverine(options =>
     options.ListenToPostgresqlQueue("owner-invitation-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("notification-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound").UseDurableInbox();
+    options.ListenToPostgresqlQueue("whatsapp-inbound-documents").UseDurableInbox();
 });
 builder.Services.AddOpenTelemetry();
 builder.Services.AddHealthChecks();

@@ -1880,6 +1880,11 @@ ALTER TABLE foundation.capabilities ENABLE ROW LEVEL SECURITY;
 CREATE POLICY capabilities_employee_directory_owner_select ON foundation.capabilities FOR SELECT TO vinx_employee_directory_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying])::text[])));
 
 
+-- Name: capabilities capabilities_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_notifications_owner_read ON foundation.capabilities FOR SELECT TO vinx_notifications_owner USING (((name)::text = 'foundation.files.upload'::text));
+
+
 -- Name: capabilities capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY capabilities_provisioning_owner ON foundation.capabilities FOR SELECT TO vinx_provisioning_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.memberships.revoke'::character varying, 'foundation.files.upload'::character varying, 'foundation.files.confirm'::character varying])::text[])));
@@ -2111,6 +2116,11 @@ CREATE POLICY role_assignments_company_isolation ON foundation.role_assignments 
 CREATE POLICY role_assignments_employee_directory_owner_select ON foundation.role_assignments FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: role_assignments role_assignments_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_assignments_notifications_owner_read ON foundation.role_assignments FOR SELECT TO vinx_notifications_owner USING (true);
+
+
 -- Name: role_assignments role_assignments_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_assignments_provisioning_owner ON foundation.role_assignments FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
@@ -2140,6 +2150,11 @@ CREATE POLICY role_capabilities_employee_directory_owner_insert ON foundation.ro
 CREATE POLICY role_capabilities_employee_directory_owner_select ON foundation.role_capabilities FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: role_capabilities role_capabilities_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_notifications_owner_read ON foundation.role_capabilities FOR SELECT TO vinx_notifications_owner USING (true);
+
+
 -- Name: role_capabilities role_capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_capabilities_provisioning_owner ON foundation.role_capabilities FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
@@ -2162,6 +2177,11 @@ CREATE POLICY roles_company_isolation ON foundation.roles USING ((company_id = (
 -- Name: roles roles_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY roles_employee_directory_owner_select ON foundation.roles FOR SELECT TO vinx_employee_directory_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: roles roles_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY roles_notifications_owner_read ON foundation.roles FOR SELECT TO vinx_notifications_owner USING (true);
 
 
 -- Name: roles roles_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -

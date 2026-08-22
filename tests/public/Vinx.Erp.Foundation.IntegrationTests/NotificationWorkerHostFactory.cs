@@ -57,7 +57,9 @@ internal sealed class NotificationWorkerHostFactory(
     HttpMessageHandler? metaGraphHandler = null,
     bool configureInboundAi = false,
     HttpMessageHandler? inboundTextAiHandler = null,
-    HttpMessageHandler? inboundVisionAiHandler = null
+    HttpMessageHandler? inboundVisionAiHandler = null,
+    Vinx.Erp.Foundation.Files.FileStorage? testFileStorage = null,
+    Vinx.Erp.Foundation.Files.IMalwareScanner? testMalwareScanner = null
 )
     : WebApplicationFactory<WorkerProgram>
 {
@@ -75,6 +77,46 @@ internal sealed class NotificationWorkerHostFactory(
         builder.UseSetting("META_WHATSAPP_WEB_APP_BASE_URL", "https://app.example.test");
         builder.UseSetting("META_WHATSAPP_APP_SECRET", "test-meta-app-secret");
         builder.UseSetting("META_WHATSAPP_WEBHOOK_VERIFY_TOKEN", "test-meta-verify-token");
+        if (testFileStorage is not null)
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<Vinx.Erp.Foundation.Files.FileStorage>();
+                services.AddSingleton(testFileStorage);
+            });
+        }
+        else
+        {
+            // Sem fake: força o fail-closed determinístico, imune a variáveis
+            // de ambiente do processo de teste (Supabase local, etc.).
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<Vinx.Erp.Foundation.Files.FileStorage>();
+                services.AddSingleton<Vinx.Erp.Foundation.Files.FileStorage>(
+                    new Vinx.Erp.Foundation.Files.BlockedFileStorage()
+                );
+            });
+        }
+
+        if (testMalwareScanner is not null)
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<Vinx.Erp.Foundation.Files.IMalwareScanner>();
+                services.AddSingleton(testMalwareScanner);
+            });
+        }
+        else
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<Vinx.Erp.Foundation.Files.IMalwareScanner>();
+                services.AddSingleton<Vinx.Erp.Foundation.Files.IMalwareScanner>(
+                    new Vinx.Erp.Foundation.Files.BlockedMalwareScanner()
+                );
+            });
+        }
+
         if (metaGraphHandler is not null)
         {
             builder.ConfigureTestServices(services =>

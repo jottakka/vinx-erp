@@ -41,15 +41,18 @@ public sealed record InboundCapturedRequest(
     System.Net.Http.Headers.AuthenticationHeaderValue? Authorization
 );
 
+public sealed record FakeMediaObject(byte[] Bytes, string ContentType);
+
 /// <summary>
 /// Handler falso do Graph para o fluxo inbound: metadados de mídia, download
-/// da mídia (PNG 1x1 válido para o canonicalizador) e o POST da resposta.
+/// da mídia (PNG 1x1 válido para o canonicalizador, ou objeto registrado por
+/// id no dicionário para documentos) e o POST da resposta.
 /// Tipos públicos concretos: o codegen do Wolverine só inline-a dependências
 /// públicas tipadas.
 /// </summary>
 public sealed class FakeInboundMetaHandler : HttpMessageHandler
 {
-    private const string MediaUrl = "https://media.example.test/image.png";
+    private const string MediaUrlPrefix = "https://media.example.test/";
 
     private static readonly byte[] PngBytes = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -57,6 +60,7 @@ public sealed class FakeInboundMetaHandler : HttpMessageHandler
 
     private readonly Lock _gate = new();
     private readonly List<InboundCapturedRequest> _replyRequests = [];
+    private readonly Dictionary<string, FakeMediaObject> _mediaObjects = new(StringComparer.Ordinal);
 
     public bool FailMediaMetadata { get; set; }
 
@@ -79,6 +83,17 @@ public sealed class FakeInboundMetaHandler : HttpMessageHandler
         }
     }
 
+    public void AddMedia(string mediaId, byte[] bytes, string contentType) =>
+        _mediaObjects[mediaId] = new FakeMediaObject(bytes, contentType);
+
+    private FakeMediaObject? FindMedia(Uri requestUri)
+    {
+        var name = requestUri.Segments.Length > 0
+            ? requestUri.Segments[^1].TrimEnd('/')
+            : string.Empty;
+        return _mediaObjects.TryGetValue(name, out var media) ? media : null;
+    }
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken
@@ -92,10 +107,16 @@ public sealed class FakeInboundMetaHandler : HttpMessageHandler
                 return new HttpResponseMessage(HttpStatusCode.InternalServerError);
             }
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            var media = FindMedia(request.RequestUri);
+            var content = new ByteArrayContent(media?.Bytes ?? PngBytes);
+            if (media is not null)
             {
-                Content = new ByteArrayContent(PngBytes),
-            };
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+                    media.ContentType
+                );
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         }
 
         if (request.Method == HttpMethod.Get)
@@ -106,10 +127,14 @@ public sealed class FakeInboundMetaHandler : HttpMessageHandler
                 return new HttpResponseMessage(HttpStatusCode.NotFound);
             }
 
+            var mediaId = request.RequestUri?.Segments is { Length: > 0 } segments
+                ? segments[^1].TrimEnd('/')
+                : "1938";
+            var media = _mediaObjects.GetValueOrDefault(mediaId);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    $$"""{"url":"{{MediaUrl}}","mime_type":"image/png","id":"1938"}""",
+                    $$"""{"url":"{{MediaUrlPrefix}}{{mediaId}}","mime_type":"{{media?.ContentType ?? "image/png"}}","id":"{{mediaId}}"}""",
                     Encoding.UTF8,
                     "application/json"
                 ),

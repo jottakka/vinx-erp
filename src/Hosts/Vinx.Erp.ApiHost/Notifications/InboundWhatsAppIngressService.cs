@@ -57,7 +57,6 @@ public sealed class InboundWhatsAppIngressService(
             "image",
             image.MediaId,
             image.Caption,
-            publishesWhenAdmitted: true,
             cancellationToken
         );
 
@@ -72,7 +71,6 @@ public sealed class InboundWhatsAppIngressService(
             "document",
             document.MediaId,
             document.Caption,
-            publishesWhenAdmitted: false,
             cancellationToken
         );
 
@@ -83,7 +81,6 @@ public sealed class InboundWhatsAppIngressService(
         string messageType,
         string mediaId,
         string? caption,
-        bool publishesWhenAdmitted,
         CancellationToken cancellationToken
     )
     {
@@ -143,7 +140,7 @@ public sealed class InboundWhatsAppIngressService(
             );
             var admission = (string?)await command.ExecuteScalarAsync(cancellationToken);
             created = string.Equals(admission, "created", StringComparison.Ordinal);
-            shouldPublish = created && publishesWhenAdmitted && resolution.IsAdmitted;
+            shouldPublish = created && resolution.IsAdmitted;
             if (!created && !string.Equals(admission, "replay", StringComparison.Ordinal))
             {
                 // messageId reaproveitado com payload incompatível: conflito
@@ -160,8 +157,13 @@ public sealed class InboundWhatsAppIngressService(
             if (shouldPublish)
             {
                 outbox.Enroll(database);
+                // Imagem admitida segue ao subsete #140 (OCR/resposta);
+                // documento admitido segue à fila de quarentena do #272 PR2.
+                object message = messageType == "image"
+                    ? new InboundWhatsAppImageReceived(inboundId)
+                    : new InboundWhatsAppDocumentReceived(inboundId);
                 await outbox.PublishAsync(
-                    new InboundWhatsAppImageReceived(inboundId),
+                    message,
                     new DeliveryOptions { CorrelationId = Guid.NewGuid().ToString("D") }
                 );
             }

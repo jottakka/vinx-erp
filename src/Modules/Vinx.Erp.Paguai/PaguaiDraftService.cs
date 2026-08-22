@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Vinx.Erp.Foundation.Audit;
@@ -90,6 +91,7 @@ public sealed class PaguaiDraftService(
                 DueDate = command.DueDate,
                 BeneficiaryDisplayName = command.BeneficiaryDisplayName,
                 ProofRequirement = command.ProofRequirement,
+                SourceInboundMessageId = command.SourceInboundMessageId,
                 State = "rascunho",
                 Version = 1,
             };
@@ -149,6 +151,115 @@ public sealed class PaguaiDraftService(
             );
             return PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
         }
+    }
+
+    /// <summary>
+    /// Rascunho idempotente a partir de um candidato admitido do WhatsApp
+    /// (#272 PR4): valor/vencimento/beneficiário vêm do candidato tipado
+    /// (revalidados, nunca confiados), title/description/proof são sempre
+    /// explícitos e o rascunho fica único por documento. A criação automática
+    /// permanece decisão pendente do #272 — este caminho é sempre requerido
+    /// por um ator autenticado com capability de criar rascunho.
+    /// </summary>
+    public async Task<PaguaiDraftResult> CreateFromInboundDocumentAsync(
+        ActorContext actor,
+        CreateDraftFromDocumentCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            command.CompanyId == Guid.Empty
+            || command.InboundMessageId == Guid.Empty
+            || string.IsNullOrWhiteSpace(command.Title)
+            || string.IsNullOrWhiteSpace(command.Description)
+            || (
+                command.ProofRequirement != "optional"
+                && command.ProofRequirement != "required"
+            )
+        )
+        {
+            return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
+        }
+
+        await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))
+        {
+            await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var readCommand = connection.CreateCommand();
+            readCommand.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
+            readCommand.CommandText =
+                "SELECT company_id, state, beneficiary_name, amount, currency, due_date "
+                + "FROM notifications.read_inbound_whatsapp_invoice_candidate(@inbound_id)";
+            var inboundId = readCommand.CreateParameter();
+            inboundId.ParameterName = "inbound_id";
+            inboundId.Value = command.InboundMessageId;
+            readCommand.Parameters.Add(inboundId);
+            bool found = false;
+            string candidateState = string.Empty;
+            string beneficiary = string.Empty;
+            string amountText = string.Empty;
+            string currency = string.Empty;
+            var dueDate = default(DateOnly);
+            await using (var reader = await readCommand.ExecuteReaderAsync(cancellationToken))
+            {
+                if (await reader.ReadAsync(cancellationToken))
+                {
+                    found = true;
+                    candidateState = reader.GetString(1);
+                    if (candidateState == "candidate")
+                    {
+                        beneficiary = reader.GetString(2);
+                        amountText = reader.GetString(3);
+                        currency = reader.GetString(4);
+                        dueDate = reader.GetFieldValue<DateOnly>(5);
+                    }
+                }
+            }
+
+            if (
+                !found
+                || candidateState != "candidate"
+                || beneficiary.Length is < 1 or > 200
+                || !PaguaiAmountRules.TryParseText(amountText, out var amount)
+            )
+            {
+                // Sem candidato visível/fechado ou gramática reprovada na
+                // fronteira: sem confiança silenciosa em dado persistido.
+                await transaction.RollbackAsync(cancellationToken);
+                return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return await CreateAsync(
+                actor,
+                new CreateDraftCommand(
+                    command.CompanyId,
+                    command.InboundMessageId,
+                    command.Title,
+                    command.Description,
+                    amount,
+                    currency,
+                    dueDate,
+                    beneficiary,
+                    command.ProofRequirement,
+                    SourceInboundMessageId: command.InboundMessageId
+                ),
+                cancellationToken
+            );
+        }
+    }
+
+    private async Task<System.Data.Common.DbConnection> OpenConnectionAsync(
+        CancellationToken cancellationToken
+    )
+    {
+        var connection = database.Database.GetDbConnection();
+        if (!connection.State.HasFlag(System.Data.ConnectionState.Open))
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        return connection;
     }
 
     public async Task<PaguaiDraftListResult> ListAsync(

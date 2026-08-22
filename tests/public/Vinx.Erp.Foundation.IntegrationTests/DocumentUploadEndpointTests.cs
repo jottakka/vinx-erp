@@ -1099,6 +1099,13 @@ public sealed class DocumentUploadEndpointTests
             Task.FromResult(new SignedStorageUploadUrl(new Uri(
                 $"https://storage.test/upload/{providerKey}?attempt={Interlocked.Increment(ref _uploadUrlCount)}")));
 
+        public Task UploadObjectAsync(
+            string providerKey,
+            ReadOnlyMemory<byte> content,
+            string contentType,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException("Server-side upload is not part of the upload-endpoint tests.");
+
         public Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken)
         {
             if (FailReads)

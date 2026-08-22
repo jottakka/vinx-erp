@@ -27,6 +27,9 @@ public sealed class PaguaiRequest
 
     public string ProofRequirement { get; set; } = string.Empty;
 
+    /// <summary>Documento inbound que originou o rascunho; único por documento.</summary>
+    public Guid? SourceInboundMessageId { get; set; }
+
     public string State { get; set; } = "rascunho";
 
     public int Version { get; set; } = 1;
