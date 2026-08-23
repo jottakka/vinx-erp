@@ -118,10 +118,14 @@ public static class MetaWhatsAppWebhookEndpoints
             await RecordAsync(database, status, request.HttpContext.RequestAborted);
         }
 
-        if (inboundMedia.Images.Count > 0 || inboundMedia.Documents.Count > 0)
+        if (
+            inboundMedia.Images.Count > 0
+            || inboundMedia.Documents.Count > 0
+            || inboundMedia.Texts.Count > 0
+        )
         {
-            // Somente mídia inbound (imagem/documento, #272); demais tipos
-            // seguem ignorados.
+            // Somente tipos inbound admitidos seguem após a assinatura; os
+            // demais continuam ignorados.
             var ingress = request.HttpContext.RequestServices.GetRequiredService<
                 InboundWhatsAppIngressService
             >();
@@ -133,6 +137,10 @@ public static class MetaWhatsAppWebhookEndpoints
             {
                 await ingress.RecordAsync(document, request.HttpContext.RequestAborted);
             }
+            foreach (var text in inboundMedia.Texts)
+            {
+                await ingress.RecordAsync(text, request.HttpContext.RequestAborted);
+            }
         }
 
         return Results.Json(new { code = "accepted" });
@@ -140,17 +148,19 @@ public static class MetaWhatsAppWebhookEndpoints
 
     private sealed record InboundWhatsAppMedia(
         List<InboundWhatsAppImage> Images,
-        List<InboundWhatsAppDocument> Documents
+        List<InboundWhatsAppDocument> Documents,
+        List<InboundWhatsAppText> Texts
     );
 
     private static InboundWhatsAppMedia ParseInboundMedia(byte[] rawBody)
     {
         var images = new List<InboundWhatsAppImage>();
         var documents = new List<InboundWhatsAppDocument>();
+        var texts = new List<InboundWhatsAppText>();
         using var document = JsonDocument.Parse(rawBody);
         if (!document.RootElement.TryGetProperty("entry", out var entries))
         {
-            return new InboundWhatsAppMedia(images, documents);
+            return new InboundWhatsAppMedia(images, documents, texts);
         }
 
         foreach (var entry in entries.EnumerateArray())
@@ -187,13 +197,35 @@ public static class MetaWhatsAppWebhookEndpoints
                 {
                     if (
                         !message.TryGetProperty("type", out var type)
-                        || type.GetString() is not ("image" or "document")
+                        || type.GetString() is not ("image" or "document" or "text")
                         || !message.TryGetProperty("id", out var id)
                         || id.GetString() is not { Length: > 0 } messageId
                         || !message.TryGetProperty("from", out var from)
                         || from.GetString() is not { Length: > 0 } waId
                         || phoneNumberId is null
-                        || !message.TryGetProperty(type.GetString()!, out var media)
+                    )
+                    {
+                        continue;
+                    }
+
+                    if (type.GetString() == "text")
+                    {
+                        if (
+                            !message.TryGetProperty("text", out var text)
+                            || !text.TryGetProperty("body", out var body)
+                            || body.ValueKind != JsonValueKind.String
+                            || body.GetString() is not { } textBody
+                        )
+                        {
+                            continue;
+                        }
+
+                        texts.Add(new InboundWhatsAppText(messageId, phoneNumberId, waId, textBody));
+                        continue;
+                    }
+
+                    if (
+                        !message.TryGetProperty(type.GetString()!, out var media)
                         || !media.TryGetProperty("id", out var mediaIdElement)
                         || mediaIdElement.GetString() is not { Length: > 0 } mediaId
                     )
@@ -230,7 +262,7 @@ public static class MetaWhatsAppWebhookEndpoints
             }
         }
 
-        return new InboundWhatsAppMedia(images, documents);
+        return new InboundWhatsAppMedia(images, documents, texts);
     }
 
     private static List<ProviderStatus> ParseStatuses(byte[] rawBody)

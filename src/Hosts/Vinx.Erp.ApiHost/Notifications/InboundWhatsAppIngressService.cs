@@ -31,8 +31,16 @@ public sealed record InboundWhatsAppDocument(
     string? Caption
 );
 
+/// <summary>Texto inbound extraído do webhook após a validação da assinatura.</summary>
+public sealed record InboundWhatsAppText(
+    string MessageId,
+    string PhoneNumberId,
+    string WaId,
+    string Body
+);
+
 /// <summary>
-/// Admite mídia inbound (imagem/documento) com resolução de identidade
+/// Admite mensagens inbound com resolução de identidade
 /// fechada e durável: deduplica por (canal, message_id), grava o resultado
 /// da resolução na mesma transação e somente publica o evento Wolverine
 /// quando a mensagem é admitida com exatamente um usuário, uma empresa e
@@ -50,13 +58,14 @@ public sealed class InboundWhatsAppIngressService(
     private const string Module = "notifications";
 
     public Task<bool> RecordAsync(InboundWhatsAppImage image, CancellationToken cancellationToken) =>
-        RecordMediaAsync(
+        RecordAsync(
             image.MessageId,
             image.PhoneNumberId,
             image.WaId,
             "image",
             image.MediaId,
             image.Caption,
+            null,
             cancellationToken
         );
 
@@ -64,29 +73,43 @@ public sealed class InboundWhatsAppIngressService(
         InboundWhatsAppDocument document,
         CancellationToken cancellationToken
     ) =>
-        RecordMediaAsync(
+        RecordAsync(
             document.MessageId,
             document.PhoneNumberId,
             document.WaId,
             "document",
             document.MediaId,
             document.Caption,
+            null,
             cancellationToken
         );
 
-    private async Task<bool> RecordMediaAsync(
+    public Task<bool> RecordAsync(InboundWhatsAppText text, CancellationToken cancellationToken) =>
+        RecordAsync(
+            text.MessageId,
+            text.PhoneNumberId,
+            text.WaId,
+            "text",
+            null,
+            null,
+            text.Body,
+            cancellationToken
+        );
+
+    private async Task<bool> RecordAsync(
         string messageId,
         string phoneNumberId,
         string waId,
         string messageType,
-        string mediaId,
+        string? mediaId,
         string? caption,
+        string? textBody,
         CancellationToken cancellationToken
     )
     {
         if (!options.IsKnownInboundChannel(phoneNumberId))
         {
-            // Canal desconhecido: a mídia não avança (chave de idempotência e
+            // Canal desconhecido: a mensagem não avança (chave de idempotência e
             // identidade dependem do canal estável configurado).
             logger.LogWarning(
                 "Inbound ingress {Operation} {Module} {Result} {Reason}",
@@ -115,17 +138,27 @@ public sealed class InboundWhatsAppIngressService(
             var connection = database.Database.GetDbConnection();
             await using var command = connection.CreateCommand();
             command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
-            command.CommandText =
-                "SELECT notifications.admit_inbound_whatsapp_media("
-                + "@inbound_id, @phone_number_id, @message_id, @wa_id, @message_type, @media_id, @caption, "
-                + "@resolution_state, @user_id, @company_id, @membership_id)";
+            command.CommandText = messageType == "text"
+                ? "SELECT notifications.admit_inbound_whatsapp_text("
+                    + "@inbound_id, @phone_number_id, @message_id, @wa_id, @text_body, "
+                    + "@resolution_state, @user_id, @company_id, @membership_id)"
+                : "SELECT notifications.admit_inbound_whatsapp_media("
+                    + "@inbound_id, @phone_number_id, @message_id, @wa_id, @message_type, @media_id, @caption, "
+                    + "@resolution_state, @user_id, @company_id, @membership_id)";
             AddParameter(command, "inbound_id", inboundId);
             AddParameter(command, "phone_number_id", phoneNumberId.Trim());
             AddParameter(command, "message_id", messageId);
             AddParameter(command, "wa_id", waId);
-            AddParameter(command, "message_type", messageType);
-            AddParameter(command, "media_id", mediaId);
-            AddParameter(command, "caption", caption is null ? DBNull.Value : caption);
+            if (messageType == "text")
+            {
+                AddParameter(command, "text_body", (object?)textBody ?? DBNull.Value);
+            }
+            else
+            {
+                AddParameter(command, "message_type", messageType);
+                AddParameter(command, "media_id", (object?)mediaId ?? DBNull.Value);
+                AddParameter(command, "caption", caption is null ? DBNull.Value : caption);
+            }
             AddParameter(command, "resolution_state", resolution.SerializeState());
             AddParameter(command, "user_id", resolution.UserId.HasValue ? resolution.UserId.Value : DBNull.Value);
             AddParameter(
@@ -140,7 +173,7 @@ public sealed class InboundWhatsAppIngressService(
             );
             var admission = (string?)await command.ExecuteScalarAsync(cancellationToken);
             created = string.Equals(admission, "created", StringComparison.Ordinal);
-            shouldPublish = created && resolution.IsAdmitted;
+            shouldPublish = created && resolution.IsAdmitted && messageType != "text";
             if (!created && !string.Equals(admission, "replay", StringComparison.Ordinal))
             {
                 // messageId reaproveitado com payload incompatível: conflito
@@ -152,6 +185,16 @@ public sealed class InboundWhatsAppIngressService(
                     "conflict",
                     "message_id_conflict"
                 );
+            }
+
+            if (created && resolution.IsAdmitted && messageType is "image" or "text")
+            {
+                await using var correlationCommand = connection.CreateCommand();
+                correlationCommand.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
+                correlationCommand.CommandText =
+                    "SELECT notifications.correlate_inbound_whatsapp_text_image(@inbound_id)";
+                AddParameter(correlationCommand, "inbound_id", inboundId);
+                await correlationCommand.ExecuteScalarAsync(cancellationToken);
             }
 
             if (shouldPublish)
