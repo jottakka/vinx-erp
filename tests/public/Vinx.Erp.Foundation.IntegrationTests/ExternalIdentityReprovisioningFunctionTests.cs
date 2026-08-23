@@ -20,6 +20,7 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
         await using var fixture = await StartAsync();
         var seed = await SeedAsync(fixture);
         var correlationId = Guid.NewGuid();
+        var authorizationBefore = await AuthorizationProjectionAsync(fixture, seed);
         Assert.Equal("reprovisioned", await RotateAsync(fixture, seed, NewSubject, correlationId));
 
         var state = await ReadAsync(fixture, seed);
@@ -28,12 +29,12 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
         Assert.Equal(2, state.RevokedSessions);
         Assert.True(state.RevokedForRecovery);
         Assert.Equal(seed.IdentityId, state.OperatorIdentityId);
-        Assert.Equal(1, state.SuccessAudits);
+        Assert.Equal(1, state.ReprovisioningAudits);
         Assert.Equal(DeploymentActorId, state.AuditActorId);
         Assert.Equal(seed.UserId, state.AuditResourceId);
         Assert.Equal(correlationId, state.AuditCorrelationId);
         Assert.Empty(JsonDocument.Parse(state.AuditMetadata!).RootElement.EnumerateObject());
-        Assert.Equal(1, await GraphRowsAsync(fixture, seed));
+        Assert.Equal(authorizationBefore, await AuthorizationProjectionAsync(fixture, seed));
         Assert.Equal(seed.UserId, await ResolveAsync(fixture, NewSubject));
         Assert.Null(await ResolveAsync(fixture, OldSubject));
         await InsertFreshSessionAsync(fixture, seed.UserId, state.Barrier!.Value);
@@ -80,6 +81,7 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
     {
         await using var fixture = await StartAsync();
         var seed = await SeedAsync(fixture);
+        var authorizationBefore = await AuthorizationProjectionAsync(fixture, seed);
         var request = new Request(seed.UserId, seed.IdentityId, Issuer, OldSubject, NewSubject, Guid.NewGuid());
         switch (scenario)
         {
@@ -93,9 +95,9 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
         }
         Assert.Equal(expected, await RotateAsync(fixture, request));
         if (scenario == "already_configured")
-            Assert.Equal(1, (await ReadAsync(fixture, seed)).SuccessAudits);
+            Assert.Equal(1, (await ReadAsync(fixture, seed)).ReprovisioningAudits);
         else if (expected != "reprovisioned")
-            await AssertUnchangedAsync(fixture, seed);
+            await AssertUnchangedAsync(fixture, seed, authorizationBefore);
     }
 
     [Fact]
@@ -111,7 +113,7 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
         var exception = await Assert.ThrowsAsync<PostgresException>(() => RotateAsync(fixture, seed, NewSubject, Guid.NewGuid()));
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
         var state = await ReadAsync(fixture, seed);
-        Assert.Equal((OldSubject, null, 0L, 0L), (state.Subject, state.Barrier, state.RevokedSessions, state.SuccessAudits));
+        Assert.Equal((OldSubject, null, 0L, 0L), (state.Subject, state.Barrier, state.RevokedSessions, state.ReprovisioningAudits));
     }
 
     [Fact]
@@ -123,8 +125,8 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
         var first = await ReadAsync(fixture, seed);
         Assert.Equal("already_configured", await RotateAsync(fixture, seed, NewSubject, Guid.NewGuid()));
         var replay = await ReadAsync(fixture, seed);
-        Assert.Equal((first.Barrier, first.RevokedSessions, first.SuccessAudits),
-            (replay.Barrier, replay.RevokedSessions, replay.SuccessAudits));
+        Assert.Equal((first.Barrier, first.RevokedSessions, first.ReprovisioningAudits),
+            (replay.Barrier, replay.RevokedSessions, replay.ReprovisioningAudits));
     }
 
     [Fact]
@@ -152,7 +154,7 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
         Assert.Contains(state.Subject, new[] { "new-subject-first", "new-subject-second" });
         Assert.Equal(2, state.RevokedSessions);
         Assert.True(state.RevokedForRecovery);
-        Assert.Equal(1, state.SuccessAudits);
+        Assert.Equal(1, state.ReprovisioningAudits);
     }
 
     [Fact]
@@ -240,7 +242,7 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
                 (SELECT count(*) FROM foundation.user_sessions WHERE user_id = @user AND revoked_at IS NOT NULL),
                 (SELECT coalesce(bool_and(revoked_by_user_id = @user AND revocation_reason = 'identity_reprovisioned'), false) FROM foundation.user_sessions WHERE user_id = @user),
                 (SELECT external_identity_id FROM foundation.platform_operators WHERE singleton = 1),
-                (SELECT count(*) FROM audit.audit_events WHERE action = 'identity.external.reprovision' AND outcome = 'success'),
+                (SELECT count(*) FROM audit.audit_events WHERE action = 'identity.external.reprovision'),
                 (SELECT actor_user_id FROM audit.audit_events WHERE action = 'identity.external.reprovision'),
                 (SELECT resource_id FROM audit.audit_events WHERE action = 'identity.external.reprovision'),
                 (SELECT correlation_id FROM audit.audit_events WHERE action = 'identity.external.reprovision'),
@@ -257,16 +259,28 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
             reader.IsDBNull(9) ? null : reader.GetGuid(9), reader.IsDBNull(10) ? null : reader.GetGuid(10), reader.IsDBNull(11) ? null : reader.GetString(11));
     }
 
-    private static async Task<long> GraphRowsAsync(FoundationPostgresFixture fixture, Seed seed)
+    private static async Task<string> AuthorizationProjectionAsync(FoundationPostgresFixture fixture, Seed seed)
     {
         await using var admin = await fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
-            "SELECT count(*) FROM foundation.memberships m JOIN foundation.role_assignments a ON a.membership_id=m.id JOIN foundation.role_capabilities c ON c.role_id=a.role_id WHERE m.user_id=@user AND m.deleted_at IS NULL", admin);
+            """
+            SELECT coalesce(string_agg(concat_ws('|', m.id, m.company_id, m.user_id,
+                a.id, a.company_id, a.role_id, a.membership_id, r.id, r.company_id, r.name,
+                rc.id, rc.company_id, rc.role_id, rc.capability_id, rc.scope,
+                c.id, c.name, coalesce(c.description, '')), E'\n'
+                ORDER BY m.id, a.id, rc.id, c.id), '')
+            FROM foundation.memberships AS m
+            JOIN foundation.role_assignments AS a ON a.membership_id = m.id AND a.deleted_at IS NULL
+            JOIN foundation.roles AS r ON r.id = a.role_id AND r.deleted_at IS NULL
+            JOIN foundation.role_capabilities AS rc ON rc.role_id = a.role_id AND rc.deleted_at IS NULL
+            JOIN foundation.capabilities AS c ON c.id = rc.capability_id
+            WHERE m.user_id = @user AND m.deleted_at IS NULL
+            """, admin);
         command.Parameters.AddWithValue("user", seed.UserId);
-        return Convert.ToInt64(await command.ExecuteScalarAsync());
+        return (string)(await command.ExecuteScalarAsync())!;
     }
 
-    private static async Task AssertUnchangedAsync(FoundationPostgresFixture fixture, Seed seed)
+    private static async Task AssertUnchangedAsync(FoundationPostgresFixture fixture, Seed seed, string authorizationBefore)
     {
         var state = await ReadAsync(fixture, seed);
         Assert.Equal(seed.UserId, state.UserId);
@@ -276,8 +290,8 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
         Assert.Equal(0, state.RevokedSessions);
         Assert.False(state.RevokedForRecovery);
         Assert.Equal(seed.IdentityId, state.OperatorIdentityId);
-        Assert.Equal(0, state.SuccessAudits);
-        Assert.Equal(1, await GraphRowsAsync(fixture, seed));
+        Assert.Equal(0, state.ReprovisioningAudits);
+        Assert.Equal(authorizationBefore, await AuthorizationProjectionAsync(fixture, seed));
     }
 
     private static async Task<Guid?> ResolveAsync(FoundationPostgresFixture fixture, string subject)
@@ -341,5 +355,5 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
     private sealed record Seed(Guid UserId, Guid IdentityId);
     private sealed record Request(Guid UserId, Guid IdentityId, string Issuer, string OldSubject, string NewSubject, Guid CorrelationId);
     private sealed record State(Guid UserId, Guid IdentityId, string Subject, DateTimeOffset? Barrier, long RevokedSessions, bool RevokedForRecovery,
-        Guid OperatorIdentityId, long SuccessAudits, Guid? AuditActorId, Guid? AuditResourceId, Guid? AuditCorrelationId, string? AuditMetadata);
+        Guid OperatorIdentityId, long ReprovisioningAudits, Guid? AuditActorId, Guid? AuditResourceId, Guid? AuditCorrelationId, string? AuditMetadata);
 }
