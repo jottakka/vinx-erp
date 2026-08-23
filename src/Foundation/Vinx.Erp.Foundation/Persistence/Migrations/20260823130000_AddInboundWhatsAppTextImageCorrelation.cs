@@ -403,8 +403,7 @@ public partial class AddInboundWhatsAppTextImageCorrelation : Migration
                     SELECT 1
                     FROM notifications.inbound_whatsapp_messages
                     WHERE message_type = 'text'
-                        OR correlated_text_id IS NOT NULL
-                        OR correlation_deadline IS NOT NULL) THEN
+                        OR correlated_text_id IS NOT NULL) THEN
                     RAISE EXCEPTION 'cannot downgrade inbound whatsapp text correlation while state exists'
                         USING ERRCODE = '23514';
                 END IF;
@@ -449,6 +448,8 @@ public partial class AddInboundWhatsAppTextImageCorrelation : Migration
                 RETURN QUERY SELECT 'processing'::text, v_row.wa_id, v_row.media_id, v_row.caption, true;
             END;
             $function$;
+            REVOKE ALL ON FUNCTION notifications.claim_inbound_whatsapp_message(uuid)
+                FROM PUBLIC, vinx_runtime, vinx_migrator;
             GRANT EXECUTE ON FUNCTION notifications.claim_inbound_whatsapp_message(uuid) TO vinx_worker;
 
             CREATE OR REPLACE FUNCTION notifications.admit_inbound_whatsapp_media(
@@ -527,7 +528,11 @@ public partial class AddInboundWhatsAppTextImageCorrelation : Migration
                 ADD CONSTRAINT inbound_whatsapp_messages_message_type_check
                     CHECK (message_type IN ('image', 'document')),
                 ADD CONSTRAINT inbound_whatsapp_messages_failure_reason_check
-                    CHECK (failure_reason IS NULL OR char_length(failure_reason) <= 100);
+                    CHECK (failure_reason IS NULL OR failure_reason IN (
+                        'ai_unconfigured', 'media_unavailable', 'media_invalid',
+                        'ocr_failed', 'ai_failed', 'reply_rejected', 'reply_ambiguous',
+                        'document_rejected', 'document_scan_unavailable',
+                        'document_storage_unavailable', 'capability_missing'));
             RESET ROLE;
             REVOKE CREATE ON SCHEMA notifications FROM vinx_notifications_owner;
             """);
