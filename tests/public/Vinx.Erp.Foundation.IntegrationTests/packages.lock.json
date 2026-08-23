@@ -1054,6 +1054,12 @@
           "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
+      "vinx.erp.platformbootstrap": {
+        "type": "Project",
+        "dependencies": {
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
       "vinx.erp.workerhost": {
         "type": "Project",
         "dependencies": {
