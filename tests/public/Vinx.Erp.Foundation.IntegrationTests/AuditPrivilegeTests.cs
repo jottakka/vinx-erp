@@ -89,7 +89,8 @@ public sealed class AuditPrivilegeTests
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_provisioning_owner'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_employee_directory_owner'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_worker_owner'),
-                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_notifications_owner')))
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_notifications_owner'),
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_identity_owner')))
             FROM pg_proc AS appender
             WHERE appender.oid = 'audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb)'::regprocedure
             """,
