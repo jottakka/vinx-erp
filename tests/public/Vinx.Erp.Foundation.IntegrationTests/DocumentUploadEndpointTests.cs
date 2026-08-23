@@ -1001,6 +1001,59 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
+    public async Task Concurrent_same_request_rechecks_membership_before_returning_a_committed_replay()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage);
+        var gate = new FirstConfirmationIdempotencyReadGate();
+        await using var factory = await CreateFactoryAsync(storage, scanner, commandInterceptor: gate);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var request = new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var first = factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request, timeout.Token);
+        try
+        {
+            await gate.FirstRead.WaitAsync(timeout.Token);
+
+            var winner = await factory.CreateClient().PostAsJsonAsync(
+                "/foundation/files/confirmations", request, timeout.Token);
+            winner.EnsureSuccessStatusCode();
+
+            await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+            {
+                var membership = await administrator.Memberships.SingleAsync(
+                    candidate => candidate.Id == scenario.ActorMembershipId,
+                    timeout.Token);
+                membership.Revoke("test_revocation", factory.ActorUserId, Guid.NewGuid());
+                await administrator.SaveChangesAsync(timeout.Token);
+            }
+
+            gate.Release();
+            var replay = await first.WaitAsync(timeout.Token);
+
+            Assert.Equal(HttpStatusCode.Forbidden, replay.StatusCode);
+            Assert.Equal("membership_required", (await replay.Content.ReadFromJsonAsync<ErrorResponse>(timeout.Token))?.Code);
+            Assert.Equal(1, storage.InspectionCount);
+            Assert.Equal(1, scanner.ScanCount);
+            await using var auditReader = factory.Fixture.CreateAdministratorDbContext();
+            Assert.Single(await auditReader.AuditEvents.Where(audit =>
+                audit.Action == "foundation.files.upload.confirm" && audit.Outcome == AuditOutcome.Success).ToListAsync(timeout.Token));
+            Assert.Single(await auditReader.IdempotencyRecords.Where(record =>
+                record.CommandName == "foundation.files.upload.confirm" && record.RequestId == request.RequestId).ToListAsync(timeout.Token));
+            Assert.Single(await auditReader.AuditEvents.Where(audit =>
+                audit.Action == "membership_required" && audit.Outcome == AuditOutcome.Denied).ToListAsync(timeout.Token));
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    [Fact]
     public async Task Concurrent_confirmation_with_the_same_request_creates_one_confirmed_result()
     {
         var storage = new ControlledFileStorage
@@ -1210,10 +1263,10 @@ public sealed class DocumentUploadEndpointTests
         }
 
         await administrator.SaveChangesAsync();
-        return new UploadScenario(company.Id);
+        return new UploadScenario(company.Id, membership.Id);
     }
 
-    private sealed record UploadScenario(Guid CompanyId);
+    private sealed record UploadScenario(Guid CompanyId, Guid ActorMembershipId);
     private sealed record UploadIntentRequest(Guid CompanyId, Guid RequestId, string FileName, string MimeType, long SizeBytes, string Checksum, string Classification, string Origin, DateTimeOffset RetentionUntil);
     private sealed record ConfirmUploadRequest(Guid CompanyId, Guid RequestId, Guid FileId);
     private sealed record UploadIntentResponse(Guid FileId, string ProcessingState, Uri UploadUrl);

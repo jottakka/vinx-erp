@@ -1,61 +1,61 @@
-# Issue #173 Confirmation Replay Implementation Plan
+# Plano de implementação — replay de confirmação (#173)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Para agentes:** subskill obrigatória: use `superpowers:subagent-driven-development` (recomendado) ou `superpowers:executing-plans` por tarefa. Os passos usam checkbox (`- [ ]`).
 
-**Goal:** Make concurrent confirmations with the same `RequestId` and payload converge on the committed `confirmed` result without duplicate inspection, scan, audit, or idempotency state.
+**Objetivo:** Fazer confirmações concorrentes com o mesmo `RequestId` e payload convergirem no resultado `confirmed` já persistido, sem inspeção, scan, auditoria ou idempotência duplicados.
 
-**Architecture:** Keep the existing advisory lock and reconciliation helper. A deterministic EF Core command interceptor pauses the first request after its empty idempotency read, allows an identical request to commit, and then proves the first request reconciles the terminal file through `ReturnConcurrentConfirmationReplayAsync` instead of returning a premature `integrity_conflict`.
+**Arquitetura:** Manter o advisory lock e o helper de reconciliação. Um interceptor determinístico de comando EF Core pausa A após seu read vazio de idempotência, deixa B idêntico confirmar e prova que A reconcilia o arquivo terminal por `ReturnConcurrentConfirmationReplayAsync`, sem `integrity_conflict` prematuro.
 
-**Tech Stack:** .NET 10, ASP.NET Core, EF Core interceptors, PostgreSQL/Testcontainers, xUnit.
+**Stack:** .NET 10, ASP.NET Core, interceptors EF Core, PostgreSQL/Testcontainers, xUnit.
 
-## Global Constraints
+## Restrições globais
 
-- Start from current `origin/main`; do not reuse or cherry-pick the stale issue branch.
-- Use strict RED → GREEN TDD and retain the failing/passing command evidence in the implementer report.
-- Preserve membership, capability, tenant/RLS, malware, advisory-lock, audit, and idempotency guarantees.
-- Same request and payload replays `200 confirmed`; divergent payload remains `409 idempotency_conflict`; distinct request IDs retain `409 integrity_conflict`.
-- Add no migration, package, polling, delay, retry loop, stronger isolation level, or generic abstraction.
-- Keep documentation in compact Portuguese and do not access `quality/private`.
-- Count every manual test line; generated lines are zero. Freeze scope after the review correction round.
+- Partir de `origin/main` atual; não reutilizar nem cherry-pickar a branch obsoleta.
+- Usar TDD RED → GREEN estrito e guardar os comandos falho/aprovado no relatório.
+- Preservar membership, capability, tenant/RLS, malware, advisory lock, auditoria e idempotência.
+- Mesmo pedido e payload retorna `200 confirmed`; payload divergente mantém `409 idempotency_conflict`; IDs distintos mantêm `409 integrity_conflict`.
+- Não adicionar migration, pacote, polling, delay, retry, isolamento mais forte ou abstração genérica.
+- Documentar em português compacto e não acessar `quality/private`.
+- Contar cada linha manual de teste; linhas geradas são zero. Congelar escopo após a correção de revisão.
 
 ---
 
-### Task 1: Deterministic read-skew regression and minimal reconciliation
+### Tarefa 1: Regressão determinística de read-skew e reconciliação mínima
 
-**Files:**
-- Modify: `tests/public/Vinx.Erp.Foundation.IntegrationTests/Infrastructure/FoundationApiFactory.cs`
-- Modify: `tests/public/Vinx.Erp.Foundation.IntegrationTests/DocumentUploadEndpointTests.cs`
-- Modify: `src/Foundation/Vinx.Erp.Foundation/Files/DocumentUploadService.cs`
-- Create: `docs/verification/issue-173-concurrent-confirmation-replay-test-cases.md`
+**Arquivos:**
+- Modificar: `tests/public/Vinx.Erp.Foundation.IntegrationTests/Infrastructure/FoundationApiFactory.cs`
+- Modificar: `tests/public/Vinx.Erp.Foundation.IntegrationTests/DocumentUploadEndpointTests.cs`
+- Modificar: `src/Foundation/Vinx.Erp.Foundation/Files/DocumentUploadService.cs`
+- Criar: `docs/verification/issue-173-concurrent-confirmation-replay-test-cases.md`
 
 **Interfaces:**
-- Consumes: `DocumentUploadService.ConfirmAsync`, `ReturnConcurrentConfirmationReplayAsync`, the existing real PostgreSQL fixture, `ControlledFileStorage`, and `ControlledMalwareScanner`.
-- Produces: test-only `FirstConfirmationIdempotencyReadGate` wiring and unchanged public HTTP contracts.
+- Consome: `DocumentUploadService.ConfirmAsync`, `ReturnConcurrentConfirmationReplayAsync`, fixture PostgreSQL real existente, `ControlledFileStorage` e `ControlledMalwareScanner`.
+- Produz: wiring de teste `FirstConfirmationIdempotencyReadGate` e contratos HTTP públicos inalterados.
 
-- [x] **Step 1: Add the deterministic timing gate and failing integration test**
+- [x] **Passo 1: Adicionar gate determinístico e teste de integração falho**
 
-  Add an optional `DbCommandInterceptor` hook to `FoundationApiFactory` using the existing test-service registration pattern. In `DocumentUploadEndpointTests`, implement `FirstConfirmationIdempotencyReadGate` so its first matching `ReaderExecutedAsync` call:
+  Adicionar hook opcional `DbCommandInterceptor` a `FoundationApiFactory` pelo padrão existente. Em `DocumentUploadEndpointTests`, implementar `FirstConfirmationIdempotencyReadGate` para que a primeira chamada `ReaderExecutedAsync` correspondente:
 
-  1. matches a command containing `idempotency_records` and the parameter value `foundation.files.upload.confirm`;
-  2. signals `FirstRead` only after the real empty query completes;
-  3. awaits `Release` with a bounded cancellation token;
-  4. always permits release from test cleanup.
+  1. encontre comando com `idempotency_records` e parâmetro `foundation.files.upload.confirm`;
+  2. sinalize `FirstRead` só após a consulta vazia real;
+  3. aguarde `Release` com cancellation token limitado;
+  4. sempre permita release no cleanup do teste.
 
-  Add `Concurrent_same_request_replays_when_idempotency_read_precedes_the_winner_commit`: start request A, await `FirstRead`, complete identical request B as `200 confirmed`, release A, then assert both bodies contain the same file and `confirmed`; exactly one inspection, malware scan, success audit, and idempotency record exist; no denied `integrity_conflict` audit exists.
+  Adicionar `Concurrent_same_request_replays_when_idempotency_read_precedes_the_winner_commit`: iniciar A, aguardar `FirstRead`, concluir B idêntico como `200 confirmed`, liberar A e verificar mesmo arquivo/`confirmed` nos dois corpos; uma inspeção, scan, auditoria de sucesso e linha de idempotência; nenhuma auditoria negada `integrity_conflict`.
 
-- [x] **Step 2: Run the new test and capture the expected RED**
+- [x] **Passo 2: Executar o novo teste e registrar o RED esperado**
 
-  Run:
+  Executar:
 
   ```bash
   dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj --no-restore --filter FullyQualifiedName~Concurrent_same_request_replays_when_idempotency_read_precedes_the_winner_commit -v minimal
   ```
 
-  Expected: request B is `200 confirmed`, request A is `409 integrity_conflict`, and the assertion requiring two successful replays fails. A timeout, setup error, or synthetic exception is not an acceptable RED.
+  Esperado: B retorna `200 confirmed`, A retorna `409 integrity_conflict` e falha a asserção de dois replays aprovados. Timeout, erro de setup ou exceção sintética não valem como RED.
 
-- [x] **Step 3: Implement the minimal production fix**
+- [x] **Passo 3: Implementar a correção mínima de produção**
 
-  In `PrepareConfirmationAsync`, replace only the terminal-file direct denial with the existing reconciliation path:
+  Em `PrepareConfirmationAsync`, trocar somente a negação direta de arquivo terminal pelo caminho de reconciliação existente:
 
   ```csharp
   if (!string.Equals(processingState, FileRecord.QuarantinedState, StringComparison.Ordinal))
@@ -69,31 +69,31 @@
   }
   ```
 
-  Do not change finalization exception handling, locking, transaction isolation, or PostgreSQL error classification.
+  Não alterar tratamento de exceção da finalização, lock, isolamento transacional ou classificação de erro PostgreSQL.
 
-- [x] **Step 4: Run the deterministic test and capture GREEN**
+- [x] **Passo 4: Executar o teste determinístico e registrar GREEN**
 
-  Re-run the exact Step 2 command. Expected: `1/1` passes with pristine output and one-time durable effects.
+  Reexecutar o comando exato do Passo 2. Esperado: `1/1` aprovado, saída limpa e efeitos duráveis únicos.
 
-- [x] **Step 5: Add the realistic divergent-payload regression**
+- [x] **Passo 5: Adicionar regressão realista de payload divergente**
 
-  Add `Confirmation_with_same_request_id_and_different_file_returns_idempotency_conflict`: confirm file 1, then confirm file 2 in the same company with the same `RequestId`; assert `409 idempotency_conflict`, file 2 remains quarantined, and the original one-time effects are not duplicated.
+  Adicionar `Confirmation_with_same_request_id_and_different_file_returns_idempotency_conflict`: confirmar arquivo 1 e depois arquivo 2 na mesma empresa com o mesmo `RequestId`; verificar `409 idempotency_conflict`, arquivo 2 em quarentena e efeitos únicos originais sem duplicação.
 
-- [x] **Step 6: Run focused regression coverage**
+- [x] **Passo 6: Executar regressão focada**
 
-  Run the two new tests plus these existing methods using one filter expression:
+  Executar os dois testes novos e estes métodos existentes com uma expressão de filtro:
 
   - `Concurrent_confirmation_with_the_same_request_creates_one_confirmed_result`
   - `Concurrent_confirmations_with_distinct_request_ids_inspect_once_and_replay_their_results`
   - `Repeated_confirmation_replays_confirmed_state_without_a_second_audit_or_exposure`
   - `Confirmation_reauthorizes_after_private_inspection_finishes`
 
-  Expected: all selected tests pass; no output warnings or errors.
+  Esperado: todos os selecionados aprovados, sem warnings ou errors.
 
-- [x] **Step 7: Add the verification manifest**
+- [x] **Passo 7: Adicionar manifest de verificação**
 
-  Create a compact Portuguese table mapping success, validation/error, access, state/exception, and concurrency BDD classes to exact test methods. Mark existing unchanged authorization tests as covered by name; do not copy logs.
+  Criar tabela compacta em português que mapeie classes BDD de sucesso, validação/erro, acesso, estado/exceção e concorrência aos métodos exatos. Marcar testes de autorização existentes e inalterados pelo nome; não copiar logs.
 
-- [x] **Step 8: Verify scope and commit**
+- [x] **Passo 8: Verificar escopo e fazer commit**
 
-  Run `git diff --check`, recalculate counted files/manual lines, and confirm zero migration/snapshot/lockfile changes. Commit the issue slice with a concise conventional subject. The implementer report must include RED, GREEN, focused-test output, changed files, and the size estimate. Do not run the full public gate inside this task; the controller runs it once after independent review and corrections.
+  Executar `git diff --check`, recalcular arquivos/linhas manuais e confirmar zero mudanças de migration/snapshot/lockfile. Commitar a fatia com assunto convencional curto. O relatório deve incluir RED, GREEN, saída focada, arquivos alterados e estimativa de tamanho. Não executar o gate público completo nesta tarefa; o controller o executa após revisão independente e correções.
