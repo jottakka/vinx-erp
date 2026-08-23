@@ -1,5 +1,9 @@
 using System.Net;
 using System.Text;
+using System.Data.Common;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Vinx.Erp.Foundation.Domain;
@@ -72,6 +76,70 @@ public sealed class ExternalIdentityReprovisioningServiceTests
         Assert.DoesNotContain(NewSubject, result.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Reprovision_async_logs_only_safe_outcome_when_the_database_exception_contains_sensitive_values()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var seed = await SeedAsync(fixture);
+        var sensitiveValues = new[]
+        {
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+            Issuer,
+            OldSubject,
+            NewSubject,
+            "33333333-3333-3333-3333-333333333333",
+            RetainedEmail,
+            "provider-payload-marker",
+            "token-credential-marker",
+        };
+        var logger = new ExternalIdentityReprovisioningLogCapture();
+        var handler = new ControlledHttpMessageHandler(subject =>
+            subject == OldSubject
+                ? Json(HttpStatusCode.NotFound, "old-provider-payload")
+                : Json(HttpStatusCode.OK, UserJson(NewSubject, RetainedEmail))
+        );
+        await using var database = CreateMigratorDbContext(
+            fixture,
+            new ThrowingReprovisioningCommandInterceptor(
+                new InvalidOperationException(string.Join("|", sensitiveValues))
+            )
+        );
+        var service = CreateService(database, handler, logger);
+
+        var result = await service.ReprovisionAsync(NewCommand(seed), CancellationToken.None);
+
+        Assert.Equal(ExternalIdentityReprovisioningState.Unavailable, result);
+        var log = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Error, log.Level);
+        Assert.Equal(
+            "External identity reprovisioning {Operation} {Module} {Result} {Reason}",
+            log.Template
+        );
+        Assert.Equal("external_identity_reprovisioning", log.Properties["Operation"]);
+        Assert.Equal("foundation", log.Properties["Module"]);
+        Assert.Equal("unavailable", log.Properties["Result"]);
+        Assert.Equal("reprovisioning_execution_failed", log.Properties["Reason"]);
+        Assert.Equal(
+            ["Module", "Operation", "Reason", "Result"],
+            log.Properties.Keys.OrderBy(key => key)
+        );
+        Assert.Null(log.Exception);
+        foreach (var sensitiveValue in sensitiveValues)
+        {
+            Assert.DoesNotContain(sensitiveValue, log.Formatted, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                sensitiveValue,
+                log.Properties.Values.Select(value => value?.ToString()),
+                StringComparer.Ordinal
+            );
+        }
+
+        var state = await ReadStateAsync(fixture, seed);
+        Assert.Equal(OldSubject, state.Subject);
+        Assert.Equal(0L, state.ReprovisioningAudits);
+    }
+
     public static TheoryData<ProviderCase, ExternalIdentityReprovisioningState> RejectedCases =>
         new()
         {
@@ -114,7 +182,8 @@ public sealed class ExternalIdentityReprovisioningServiceTests
 
     private static ExternalIdentityReprovisioningService CreateService(
         Persistence.FoundationDbContext database,
-        HttpMessageHandler handler) =>
+        HttpMessageHandler handler,
+        ILogger<ExternalIdentityReprovisioningService>? logger = null) =>
         new(
             database,
             new SupabaseAdminUserVerifier(
@@ -123,7 +192,18 @@ public sealed class ExternalIdentityReprovisioningServiceTests
                 new SupabaseAdminOptions { ServiceRoleKey = "test-service-role-key" }
             ),
             new SupabaseAuthOptions { Issuer = Issuer, Audience = Audience },
-            NullLogger<ExternalIdentityReprovisioningService>.Instance
+            logger ?? NullLogger<ExternalIdentityReprovisioningService>.Instance
+        );
+
+    private static Persistence.FoundationDbContext CreateMigratorDbContext(
+        FoundationPostgresFixture fixture,
+        IInterceptor interceptor) =>
+        new(
+            new DbContextOptionsBuilder<Persistence.FoundationDbContext>()
+                .UseNpgsql(fixture.MigratorConnectionString)
+                .UseSnakeCaseNamingConvention()
+                .AddInterceptors(interceptor)
+                .Options
         );
 
     private static ExternalIdentityReprovisioningCommand NewCommand(Seed seed) =>
@@ -196,6 +276,62 @@ public sealed class ExternalIdentityReprovisioningServiceTests
 
     private sealed record Seed(Guid UserId, Guid IdentityId);
     private sealed record State(string Subject, long ReprovisioningAudits);
+    private sealed record CapturedLog(
+        LogLevel Level,
+        Exception? Exception,
+        string Template,
+        string Formatted,
+        IReadOnlyDictionary<string, object?> Properties
+    );
+
+    private sealed class ExternalIdentityReprovisioningLogCapture
+        : ILogger<ExternalIdentityReprovisioningService>
+    {
+        public List<CapturedLog> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        )
+        {
+            var values = ((IEnumerable<KeyValuePair<string, object?>>)state!).ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value,
+                StringComparer.Ordinal
+            );
+            var template = values["{OriginalFormat}"]?.ToString()
+                ?? throw new InvalidOperationException("The structured log template was missing.");
+            values.Remove("{OriginalFormat}");
+            Entries.Add(new CapturedLog(logLevel, exception, template, formatter(state, exception), values));
+        }
+    }
+
+    private sealed class ThrowingReprovisioningCommandInterceptor(Exception exception)
+        : DbCommandInterceptor
+    {
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (command.CommandText.Contains("reprovision_external_identity", StringComparison.Ordinal))
+            {
+                throw exception;
+            }
+
+            return new ValueTask<InterceptionResult<DbDataReader>>(result);
+        }
+    }
 
     private sealed class ControlledHttpMessageHandler(Func<string, HttpResponseMessage> respond) : HttpMessageHandler
     {

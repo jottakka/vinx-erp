@@ -105,9 +105,9 @@ public sealed class ExternalIdentityReprovisioningService(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            return LogUnavailable(exception);
+            return LogUnavailable();
         }
     }
 
@@ -129,10 +129,9 @@ public sealed class ExternalIdentityReprovisioningService(
             StringComparison.OrdinalIgnoreCase
         );
 
-    private ExternalIdentityReprovisioningState LogUnavailable(Exception? exception = null)
+    private ExternalIdentityReprovisioningState LogUnavailable()
     {
         logger.LogError(
-            exception,
             EventTemplate,
             Operation,
             Module,
