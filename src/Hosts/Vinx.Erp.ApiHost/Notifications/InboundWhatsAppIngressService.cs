@@ -7,6 +7,7 @@ using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
+using Wolverine.Runtime;
 
 namespace Vinx.Erp.ApiHost.Notifications;
 
@@ -264,7 +265,10 @@ public sealed class InboundWhatsAppIngressService(
                 }
 
                 commitAttempted = true;
-                await outbox.SaveChangesAndFlushMessagesAsync(cancellationToken);
+                await outbox.SaveChangesAndFlushMessagesAsync(
+                    MultiFlushMode.AllowMultiples,
+                    cancellationToken
+                );
                 committedByOutbox = true;
             }
 

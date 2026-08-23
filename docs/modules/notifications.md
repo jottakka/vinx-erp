@@ -104,12 +104,16 @@ message_id)` na mesma transação:
   Texto aceita no máximo 4096 caracteres.
 
 Texto e imagem sem legenda correlacionam por 30 segundos somente com a chave
-exata `(phone_number_id, wa_id, user_id, company_id, membership_id)`. Um par
-único processa a imagem; múltiplos candidatos falham como
-`correlation_ambiguous`. Texto isolado fecha como `correlation_timeout`, sem IA
-ou resposta. Imagem sem par aguarda 30 segundos; imagem com legenda ou par
-único processa imediatamente. Replays não publicam novamente. Wolverine usa o
-outbox e seu agendamento durável existentes; documentos continuam em
+exata `(phone_number_id, wa_id, user_id, company_id, membership_id)`. Se o texto
+chega primeiro, a imagem sem legenda correlacionada depois processa
+imediatamente; imagem com legenda também processa imediatamente. Se a imagem
+sem legenda chega primeiro, o texto posterior apenas grava o vínculo: o
+envelope da imagem conserva seu prazo original. Ambiguidade falha os candidatos
+como `correlation_ambiguous` e não enfileira processamento de imagem; o envelope
+de expiração de texto já exigido pode permanecer agendado e vira no-op ao
+encontrar o estado terminal. Texto isolado fecha como `correlation_timeout`, sem
+IA ou resposta. Replays não publicam novamente. Wolverine usa o outbox e seu
+agendamento durável existentes; documentos continuam em
 `whatsapp-inbound-documents`. Linhas não admitidas são somente evidência.
 
 ## Inbound extração tipada de fatura (#272 PR3)Após a quarentena limpa, o mesmo processamento extrai o candidato tipado:

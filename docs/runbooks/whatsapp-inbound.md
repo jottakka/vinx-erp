@@ -12,9 +12,13 @@ resolve para exatamente um usuário, uma empresa e uma membership ativa
 
 Texto e imagem sem legenda do mesmo ator podem formar um par durante 30
 segundos. A chave exige canal, remetente, usuário, empresa e membership iguais.
-Imagem com legenda ou par único segue imediatamente; imagem sem par é agendada
-por 30 segundos; ambiguidade não publica; replay não republica. Texto sem
-imagem expira sem IA nem resposta automática.
+Se o texto chega primeiro, a imagem sem legenda correlacionada depois segue
+imediatamente; imagem com legenda também segue imediatamente. Se a imagem sem
+legenda chega primeiro, o texto posterior não antecipa o processamento: o
+envelope da imagem conserva o prazo original. Ambiguidade não enfileira
+processamento de imagem. O envelope de expiração de texto já exigido pode
+permanecer agendado e vira no-op ao encontrar o estado terminal. Replay não
+republica; texto sem imagem expira sem IA nem resposta automática.
 
 Imagens processadas seguem pela fila durável `whatsapp-inbound` e o WorkerHost:
 download da mídia → canonicalização (strip de metadados, tetos de pixel/byte) →

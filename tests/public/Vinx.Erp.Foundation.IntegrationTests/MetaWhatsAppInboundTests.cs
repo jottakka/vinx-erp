@@ -1,5 +1,6 @@
 extern alias workerhost;
 
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -255,6 +256,80 @@ public sealed class MetaWhatsAppInboundTests
         Assert.Equal("expired", decision.Properties["Result"]);
         Assert.Equal("deadline_elapsed", decision.Properties["Reason"]);
         Assert.DoesNotContain(inboundId.ToString("D"), decision.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Signed_webhook_with_two_admitted_texts_publishes_both_expiry_envelopes()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        var logs = new CapturingLoggerProvider();
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logs);
+        using var client = factory.CreateClient();
+        const string firstMessageId = "wamid.in.text-batch.1";
+        const string secondMessageId = "wamid.in.text-batch.2";
+        var payload = $$"""
+            {
+              "entry": [{
+                "changes": [{
+                  "value": {
+                    "metadata": { "phone_number_id": "{{ChannelPhoneNumberId}}" },
+                    "messages": [
+                      {
+                        "id": "{{firstMessageId}}",
+                        "type": "text",
+                        "from": "{{SenderWaId}}",
+                        "text": { "body": "first batch text" }
+                      },
+                      {
+                        "id": "{{secondMessageId}}",
+                        "type": "text",
+                        "from": "{{SenderWaId}}",
+                        "text": { "body": "second batch text" }
+                      }
+                    ]
+                  }
+                }]
+              }]
+            }
+            """;
+
+        using (var posted = await PostSignedAsync(client, payload))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var firstInboundId = await ReadInboundIdAsync(factory, firstMessageId);
+        var secondInboundId = await ReadInboundIdAsync(factory, secondMessageId);
+        var scheduled = (await ReadInboundQueueAsync(factory))
+            .Where(envelope =>
+                envelope.MessageType.EndsWith(
+                    "InboundWhatsAppTextCorrelationExpired",
+                    StringComparison.Ordinal
+                )
+            )
+            .ToArray();
+        Assert.Equal(2, scheduled.Length);
+        Assert.All(scheduled, envelope => Assert.True(envelope.Scheduled));
+        Assert.All(
+            scheduled,
+            envelope => Assert.StartsWith(
+                "postgresql://",
+                envelope.Destination,
+                StringComparison.Ordinal
+            )
+        );
+        Assert.Equal(
+            new[] { firstInboundId, secondInboundId }.Order(),
+            scheduled.Select(envelope => envelope.InboundMessageId).Order()
+        );
+        Assert.DoesNotContain(
+            logs.Messages,
+            message => message.Contains(
+                "has already flushed its outgoing messages",
+                StringComparison.Ordinal
+            )
+        );
     }
 
     [Fact]
@@ -1089,5 +1164,32 @@ public sealed class MetaWhatsAppInboundTests
         command.Parameters.AddWithValue("image_id", imageId);
         command.Parameters.AddWithValue("text_id", textId);
         return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<string> _messages = new();
+
+        public IReadOnlyCollection<string> Messages => _messages;
+
+        public ILogger CreateLogger(string categoryName) => new Sink(_messages);
+
+        public void Dispose() { }
+
+        private sealed class Sink(ConcurrentQueue<string> messages) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state)
+                where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter
+            ) => messages.Enqueue(formatter(state, exception));
+        }
     }
 }
