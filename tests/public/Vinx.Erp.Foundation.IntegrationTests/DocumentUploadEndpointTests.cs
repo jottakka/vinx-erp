@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
+using System.Data.Common;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Audit;
@@ -898,6 +900,57 @@ public sealed class DocumentUploadEndpointTests
     }
 
     [Fact]
+    public async Task Concurrent_same_request_replays_when_idempotency_read_precedes_the_winner_commit()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage);
+        var gate = new FirstConfirmationIdempotencyReadGate();
+        await using var factory = await CreateFactoryAsync(storage, scanner, commandInterceptor: gate);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var request = new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var first = factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request, timeout.Token);
+        try
+        {
+            await gate.FirstRead.WaitAsync(timeout.Token);
+
+            var winner = await factory.CreateClient().PostAsJsonAsync(
+                "/foundation/files/confirmations", request, timeout.Token);
+            winner.EnsureSuccessStatusCode();
+
+            gate.Release();
+            var replay = await first.WaitAsync(timeout.Token);
+            replay.EnsureSuccessStatusCode();
+
+            var winnerResult = await winner.Content.ReadFromJsonAsync<ConfirmationResponse>(timeout.Token);
+            var replayResult = await replay.Content.ReadFromJsonAsync<ConfirmationResponse>(timeout.Token);
+            Assert.NotNull(winnerResult);
+            Assert.NotNull(replayResult);
+            Assert.Equal(winnerResult.FileId, replayResult.FileId);
+            Assert.Equal("confirmed", winnerResult.ProcessingState);
+            Assert.Equal("confirmed", replayResult.ProcessingState);
+            Assert.Equal(1, storage.InspectionCount);
+            Assert.Equal(1, scanner.ScanCount);
+
+            await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+            Assert.Single(await administrator.AuditEvents.Where(audit =>
+                audit.Action == "foundation.files.upload.confirm" && audit.Outcome == AuditOutcome.Success).ToListAsync(timeout.Token));
+            Assert.Single(await administrator.IdempotencyRecords.Where(record =>
+                record.CommandName == "foundation.files.upload.confirm" && record.RequestId == request.RequestId).ToListAsync(timeout.Token));
+            Assert.Empty(await administrator.AuditEvents.Where(audit =>
+                audit.Action == "integrity_conflict" && audit.Outcome == AuditOutcome.Denied).ToListAsync(timeout.Token));
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    [Fact]
     public async Task Concurrent_confirmation_with_the_same_request_creates_one_confirmed_result()
     {
         var storage = new ControlledFileStorage
@@ -967,6 +1020,41 @@ public sealed class DocumentUploadEndpointTests
         Assert.Single(await verification.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.confirm").ToListAsync());
     }
 
+    [Fact]
+    public async Task Confirmation_with_same_request_id_and_different_file_returns_idempotency_conflict()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage);
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var firstIntent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var secondIntent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var firstFile = await GetFileAsync(factory, firstIntent.FileId);
+        var secondFile = await GetFileAsync(factory, secondIntent.FileId);
+        storage.Put(firstFile.ProviderKey, SafePayload, firstFile.MimeType);
+        storage.Put(secondFile.ProviderKey, SafePayload, secondFile.MimeType);
+        var requestId = Guid.NewGuid();
+
+        var confirmed = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, requestId, firstIntent.FileId));
+        var conflict = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, requestId, secondIntent.FileId));
+
+        confirmed.EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        Assert.Equal("idempotency_conflict", (await conflict.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(1, storage.InspectionCount);
+        Assert.Equal(1, scanner.ScanCount);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal("quarantined", (await administrator.Files.SingleAsync(file => file.Id == secondIntent.FileId)).ProcessingState);
+        Assert.Single(await administrator.AuditEvents.Where(audit =>
+            audit.Action == "foundation.files.upload.confirm" && audit.Outcome == AuditOutcome.Success).ToListAsync());
+        Assert.Single(await administrator.IdempotencyRecords.Where(record =>
+            record.CommandName == "foundation.files.upload.confirm" && record.RequestId == requestId).ToListAsync());
+    }
+
     private static UploadIntentRequest NewIntent(Guid companyId) => new(
         companyId, Guid.NewGuid(), "invoice.pdf", "application/pdf", SafePayload.Length, ComputeChecksum(SafePayload),
         "financial", "user_upload", DateTimeOffset.UtcNow.AddDays(30));
@@ -986,11 +1074,13 @@ public sealed class DocumentUploadEndpointTests
     private static Task<FoundationApiFactory> CreateFactoryAsync(
         ControlledFileStorage storage,
         IMalwareScanner? scanner = null,
-        TimeSpan? malwareScanTimeout = null) =>
+        TimeSpan? malwareScanTimeout = null,
+        DbCommandInterceptor? commandInterceptor = null) =>
         FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
             fileStorage: storage,
             malwareScanner: scanner,
-            malwareScanTimeout: malwareScanTimeout);
+            malwareScanTimeout: malwareScanTimeout,
+            commandInterceptor: commandInterceptor);
 
     private static async Task<UploadIntentResponse> CreateIntentAsync(FoundationApiFactory factory, Guid companyId)
     {
@@ -1080,6 +1170,37 @@ public sealed class DocumentUploadEndpointTests
     private sealed record ConfirmationResponse(Guid FileId, string ProcessingState);
     private sealed record ErrorResponse(string Code);
 
+    private sealed class FirstConfirmationIdempotencyReadGate : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource firstRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int firstReadObserved;
+
+        public Task FirstRead => firstRead.Task;
+
+        public void Release() => release.TrySetResult();
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("idempotency_records", StringComparison.OrdinalIgnoreCase)
+                && command.Parameters.Cast<DbParameter>().Any(parameter =>
+                    string.Equals(parameter.Value as string, "foundation.files.upload.confirm", StringComparison.Ordinal))
+                && Interlocked.Exchange(ref firstReadObserved, 1) == 0)
+            {
+                firstRead.TrySetResult();
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(60));
+                await release.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
+            }
+
+            return result;
+        }
+    }
+
     private sealed class ControlledFileStorage : FileStorage
     {
         private readonly Dictionary<string, StoredObject> _objects = new(StringComparer.Ordinal);
@@ -1128,9 +1249,10 @@ public sealed class DocumentUploadEndpointTests
                 throw new InvalidOperationException("storage_read_failed");
             }
 
+            var currentInspection = Interlocked.Increment(ref inspectionCount);
             if (BlockInspection)
             {
-                if (Interlocked.Increment(ref inspectionCount) >= InspectionsToBlock)
+                if (currentInspection >= InspectionsToBlock)
                 {
                     inspectionStarted.TrySetResult();
                 }

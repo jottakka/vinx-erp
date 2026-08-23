@@ -271,8 +271,12 @@ public sealed class DocumentUploadService(
 
         if (!string.Equals(processingState, FileRecord.QuarantinedState, StringComparison.Ordinal))
         {
-            return ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
-                actor, command.CompanyId, "integrity_conflict", StatusCodes.Status409Conflict, cancellationToken));
+            return ConfirmationPreparation.Completed(
+                await ReturnConcurrentConfirmationReplayAsync(
+                    actor,
+                    command,
+                    payloadHash,
+                    cancellationToken));
         }
 
         return ConfirmationPreparation.ForInspection(providerKey);
