@@ -1,0 +1,9 @@
+# Casos BDD — reprovisionamento de identidade (#241)
+
+| Classe BDD | Dado / quando / então | Evidência pública | Situação |
+|---|---|---|---|
+| mesma pessoa | Dado subject antigo ausente, subject novo confirmado e e-mail local igual, quando recupera, então somente o vínculo esperado muda. | `ExternalIdentityReprovisioningServiceTests.Reprovision_async_changes_the_exact_configured_identity_after_both_provider_preflights` | coberto |
+| antigo ainda ativo | Dado subject antigo presente, quando recupera, então retorna `provider_not_deleted` sem mutação. | `ExternalIdentityReprovisioningServiceTests.Reprovision_async_denies_or_reports_unavailable_without_mutating_when_preconditions_fail(OldStillPresent, ProviderNotDeleted)` | coberto |
+| novo não confiável | Dado usuário novo inválido, não confirmado, banido, anônimo ou de outra audiência, quando recupera, então retorna `provider_rejected` sem mutação. | `ExternalIdentityReprovisioningServiceTests.Reprovision_async_denies_or_reports_unavailable_without_mutating_when_preconditions_fail(InvalidNew/UnconfirmedNew/BannedNew/AnonymousNew/WrongAudienceNew, ProviderRejected)` | coberto |
+| guarda local exata | Dado e-mail diferente ou tupla de identidade divergente, quando recupera, então retorna `email_mismatch` ou `tuple_mismatch` sem mutação. | `ExternalIdentityReprovisioningServiceTests.Reprovision_async_denies_or_reports_unavailable_without_mutating_when_preconditions_fail(EmailMismatch/TupleMismatch, ...)` | coberto |
+| provedor indisponível | Dado Admin Auth indisponível, quando recupera, então retorna `unavailable` sem mutação nem exposição de dados. | `ExternalIdentityReprovisioningServiceTests.Reprovision_async_denies_or_reports_unavailable_without_mutating_when_preconditions_fail(ProviderUnavailable, Unavailable)` | coberto |

@@ -22,7 +22,8 @@ internal static class PlatformBootstrapCommand
             return await RunWolverineGrantsAsync();
         }
 
-        if (arguments.Length != 0)
+        var isReprovisioning = arguments is ["reprovision-identity"];
+        if (arguments.Length != 0 && !isReprovisioning)
         {
             return await WriteOutcomeAsync("configuration_invalid", exitCode: 1);
         }
@@ -48,6 +49,19 @@ internal static class PlatformBootstrapCommand
                         && !string.IsNullOrWhiteSpace(options.DisplayName)
                         && options.DisplayName.Trim().Length <= 200,
                     "Platform operator deployment identity is invalid."
+                );
+            builder
+                .Services.AddOptions<ExternalIdentityReprovisioningOptions>()
+                .Bind(builder.Configuration)
+                .Validate(
+                    options =>
+                        Guid.TryParse(options.UserId, out var userId)
+                        && userId != Guid.Empty
+                        && Guid.TryParse(options.ExpectedExternalIdentityId, out var identityId)
+                        && identityId != Guid.Empty
+                        && IsExactSubject(options.ExpectedOldSubject)
+                        && IsExactSubject(options.NewSubject),
+                    "External identity reprovisioning configuration is invalid."
                 );
             builder
                 .Services.AddOptions<SupabaseAuthOptions>()
@@ -91,9 +105,46 @@ internal static class PlatformBootstrapCommand
                 );
             builder.Services.AddScoped<PlatformOperatorBootstrapService>();
             builder.Services.AddScoped<PlatformBootstrapRunner>();
+            builder.Services.AddScoped<ExternalIdentityReprovisioningService>();
+            builder.Services.AddScoped<ExternalIdentityReprovisioningRunner>();
 
             using var host = builder.Build();
             await using var scope = host.Services.CreateAsyncScope();
+            if (isReprovisioning)
+            {
+                var reprovisioningOutcome = await scope
+                    .ServiceProvider.GetRequiredService<ExternalIdentityReprovisioningRunner>()
+                    .RunAsync(CancellationToken.None);
+                return reprovisioningOutcome switch
+                {
+                    ExternalIdentityReprovisioningState.Reprovisioned => await WriteOutcomeAsync(
+                        "reprovisioned",
+                        exitCode: 0
+                    ),
+                    ExternalIdentityReprovisioningState.AlreadyConfigured => await WriteOutcomeAsync(
+                        "already_configured",
+                        exitCode: 0
+                    ),
+                    ExternalIdentityReprovisioningState.ProviderNotDeleted => await WriteOutcomeAsync(
+                        "provider_not_deleted",
+                        exitCode: 1
+                    ),
+                    ExternalIdentityReprovisioningState.ProviderRejected => await WriteOutcomeAsync(
+                        "provider_rejected",
+                        exitCode: 1
+                    ),
+                    ExternalIdentityReprovisioningState.EmailMismatch => await WriteOutcomeAsync(
+                        "email_mismatch",
+                        exitCode: 1
+                    ),
+                    ExternalIdentityReprovisioningState.TupleMismatch => await WriteOutcomeAsync(
+                        "tuple_mismatch",
+                        exitCode: 1
+                    ),
+                    _ => await WriteOutcomeAsync("unavailable", exitCode: 1),
+                };
+            }
+
             var outcome = await scope
                 .ServiceProvider.GetRequiredService<PlatformBootstrapRunner>()
                 .RunAsync(CancellationToken.None);
@@ -184,4 +235,7 @@ internal static class PlatformBootstrapCommand
         await Console.Out.WriteLineAsync(value);
         return exitCode;
     }
+
+    private static bool IsExactSubject(string value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 400 && value.Trim().Length == value.Length;
 }
