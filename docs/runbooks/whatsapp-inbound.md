@@ -85,10 +85,37 @@ Motivos terminais de documento (`failure_reason`):
 | `media_invalid` | decodificação/limites (pixels/bytes) | usuário reenvia imagem válida |
 | `ocr_failed` | OCR sem texto válido (e sem legenda) | usuário reenvia imagem legível |
 | `ai_failed` | perfil de texto falhou determinístico | ver logs do provider |
-| `reply_rejected` / `reply_ambiguous` | resposta recusada/incerta | ver logs; janela 24h pode ter fechado |
+| `reply_rejected` | rejeição definitiva do provider | verificar o motivo seguro e a janela de 24h; não reenviar automaticamente |
+| `reply_ambiguous` | timeout, transporte/HTTP incerto, 2xx malformado ou conclusão local incerta | seguir reconciliação manual; não reenviar automaticamente |
 
-Transitivos (5xx/429/timeout de rede) seguem a política Wolverine 1s/5s/30s e depois DLQ
-redigido (`whatsapp_inbound_retry_exhausted`).
+Antes da barreira de resposta, transitivos de download/OCR/IA seguem a política
+Wolverine 1s/5s/30s e depois DLQ redigida (`whatsapp_inbound_retry_exhausted`).
+Depois de `reply_in_flight`, timeout, transporte incerto e HTTP 408/429/5xx
+são terminais `reply_ambiguous`: nunca são retries cegos de provider.
+
+## Barreira de resposta e reconciliação manual
+
+`reply_in_flight` significa que VINX confirmou a intenção de fazer sua única
+tentativa automática imediatamente antes do `POST`. Uma redelivery dessa linha
+é bloqueada e não baixa mídia, não chama OCR/IA e não faz outro `POST`.
+
+Logs estruturados seguros usam `Operation=whatsapp_inbound_interaction` e
+`Module=notifications`, sem telefone, conteúdo, token, prompt ou corpo HTTP:
+
+| Resultado | Significado operacional |
+| --- | --- |
+| `reply_send_started` | barreira confirmada; uma tentativa automática começou |
+| `reply_provider_accepted` | Meta devolveu `wamid`; confirmação local ainda é necessária |
+| `reply_confirmed` | `wamid` persistido e linha concluída |
+| `reply_ambiguous` | resultado externo ou local não é conclusivo |
+| `reply_redelivery_blocked` | redelivery encontrou `reply_in_flight` |
+| `reply_duplicate_blocked` | corrida perdeu a barreira antes do provider |
+
+Para uma linha `reply_in_flight` ou `reply_ambiguous`, o operador autorizado
+consulta somente evidência autorizada do provider. Se houver um `wamid` conhecido
+da resposta, conclui com esse `wamid`; sem `wamid` conhecido, fecha como
+`reply_ambiguous`. Nunca reseta a linha para `processing`, reabre a barreira ou
+republica a mensagem para obter outro POST automático.
 
 ## Incidentes
 
@@ -103,8 +130,9 @@ redigido (`whatsapp_inbound_retry_exhausted`).
   com `resolution_state <> 'admitted'` em `pending` são admissões fechadas
   (comportamento esperado), não backlog do worker.
 - **Tudo `ai_unconfigured`**: perfis ausentes no worker (não no ApiHost).
-- **Resposta duplicada após crash**: at-least-once documentado — o `complete` é idempotente
-  pelo `reply_message_id`, mas um crash entre envio e finalize pode reenviar uma vez.
+- **Resposta pendente após crash**: localizar `reply_in_flight`/`reply_ambiguous`,
+  seguir a reconciliação manual acima e preservar a evidência autorizada; a
+  redelivery automática é bloqueada para evitar um segundo POST.
 
 ## Corte (o que ficou de fora)
 

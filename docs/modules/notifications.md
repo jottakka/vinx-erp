@@ -163,16 +163,24 @@ sem resposta automática nesta fatia (PRs seguintes). Grant de DML da fila em
 `Providers/Meta/InboundWhatsAppInteractionService` orquestra o subsete
 automatizado do #140: após admissão admitida (#272 PR1), o ingress publica
 `InboundWhatsAppImageReceived` na fila durável `whatsapp-inbound` na mesma
-transação (padrão do outbox transacional). O worker faz claim idempotente
-(`claim/complete/fail_inbound_whatsapp_message`), baixa a mídia em duas fases,
-canonicaliza (EXIF descartado, tetos de pixel/byte), transcreve pelo perfil
-de visão (`DocumentVisionOcr` do módulo AI — conteúdo sempre tratado como
-dado), compõe um turno único no perfil de texto e responde em texto na
-janela de 24h (`MetaWhatsAppReplyMapper`, cap 4096). Perfis `InboundWhatsAppAi`
-são tudo-ou-nada: ausentes, cada imagem falha fechada (`ai_unconfigured`);
-parciais derrubam o boot. Falhas terminais carregam motivo estável
-(`failure_reason`); transitivas seguem retry 1s/5s/30s e DLQ redigida
-(`whatsapp_inbound_*`). Runbook: `docs/runbooks/whatsapp-inbound.md`.
+transação (padrão do outbox transacional). O worker faz claim idempotente,
+baixa a mídia em duas fases, canonicaliza (EXIF descartado, tetos de
+pixel/byte), transcreve pelo perfil de visão (`DocumentVisionOcr` do módulo AI
+— conteúdo sempre tratado como dado), compõe um turno único no perfil de texto
+e responde na janela de 24h (`MetaWhatsAppReplyMapper`, cap 4096).
+
+Imediatamente antes do único `POST` automático à Meta, a função
+`begin_inbound_whatsapp_reply` move a linha de `processing` para
+`reply_in_flight` e confirma essa barreira. Assim, cada inbound tem no máximo
+uma tentativa automática de provider; não é uma promessa de entrega exactly-once
+da Meta. `2xx` com `wamid` conclui a linha; rejeição definitiva fecha com
+`reply_rejected`; timeout, transporte incerto, 408/429/5xx, 2xx malformado ou
+incerteza local posterior fecham com `reply_ambiguous`. Redelivery ou corrida
+não fazem outro POST. Perfis `InboundWhatsAppAi` são tudo-ou-nada: ausentes,
+cada imagem falha fechada (`ai_unconfigured`); parciais derrubam o boot.
+Falhas antes da barreira preservam retry 1s/5s/30s e DLQ redigida
+(`whatsapp_inbound_*`). Runbook: `docs/runbooks/whatsapp-inbound.md`; matriz:
+`docs/verification/issue-265-whatsapp-reply-delivery-test-cases.md`.
 
 ## Deletion strategy
 

@@ -1,8 +1,14 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Notifications.Providers.Meta;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -125,6 +131,44 @@ public sealed class MetaWhatsAppInboundTests
     }
 
     [Fact]
+    public async Task Accepted_reply_then_process_loss_before_complete_is_not_sent_again_on_redelivery()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var completionFailure = new OneShotTransactionCommitFailureInterceptor();
+        var meta = new FakeInboundMetaHandler { ReplyAccepted = completionFailure.Arm };
+        const string messageId = "wamid.in.reply-process-loss";
+
+        using (var posted = await PostSignedAsync(client, ImagePayload(messageId, SenderWaId, "1938", null)))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var inboundId = await ReadInboundIdAsync(factory, messageId);
+        using var services = CreateInteractionServices(meta);
+
+        await using (var firstDatabase = CreateWorkerDatabase(factory, completionFailure))
+        {
+            var interaction = CreateInteractionService(firstDatabase, services);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                interaction.ProcessAsync(inboundId, CancellationToken.None));
+        }
+
+        await using (var redeliveryDatabase = CreateWorkerDatabase(factory, completionFailure))
+        {
+            var interaction = CreateInteractionService(redeliveryDatabase, services);
+            await interaction.ProcessAsync(inboundId, CancellationToken.None);
+        }
+
+        var row = (await NotificationIntentSeed.ReadInboundRowsAsync(factory)).Single(row => row.MessageId == messageId);
+        Assert.Equal(1, meta.ReplyPosts);
+        Assert.Equal("reply_in_flight", row.Status);
+        Assert.Null(row.ReplyMessageId);
+        Assert.Null(row.FailureReason);
+    }
+
+    [Fact]
     public async Task Without_ai_profiles_the_image_fails_closed_without_external_calls()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -234,6 +278,61 @@ public sealed class MetaWhatsAppInboundTests
             }
         );
     }
+
+    private static async Task<Guid> ReadInboundIdAsync(FoundationApiFactory factory, string messageId)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT id FROM notifications.inbound_whatsapp_messages WHERE message_id = @message_id",
+            administrator
+        );
+        command.Parameters.AddWithValue("message_id", messageId);
+        return (Guid)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static FoundationDbContext CreateWorkerDatabase(
+        FoundationApiFactory factory,
+        OneShotTransactionCommitFailureInterceptor completionFailure
+    ) =>
+        new(
+            new DbContextOptionsBuilder<FoundationDbContext>()
+                .UseNpgsql(factory.Fixture.WorkerConnectionString)
+                .UseSnakeCaseNamingConvention()
+                .AddInterceptors(completionFailure)
+                .Options
+        );
+
+    private static ServiceProvider CreateInteractionServices(FakeInboundMetaHandler meta)
+    {
+        var services = new ServiceCollection();
+        services
+            .AddHttpClient(MetaWhatsAppClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => meta);
+        services
+            .AddHttpClient(InboundWhatsAppInteractionService.TextHttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText));
+        services
+            .AddHttpClient(InboundWhatsAppInteractionService.VisionHttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson));
+        return services.BuildServiceProvider();
+    }
+
+    private static InboundWhatsAppInteractionService CreateInteractionService(
+        FoundationDbContext database,
+        ServiceProvider services
+    ) =>
+        new(
+            database,
+            services.GetRequiredService<IHttpClientFactory>(),
+            new MetaWhatsAppOptions
+            {
+                PhoneNumberId = ChannelPhoneNumberId,
+                AccessToken = "test-meta-access-token",
+                WebAppBaseUrl = "https://app.example.test",
+            },
+            InboundAiTestProfiles.Create(),
+            NullLogger<InboundWhatsAppInteractionService>.Instance
+        );
 
     private static string ImagePayload(string messageId, string waId, string mediaId, string? caption)
     {

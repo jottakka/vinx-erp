@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Data.Common;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Vinx.Erp.Notifications.Providers.Meta;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -65,6 +67,8 @@ public sealed class FakeInboundMetaHandler : HttpMessageHandler
     public bool FailMediaMetadata { get; set; }
 
     public bool FailFirstDownloadOnce { get; set; }
+
+    public Action? ReplyAccepted { get; set; }
 
     public int MediaMetadataGets { get; private set; }
 
@@ -148,6 +152,7 @@ public sealed class FakeInboundMetaHandler : HttpMessageHandler
         {
             _replyRequests.Add(new InboundCapturedRequest(body, request.Headers.Authorization));
         }
+        ReplyAccepted?.Invoke();
 
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -157,6 +162,32 @@ public sealed class FakeInboundMetaHandler : HttpMessageHandler
                 "application/json"
             ),
         };
+    }
+}
+
+/// <summary>
+/// Falha uma confirmação local depois de o fake registrar o aceite do provider.
+/// Modela a perda de processo antes da conclusão durável, sem alterar o adapter.
+/// </summary>
+public sealed class OneShotTransactionCommitFailureInterceptor : DbTransactionInterceptor
+{
+    private int _state;
+
+    public void Arm() => Interlocked.CompareExchange(ref _state, 1, 0);
+
+    public override ValueTask<InterceptionResult> TransactionCommittingAsync(
+        DbTransaction transaction,
+        TransactionEventData eventData,
+        InterceptionResult result,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (Interlocked.CompareExchange(ref _state, 2, 1) == 1)
+        {
+            throw new InvalidOperationException("Test-only reply completion failure.");
+        }
+
+        return ValueTask.FromResult(result);
     }
 }
 
