@@ -60,8 +60,8 @@ public sealed class InboundWhatsAppInteractionService(
                 "Inbound interaction {Operation} {Module} {Result} {Reason}",
                 Operation,
                 Module,
-                claim.Status,
-                "replay"
+                claim.Status == "reply_in_flight" ? "reply_redelivery_blocked" : claim.Status,
+                claim.Status == "reply_in_flight" ? "reply_in_flight" : "replay"
             );
 #pragma warning restore CA1873
             return;
@@ -165,7 +165,10 @@ public sealed class InboundWhatsAppInteractionService(
                 ],
                 cancellationToken: cancellationToken
             );
-            replyBody = response.Text is { Length: > 0 } text ? text.Trim() : FallbackReplyText;
+            var normalizedReply = response.Text?.Trim();
+            replyBody = string.IsNullOrWhiteSpace(normalizedReply)
+                ? FallbackReplyText
+                : normalizedReply;
         }
         catch (Exception exception) when (IsTransientExternalFailure(exception))
         {
@@ -180,35 +183,106 @@ public sealed class InboundWhatsAppInteractionService(
             return;
         }
 
+        var replyMessage = MetaWhatsAppReplyMapper.Map(claim.WaId!, replyBody);
         var sender = new MetaWhatsAppClient(
             httpClientFactory.CreateClient(MetaWhatsAppClient.HttpClientName),
             metaOptions,
             logger
         );
+        if (!await BeginReplyAsync(inboundMessageId, cancellationToken))
+        {
+            logger.LogInformation(
+                "Inbound interaction {Operation} {Module} {Result} {Reason}",
+                Operation,
+                Module,
+                "reply_duplicate_blocked",
+                "reply_in_flight"
+            );
+            return;
+        }
+
+        logger.LogInformation(
+            "Inbound interaction {Operation} {Module} {Result} {Reason}",
+            Operation,
+            Module,
+            "reply_send_started",
+            "provider_attempt"
+        );
         MetaWhatsAppSendResult send;
         try
         {
             send = await sender.SendTextAsync(
-                MetaWhatsAppReplyMapper.Map(claim.WaId!, replyBody),
+                replyMessage,
                 cancellationToken
             );
         }
         catch (InboundWhatsAppReplyTimeoutException)
         {
             await FailAsync(inboundMessageId, "reply_ambiguous", cancellationToken);
+            logger.LogWarning(
+                "Inbound interaction {Operation} {Module} {Result} {Reason}",
+                Operation,
+                Module,
+                "reply_ambiguous",
+                "provider_timeout"
+            );
+            return;
+        }
+        catch (NotificationProviderTransientException)
+        {
+            await FailAsync(inboundMessageId, "reply_ambiguous", cancellationToken);
+            logger.LogWarning(
+                "Inbound interaction {Operation} {Module} {Result} {Reason}",
+                Operation,
+                Module,
+                "reply_ambiguous",
+                "provider_transient"
+            );
+            return;
+        }
+        catch (HttpRequestException)
+        {
+            await FailAsync(inboundMessageId, "reply_ambiguous", cancellationToken);
+            logger.LogWarning(
+                "Inbound interaction {Operation} {Module} {Result} {Reason}",
+                Operation,
+                Module,
+                "reply_ambiguous",
+                "provider_transport"
+            );
             return;
         }
 
         if (send.Kind == NotificationProviderResultKind.Delivered && send.MessageId is not null)
         {
+            logger.LogInformation(
+                "Inbound interaction {Operation} {Module} {Result} {Reason}",
+                Operation,
+                Module,
+                "reply_provider_accepted",
+                "wamid_received"
+            );
             var completed = await CompleteAsync(inboundMessageId, send.MessageId, cancellationToken);
+            if (!completed)
+            {
+                await FailAsync(inboundMessageId, "reply_ambiguous", cancellationToken);
+                logger.LogWarning(
+                    "Inbound interaction {Operation} {Module} {Result} {Reason}",
+                    Operation,
+                    Module,
+                    "reply_ambiguous",
+                    "completion_unconfirmed"
+                );
+                return;
+            }
+
 #pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
             logger.LogInformation(
                 "Inbound interaction {Operation} {Module} {Result} {Reason}",
                 Operation,
                 Module,
-                completed ? "completed" : "replay",
-                "replied"
+                "reply_confirmed",
+                "wamid_persisted"
             );
 #pragma warning restore CA1873
             return;
@@ -224,7 +298,7 @@ public sealed class InboundWhatsAppInteractionService(
             "Inbound interaction {Operation} {Module} {Result} {Reason}",
             Operation,
             Module,
-            "failed",
+            reason,
             reason
         );
     }
@@ -305,9 +379,18 @@ public sealed class InboundWhatsAppInteractionService(
     {
         return await ExecuteStatusFunctionAsync(
             "SELECT notifications.complete_inbound_whatsapp_message(@inbound_id, @reply_message_id)",
+            cancellationToken,
             ("inbound_id", inboundMessageId),
-            ("reply_message_id", replyMessageId),
-            cancellationToken
+            ("reply_message_id", replyMessageId)
+        );
+    }
+
+    private async Task<bool> BeginReplyAsync(Guid inboundMessageId, CancellationToken cancellationToken)
+    {
+        return await ExecuteStatusFunctionAsync(
+            "SELECT notifications.begin_inbound_whatsapp_reply(@inbound_id)",
+            cancellationToken,
+            ("inbound_id", inboundMessageId)
         );
     }
 
@@ -319,9 +402,9 @@ public sealed class InboundWhatsAppInteractionService(
     {
         await ExecuteStatusFunctionAsync(
             "SELECT notifications.fail_inbound_whatsapp_message(@inbound_id, @failure_reason)",
+            cancellationToken,
             ("inbound_id", inboundMessageId),
-            ("failure_reason", failureReason),
-            cancellationToken
+            ("failure_reason", failureReason)
         );
     }
 
@@ -344,9 +427,8 @@ public sealed class InboundWhatsAppInteractionService(
 
     private async Task<bool> ExecuteStatusFunctionAsync(
         string commandText,
-        (string Name, object Value) first,
-        (string Name, object Value) second,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        params (string Name, object Value)[] parameters
     )
     {
         await using var transaction = await database.Database.BeginTransactionAsync(
@@ -356,8 +438,10 @@ public sealed class InboundWhatsAppInteractionService(
         await using var command = connection.CreateCommand();
         command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
         command.CommandText = commandText;
-        AddParameter(command, first.Name, first.Value);
-        AddParameter(command, second.Name, second.Value);
+        foreach (var parameter in parameters)
+        {
+            AddParameter(command, parameter.Name, parameter.Value);
+        }
 
         try
         {

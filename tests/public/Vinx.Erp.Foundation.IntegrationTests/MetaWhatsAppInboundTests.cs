@@ -1,8 +1,15 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Notifications.Providers.Meta;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -42,27 +49,23 @@ public sealed class MetaWhatsAppInboundTests
         var meta = new FakeInboundMetaHandler();
         var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
         var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        var logger = new CapturingLogger<InboundWhatsAppInteractionService>();
 
         using (var posted = await PostSignedAsync(client, ImagePayload("wamid.in.e2e", "556198132901", "1938", "isto é um recibo")))
         {
             Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
         }
 
-        await using var worker = new NotificationWorkerHostFactory(
-            factory.Fixture.WorkerConnectionString,
-            metaGraphHandler: meta,
-            configureInboundAi: true,
-            inboundTextAiHandler: textAi,
-            inboundVisionAiHandler: visionAi
-        );
-        using var _ = worker.CreateClient();
+        var inboundId = await ReadInboundIdAsync(factory, "wamid.in.e2e");
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+        await using (var database = CreateWorkerDatabase(factory))
+        {
+            await CreateInteractionService(database, services, logger)
+                .ProcessAsync(inboundId, CancellationToken.None);
+        }
 
-        var row = await NotificationIntentSeed.WaitUntilInboundAsync(
-            factory,
-            "wamid.in.e2e",
-            "completed",
-            TimeSpan.FromSeconds(30)
-        );
+        var row = (await NotificationIntentSeed.ReadInboundRowsAsync(factory))
+            .Single(row => row.MessageId == "wamid.in.e2e");
         Assert.Equal("wamid.reply.test.1", row.ReplyMessageId);
         Assert.Null(row.FailureReason);
         Assert.Equal(1, meta.MediaMetadataGets);
@@ -84,6 +87,45 @@ public sealed class MetaWhatsAppInboundTests
         Assert.Equal("556198132901", root.GetProperty("to").GetString());
         Assert.Equal("text", root.GetProperty("type").GetString());
         Assert.Equal(AiReplyText, root.GetProperty("text").GetProperty("body").GetString());
+        AssertReplyDecision(logger.Entries, LogLevel.Information, "reply_send_started", "provider_attempt");
+        AssertReplyDecision(logger.Entries, LogLevel.Information, "reply_provider_accepted", "wamid_received");
+        AssertReplyDecision(logger.Entries, LogLevel.Information, "reply_confirmed", "wamid_persisted");
+    }
+
+    [Fact]
+    public async Task Whitespace_only_ai_reply_uses_the_fallback_before_the_reply_barrier()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var meta = new FakeInboundMetaHandler();
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, " \t\r\n ");
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        const string messageId = "wamid.in.reply-whitespace";
+
+        using (var posted = await PostSignedAsync(client, ImagePayload(messageId, SenderWaId, "1938", null)))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var inboundId = await ReadInboundIdAsync(factory, messageId);
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+        await using (var database = CreateWorkerDatabase(factory))
+        {
+            await CreateInteractionService(database, services)
+                .ProcessAsync(inboundId, CancellationToken.None);
+        }
+
+        var row = (await NotificationIntentSeed.ReadInboundRowsAsync(factory))
+            .Single(row => row.MessageId == messageId);
+        Assert.Equal("completed", row.Status);
+        Assert.Equal("wamid.reply.test.1", row.ReplyMessageId);
+        var reply = Assert.Single(meta.ReplyRequests);
+        using var payload = JsonDocument.Parse(reply.Body);
+        Assert.Equal(
+            "Recebi sua imagem, mas não consegui gerar uma resposta agora. Tente novamente em alguns minutos.",
+            payload.RootElement.GetProperty("text").GetProperty("body").GetString()
+        );
     }
 
     [Fact]
@@ -122,6 +164,216 @@ public sealed class MetaWhatsAppInboundTests
         );
         Assert.Equal("wamid.reply.test.1", row.ReplyMessageId);
         Assert.Equal(1, meta.ReplyPosts);
+    }
+
+    [Fact]
+    public async Task Accepted_reply_then_process_loss_before_complete_is_not_sent_again_on_redelivery()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var completionFailure = new OneShotTransactionCommitFailureInterceptor();
+        var meta = new FakeInboundMetaHandler { ReplyAccepted = completionFailure.Arm };
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        var firstLogger = new CapturingLogger<InboundWhatsAppInteractionService>();
+        var redeliveryLogger = new CapturingLogger<InboundWhatsAppInteractionService>();
+        const string messageId = "wamid.in.reply-process-loss";
+
+        using (var posted = await PostSignedAsync(client, ImagePayload(messageId, SenderWaId, "1938", null)))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var inboundId = await ReadInboundIdAsync(factory, messageId);
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+
+        await using (var firstDatabase = CreateWorkerDatabase(factory, completionFailure))
+        {
+            var interaction = CreateInteractionService(firstDatabase, services, firstLogger);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                interaction.ProcessAsync(inboundId, CancellationToken.None));
+        }
+
+        var externalWork = ExternalWork(meta, textAi, visionAi);
+
+        await using (var redeliveryDatabase = CreateWorkerDatabase(factory, completionFailure))
+        {
+            var interaction = CreateInteractionService(redeliveryDatabase, services, redeliveryLogger);
+            await interaction.ProcessAsync(inboundId, CancellationToken.None);
+        }
+
+        var row = (await NotificationIntentSeed.ReadInboundRowsAsync(factory)).Single(row => row.MessageId == messageId);
+        Assert.Equal(1, meta.ReplyPosts);
+        Assert.Equal("reply_in_flight", row.Status);
+        Assert.Null(row.ReplyMessageId);
+        Assert.Null(row.FailureReason);
+        Assert.Equal(externalWork, ExternalWork(meta, textAi, visionAi));
+        AssertReplyDecision(firstLogger.Entries, LogLevel.Information, "reply_send_started", "provider_attempt");
+        AssertReplyDecision(firstLogger.Entries, LogLevel.Information, "reply_provider_accepted", "wamid_received");
+        AssertReplyDecision(redeliveryLogger.Entries, LogLevel.Information, "reply_redelivery_blocked", "reply_in_flight");
+    }
+
+    public static TheoryData<string, HttpStatusCode, string, string?, string> PostBarrierOutcomes =>
+        new()
+        {
+            { "definite_4xx", HttpStatusCode.BadRequest, "{}", null, "reply_rejected" },
+            { "http_408", HttpStatusCode.RequestTimeout, "{}", null, "reply_ambiguous" },
+            { "http_429", HttpStatusCode.TooManyRequests, "{}", null, "reply_ambiguous" },
+            { "http_5xx", HttpStatusCode.InternalServerError, "{}", null, "reply_ambiguous" },
+            { "transport", HttpStatusCode.OK, "{}", "transport", "reply_ambiguous" },
+            { "timeout", HttpStatusCode.OK, "{}", "timeout", "reply_ambiguous" },
+            { "malformed", HttpStatusCode.OK, "not-json", null, "reply_ambiguous" },
+            { "missing_wamid", HttpStatusCode.OK, "{\"messages\":[]}", null, "reply_ambiguous" },
+            { "missing_wamid_property", HttpStatusCode.OK, "{\"messages\":[{}]}", null, "reply_ambiguous" },
+            { "non_string_wamid", HttpStatusCode.OK, "{\"messages\":[{\"id\":123}]}", null, "reply_ambiguous" },
+            { "empty_wamid", HttpStatusCode.OK, "{\"messages\":[{\"id\":\"\"}]}", null, "reply_ambiguous" },
+            { "whitespace_wamid", HttpStatusCode.OK, "{\"messages\":[{\"id\":\"   \"}]}", null, "reply_ambiguous" },
+            { "padded_wamid", HttpStatusCode.OK, "{\"messages\":[{\"id\":\" wamid.reply.test.1 \"}]}", null, "reply_ambiguous" },
+            { "oversized_wamid", HttpStatusCode.OK, "{\"messages\":[{\"id\":\"" + new string('w', 201) + "\"}]}", null, "reply_ambiguous" },
+        };
+
+    [Theory]
+    [MemberData(nameof(PostBarrierOutcomes))]
+    public async Task Post_barrier_outcomes_are_terminal_and_redelivery_does_no_external_work(
+        string scenario,
+        HttpStatusCode statusCode,
+        string responseBody,
+        string? exceptionKind,
+        string expectedFailureReason
+    )
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var meta = new FakeInboundMetaHandler
+        {
+            ReplyStatusCode = statusCode,
+            ReplyResponseBody = responseBody,
+            ReplyException = exceptionKind switch
+            {
+                "transport" => new HttpRequestException("test transport failure"),
+                "timeout" => new OperationCanceledException("test provider timeout"),
+                _ => null,
+            },
+        };
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        const string messagePrefix = "wamid.in.reply-outcome.";
+        var messageId = messagePrefix + scenario;
+
+        using (var posted = await PostSignedAsync(client, ImagePayload(messageId, SenderWaId, "1938", null)))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var inboundId = await ReadInboundIdAsync(factory, messageId);
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+        await using (var firstDatabase = CreateWorkerDatabase(factory))
+        {
+            await CreateInteractionService(firstDatabase, services)
+                .ProcessAsync(inboundId, CancellationToken.None);
+        }
+
+        var firstRow = (await NotificationIntentSeed.ReadInboundRowsAsync(factory))
+            .Single(row => row.MessageId == messageId);
+        Assert.Equal("failed", firstRow.Status);
+        Assert.Equal(expectedFailureReason, firstRow.FailureReason);
+        Assert.Equal(1, meta.ReplyPosts);
+        var externalWork = ExternalWork(meta, textAi, visionAi);
+
+        await using (var redeliveryDatabase = CreateWorkerDatabase(factory))
+        {
+            await CreateInteractionService(redeliveryDatabase, services)
+                .ProcessAsync(inboundId, CancellationToken.None);
+        }
+
+        Assert.Equal(externalWork, ExternalWork(meta, textAi, visionAi));
+    }
+
+    [Fact]
+    public async Task Barrier_race_emits_one_duplicate_blocked_decision_without_a_second_post()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var meta = new FakeInboundMetaHandler();
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        var firstLogger = new CapturingLogger<InboundWhatsAppInteractionService>();
+        var secondLogger = new CapturingLogger<InboundWhatsAppInteractionService>();
+        const string messageId = "wamid.in.reply-barrier-race";
+
+        using (var posted = await PostSignedAsync(client, ImagePayload(messageId, SenderWaId, "1938", null)))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var inboundId = await ReadInboundIdAsync(factory, messageId);
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+        await using var firstDatabase = CreateWorkerDatabase(factory);
+        await using var secondDatabase = CreateWorkerDatabase(factory);
+        await Task.WhenAll(
+            CreateInteractionService(firstDatabase, services, firstLogger).ProcessAsync(inboundId, CancellationToken.None),
+            CreateInteractionService(secondDatabase, services, secondLogger).ProcessAsync(inboundId, CancellationToken.None)
+        );
+
+        var entries = firstLogger.Entries.Concat(secondLogger.Entries).ToArray();
+        Assert.Equal(1, meta.ReplyPosts);
+        AssertReplyDecision(entries, LogLevel.Information, "reply_duplicate_blocked", "reply_in_flight");
+    }
+
+    [Fact]
+    public async Task Ambiguous_transport_logs_one_safe_application_decision_without_provider_exception()
+    {
+        const string sensitivePhone = "+5511999999999";
+        const string sensitiveToken = "token-adversarial-123";
+        const string sensitivePayload = "payload-adversarial-456";
+        const string sensitiveWamid = "wamid-adversarial-789";
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var meta = new FakeInboundMetaHandler
+        {
+            ReplyException = new HttpRequestException($"{sensitivePhone} {sensitiveToken} {sensitivePayload} {sensitiveWamid}"),
+        };
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        var logger = new CapturingLogger<InboundWhatsAppInteractionService>();
+        const string messageId = "wamid.in.reply-safe-log";
+
+        using (var posted = await PostSignedAsync(client, ImagePayload(messageId, SenderWaId, "1938", null)))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var inboundId = await ReadInboundIdAsync(factory, messageId);
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+        await using (var database = CreateWorkerDatabase(factory))
+        {
+            await CreateInteractionService(
+                database,
+                services,
+                logger,
+                new MetaWhatsAppOptions
+                {
+                    PhoneNumberId = ChannelPhoneNumberId,
+                    AccessToken = sensitiveToken,
+                    WebAppBaseUrl = "https://app.example.test",
+                }
+            ).ProcessAsync(inboundId, CancellationToken.None);
+        }
+
+        AssertReplyDecision(logger.Entries, LogLevel.Warning, "reply_ambiguous", "reply_ambiguous");
+        Assert.All(logger.Entries, entry => Assert.Null(entry.Exception));
+        var observed = string.Join(
+            "\n",
+            logger.Entries.Select(entry => entry.Message + " " + string.Join(" ", entry.Properties.Values))
+        );
+        Assert.DoesNotContain(sensitivePhone, observed, StringComparison.Ordinal);
+        Assert.DoesNotContain(sensitiveToken, observed, StringComparison.Ordinal);
+        Assert.DoesNotContain(sensitivePayload, observed, StringComparison.Ordinal);
+        Assert.DoesNotContain(sensitiveWamid, observed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -233,6 +485,106 @@ public sealed class MetaWhatsAppInboundTests
                 Headers = { { "X-Hub-Signature-256", MetaWhatsAppWebhookVerifier.Compute(body, AppSecret) } },
             }
         );
+    }
+
+    private static async Task<Guid> ReadInboundIdAsync(FoundationApiFactory factory, string messageId)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT id FROM notifications.inbound_whatsapp_messages WHERE message_id = @message_id",
+            administrator
+        );
+        command.Parameters.AddWithValue("message_id", messageId);
+        return (Guid)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static FoundationDbContext CreateWorkerDatabase(FoundationApiFactory factory) =>
+        new(
+            new DbContextOptionsBuilder<FoundationDbContext>()
+                .UseNpgsql(factory.Fixture.WorkerConnectionString)
+                .UseSnakeCaseNamingConvention()
+                .Options
+        );
+
+    private static FoundationDbContext CreateWorkerDatabase(
+        FoundationApiFactory factory,
+        OneShotTransactionCommitFailureInterceptor completionFailure
+    ) =>
+        new(
+            new DbContextOptionsBuilder<FoundationDbContext>()
+                .UseNpgsql(factory.Fixture.WorkerConnectionString)
+                .UseSnakeCaseNamingConvention()
+                .AddInterceptors(completionFailure)
+                .Options
+        );
+
+    private static ServiceProvider CreateInteractionServices(
+        FakeInboundMetaHandler meta,
+        FakeInboundAiHandler? textAi = null,
+        FakeInboundAiHandler? visionAi = null
+    )
+    {
+        textAi ??= new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        visionAi ??= new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        var services = new ServiceCollection();
+        services
+            .AddHttpClient(MetaWhatsAppClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => meta);
+        services
+            .AddHttpClient(InboundWhatsAppInteractionService.TextHttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => textAi);
+        services
+            .AddHttpClient(InboundWhatsAppInteractionService.VisionHttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => visionAi);
+        return services.BuildServiceProvider();
+    }
+
+    private static InboundWhatsAppInteractionService CreateInteractionService(
+        FoundationDbContext database,
+        ServiceProvider services,
+        ILogger<InboundWhatsAppInteractionService>? logger = null,
+        MetaWhatsAppOptions? options = null
+    ) =>
+        new(
+            database,
+            services.GetRequiredService<IHttpClientFactory>(),
+            options ?? new MetaWhatsAppOptions
+            {
+                PhoneNumberId = ChannelPhoneNumberId,
+                AccessToken = "test-meta-access-token",
+                WebAppBaseUrl = "https://app.example.test",
+            },
+            InboundAiTestProfiles.Create(),
+            logger ?? NullLogger<InboundWhatsAppInteractionService>.Instance
+        );
+
+    private static (int MediaMetadataGets, int MediaDownloads, int VisionRequests, int TextRequests, int ReplyPosts) ExternalWork(
+        FakeInboundMetaHandler meta,
+        FakeInboundAiHandler textAi,
+        FakeInboundAiHandler visionAi
+    ) => (meta.MediaMetadataGets, meta.MediaDownloads, visionAi.RequestBodies.Count, textAi.RequestBodies.Count, meta.ReplyPosts);
+
+    private static void AssertReplyDecision(
+        IEnumerable<CapturedLogEntry> entries,
+        LogLevel level,
+        string result,
+        string reason
+    )
+    {
+        var decision = Assert.Single(
+            entries,
+            entry => entry.Properties.GetValueOrDefault("Result")?.ToString() == result
+        );
+        Assert.Equal(level, decision.Level);
+        Assert.Equal("whatsapp_inbound_interaction", decision.Properties["Operation"]);
+        Assert.Equal("notifications", decision.Properties["Module"]);
+        Assert.Equal(result, decision.Properties["Result"]);
+        Assert.Equal(reason, decision.Properties["Reason"]);
+        Assert.Equal(
+            ["Module", "Operation", "Reason", "Result", "{OriginalFormat}"],
+            decision.Properties.Keys.OrderBy(key => key, StringComparer.Ordinal)
+        );
+        Assert.Null(decision.Exception);
     }
 
     private static string ImagePayload(string messageId, string waId, string mediaId, string? caption)
