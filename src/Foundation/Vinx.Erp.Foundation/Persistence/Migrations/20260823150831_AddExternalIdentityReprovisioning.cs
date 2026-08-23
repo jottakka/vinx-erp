@@ -39,6 +39,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 SET search_path TO pg_catalog, foundation, pg_temp
                 AS $function$
                 DECLARE
+                    v_deployment_actor_id constant uuid := '00000000-0000-0000-0000-000000000001';
                     v_identity_user_id uuid;
                     v_identity_issuer text;
                     v_identity_subject text;
@@ -116,8 +117,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     WHERE user_id = p_user_id AND revoked_at IS NULL;
 
                     PERFORM audit.append_event(
-                        p_user_id, 'global', NULL, 'worker', 'identity.external.reprovision',
-                        'external_identity', p_expected_identity_id, 'success', p_correlation_id,
+                        v_deployment_actor_id, 'global', NULL, 'worker', 'identity.external.reprovision',
+                        'user', p_user_id, 'success', p_correlation_id,
                         'same_person_recovery', '{}'::jsonb);
                     RETURN QUERY SELECT 'reprovisioned'::text;
                 END;
@@ -140,8 +141,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
         {
             migrationBuilder.Sql(
                 """
-                LOCK TABLE foundation.external_identities IN ACCESS EXCLUSIVE MODE;
                 LOCK TABLE foundation.users IN ACCESS EXCLUSIVE MODE;
+                LOCK TABLE foundation.external_identities IN ACCESS EXCLUSIVE MODE;
                 LOCK TABLE foundation.user_sessions IN ACCESS EXCLUSIVE MODE;
 
                 SET ROLE vinx_audit_owner;
