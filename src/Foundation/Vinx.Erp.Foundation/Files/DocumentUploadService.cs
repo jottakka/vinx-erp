@@ -271,8 +271,12 @@ public sealed class DocumentUploadService(
 
         if (!string.Equals(processingState, FileRecord.QuarantinedState, StringComparison.Ordinal))
         {
-            return ConfirmationPreparation.Completed(await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
-                actor, command.CompanyId, "integrity_conflict", StatusCodes.Status409Conflict, cancellationToken));
+            return ConfirmationPreparation.Completed(
+                await ReturnConcurrentConfirmationReplayAsync(
+                    actor,
+                    command,
+                    payloadHash,
+                    cancellationToken));
         }
 
         return ConfirmationPreparation.ForInspection(providerKey);
@@ -512,7 +516,30 @@ public sealed class DocumentUploadService(
         string payloadHash,
         CancellationToken cancellationToken)
     {
-        var existing = await ReadIdempotencyAsync(actor, command.CompanyId, ConfirmationCommandName, command.RequestId, cancellationToken);
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+        var membership = await GetMembershipAsync(actor.UserId, command.CompanyId, cancellationToken);
+        if (membership is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                actor, command.CompanyId, "membership_required", StatusCodes.Status403Forbidden, cancellationToken);
+        }
+
+        if (!await capabilityEvaluator.HasGrantAsync(command.CompanyId, membership.Id, ConfirmCapability, cancellationToken))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(
+                actor, command.CompanyId, "capability_denied", StatusCodes.Status403Forbidden, cancellationToken);
+        }
+
+        var existing = await FindIdempotencyAsync(
+            actor.UserId,
+            command.CompanyId,
+            ConfirmationCommandName,
+            command.RequestId,
+            cancellationToken);
+        await transaction.RollbackAsync(cancellationToken);
         if (existing is null)
         {
             return await ReturnAuditedDenialAsync<DocumentUploadConfirmationResult>(

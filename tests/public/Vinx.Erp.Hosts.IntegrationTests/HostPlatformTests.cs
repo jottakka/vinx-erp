@@ -38,7 +38,8 @@ public sealed class HostPlatformTests
     {
         using var workerFactory = new WorkerHostFactory();
 
-        Assert.Throws<ArgumentNullException>(() => workerFactory.CreateClient());
+        var exception = Assert.Throws<InvalidOperationException>(() => workerFactory.CreateClient());
+        Assert.Equal("Worker database connection must be configured.", exception.Message);
     }
 
     [Fact]

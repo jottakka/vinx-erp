@@ -48,6 +48,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly TimeSpan? _testMalwareScanTimeout;
     private readonly IAgentModel? _testAgentModel;
     private readonly AgentRunOptions? _testAgentRunOptions;
+    private readonly DbCommandInterceptor? _testCommandInterceptor;
     private readonly HttpMessageHandler? _browserSessionProviderHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
     private readonly Func<ValueTask>? _disposeJwtAsync;
@@ -70,7 +71,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         IFoundationFixtureLifecycle? fixture = null,
         Func<ValueTask>? disposeHostAsync = null,
         Func<ValueTask>? disposeJwtAsync = null,
-        bool provisionWolverineStorage = true)
+        bool provisionWolverineStorage = true,
+        DbCommandInterceptor? testCommandInterceptor = null)
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
@@ -83,6 +85,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _testMalwareScanTimeout = testMalwareScanTimeout;
         _testAgentModel = testAgentModel;
         _testAgentRunOptions = testAgentRunOptions;
+        _testCommandInterceptor = testCommandInterceptor;
         _browserSessionProviderHandler = browserSessionProviderHandler;
         _fixture = fixture ?? new FoundationPostgresFixture();
         _disposeHostAsync = disposeHostAsync;
@@ -135,7 +138,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         string? aal = null,
         IAgentModel? agentModel = null,
         AgentRunOptions? agentRunOptions = null,
-        bool provisionWolverineStorage = true)
+        bool provisionWolverineStorage = true,
+        DbCommandInterceptor? commandInterceptor = null)
     {
         var resolvedActorUserId = actorUserId ?? Guid.NewGuid();
         var resolvedCorrelationId = correlationId ?? Guid.NewGuid();
@@ -153,7 +157,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             testMalwareScanTimeout: malwareScanTimeout,
             testAgentModel: agentModel,
             testAgentRunOptions: agentRunOptions,
-            provisionWolverineStorage: provisionWolverineStorage);
+            provisionWolverineStorage: provisionWolverineStorage,
+            testCommandInterceptor: commandInterceptor);
         return await PrepareAsync(factory);
     }
 
@@ -165,11 +170,12 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         TimeSpan? malwareScanTimeout = null,
         string? aal = null,
         IAgentModel? agentModel = null,
-        AgentRunOptions? agentRunOptions = null)
+        AgentRunOptions? agentRunOptions = null,
+        DbCommandInterceptor? commandInterceptor = null)
     {
         var factory = await CreateAsync(
             actorUserId, correlationId, fileStorage, malwareScanner, malwareScanTimeout, aal,
-            agentModel, agentRunOptions);
+            agentModel, agentRunOptions, commandInterceptor: commandInterceptor);
         return await SeedAuthenticatedActorAndReturnAsync(factory);
     }
 
@@ -335,13 +341,20 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         {
             services.AddTransient<IStartupFilter, AllowAnonymousTestEndpointStartupFilter>();
             services.RemoveAll<DbContextOptions<FoundationDbContext>>();
-            services.AddDbContext<FoundationDbContext>((_, options) => options
-                .UseNpgsql(_fixture.RuntimeConnectionString)
-                .UseSnakeCaseNamingConvention()
-                .AddInterceptors(
-                    new RowVersionInterceptor(),
-                    new GateDatabaseFailureInterceptor(_databaseFailurePoint),
-                    new CommitAcknowledgementFailureInterceptor()));
+            services.AddDbContext<FoundationDbContext>((_, options) =>
+            {
+                options
+                    .UseNpgsql(_fixture.RuntimeConnectionString)
+                    .UseSnakeCaseNamingConvention()
+                    .AddInterceptors(
+                        new RowVersionInterceptor(),
+                        new GateDatabaseFailureInterceptor(_databaseFailurePoint),
+                        new CommitAcknowledgementFailureInterceptor());
+                if (_testCommandInterceptor is not null)
+                {
+                    options.AddInterceptors(_testCommandInterceptor);
+                }
+            });
             if (_testFileStorage is not null)
             {
                 services.RemoveAll<FileStorage>();
