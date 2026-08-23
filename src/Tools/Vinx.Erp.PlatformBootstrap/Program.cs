@@ -4,6 +4,7 @@ using Npgsql;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Vinx.Erp.Foundation.Configuration;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
@@ -52,7 +53,7 @@ internal static class PlatformBootstrapCommand
                 .Services.AddOptions<SupabaseAuthOptions>()
                 .Bind(builder.Configuration)
                 .Validate(
-                    options => IsAllowedIssuer(options.Issuer, builder.Environment),
+                    options => AllowedUriPolicy.IsAllowedHttp(options.Issuer, builder.Environment),
                     "Supabase Auth issuer is invalid."
                 )
                 .Validate(
@@ -177,17 +178,6 @@ internal static class PlatformBootstrapCommand
 
         throw new InvalidOperationException("The VINX repository root was not found.");
     }
-
-    private static bool IsAllowedIssuer(string value, IHostEnvironment environment) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var issuer)
-        && (
-            issuer.Scheme == Uri.UriSchemeHttps
-            || (
-                environment.IsDevelopment()
-                && issuer.Scheme == Uri.UriSchemeHttp
-                && issuer.IsLoopback
-            )
-        );
 
     private static async Task<int> WriteOutcomeAsync(string value, int exitCode)
     {

@@ -1,6 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
-    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
     <PackageReference Include="WolverineFx.Postgresql" />
     <PackageReference Include="WolverineFx.RuntimeCompilation" />
     <ProjectReference Include="../../Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />

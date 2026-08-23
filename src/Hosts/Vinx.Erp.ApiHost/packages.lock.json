@@ -386,6 +386,27 @@
           "Npgsql": "9.0.4"
         }
       },
+      "OpenTelemetry": {
+        "type": "Transitive",
+        "resolved": "1.17.0",
+        "contentHash": "rMLOTftlMlTm7+MSrvXDHnJRjVkROFNKXHZrYjOsX+LankaFG7QSflx7qRRGjoqZoirohnxmJQ7GEb9occO4Gg==",
+        "dependencies": {
+          "OpenTelemetry.Api.ProviderBuilderExtensions": "1.17.0"
+        }
+      },
+      "OpenTelemetry.Api": {
+        "type": "Transitive",
+        "resolved": "1.17.0",
+        "contentHash": "mSBxzomZgHIJu9CyVNqyDu/n2JHEtqVgfcCD1Br0cV5iLYogjZOMqhlVLt99PEp+0KGBNUR3GXgeOdN2GR3F9g=="
+      },
+      "OpenTelemetry.Api.ProviderBuilderExtensions": {
+        "type": "Transitive",
+        "resolved": "1.17.0",
+        "contentHash": "Xgc3Qf9B9TFMFpx6exTdGqMWuYIT2miNzkdMPutVvT9YuMFaEovXWke1Gb6z8NxYaQbbGF38vYLuSg1JCeui5Q==",
+        "dependencies": {
+          "OpenTelemetry.Api": "1.17.0"
+        }
+      },
       "Polly.Core": {
         "type": "Transitive",
         "resolved": "8.6.5",
@@ -569,6 +590,7 @@
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.10, )",
           "Microsoft.EntityFrameworkCore": "[10.0.10, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "OpenTelemetry.Extensions.Hosting": "[1.17.0, )",
           "WolverineFx.EntityFrameworkCore": "[6.28.2, )"
         }
       },
@@ -667,6 +689,15 @@
         "contentHash": "rKyVV0sJPo7pn0Ya5dgRs5ggGbjvnKcYSvYV2jITKgFIfeo2XHjgyi6UqNT/OnF0YBqjsNpPdgM6QjzYczWplg==",
         "dependencies": {
           "System.ClientModel": "1.14.0"
+        }
+      },
+      "OpenTelemetry.Extensions.Hosting": {
+        "type": "CentralTransitive",
+        "requested": "[1.17.0, )",
+        "resolved": "1.17.0",
+        "contentHash": "t1OwL/4qgboGMobYVT+UV5zgWnFqCp4Pw8lcsmzh8m2K8PQsTKkyxrC32tqYTMYny3GOW4q5cltE3dTVzLmRew==",
+        "dependencies": {
+          "OpenTelemetry": "1.17.0"
         }
       },
       "PdfPig": {

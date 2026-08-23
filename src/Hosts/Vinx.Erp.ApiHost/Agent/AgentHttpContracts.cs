@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Vinx.Erp.ApiHost.Contracts;
 
 namespace Vinx.Erp.ApiHost.Agent;
 
@@ -97,18 +98,9 @@ public static class AgentHttpContract
     {
         request = null;
         errorCode = InvalidRequest;
-        if (root.ValueKind is not JsonValueKind.Object)
+        if (!StrictJsonFieldSet.TryReadObject(root, Fields, out var values))
         {
             return false;
-        }
-
-        var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        foreach (var property in root.EnumerateObject())
-        {
-            if (!Fields.Contains(property.Name) || !values.TryAdd(property.Name, property.Value))
-            {
-                return false;
-            }
         }
 
         if (

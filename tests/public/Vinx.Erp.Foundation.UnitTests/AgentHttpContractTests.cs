@@ -80,6 +80,25 @@ public sealed class AgentHttpContractTests
         Assert.Equal("invalid_request", errorCode);
     }
 
+    [Fact]
+    public void Duplicate_field_is_rejected()
+    {
+        // System.Text.Json aceita chaves duplicadas (última vence); o contrato
+        // precisa rejeitar para não permitir contornar o conjunto fechado.
+        var ok = AgentHttpContract.TryParse(
+            Body(
+                """{"requestId":"8f1d2b3c-4e5f-4a6b-8c7d-9e0f1a2b3c4d","journey":"j","message":"m","message":"outro"}"""
+            ),
+            24 * 1024,
+            out var request,
+            out var errorCode
+        );
+
+        Assert.False(ok);
+        Assert.Null(request);
+        Assert.Equal("invalid_request", errorCode);
+    }
+
     [Theory]
     [InlineData("journey")]
     [InlineData("message")]

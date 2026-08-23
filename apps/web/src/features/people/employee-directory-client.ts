@@ -1,8 +1,13 @@
 import { z } from "zod";
 import {
+  bffFailure,
+  fetchSameOriginBff,
+  isAbortError,
   isCanonicalUuid,
+  readAntiforgeryTokenBff,
   readCorrelationId,
   readErrorCode,
+  type SameOriginInit,
 } from "../../shared/http/bff-response";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
@@ -25,9 +30,6 @@ const createCommandSchema = z
     displayName: z.string().trim().min(1).max(200),
     email: z.string().trim().min(1).max(320).email(),
   })
-  .strict();
-const antiforgeryResponseSchema = z
-  .object({ requestToken: z.string().min(1) })
   .strict();
 const createResponseSchema = z
   .object({
@@ -90,9 +92,6 @@ export type EmployeeDirectoryGateway = {
 type FetchResult =
   | { response: Response }
   | { failure: EmployeeDirectoryFailureResult };
-type SameOriginRequestInit = RequestInit & {
-  mayHaveCommittedOnAbort?: boolean;
-};
 type Operation = "antiforgery" | "list" | "create";
 
 /**
@@ -104,32 +103,21 @@ export function createEmployeeDirectoryClient(
 ): EmployeeDirectoryGateway {
   async function fetchSameOrigin(
     path: string,
-    { mayHaveCommittedOnAbort = false, ...init }: SameOriginRequestInit = {},
+    { mayHaveCommittedOnAbort = false, ...init }: SameOriginInit = {},
   ): Promise<FetchResult> {
-    if (init.signal?.aborted) {
-      return { failure: failure("aborted") };
-    }
-
-    try {
-      return {
-        response: await fetchImplementation(path, {
-          ...init,
-          cache: "no-store",
-          credentials: "same-origin",
-          mode: "same-origin",
-          redirect: "error",
-        }),
-      };
-    } catch (reason) {
-      const aborted = isAbort(reason, init.signal);
-      return {
-        failure: failure(aborted ? "aborted" : "network", {
-          ...(aborted && mayHaveCommittedOnAbort
+    return fetchSameOriginBff(
+      fetchImplementation,
+      path,
+      { ...init, mayHaveCommittedOnAbort },
+      (kind, details) => ({
+        failure: failure(
+          kind,
+          details.wasAborted && details.mayHaveCommittedOnAbort
             ? { mayHaveCommitted: true }
-            : {}),
-        }),
-      };
-    }
+            : {},
+        ),
+      }),
+    );
   }
 
   async function getAntiforgery(
@@ -137,30 +125,17 @@ export function createEmployeeDirectoryClient(
   ): Promise<
     { ok: true; requestToken: string } | EmployeeDirectoryFailureResult
   > {
-    const result = await fetchSameOrigin(antiforgeryPath, {
-      headers: { Accept: "application/json" },
-      method: "GET",
+    return readAntiforgeryTokenBff(
+      async (init) => {
+        const result = await fetchSameOrigin(antiforgeryPath, init);
+        return "response" in result
+          ? { response: result.response }
+          : result.failure;
+      },
+      (kind, status) => failure(kind, status === undefined ? {} : { status }),
+      (response) => normalizeFailure(response, "antiforgery", signal),
       signal,
-    });
-    if ("failure" in result) {
-      return result.failure;
-    }
-    if (!result.response.ok) {
-      return normalizeFailure(result.response, "antiforgery", signal);
-    }
-
-    try {
-      const parsed = antiforgeryResponseSchema.safeParse(
-        await result.response.json(),
-      );
-      return parsed.success
-        ? { ok: true, requestToken: parsed.data.requestToken }
-        : failure("protocol", { status: result.response.status });
-    } catch (reason) {
-      return failure(isAbort(reason, signal) ? "aborted" : "protocol", {
-        status: result.response.status,
-      });
-    }
+    );
   }
 
   async function list(
@@ -198,7 +173,7 @@ export function createEmployeeDirectoryClient(
         ? { ok: true, items: parsed.data, correlationId }
         : { ok: true, items: parsed.data };
     } catch (reason) {
-      return failure(isAbort(reason, signal) ? "aborted" : "protocol", {
+      return failure(isAbortError(reason, signal) ? "aborted" : "protocol", {
         correlationId,
         status: result.response.status,
       });
@@ -258,7 +233,7 @@ export function createEmployeeDirectoryClient(
         ? { ok: true, state, correlationId }
         : { ok: true, state };
     } catch (reason) {
-      return isAbort(reason, signal)
+      return isAbortError(reason, signal)
         ? failure("aborted", {
             correlationId,
             mayHaveCommitted: true,
@@ -324,25 +299,5 @@ function failure(
   kind: EmployeeDirectoryFailure["kind"],
   options: Omit<EmployeeDirectoryFailure, "kind"> = {},
 ): EmployeeDirectoryFailureResult {
-  return {
-    ok: false,
-    error: {
-      kind,
-      ...(options.status === undefined ? {} : { status: options.status }),
-      ...(options.correlationId === undefined
-        ? {}
-        : { correlationId: options.correlationId }),
-      ...(options.mayHaveCommitted ? { mayHaveCommitted: true as const } : {}),
-    },
-  };
-}
-
-function isAbort(
-  reason: unknown,
-  signal: AbortSignal | null | undefined,
-): boolean {
-  return (
-    signal?.aborted === true ||
-    (reason instanceof Error && reason.name === "AbortError")
-  );
+  return bffFailure<EmployeeDirectoryFailure>(kind, options);
 }

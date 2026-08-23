@@ -1033,6 +1033,7 @@
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.10, )",
           "Microsoft.EntityFrameworkCore": "[10.0.10, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "OpenTelemetry.Extensions.Hosting": "[1.17.0, )",
           "WolverineFx.EntityFrameworkCore": "[6.28.2, )"
         }
       },
@@ -1056,7 +1057,6 @@
       "vinx.erp.workerhost": {
         "type": "Project",
         "dependencies": {
-          "OpenTelemetry.Extensions.Hosting": "[1.17.0, )",
           "Vinx.Erp.Foundation": "[1.0.0, )",
           "Vinx.Erp.Notifications": "[1.0.0, )",
           "WolverineFx.Postgresql": "[6.28.2, )",

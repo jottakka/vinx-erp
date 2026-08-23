@@ -1,3 +1,5 @@
+using Vinx.Erp.Foundation.Configuration;
+
 namespace Vinx.Erp.Notifications.Providers.Meta;
 
 /// <summary>
@@ -58,9 +60,6 @@ public sealed class MetaWhatsAppOptions
         && !string.IsNullOrWhiteSpace(WebAppBaseUrl)
         && IsAllowedHttpsUrl(WebAppBaseUrl);
 
-    public static bool IsAllowedHttpsUrl(string value) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri)
-        && string.IsNullOrEmpty(uri.UserInfo)
-        && string.IsNullOrEmpty(uri.Fragment)
-        && uri.Scheme == Uri.UriSchemeHttps;
+    /// <summary>Delega à política canônica de URLs permitidas do Foundation.</summary>
+    public static bool IsAllowedHttpsUrl(string value) => AllowedUriPolicy.IsAllowedHttps(value);
 }
