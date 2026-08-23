@@ -180,6 +180,8 @@ public sealed class MetaWhatsAppInboundTests
             { "timeout", HttpStatusCode.OK, "{}", "timeout", "reply_ambiguous" },
             { "malformed", HttpStatusCode.OK, "not-json", null, "reply_ambiguous" },
             { "missing_wamid", HttpStatusCode.OK, "{\"messages\":[]}", null, "reply_ambiguous" },
+            { "missing_wamid_property", HttpStatusCode.OK, "{\"messages\":[{}]}", null, "reply_ambiguous" },
+            { "non_string_wamid", HttpStatusCode.OK, "{\"messages\":[{\"id\":123}]}", null, "reply_ambiguous" },
             { "empty_wamid", HttpStatusCode.OK, "{\"messages\":[{\"id\":\"\"}]}", null, "reply_ambiguous" },
             { "whitespace_wamid", HttpStatusCode.OK, "{\"messages\":[{\"id\":\"   \"}]}", null, "reply_ambiguous" },
         };
