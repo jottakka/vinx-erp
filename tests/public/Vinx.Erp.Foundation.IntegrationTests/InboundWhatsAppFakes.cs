@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Vinx.Erp.Notifications.Providers.Meta;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -69,6 +70,13 @@ public sealed class FakeInboundMetaHandler : HttpMessageHandler
     public bool FailFirstDownloadOnce { get; set; }
 
     public Action? ReplyAccepted { get; set; }
+
+    public HttpStatusCode ReplyStatusCode { get; set; } = HttpStatusCode.OK;
+
+    public string ReplyResponseBody { get; set; } =
+        """{"messaging_product":"whatsapp","messages":[{"id":"wamid.reply.test.1"}]}""";
+
+    public Exception? ReplyException { get; set; }
 
     public int MediaMetadataGets { get; private set; }
 
@@ -154,10 +162,15 @@ public sealed class FakeInboundMetaHandler : HttpMessageHandler
         }
         ReplyAccepted?.Invoke();
 
-        return new HttpResponseMessage(HttpStatusCode.OK)
+        if (ReplyException is not null)
+        {
+            throw ReplyException;
+        }
+
+        return new HttpResponseMessage(ReplyStatusCode)
         {
             Content = new StringContent(
-                """{"messaging_product":"whatsapp","messages":[{"id":"wamid.reply.test.1"}]}""",
+                ReplyResponseBody,
                 Encoding.UTF8,
                 "application/json"
             ),
@@ -188,6 +201,39 @@ public sealed class OneShotTransactionCommitFailureInterceptor : DbTransactionIn
         }
 
         return ValueTask.FromResult(result);
+    }
+}
+
+public sealed record CapturedLogEntry(
+    LogLevel Level,
+    string Message,
+    Exception? Exception,
+    IReadOnlyDictionary<string, object?> Properties
+);
+
+public sealed class CapturingLogger<T> : ILogger<T>
+{
+    private readonly List<CapturedLogEntry> _entries = [];
+
+    public IReadOnlyList<CapturedLogEntry> Entries => _entries;
+
+    public IDisposable? BeginScope<TState>(TState state)
+        where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter
+    )
+    {
+        var properties = state is IEnumerable<KeyValuePair<string, object?>> values
+            ? values.ToDictionary(value => value.Key, value => value.Value, StringComparer.Ordinal)
+            : new Dictionary<string, object?>();
+        _entries.Add(new(logLevel, formatter(state, exception), exception, properties));
     }
 }
 

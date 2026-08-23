@@ -111,11 +111,11 @@ Logs estruturados seguros usam `Operation=whatsapp_inbound_interaction` e
 | `reply_redelivery_blocked` | redelivery encontrou `reply_in_flight` |
 | `reply_duplicate_blocked` | corrida perdeu a barreira antes do provider |
 
-Para uma linha `reply_in_flight` ou `reply_ambiguous`, o operador autorizado
-consulta somente evidência autorizada do provider. Se houver um `wamid` conhecido
-da resposta, conclui com esse `wamid`; sem `wamid` conhecido, fecha como
-`reply_ambiguous`. Nunca reseta a linha para `processing`, reabre a barreira ou
-republica a mensagem para obter outro POST automático.
+Somente uma linha `reply_in_flight` pode ser concluída pelo operador autorizado:
+se houver evidência autorizada de um `wamid` conhecido, conclui com esse `wamid`;
+sem `wamid` conhecido, fecha como `reply_ambiguous`. `reply_ambiguous` já é
+terminal: não pode concluir, resetar, reabrir, republicar ou reenviar para obter
+outro POST automático.
 
 ## Incidentes
 

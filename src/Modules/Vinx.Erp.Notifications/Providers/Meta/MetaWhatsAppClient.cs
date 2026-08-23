@@ -65,12 +65,6 @@ public sealed class MetaWhatsAppClient(
 
             if (!response.IsSuccessStatusCode)
             {
-                logger.LogWarning(
-                    "Meta WhatsApp reply {Operation} {Result} {Reason}",
-                    "meta_whatsapp_reply",
-                    "rejected",
-                    $"http_{(int)response.StatusCode}"
-                );
                 return new MetaWhatsAppSendResult(NotificationProviderResultKind.Rejected, null);
             }
 
@@ -95,24 +89,11 @@ public sealed class MetaWhatsAppClient(
         {
             // A resposta 2xx malformada não prova a ausência de aceite remoto.
         }
-        catch (HttpRequestException exception)
+        catch (HttpRequestException)
         {
-            logger.LogWarning(
-                exception,
-                "Meta WhatsApp reply {Operation} {Result} {Reason}",
-                "meta_whatsapp_reply",
-                "ambiguous",
-                "provider_transport"
-            );
             return new MetaWhatsAppSendResult(NotificationProviderResultKind.Ambiguous, null);
         }
 
-        logger.LogWarning(
-            "Meta WhatsApp reply {Operation} {Result} {Reason}",
-            "meta_whatsapp_reply",
-            "ambiguous",
-            "malformed_success"
-        );
         return new MetaWhatsAppSendResult(NotificationProviderResultKind.Ambiguous, null);
     }
 
@@ -125,18 +106,11 @@ public sealed class MetaWhatsAppClient(
         {
             return await http.SendAsync(request, cancellationToken);
         }
-        catch (OperationCanceledException exception)
+        catch (OperationCanceledException)
             when (!cancellationToken.IsCancellationRequested)
         {
             // Timeout do HttpClient: resultado incerto no provider vira
             // ambíguo terminal, sem retry cego.
-            logger.LogWarning(
-                exception,
-                "Meta WhatsApp send {Operation} {Result} {Reason}",
-                "meta_whatsapp_send",
-                "ambiguous",
-                "provider_timeout"
-            );
             throw new InboundWhatsAppReplyTimeoutException();
         }
     }
@@ -167,18 +141,11 @@ public sealed class MetaWhatsAppClient(
         {
             response = await http.SendAsync(request, cancellationToken);
         }
-        catch (OperationCanceledException exception)
+        catch (OperationCanceledException)
             when (!cancellationToken.IsCancellationRequested)
         {
             // Timeout do HttpClient: resultado incerto no provider vira
             // ambíguo terminal, sem retry cego.
-            logger.LogWarning(
-                exception,
-                "Meta WhatsApp send {Operation} {Result} {Reason}",
-                "meta_whatsapp_send",
-                "ambiguous",
-                "provider_timeout"
-            );
             return new NotificationProviderResult(NotificationProviderResultKind.Ambiguous);
         }
 
