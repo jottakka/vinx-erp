@@ -52,7 +52,10 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
                 has_function_privilege('public', 'foundation.reprovision_external_identity(uuid,uuid,text,text,text,uuid)', 'EXECUTE'),
                 has_column_privilege('vinx_runtime', 'foundation.external_identities', 'subject', 'UPDATE'),
                 has_column_privilege('vinx_runtime', 'foundation.users', 'sessions_valid_after', 'UPDATE'),
-                has_column_privilege('vinx_runtime', 'foundation.user_sessions', 'revoked_at', 'UPDATE')
+                has_column_privilege('vinx_runtime', 'foundation.user_sessions', 'revoked_at', 'UPDATE'),
+                has_column_privilege('public', 'foundation.external_identities', 'subject', 'UPDATE'),
+                has_column_privilege('public', 'foundation.users', 'sessions_valid_after', 'UPDATE'),
+                has_column_privilege('public', 'foundation.user_sessions', 'revoked_at', 'UPDATE')
             FROM pg_proc
             WHERE oid = 'foundation.reprovision_external_identity(uuid,uuid,text,text,text,uuid)'::regprocedure
             """, admin);
@@ -89,8 +92,10 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
             case "already_configured": await RotateAsync(fixture, seed, NewSubject, Guid.NewGuid()); break;
         }
         Assert.Equal(expected, await RotateAsync(fixture, request));
-        if (expected != "reprovisioned")
-            Assert.Equal(scenario == "already_configured" ? 1 : 0, (await ReadAsync(fixture, seed)).SuccessAudits);
+        if (scenario == "already_configured")
+            Assert.Equal(1, (await ReadAsync(fixture, seed)).SuccessAudits);
+        else if (expected != "reprovisioned")
+            await AssertUnchangedAsync(fixture, seed);
     }
 
     [Fact]
@@ -143,7 +148,11 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
         var results = await Task.WhenAll(first, second);
         Assert.Single(results, result => result == "reprovisioned");
         Assert.Single(results, result => result == "conflict");
-        Assert.Equal(1, (await ReadAsync(fixture, seed)).SuccessAudits);
+        var state = await ReadAsync(fixture, seed);
+        Assert.Contains(state.Subject, new[] { "new-subject-first", "new-subject-second" });
+        Assert.Equal(2, state.RevokedSessions);
+        Assert.True(state.RevokedForRecovery);
+        Assert.Equal(1, state.SuccessAudits);
     }
 
     [Fact]
@@ -255,6 +264,20 @@ public sealed class ExternalIdentityReprovisioningFunctionTests
             "SELECT count(*) FROM foundation.memberships m JOIN foundation.role_assignments a ON a.membership_id=m.id JOIN foundation.role_capabilities c ON c.role_id=a.role_id WHERE m.user_id=@user AND m.deleted_at IS NULL", admin);
         command.Parameters.AddWithValue("user", seed.UserId);
         return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task AssertUnchangedAsync(FoundationPostgresFixture fixture, Seed seed)
+    {
+        var state = await ReadAsync(fixture, seed);
+        Assert.Equal(seed.UserId, state.UserId);
+        Assert.Equal(seed.IdentityId, state.IdentityId);
+        Assert.Equal(OldSubject, state.Subject);
+        Assert.Null(state.Barrier);
+        Assert.Equal(0, state.RevokedSessions);
+        Assert.False(state.RevokedForRecovery);
+        Assert.Equal(seed.IdentityId, state.OperatorIdentityId);
+        Assert.Equal(0, state.SuccessAudits);
+        Assert.Equal(1, await GraphRowsAsync(fixture, seed));
     }
 
     private static async Task<Guid?> ResolveAsync(FoundationPostgresFixture fixture, string subject)
