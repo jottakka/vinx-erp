@@ -570,7 +570,8 @@ public sealed class MetaWhatsAppInboundAdmissionTests
         await AssertFunctionContractAsync(
             administrator,
             "notifications.correlate_inbound_whatsapp_text_image(uuid)",
-            "vinx_runtime");
+            "vinx_runtime",
+            "vinx_worker");
         await AssertFunctionContractAsync(
             administrator,
             "notifications.expire_inbound_whatsapp_text(uuid)",
@@ -865,19 +866,17 @@ public sealed class MetaWhatsAppInboundAdmissionTests
     private static async Task AssertFunctionContractAsync(
         NpgsqlConnection connection,
         string signature,
-        string executor)
+        params string[] executors)
     {
         await using var command = new NpgsqlCommand(
             """
             SELECT pg_get_userbyid(function_row.proowner),
                    function_row.prosecdef,
                    function_row.proconfig,
-                   has_function_privilege(@executor, function_row.oid, 'EXECUTE'),
+                   NOT EXISTS (
+                       SELECT 1 FROM unnest(@executors::text[]) AS executor(role_name)
+                       WHERE NOT has_function_privilege(executor.role_name, function_row.oid, 'EXECUTE')),
                    NOT has_function_privilege('public', function_row.oid, 'EXECUTE'),
-                   NOT has_function_privilege(
-                       CASE WHEN @executor = 'vinx_runtime' THEN 'vinx_worker' ELSE 'vinx_runtime' END,
-                       function_row.oid,
-                       'EXECUTE'),
                    NOT has_function_privilege('vinx_migrator', function_row.oid, 'EXECUTE'),
                    NOT EXISTS (
                        SELECT 1
@@ -885,14 +884,14 @@ public sealed class MetaWhatsAppInboundAdmissionTests
                            function_row.proacl,
                            acldefault('f', function_row.proowner))) AS privilege
                        WHERE privilege.privilege_type = 'EXECUTE'
-                         AND privilege.grantee NOT IN (
-                             function_row.proowner,
-                             (SELECT oid FROM pg_roles WHERE rolname = @executor)))
+                         AND privilege.grantee <> function_row.proowner
+                         AND privilege.grantee <> ALL (
+                             SELECT oid FROM pg_roles WHERE rolname = ANY(@executors)))
             FROM pg_proc AS function_row
             WHERE function_row.oid = to_regprocedure(@signature);
             """,
             connection);
-        command.Parameters.AddWithValue("executor", executor);
+        command.Parameters.AddWithValue("executors", executors);
         command.Parameters.AddWithValue("signature", signature);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
@@ -905,7 +904,6 @@ public sealed class MetaWhatsAppInboundAdmissionTests
         Assert.True(reader.GetBoolean(4));
         Assert.True(reader.GetBoolean(5));
         Assert.True(reader.GetBoolean(6));
-        Assert.True(reader.GetBoolean(7));
         Assert.False(await reader.ReadAsync());
     }
 

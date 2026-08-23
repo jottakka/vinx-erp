@@ -375,7 +375,7 @@ public partial class AddInboundWhatsAppTextImageCorrelation : Migration
             REVOKE ALL ON FUNCTION notifications.admit_inbound_whatsapp_text(uuid, text, text, text, text, text, uuid, uuid, uuid)
                 FROM PUBLIC, vinx_worker, vinx_migrator;
             REVOKE ALL ON FUNCTION notifications.correlate_inbound_whatsapp_text_image(uuid)
-                FROM PUBLIC, vinx_worker, vinx_migrator;
+                FROM PUBLIC, vinx_migrator;
             REVOKE ALL ON FUNCTION notifications.expire_inbound_whatsapp_text(uuid)
                 FROM PUBLIC, vinx_runtime, vinx_migrator;
             REVOKE ALL ON FUNCTION notifications.claim_inbound_whatsapp_message(uuid)
@@ -383,7 +383,7 @@ public partial class AddInboundWhatsAppTextImageCorrelation : Migration
             GRANT EXECUTE ON FUNCTION notifications.admit_inbound_whatsapp_text(uuid, text, text, text, text, text, uuid, uuid, uuid)
                 TO vinx_runtime;
             GRANT EXECUTE ON FUNCTION notifications.correlate_inbound_whatsapp_text_image(uuid)
-                TO vinx_runtime;
+                TO vinx_runtime, vinx_worker;
             GRANT EXECUTE ON FUNCTION notifications.expire_inbound_whatsapp_text(uuid)
                 TO vinx_worker;
             GRANT EXECUTE ON FUNCTION notifications.claim_inbound_whatsapp_message(uuid)

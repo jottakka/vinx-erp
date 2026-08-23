@@ -1,8 +1,8 @@
-# Runbook — WhatsApp inbound admissão, imagem → OCR → IA (#272 PR1, #140 subsete)
+# Runbook — WhatsApp inbound, correlação curta e imagem → IA
 
 ## Visão
 
-Uma mensagem recebida **com imagem ou documento** no webhook (`POST /foundation/notifications/whatsapp/webhook`,
+Uma mensagem recebida com **texto, imagem ou documento** no webhook (`POST /foundation/notifications/whatsapp/webhook`,
 assinatura HMAC do W3) é admitida com resolução de identidade fechada: o
 `metadata.phone_number_id` deve ser exatamente o número configurado e o `wa_id`
 resolve para exatamente um usuário, uma empresa e uma membership ativa
@@ -10,10 +10,19 @@ resolve para exatamente um usuário, uma empresa e uma membership ativa
 `ambiguous` ou `inactive` e **não avança**. A admissão é deduplicada por
 `(phone_number_id, message_id)`.
 
-Imagens admitidas seguem para a fila durável `whatsapp-inbound` e o WorkerHost:
+Texto e imagem sem legenda do mesmo ator podem formar um par durante 30
+segundos. A chave exige canal, remetente, usuário, empresa e membership iguais.
+Imagem com legenda ou par único segue imediatamente; imagem sem par é agendada
+por 30 segundos; ambiguidade não publica; replay não republica. Texto sem
+imagem expira sem IA nem resposta automática.
+
+Imagens processadas seguem pela fila durável `whatsapp-inbound` e o WorkerHost:
 download da mídia → canonicalização (strip de metadados, tetos de pixel/byte) →
 OCR pelo perfil de visão → um turno único de IA → resposta de texto ao
-remetente (janela 24h aberta pelo inbound). Documentos admitidos ficam
+remetente (janela 24h aberta pelo inbound). O pedido à IA contém um sistema
+fixo e um único turno de usuário com blocos opcionais `User text`,
+`Image caption` e `OCR transcription`, sempre como dados não confiáveis.
+Documentos admitidos ficam
 duráveis sem consumidor nesta fatia (download/quarentena/OCR/Pagaí são os PRs
 seguintes do #272; sem resposta automática). Outros tipos de mensagem continuam
 ignorados (fora do corte).
@@ -69,10 +78,12 @@ Motivos terminais de documento (`failure_reason`):
 
 ## Provisionamento
 
-1. Migração `20260821120000_AddNotificationMetaInbound` (funções owner, grants runtime/worker) e
+1. Migrações `20260821120000_AddNotificationMetaInbound`,
    `20260821130000_AddInboundWhatsAppMediaAdmission` (colunas de admissão,
    `resolve_inbound_whatsapp_actor` e `admit_inbound_whatsapp_media`, grants de
-   leitura Foundation → owner de notificações).
+   leitura Foundation → owner de notificações) e
+   `20260823130000_AddInboundWhatsAppTextImageCorrelation` (texto, prazo,
+   correlação, expiração e claims estreitos).
 2. `db-apply` dos dois hosts cria a fila `whatsapp-inbound` (deploy-time, `AutoCreate.None`).
 3. `infra/database/grant-wolverine-runtime.sql` concede DML do worker nas tabelas da fila.
 
@@ -87,6 +98,8 @@ Motivos terminais de documento (`failure_reason`):
 | `ai_failed` | perfil de texto falhou determinístico | ver logs do provider |
 | `reply_rejected` | rejeição definitiva do provider | verificar o motivo seguro e a janela de 24h; não reenviar automaticamente |
 | `reply_ambiguous` | timeout, transporte/HTTP incerto, 2xx malformado ou conclusão local incerta | seguir reconciliação manual; não reenviar automaticamente |
+| `correlation_timeout` | texto não encontrou uma imagem única em 30 segundos | nenhuma resposta automática |
+| `correlation_ambiguous` | mais de um candidato compatível | revisar sem escolher automaticamente |
 
 Antes da barreira de resposta, transitivos de download/OCR/IA seguem a política
 Wolverine 1s/5s/30s e depois DLQ redigida (`whatsapp_inbound_retry_exhausted`).
@@ -129,6 +142,10 @@ outro POST automático.
   (`wolverine_queue_whatsapp_inbound`) e listener no log do WorkerHost. Linhas
   com `resolution_state <> 'admitted'` em `pending` são admissões fechadas
   (comportamento esperado), não backlog do worker.
+- **Texto ficou em `correlation_timeout`**: comportamento esperado após 30
+  segundos sem imagem única; não republicar nem responder automaticamente.
+- **`correlation_ambiguous`**: manter fail-closed; não escolher por ordem de
+  chegada e não enviar conteúdo para IA.
 - **Tudo `ai_unconfigured`**: perfis ausentes no worker (não no ApiHost).
 - **Resposta pendente após crash**: localizar `reply_in_flight`/`reply_ambiguous`,
   seguir a reconciliação manual acima e preservar a evidência autorizada; a
@@ -138,7 +155,8 @@ outro POST automático.
 
 Download/quarentena/MIME/checksum/ClamAV de documentos, OCR e extração
 tipada, rascunho Pagaí e resposta automática para documentos — PRs seguintes
-do #272. Inbound de texto/áudio, histórico multi-turno, supervisão humana,
+do #272. Áudio inbound, resposta automática a texto isolado, histórico
+multi-turno, chat/sessão, supervisão humana,
 templates de resposta e moderação dedicada (guardrails #136 segue em PR
 próprio). Webhook real em ambiente de teste da Meta não faz fan-out de
 eventos (constatado ao vivo em 2026-08-19); a receita de produção é idêntica

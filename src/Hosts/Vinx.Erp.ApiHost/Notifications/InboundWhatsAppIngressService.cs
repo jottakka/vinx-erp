@@ -56,6 +56,7 @@ public sealed class InboundWhatsAppIngressService(
 {
     private const string Operation = "whatsapp_inbound_ingress";
     private const string Module = "notifications";
+    private static readonly TimeSpan CorrelationWindow = TimeSpan.FromSeconds(30);
 
     public Task<bool> RecordAsync(InboundWhatsAppImage image, CancellationToken cancellationToken) =>
         RecordAsync(
@@ -124,7 +125,9 @@ public sealed class InboundWhatsAppIngressService(
         var inboundId = Guid.NewGuid();
         var commitAttempted = false;
         var created = false;
-        var shouldPublish = false;
+        string? outboundKind = null;
+        var scheduleDelay = false;
+        var committedByOutbox = false;
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(
@@ -173,7 +176,6 @@ public sealed class InboundWhatsAppIngressService(
             );
             var admission = (string?)await command.ExecuteScalarAsync(cancellationToken);
             created = string.Equals(admission, "created", StringComparison.Ordinal);
-            shouldPublish = created && resolution.IsAdmitted && messageType != "text";
             if (!created && !string.Equals(admission, "replay", StringComparison.Ordinal))
             {
                 // messageId reaproveitado com payload incompatível: conflito
@@ -187,32 +189,90 @@ public sealed class InboundWhatsAppIngressService(
                 );
             }
 
-            if (created && resolution.IsAdmitted && messageType is "image" or "text")
+            string? correlation = null;
+            if (
+                created
+                && resolution.IsAdmitted
+                && (messageType == "text" || (messageType == "image" && caption is null))
+            )
             {
                 await using var correlationCommand = connection.CreateCommand();
                 correlationCommand.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
                 correlationCommand.CommandText =
                     "SELECT notifications.correlate_inbound_whatsapp_text_image(@inbound_id)";
                 AddParameter(correlationCommand, "inbound_id", inboundId);
-                await correlationCommand.ExecuteScalarAsync(cancellationToken);
+                correlation = (string?)await correlationCommand.ExecuteScalarAsync(cancellationToken);
             }
 
-            if (shouldPublish)
+            if (created && resolution.IsAdmitted)
+            {
+                if (messageType == "text")
+                {
+                    outboundKind = "text_expiry";
+                    scheduleDelay = true;
+                }
+                else if (messageType == "image")
+                {
+                    if (caption is not null || string.Equals(correlation, "correlated", StringComparison.Ordinal))
+                    {
+                        outboundKind = "image";
+                    }
+                    else if (string.Equals(correlation, "no_match", StringComparison.Ordinal))
+                    {
+                        outboundKind = "image";
+                        scheduleDelay = true;
+                    }
+                }
+                else if (messageType == "document")
+                {
+                    outboundKind = "document";
+                }
+            }
+
+            if (outboundKind is not null)
             {
                 outbox.Enroll(database);
-                // Imagem admitida segue ao subsete #140 (OCR/resposta);
-                // documento admitido segue à fila de quarentena do #272 PR2.
-                object message = messageType == "image"
-                    ? new InboundWhatsAppImageReceived(inboundId)
-                    : new InboundWhatsAppDocumentReceived(inboundId);
-                await outbox.PublishAsync(
-                    message,
-                    new DeliveryOptions { CorrelationId = Guid.NewGuid().ToString("D") }
-                );
+                var delivery = new DeliveryOptions
+                {
+                    CorrelationId = Guid.NewGuid().ToString("D"),
+                };
+                if (scheduleDelay)
+                {
+                    delivery.ScheduleDelay = CorrelationWindow;
+                }
+
+                switch (outboundKind)
+                {
+                    case "image":
+                        await outbox.PublishAsync(
+                            new InboundWhatsAppImageReceived(inboundId),
+                            delivery
+                        );
+                        break;
+                    case "text_expiry":
+                        await outbox.PublishAsync(
+                            new InboundWhatsAppTextCorrelationExpired(inboundId),
+                            delivery
+                        );
+                        break;
+                    case "document":
+                        await outbox.PublishAsync(
+                            new InboundWhatsAppDocumentReceived(inboundId),
+                            delivery
+                        );
+                        break;
+                }
+
+                commitAttempted = true;
+                await outbox.SaveChangesAndFlushMessagesAsync(cancellationToken);
+                committedByOutbox = true;
             }
 
-            commitAttempted = true;
-            await transaction.CommitAsync(cancellationToken);
+            if (!committedByOutbox)
+            {
+                commitAttempted = true;
+                await transaction.CommitAsync(cancellationToken);
+            }
         }
         catch (PostgresException exception)
             when (!commitAttempted && exception.SqlState == PostgresErrorCodes.InvalidParameterValue)
@@ -227,25 +287,6 @@ public sealed class InboundWhatsAppIngressService(
                 "invalid_parameters"
             );
             return false;
-        }
-
-        if (shouldPublish)
-        {
-            try
-            {
-                await outbox.FlushOutgoingMessagesAsync();
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(
-                    exception,
-                    "Inbound ingress {Operation} {Module} {Result} {Reason}",
-                    Operation,
-                    Module,
-                    "enqueued",
-                    "outbox_flush_deferred"
-                );
-            }
         }
 
         return created;

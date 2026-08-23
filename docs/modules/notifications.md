@@ -80,8 +80,8 @@ confirmação humana. Runbook: `docs/runbooks/whatsapp-outbound.md`.
 
 ## Inbound admissão e identidade (#272 PR1)
 
-O webhook (mesmo endpoint do W3) lê `messages[]` dos tipos `image` e
-`document`, exigindo `metadata.phone_number_id` (canal estável; em deploy de
+O webhook (mesmo endpoint do W3) lê `messages[]` dos tipos `image`, `document`
+e `text`, exigindo `metadata.phone_number_id` (canal estável; em deploy de
 número único, deve ser exatamente o `META_WHATSAPP_PHONE_NUMBER_ID`
 configurado). O ingress (`InboundWhatsAppIngressService` no ApiHost) resolve
 a identidade e grava a admissão deduplicada por `(phone_number_id,
@@ -96,19 +96,21 @@ message_id)` na mesma transação:
   excluída) ou `ambiguous` (múltiplas identidades ativas — nunca escolhe).
   Como um contato se torna validado é política de vinculação pendente de
   aprovação; esta fronteira somente lê o estado atual.
-- `notifications.admit_inbound_whatsapp_media(...)` persiste a linha com o
+- As funções `admit_inbound_whatsapp_media` e `admit_inbound_whatsapp_text`
+  persistem a linha com o
   resultado da resolução (`resolution_state` + ids resolvidos + `resolved_at`)
   e classifica a entrega como `created`, `replay` ou `conflict` (messageId
   reaproveitado com payload incompatível — conflito seguro, sem duplicar).
-  O casamento usa somente o `wa_id`; o vínculo `phone_number_id → empresa`
-  aguarda a mesma política.
+  Texto aceita no máximo 4096 caracteres.
 
-Somente mensagens admitidas publicam na fila durável: imagens publicam
-`InboundWhatsAppImageReceived` em `whatsapp-inbound` (subsete #140 abaixo) e
-documentos publicam `InboundWhatsAppDocumentReceived` em
-`whatsapp-inbound-documents` (fatia de documento seguro abaixo). Linhas não
-admitidas permanecem `pending` com o estado de resolução fechado — são
-evidência, não fila de retrabalho.
+Texto e imagem sem legenda correlacionam por 30 segundos somente com a chave
+exata `(phone_number_id, wa_id, user_id, company_id, membership_id)`. Um par
+único processa a imagem; múltiplos candidatos falham como
+`correlation_ambiguous`. Texto isolado fecha como `correlation_timeout`, sem IA
+ou resposta. Imagem sem par aguarda 30 segundos; imagem com legenda ou par
+único processa imediatamente. Replays não publicam novamente. Wolverine usa o
+outbox e seu agendamento durável existentes; documentos continuam em
+`whatsapp-inbound-documents`. Linhas não admitidas são somente evidência.
 
 ## Inbound extração tipada de fatura (#272 PR3)Após a quarentena limpa, o mesmo processamento extrai o candidato tipado:
 PDF usa a camada de texto local (`DocumentTextExtractor`); sem camada =
@@ -161,13 +163,15 @@ sem resposta automática nesta fatia (PRs seguintes). Grant de DML da fila em
 ## Inbound imagem → OCR → IA (#140 subsete)
 
 `Providers/Meta/InboundWhatsAppInteractionService` orquestra o subsete
-automatizado do #140: após admissão admitida (#272 PR1), o ingress publica
-`InboundWhatsAppImageReceived` na fila durável `whatsapp-inbound` na mesma
-transação (padrão do outbox transacional). O worker faz claim idempotente,
+automatizado do #140: após admissão e eventual correlação, o ingress agenda ou
+publica `InboundWhatsAppImageReceived` na fila durável `whatsapp-inbound`. O
+worker faz claim idempotente,
 baixa a mídia em duas fases, canonicaliza (EXIF descartado, tetos de
 pixel/byte), transcreve pelo perfil de visão (`DocumentVisionOcr` do módulo AI
-— conteúdo sempre tratado como dado), compõe um turno único no perfil de texto
-e responde na janela de 24h (`MetaWhatsAppReplyMapper`, cap 4096).
+— conteúdo sempre tratado como dado), compõe exatamente um turno de sistema e
+um turno de usuário. Texto correlacionado, legenda e OCR são blocos opcionais,
+rotulados e não confiáveis; não há histórico, chat ou sessão. A resposta segue
+na janela de 24h (`MetaWhatsAppReplyMapper`, cap 4096).
 
 Imediatamente antes do único `POST` automático à Meta, a função
 `begin_inbound_whatsapp_reply` move a linha de `processing` para
