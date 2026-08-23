@@ -76,12 +76,13 @@ public sealed class MetaWhatsAppClient(
                 && messages.GetArrayLength() > 0
                 && messages[0].TryGetProperty("id", out var id)
                 && id.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(id.GetString())
+                && id.GetString() is { Length: >= 1 and <= 200 } messageId
+                && string.Equals(messageId, messageId.Trim(), StringComparison.Ordinal)
             )
             {
                 return new MetaWhatsAppSendResult(
                     NotificationProviderResultKind.Delivered,
-                    id.GetString()
+                    messageId
                 );
             }
         }

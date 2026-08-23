@@ -165,7 +165,10 @@ public sealed class InboundWhatsAppInteractionService(
                 ],
                 cancellationToken: cancellationToken
             );
-            replyBody = response.Text is { Length: > 0 } text ? text.Trim() : FallbackReplyText;
+            var normalizedReply = response.Text?.Trim();
+            replyBody = string.IsNullOrWhiteSpace(normalizedReply)
+                ? FallbackReplyText
+                : normalizedReply;
         }
         catch (Exception exception) when (IsTransientExternalFailure(exception))
         {
@@ -180,6 +183,7 @@ public sealed class InboundWhatsAppInteractionService(
             return;
         }
 
+        var replyMessage = MetaWhatsAppReplyMapper.Map(claim.WaId!, replyBody);
         var sender = new MetaWhatsAppClient(
             httpClientFactory.CreateClient(MetaWhatsAppClient.HttpClientName),
             metaOptions,
@@ -208,7 +212,7 @@ public sealed class InboundWhatsAppInteractionService(
         try
         {
             send = await sender.SendTextAsync(
-                MetaWhatsAppReplyMapper.Map(claim.WaId!, replyBody),
+                replyMessage,
                 cancellationToken
             );
         }
