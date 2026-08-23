@@ -1,11 +1,10 @@
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import { Box, Card, Stack, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import type { ReactNode } from "react";
 import { AppLogo } from "../shared/ui/app-logo";
 import { AppearanceMenu } from "../shared/ui/appearance-menu";
 import { InkBackground } from "./ink-background";
-import { glassSurface, vinxShadow } from "./theme/surface-tokens";
+import { veilSurface, vinxShadow, vinxTint } from "./theme/surface-tokens";
 
 const heroHighlights = [
   "Protótipos navegáveis sem backend",
@@ -95,19 +94,18 @@ export function PublicLayout({ children }: { children: ReactNode }) {
                 >
                   <Box
                     aria-hidden="true"
-                    sx={(boxTheme) => ({
+                    sx={{
                       alignItems: "center",
-                      bgcolor: alpha(boxTheme.palette.primary.main, 0.12),
+                      bgcolor: vinxTint.primaryMuted,
                       border: 1,
-                      borderColor: (borderTheme) =>
-                        alpha(borderTheme.palette.primary.main, 0.25),
+                      borderColor: vinxTint.primaryEdge,
                       borderRadius: "50%",
                       color: "primary.main",
                       display: "flex",
                       height: 26,
                       justifyContent: "center",
                       width: 26,
-                    })}
+                    }}
                   >
                     <CheckCircleRoundedIcon fontSize="small" />
                   </Box>
@@ -120,12 +118,11 @@ export function PublicLayout({ children }: { children: ReactNode }) {
 
         <Card
           sx={(theme) => ({
-            ...glassSurface(),
+            ...veilSurface(),
             border: 1,
             borderColor: "divider",
             borderRadius: 4,
-            boxShadow:
-              theme.palette.mode === "dark" ? vinxShadow.card : vinxShadow.lift,
+            boxShadow: vinxShadow.lift,
             justifySelf: { xs: "stretch", md: "end" },
             maxWidth: "30rem",
             minWidth: 0,

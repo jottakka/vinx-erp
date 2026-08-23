@@ -5,7 +5,6 @@ import NotificationsOutlinedIcon from "@mui/icons-material/NotificationsOutlined
 import {
   AppBar,
   Avatar,
-  alpha,
   Badge,
   Box,
   Button,
@@ -16,7 +15,7 @@ import {
   useScrollTrigger,
 } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
-import { glassSurface } from "../../app/theme/surface-tokens";
+import { glassSurface, vinxTint } from "../../app/theme/surface-tokens";
 import { isAgentWorkspaceEnabled } from "../../features/agent/agent-conversation-provider";
 import { AgentTrigger } from "../../features/agent/agent-trigger";
 import { useNotifications } from "../../features/notifications/notifications-provider";
@@ -124,10 +123,7 @@ export function AppHeader({
               <Avatar
                 sx={(theme) => ({
                   bgcolor: "primary.main",
-                  boxShadow: `inset 0 0 0 1px ${alpha(
-                    theme.palette.primary.contrastText,
-                    0.28,
-                  )}`,
+                  boxShadow: `inset 0 0 0 1px ${vinxTint.contrastRing}`,
                   fontSize: theme.typography.caption.fontSize,
                   fontWeight: 700,
                 })}

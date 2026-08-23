@@ -10,10 +10,9 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
-import { vinxShadow } from "../../app/theme/surface-tokens";
+import { vinxShadow, vinxTint } from "../../app/theme/surface-tokens";
 import { PageHeader } from "../../shared/ui/page-header";
 import { useSession } from "../auth/session-provider";
 import {
@@ -224,19 +223,13 @@ export function NotificationsPage({
               <Card
                 key={item.id}
                 variant="outlined"
-                sx={(cardTheme) => ({
-                  borderColor: item.readAt
-                    ? "divider"
-                    : alpha(cardTheme.palette.primary.main, 0.45),
-                  borderLeftWidth: item.readAt ? 1 : 3,
+                sx={{
+                  bgcolor: item.readAt ? undefined : vinxTint.primaryVeil,
+                  borderColor: item.readAt ? "divider" : vinxTint.primaryLine,
                   borderLeftColor: item.readAt ? undefined : "primary.main",
+                  borderLeftWidth: item.readAt ? 1 : 3,
                   boxShadow: vinxShadow.card,
-                  ...(item.readAt
-                    ? {}
-                    : {
-                        bgcolor: alpha(cardTheme.palette.primary.main, 0.03),
-                      }),
-                })}
+                }}
               >
                 <CardContent>
                   <Stack

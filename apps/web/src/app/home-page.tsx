@@ -11,24 +11,23 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import { Link as RouterLink } from "react-router-dom";
-import { vinxShadow } from "../app/theme/surface-tokens";
-import { useSession } from "../features/auth/session-provider";
 import {
-  type AppNavigationLink,
-  paguaiPrototypePath,
-} from "../shared/routing/app-paths";
+  companySurface,
+  vinxShadow,
+  vinxTint,
+} from "../app/theme/surface-tokens";
+import { useSession } from "../features/auth/session-provider";
+import { paguaiPrototypePath } from "../shared/routing/app-paths";
 import { CompanyBadge } from "../shared/ui/company-badge";
 import { PageHeader } from "../shared/ui/page-header";
+import type { AppNavigationLink } from "./app-route-manifest";
 
 type HomePageProps = {
   navigationLinks: readonly (AppNavigationLink & {
     icon: SvgIconComponent;
   })[];
 };
-
-const moduleAccentCycle = ["alpha", "beta", "gamma", "neutral"] as const;
 
 export function getAvailablePrototypePath(modulePath: string) {
   if (!import.meta.env.DEV || modulePath !== "/paguai") {
@@ -57,12 +56,11 @@ export function HomePage({ navigationLinks }: HomePageProps) {
       />
       <Card
         component="section"
-        sx={(theme) => ({
-          bgcolor: alpha(theme.palette.primary.main, 0.05),
-          borderColor: (cardTheme) =>
-            alpha(cardTheme.palette.primary.main, 0.28),
+        sx={{
+          bgcolor: vinxTint.primaryWash,
+          borderColor: vinxTint.primaryEdge,
           borderLeftWidth: 3,
-        })}
+        }}
         variant="outlined"
       >
         <CardContent>
@@ -73,9 +71,9 @@ export function HomePage({ navigationLinks }: HomePageProps) {
           >
             <Box
               aria-hidden="true"
-              sx={(theme) => ({
+              sx={{
                 alignItems: "center",
-                bgcolor: alpha(theme.palette.primary.main, 0.12),
+                bgcolor: vinxTint.primaryMuted,
                 borderRadius: 3,
                 color: "primary.main",
                 display: "flex",
@@ -83,7 +81,7 @@ export function HomePage({ navigationLinks }: HomePageProps) {
                 height: 44,
                 justifyContent: "center",
                 width: 44,
-              })}
+              }}
             >
               <HelpOutlineRoundedIcon />
             </Box>
@@ -223,11 +221,11 @@ export function HomePage({ navigationLinks }: HomePageProps) {
             p: 0,
           }}
         >
-          {moduleLinks.map((route, index) => {
+          {moduleLinks.map((route) => {
             const Icon = route.icon;
             const prototypePath = getAvailablePrototypePath(route.path);
-            const slot = moduleAccentCycle[index % moduleAccentCycle.length];
-            const isLeadTile = index === 0;
+            const accent = companySurface(route.appearanceSlot ?? "neutral");
+            const isLeadTile = route.featured === true;
 
             return (
               <Card
@@ -264,20 +262,16 @@ export function HomePage({ navigationLinks }: HomePageProps) {
                   >
                     <Box
                       aria-hidden="true"
-                      sx={(theme) => ({
+                      sx={{
                         alignItems: "center",
-                        bgcolor: (iconTheme) =>
-                          alpha(
-                            iconTheme.palette.companyAccent[slot].main,
-                            theme.palette.mode === "dark" ? 0.18 : 0.12,
-                          ),
+                        bgcolor: accent.tint,
                         borderRadius: 2.5,
-                        color: `companyAccent.${slot}.main`,
+                        color: accent.main,
                         display: "flex",
                         height: 46,
                         justifyContent: "center",
                         width: 46,
-                      })}
+                      }}
                     >
                       <Icon />
                     </Box>

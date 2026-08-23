@@ -1,6 +1,6 @@
 import { Box, Typography } from "@mui/material";
 import { useId } from "react";
-import { vinxShadow } from "../../app/theme/surface-tokens";
+import { displayFontFamily, vinxShadow } from "../../app/theme/surface-tokens";
 
 export function AppLogo({ compact = false }: { compact?: boolean }) {
   const gradientId = useId();
@@ -76,8 +76,7 @@ export function AppLogo({ compact = false }: { compact?: boolean }) {
         <Typography
           component="span"
           sx={{
-            fontFamily:
-              '"Sora", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+            fontFamily: displayFontFamily,
             fontWeight: 700,
             letterSpacing: "0.16em",
           }}

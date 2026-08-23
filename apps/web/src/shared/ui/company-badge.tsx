@@ -1,6 +1,5 @@
 import { Box, Paper, Typography } from "@mui/material";
-import { alpha, useTheme } from "@mui/material/styles";
-import { vinxShadow } from "../../app/theme/surface-tokens";
+import { companySurface, vinxShadow } from "../../app/theme/surface-tokens";
 import { resolveCompanyAppearance } from "./company-appearance";
 
 type CompanyBadgeProps = {
@@ -10,8 +9,7 @@ type CompanyBadgeProps = {
 
 export function CompanyBadge({ id, name }: CompanyBadgeProps) {
   const { monogram, slot } = resolveCompanyAppearance(id, name);
-  const theme = useTheme();
-  const accent = theme.palette.companyAccent?.[slot] ?? theme.palette.primary;
+  const accent = companySurface(slot);
 
   return (
     <Paper
@@ -20,9 +18,8 @@ export function CompanyBadge({ id, name }: CompanyBadgeProps) {
       role="group"
       sx={{
         alignItems: "center",
-        bgcolor: (paperTheme) =>
-          alpha(paperTheme.palette.background.paper, 0.6),
-        borderColor: (_paperTheme) => alpha(accent.main, 0.5),
+        bgcolor: "background.paper",
+        borderColor: accent.border,
         borderRadius: 2.5,
         boxShadow: vinxShadow.card,
         display: "inline-flex",
@@ -47,10 +44,21 @@ export function CompanyBadge({ id, name }: CompanyBadgeProps) {
           viewBox="0 0 32 32"
           width={30}
         >
-          <rect fill="currentColor" height="32" rx="10" width="32" />
+          <rect fill={accent.tint} height="32" rx="10" width="32" />
+          <rect
+            fill="none"
+            height="31"
+            rx="9.5"
+            stroke="currentColor"
+            strokeOpacity="0.4"
+            strokeWidth="1"
+            width="31"
+            x="0.5"
+            y="0.5"
+          />
           <text
             dominantBaseline="central"
-            fill={accent.contrastText}
+            fill={accent.main}
             fontSize="13"
             fontWeight="700"
             textAnchor="middle"

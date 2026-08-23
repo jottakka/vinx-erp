@@ -6,9 +6,9 @@ import {
   PaletteOutlined,
 } from "@mui/icons-material";
 import { Box, Link, List, ListItem, Stack, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import type { ReactElement } from "react";
 import { Link as RouterLink } from "react-router-dom";
+import { vinxTint } from "../app/theme/surface-tokens";
 import type { AppNavigationLink } from "../shared/routing/app-paths";
 
 type HelpPageProps = {
@@ -121,16 +121,16 @@ function HelpSectionCard({ content, icon: Icon, title }: HelpSection) {
       <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
         <Box
           aria-hidden="true"
-          sx={(theme) => ({
+          sx={{
             alignItems: "center",
-            bgcolor: alpha(theme.palette.primary.main, 0.1),
+            bgcolor: vinxTint.primarySoft,
             borderRadius: 2.5,
             color: "primary.main",
             display: "flex",
             height: 38,
             justifyContent: "center",
             width: 38,
-          })}
+          }}
         >
           <Icon fontSize="small" />
         </Box>

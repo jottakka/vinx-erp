@@ -6,6 +6,7 @@ import {
 } from "@mui/material/styles";
 import "./theme-augmentation";
 import { darkPalette, lightPalette } from "./palette-primitives";
+import { displayFontFamily, vinxFieldBorder } from "./surface-tokens";
 import type { Density } from "./visual-preferences";
 
 export type VinxLayoutTokens = {
@@ -16,8 +17,6 @@ export type VinxLayoutTokens = {
   navigationWidth: number;
 };
 
-const displayFontFamily =
-  '"Sora", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 const bodyFontFamily =
   'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
@@ -203,7 +202,9 @@ export function createVinxTheme(density: Density): Theme & {
               },
             },
           }),
-          notchedOutline: { borderColor: "var(--vinx-palette-divider)" },
+          notchedOutline: {
+            borderColor: vinxFieldBorder.rest,
+          },
         },
       },
       MuiAlert: {
@@ -257,7 +258,7 @@ export function createVinxTheme(density: Density): Theme & {
             outlineOffset: 2,
           },
           "::selection": {
-            backgroundColor: "var(--vinx-palette-primary-light)",
+            backgroundColor: "var(--vinx-palette-primary-main)",
             color: "var(--vinx-palette-primary-contrastText)",
           },
         },
