@@ -26,8 +26,7 @@ public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
     {
         var database = $"vinx_fixture_{Guid.NewGuid():N}";
         var password = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        _container = new TestcontainersPostgresContainer(new PostgreSqlBuilder()
-            .WithImage("postgres:17.9-alpine")
+        _container = new TestcontainersPostgresContainer(new PostgreSqlBuilder("postgres:17.9-alpine")
             .WithDatabase(database)
             .WithUsername(AdministratorUsername)
             .WithPassword(password)

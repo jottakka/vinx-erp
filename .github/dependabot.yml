@@ -9,6 +9,13 @@ updates:
       dotnet:
         patterns:
           - "*"
+    ignore:
+      # Blocked by Microsoft.AspNetCore.OpenApi (< 3.0.0 constraint) — NU1608.
+      - dependency-name: "Microsoft.OpenApi"
+        versions: [">= 3.0.0"]
+      # Blocked by Microsoft.Extensions.AI.OpenAI (< 2.13.0 constraint) — NU1608.
+      - dependency-name: "OpenAI"
+        versions: [">= 2.13.0"]
   - package-ecosystem: npm
     directory: "/"
     schedule:
