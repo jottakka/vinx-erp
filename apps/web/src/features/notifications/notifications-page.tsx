@@ -6,12 +6,14 @@ import {
   Card,
   CardContent,
   Chip,
-  CircularProgress,
+  Skeleton,
   Stack,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
+import { vinxShadow } from "../../app/theme/surface-tokens";
 import { PageHeader } from "../../shared/ui/page-header";
 import { useSession } from "../auth/session-provider";
 import {
@@ -178,9 +180,29 @@ export function NotificationsPage({
           aria-label="Carregando notificações"
           role="status"
           spacing={2}
-          sx={{ py: 4 }}
+          sx={{ mt: 2 }}
         >
-          <CircularProgress aria-hidden sx={{ mx: "auto" }} />
+          {[0, 1, 2].map((index) => (
+            <Box key={index} sx={{ p: 2 }}>
+              <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
+                <Skeleton
+                  aria-hidden="true"
+                  height={40}
+                  variant="rounded"
+                  width={40}
+                />
+                <Box sx={{ flexGrow: 1 }}>
+                  <Skeleton aria-hidden="true" height={22} width="42%" />
+                  <Skeleton
+                    aria-hidden="true"
+                    height={16}
+                    sx={{ mt: 0.75 }}
+                    width="28%"
+                  />
+                </Box>
+              </Stack>
+            </Box>
+          ))}
         </Stack>
       ) : !error && items.length === 0 ? (
         <Alert severity="info" sx={{ mt: 2 }}>
@@ -202,10 +224,19 @@ export function NotificationsPage({
               <Card
                 key={item.id}
                 variant="outlined"
-                sx={{
-                  borderColor: item.readAt ? "divider" : "primary.main",
-                  borderWidth: item.readAt ? 1 : 2,
-                }}
+                sx={(cardTheme) => ({
+                  borderColor: item.readAt
+                    ? "divider"
+                    : alpha(cardTheme.palette.primary.main, 0.45),
+                  borderLeftWidth: item.readAt ? 1 : 3,
+                  borderLeftColor: item.readAt ? undefined : "primary.main",
+                  boxShadow: vinxShadow.card,
+                  ...(item.readAt
+                    ? {}
+                    : {
+                        bgcolor: alpha(cardTheme.palette.primary.main, 0.03),
+                      }),
+                })}
               >
                 <CardContent>
                   <Stack
@@ -232,6 +263,19 @@ export function NotificationsPage({
                           <Chip
                             aria-label="Não lida"
                             color="primary"
+                            icon={
+                              <Box
+                                aria-hidden="true"
+                                component="span"
+                                sx={{
+                                  bgcolor: "currentColor",
+                                  borderRadius: "50%",
+                                  height: 7,
+                                  width: 7,
+                                  mx: 0.5,
+                                }}
+                              />
+                            }
                             label="Não lida"
                             size="small"
                             variant="outlined"
@@ -272,12 +316,11 @@ export function NotificationsPage({
                               <MarkEmailReadOutlinedIcon />
                             )
                           }
+                          sx={{ minWidth: 168 }}
                         >
-                          {markingId === item.id ? (
-                            <CircularProgress aria-hidden size={18} />
-                          ) : (
-                            "Marcar como lida"
-                          )}
+                          {markingId === item.id
+                            ? "Marcando…"
+                            : "Marcar como lida"}
                         </Button>
                       ) : null}
                     </Stack>

@@ -1,9 +1,11 @@
+import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import { Box, Card, Stack, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import type { ReactNode } from "react";
 import { AppLogo } from "../shared/ui/app-logo";
 import { AppearanceMenu } from "../shared/ui/appearance-menu";
 import { InkBackground } from "./ink-background";
+import { glassSurface, vinxShadow } from "./theme/surface-tokens";
 
 const heroHighlights = [
   "Protótipos navegáveis sem backend",
@@ -93,23 +95,21 @@ export function PublicLayout({ children }: { children: ReactNode }) {
                 >
                   <Box
                     aria-hidden="true"
-                    sx={(theme) => ({
-                      bgcolor: alpha(
-                        theme.palette.primary.main,
-                        theme.palette.mode === "dark" ? 0.16 : 0.1,
-                      ),
+                    sx={(boxTheme) => ({
+                      alignItems: "center",
+                      bgcolor: alpha(boxTheme.palette.primary.main, 0.12),
                       border: 1,
-                      borderColor: "divider",
+                      borderColor: (borderTheme) =>
+                        alpha(borderTheme.palette.primary.main, 0.25),
                       borderRadius: "50%",
                       color: "primary.main",
                       display: "flex",
-                      fontSize: 13,
-                      height: 22,
+                      height: 26,
                       justifyContent: "center",
-                      width: 22,
+                      width: 26,
                     })}
                   >
-                    ✓
+                    <CheckCircleRoundedIcon fontSize="small" />
                   </Box>
                   <Typography color="text.secondary">{item}</Typography>
                 </Stack>
@@ -120,12 +120,12 @@ export function PublicLayout({ children }: { children: ReactNode }) {
 
         <Card
           sx={(theme) => ({
-            bgcolor: "background.paper",
+            ...glassSurface(),
             border: 1,
             borderColor: "divider",
-            borderRadius: 3,
+            borderRadius: 4,
             boxShadow:
-              theme.palette.mode === "dark" ? "none" : theme.shadows[4],
+              theme.palette.mode === "dark" ? vinxShadow.card : vinxShadow.lift,
             justifySelf: { xs: "stretch", md: "end" },
             maxWidth: "30rem",
             minWidth: 0,

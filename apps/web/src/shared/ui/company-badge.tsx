@@ -1,5 +1,6 @@
-import BusinessRounded from "@mui/icons-material/BusinessRounded";
-import { Box, Paper, Typography, useTheme } from "@mui/material";
+import { Box, Paper, Typography } from "@mui/material";
+import { alpha, useTheme } from "@mui/material/styles";
+import { vinxShadow } from "../../app/theme/surface-tokens";
 import { resolveCompanyAppearance } from "./company-appearance";
 
 type CompanyBadgeProps = {
@@ -19,10 +20,13 @@ export function CompanyBadge({ id, name }: CompanyBadgeProps) {
       role="group"
       sx={{
         alignItems: "center",
-        borderColor: accent.main,
-        borderLeftWidth: 4,
+        bgcolor: (paperTheme) =>
+          alpha(paperTheme.palette.background.paper, 0.6),
+        borderColor: (_paperTheme) => alpha(accent.main, 0.5),
+        borderRadius: 2.5,
+        boxShadow: vinxShadow.card,
         display: "inline-flex",
-        gap: 1,
+        gap: 1.25,
         px: 1.25,
         py: 0.75,
         width: "fit-content",
@@ -33,18 +37,29 @@ export function CompanyBadge({ id, name }: CompanyBadgeProps) {
         aria-hidden="true"
         component="span"
         data-monogram={monogram}
-        sx={{
-          alignItems: "center",
-          bgcolor: accent.main,
-          borderRadius: "50%",
-          color: accent.contrastText,
-          display: "flex",
-          height: 28,
-          justifyContent: "center",
-          width: 28,
-        }}
+        sx={{ alignItems: "center", color: accent.main, display: "flex" }}
       >
-        <BusinessRounded fontSize="small" />
+        <svg
+          aria-hidden="true"
+          focusable="false"
+          height={30}
+          style={{ display: "block" }}
+          viewBox="0 0 32 32"
+          width={30}
+        >
+          <rect fill="currentColor" height="32" rx="10" width="32" />
+          <text
+            dominantBaseline="central"
+            fill={accent.contrastText}
+            fontSize="13"
+            fontWeight="700"
+            textAnchor="middle"
+            x="16"
+            y="17"
+          >
+            {monogram}
+          </text>
+        </svg>
       </Box>
       <Typography component="span" sx={{ fontWeight: 700 }}>
         {name}

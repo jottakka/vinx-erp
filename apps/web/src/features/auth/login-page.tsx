@@ -1,4 +1,14 @@
-import { Alert, Button, Stack, TextField, Typography } from "@mui/material";
+import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
+import MailOutlineRoundedIcon from "@mui/icons-material/MailOutlineRounded";
+import {
+  Alert,
+  Button,
+  CircularProgress,
+  InputAdornment,
+  Stack,
+  TextField,
+  Typography,
+} from "@mui/material";
 import { type FormEvent, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { PublicLayout } from "../../app/public-layout";
@@ -79,6 +89,13 @@ export function LoginPage() {
               htmlInput: {
                 "aria-describedby": visibleError ? loginErrorId : undefined,
               },
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <MailOutlineRoundedIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+              },
             }}
             type="email"
             value={email}
@@ -98,6 +115,13 @@ export function LoginPage() {
               htmlInput: {
                 "aria-describedby": visibleError ? loginErrorId : undefined,
               },
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <LockOutlinedIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+              },
             }}
             type="password"
             value={password}
@@ -111,6 +135,15 @@ export function LoginPage() {
             disabled={pending}
             fullWidth
             size="large"
+            startIcon={
+              pending ? (
+                <CircularProgress
+                  aria-hidden="true"
+                  color="inherit"
+                  size={18}
+                />
+              ) : null
+            }
             sx={(theme) => ({ minHeight: theme.vinx.layout.controlMinHeight })}
             type="submit"
             variant="contained"

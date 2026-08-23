@@ -20,6 +20,7 @@ import { useSession } from "../features/auth/session-provider";
 import { NotificationsProvider } from "../features/notifications/notifications-provider";
 import { AppHeader } from "./shell/app-header";
 import { NavigationList } from "./shell/navigation-list";
+import { vinxShadow, vinxSurface } from "./theme/surface-tokens";
 
 export function AppShell() {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
@@ -38,7 +39,14 @@ export function AppShell() {
   return (
     <AgentWorkspace>
       <NotificationsProvider>
-        <Box sx={{ bgcolor: "background.default", minHeight: "100dvh" }}>
+        <Box
+          sx={{
+            bgcolor: "background.default",
+            backgroundImage: vinxSurface.ambientWash,
+            backgroundRepeat: "no-repeat",
+            minHeight: "100dvh",
+          }}
+        >
           <Link
             href="#conteudo-principal"
             sx={{
@@ -69,8 +77,10 @@ export function AppShell() {
             slotProps={{
               paper: {
                 sx: (theme) => ({
+                  bgcolor: "background.default",
                   borderRightColor: "divider",
                   boxSizing: "border-box",
+                  boxShadow: vinxShadow.card,
                   display: "flex",
                   flexDirection: "column",
                   transition: theme.transitions.create("width", {

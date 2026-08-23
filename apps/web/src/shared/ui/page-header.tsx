@@ -17,9 +17,25 @@ export function PageHeader({
   return (
     <Stack component="header" spacing={1}>
       {eyebrow ? (
-        <Typography color="primary" variant="overline">
-          {eyebrow}
-        </Typography>
+        <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+          <Box
+            aria-hidden="true"
+            sx={{
+              bgcolor: "primary.main",
+              borderRadius: 999,
+              height: 2,
+              width: 26,
+            }}
+          />
+          <Typography
+            color="primary"
+            component="p"
+            sx={{ lineHeight: 1 }}
+            variant="overline"
+          >
+            {eyebrow}
+          </Typography>
+        </Stack>
       ) : null}
       <Stack
         direction={{ xs: "column", sm: "row" }}
@@ -29,7 +45,12 @@ export function PageHeader({
           <Typography component="h1" variant="h4">
             {title}
           </Typography>
-          <Typography color="text.secondary">{description}</Typography>
+          <Typography
+            color="text.secondary"
+            sx={{ mt: 0.5, maxWidth: "46rem" }}
+          >
+            {description}
+          </Typography>
         </Box>
         {actions}
       </Stack>

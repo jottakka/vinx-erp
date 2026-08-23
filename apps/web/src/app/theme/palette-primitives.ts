@@ -5,6 +5,10 @@ type PalettePrimitives = {
   primary: PaletteColor;
   secondary: PaletteColor;
   navigation: PaletteColor;
+  success: PaletteColor;
+  warning: PaletteColor;
+  info: PaletteColor;
+  error: PaletteColor;
   background: {
     default: string;
     paper: string;
@@ -37,16 +41,40 @@ export const lightPalette = {
     dark: "#181715",
     contrastText: "#f8f3ea",
   },
+  success: {
+    light: "#7ba585",
+    main: "#4a7856",
+    dark: "#35593f",
+    contrastText: "#fff9f2",
+  },
+  warning: {
+    light: "#d3a04c",
+    main: "#9a6b1e",
+    dark: "#6f4b14",
+    contrastText: "#fff9f2",
+  },
+  info: {
+    light: "#738696",
+    main: "#506474",
+    dark: "#384754",
+    contrastText: "#fff9f2",
+  },
+  error: {
+    light: "#d4715f",
+    main: "#b3402f",
+    dark: "#8a3021",
+    contrastText: "#fff9f2",
+  },
   background: {
-    default: "#f4f0e9",
-    paper: "#fcfaf6",
+    default: "#f6f1e8",
+    paper: "#fdfbf7",
   },
   text: {
     primary: "#292521",
     secondary: "#665f58",
     disabled: "#918a82",
   },
-  divider: "#dad2c8",
+  divider: "#ddd4c9",
   companyAccent: {
     alpha: {
       light: "#a46f5b",
@@ -94,16 +122,40 @@ export const darkPalette = {
     dark: "#151412",
     contrastText: "#f3ede4",
   },
+  success: {
+    light: "#a8c9b1",
+    main: "#8fb99b",
+    dark: "#6f9a7d",
+    contrastText: "#16211a",
+  },
+  warning: {
+    light: "#e5bd7c",
+    main: "#d9a45b",
+    dark: "#b98944",
+    contrastText: "#241a0d",
+  },
+  info: {
+    light: "#b4c3cd",
+    main: "#9db1c0",
+    dark: "#8095a5",
+    contrastText: "#131c23",
+  },
+  error: {
+    light: "#eba795",
+    main: "#e08a77",
+    dark: "#c46f5c",
+    contrastText: "#2a120c",
+  },
   background: {
-    default: "#121211",
-    paper: "#1c1a18",
+    default: "#141311",
+    paper: "#201d19",
   },
   text: {
     primary: "#f2ece3",
     secondary: "#b7afa5",
     disabled: "#7e7871",
   },
-  divider: "#39342f",
+  divider: "#3a352f",
   companyAccent: {
     alpha: {
       light: "#e1a68e",
