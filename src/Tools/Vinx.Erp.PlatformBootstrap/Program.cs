@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using Vinx.Erp.Foundation.Configuration;
 using Vinx.Erp.Foundation.Identity;
@@ -13,17 +14,25 @@ using Vinx.Erp.PlatformBootstrap;
 
 return await PlatformBootstrapCommand.RunAsync(args);
 
+internal enum PlatformBootstrapCommandKind
+{
+    Bootstrap,
+    WolverineGrants,
+    ReprovisionIdentity,
+    Invalid,
+}
+
 internal static class PlatformBootstrapCommand
 {
     public static async Task<int> RunAsync(string[] arguments)
     {
-        if (arguments is ["wolverine-grants"])
+        var commandKind = Classify(arguments);
+        if (commandKind is PlatformBootstrapCommandKind.WolverineGrants)
         {
             return await RunWolverineGrantsAsync();
         }
 
-        var isReprovisioning = arguments is ["reprovision-identity"];
-        if (arguments.Length != 0 && !isReprovisioning)
+        if (commandKind is PlatformBootstrapCommandKind.Invalid)
         {
             return await WriteOutcomeAsync("configuration_invalid", exitCode: 1);
         }
@@ -32,6 +41,7 @@ internal static class PlatformBootstrapCommand
         {
             var builder = Host.CreateApplicationBuilder([]);
             builder.Logging.ClearProviders();
+            ConfigureLogging(builder.Logging);
             builder
                 .Services.AddOptions<PlatformBootstrapDatabaseOptions>()
                 .Bind(builder.Configuration)
@@ -110,39 +120,13 @@ internal static class PlatformBootstrapCommand
 
             using var host = builder.Build();
             await using var scope = host.Services.CreateAsyncScope();
-            if (isReprovisioning)
+            if (commandKind is PlatformBootstrapCommandKind.ReprovisionIdentity)
             {
                 var reprovisioningOutcome = await scope
                     .ServiceProvider.GetRequiredService<ExternalIdentityReprovisioningRunner>()
                     .RunAsync(CancellationToken.None);
-                return reprovisioningOutcome switch
-                {
-                    ExternalIdentityReprovisioningState.Reprovisioned => await WriteOutcomeAsync(
-                        "reprovisioned",
-                        exitCode: 0
-                    ),
-                    ExternalIdentityReprovisioningState.AlreadyConfigured => await WriteOutcomeAsync(
-                        "already_configured",
-                        exitCode: 0
-                    ),
-                    ExternalIdentityReprovisioningState.ProviderNotDeleted => await WriteOutcomeAsync(
-                        "provider_not_deleted",
-                        exitCode: 1
-                    ),
-                    ExternalIdentityReprovisioningState.ProviderRejected => await WriteOutcomeAsync(
-                        "provider_rejected",
-                        exitCode: 1
-                    ),
-                    ExternalIdentityReprovisioningState.EmailMismatch => await WriteOutcomeAsync(
-                        "email_mismatch",
-                        exitCode: 1
-                    ),
-                    ExternalIdentityReprovisioningState.TupleMismatch => await WriteOutcomeAsync(
-                        "tuple_mismatch",
-                        exitCode: 1
-                    ),
-                    _ => await WriteOutcomeAsync("unavailable", exitCode: 1),
-                };
+                var mappedOutcome = MapReprovisioningOutcome(reprovisioningOutcome);
+                return await WriteOutcomeAsync(mappedOutcome.Value, mappedOutcome.ExitCode);
             }
 
             var outcome = await scope
@@ -178,6 +162,44 @@ internal static class PlatformBootstrapCommand
         {
             return await WriteOutcomeAsync("unavailable", exitCode: 1);
         }
+    }
+
+    internal static PlatformBootstrapCommandKind Classify(string[] arguments) =>
+        arguments switch
+        {
+            [] => PlatformBootstrapCommandKind.Bootstrap,
+            ["wolverine-grants"] => PlatformBootstrapCommandKind.WolverineGrants,
+            ["reprovision-identity"] => PlatformBootstrapCommandKind.ReprovisionIdentity,
+            _ => PlatformBootstrapCommandKind.Invalid,
+        };
+
+    internal static (string Value, int ExitCode) MapReprovisioningOutcome(
+        ExternalIdentityReprovisioningState outcome
+    ) => outcome switch
+    {
+        ExternalIdentityReprovisioningState.Reprovisioned => ("reprovisioned", 0),
+        ExternalIdentityReprovisioningState.AlreadyConfigured => ("already_configured", 0),
+        ExternalIdentityReprovisioningState.ProviderNotDeleted => ("provider_not_deleted", 1),
+        ExternalIdentityReprovisioningState.ProviderRejected => ("provider_rejected", 1),
+        ExternalIdentityReprovisioningState.EmailMismatch => ("email_mismatch", 1),
+        ExternalIdentityReprovisioningState.TupleMismatch => ("tuple_mismatch", 1),
+        _ => ("unavailable", 1),
+    };
+
+    internal static void ConfigureLogging(ILoggingBuilder logging)
+    {
+        logging.Services.Configure<ConsoleLoggerOptions>(options =>
+            options.LogToStandardErrorThreshold = LogLevel.Error
+        );
+        logging.AddJsonConsole();
+        logging.AddFilter(
+            (category, level) =>
+                string.Equals(
+                    category,
+                    typeof(ExternalIdentityReprovisioningService).FullName,
+                    StringComparison.Ordinal
+                ) && level is LogLevel.Error
+        );
     }
 
     /// <summary>

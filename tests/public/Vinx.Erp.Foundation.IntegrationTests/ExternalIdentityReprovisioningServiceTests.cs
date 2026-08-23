@@ -1,16 +1,24 @@
+extern alias platformbootstrap;
+
 using System.Net;
 using System.Text;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Console;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Platform;
 using Xunit;
+using ExternalIdentityReprovisioningOptions = platformbootstrap::Vinx.Erp.PlatformBootstrap.ExternalIdentityReprovisioningOptions;
+using ExternalIdentityReprovisioningRunner = platformbootstrap::Vinx.Erp.PlatformBootstrap.ExternalIdentityReprovisioningRunner;
+using PlatformBootstrapCommand = platformbootstrap::PlatformBootstrapCommand;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
 
@@ -45,6 +53,73 @@ public sealed class ExternalIdentityReprovisioningServiceTests
         Assert.DoesNotContain(RetainedEmail, result.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(OldSubject, result.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(NewSubject, result.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Runner_passes_the_exact_options_to_the_service_and_maps_its_stable_outcome()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var seed = await SeedAsync(fixture);
+        var handler = new ControlledHttpMessageHandler(subject =>
+            subject == OldSubject
+                ? Json(HttpStatusCode.NotFound, "old-provider-payload")
+                : Json(HttpStatusCode.OK, UserJson(NewSubject, RetainedEmail))
+        );
+        await using var database = fixture.CreateMigratorDbContext();
+        var runner = new ExternalIdentityReprovisioningRunner(
+            CreateService(database, handler),
+            Options.Create(
+                new ExternalIdentityReprovisioningOptions
+                {
+                    UserId = seed.UserId.ToString(),
+                    ExpectedExternalIdentityId = seed.IdentityId.ToString(),
+                    ExpectedOldSubject = OldSubject,
+                    NewSubject = NewSubject,
+                }
+            )
+        );
+
+        var result = await runner.RunAsync(CancellationToken.None);
+
+        Assert.Equal(ExternalIdentityReprovisioningState.Reprovisioned, result);
+        Assert.Equal(("reprovisioned", 0), PlatformBootstrapCommand.MapReprovisioningOutcome(result));
+        Assert.Equal([OldSubject, NewSubject], handler.RequestedSubjects);
+        var state = await ReadStateAsync(fixture, seed);
+        Assert.Equal(NewSubject, state.Subject);
+        Assert.Equal(1L, state.ReprovisioningAudits);
+    }
+
+    [Fact]
+    public void Logging_composition_keeps_only_the_sanitized_service_error_on_json_stderr()
+    {
+        var capture = new FilteredLogCaptureProvider();
+        var services = new ServiceCollection();
+        services.AddLogging(logging =>
+        {
+            PlatformBootstrapCommand.ConfigureLogging(logging);
+            logging.AddProvider(capture);
+        });
+        using var serviceProvider = services.BuildServiceProvider();
+        var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
+
+        loggerFactory.CreateLogger<ExternalIdentityReprovisioningService>().LogError("safe failure");
+        loggerFactory.CreateLogger<ExternalIdentityReprovisioningService>().LogWarning("ordinary warning");
+        loggerFactory.CreateLogger("Microsoft.EntityFrameworkCore.Database.Command").LogError("ordinary error");
+
+        Assert.Equal(
+            LogLevel.Error,
+            serviceProvider.GetRequiredService<IOptions<ConsoleLoggerOptions>>().Value.LogToStandardErrorThreshold
+        );
+        var entry = Assert.Single(capture.Entries);
+        Assert.Equal(typeof(ExternalIdentityReprovisioningService).FullName, entry.Category);
+        Assert.Equal(LogLevel.Error, entry.Level);
+    }
+
+    [Fact]
+    public void Command_classification_preserves_the_default_bootstrap_and_wolverine_grants_paths()
+    {
+        Assert.Equal("Bootstrap", PlatformBootstrapCommand.Classify([]).ToString());
+        Assert.Equal("WolverineGrants", PlatformBootstrapCommand.Classify(["wolverine-grants"]).ToString());
     }
 
     [Theory]
@@ -312,6 +387,31 @@ public sealed class ExternalIdentityReprovisioningServiceTests
             values.Remove("{OriginalFormat}");
             Entries.Add(new CapturedLog(logLevel, exception, template, formatter(state, exception), values));
         }
+    }
+
+    private sealed class FilteredLogCaptureProvider : ILoggerProvider
+    {
+        public List<(string Category, LogLevel Level)> Entries { get; } = [];
+
+        public ILogger CreateLogger(string categoryName) => new FilteredLogCapture(Entries, categoryName);
+
+        public void Dispose() { }
+    }
+
+    private sealed class FilteredLogCapture(List<(string Category, LogLevel Level)> entries, string category) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        ) => entries.Add((category, logLevel));
     }
 
     private sealed class ThrowingReprovisioningCommandInterceptor(Exception exception)
