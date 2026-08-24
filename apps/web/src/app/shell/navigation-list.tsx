@@ -92,6 +92,14 @@ export function NavigationList({
                                 color: "primary.contrastText",
                               },
                             },
+                            // Os estados de hover/foco do MUI têm especificidade
+                            // maior (0,3,0) e rebaixariam o fundo sólido a uma
+                            // tint sobre a qual contrastText fica ilegível.
+                            "&.Mui-selected:hover, &.Mui-selected.Mui-focusVisible":
+                              {
+                                bgcolor: "primary.main",
+                                color: "primary.contrastText",
+                              },
                           }
                         : {
                             "&:hover": {
@@ -100,7 +108,7 @@ export function NavigationList({
                             },
                           }),
                       "&.Mui-focusVisible": {
-                        outline: "2px solid var(--vinx-palette-primary-main)",
+                        outline: `2px solid var(--vinx-palette-primary-${selected ? "contrastText" : "main"})`,
                         outlineOffset: -2,
                       },
                     })}

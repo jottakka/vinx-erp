@@ -119,6 +119,24 @@ describe("vinx semantic theme", () => {
     }
   });
 
+  it("uses valid contrast pairs for every status palette", () => {
+    for (const [scheme, palette] of palettes) {
+      for (const status of [
+        "primary",
+        "secondary",
+        "success",
+        "warning",
+        "info",
+        "error",
+      ] as const) {
+        expect(
+          contrastRatio(palette[status].contrastText, palette[status].main),
+          `${scheme} ${status} main/contrastText`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
   it("normalizes mode storage defaults and invalid values to light", () => {
     const events = new Map<string, EventListener>();
     const throwingWindow = {

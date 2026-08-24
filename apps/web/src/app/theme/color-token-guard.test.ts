@@ -105,11 +105,18 @@ describe("semantic color boundary", () => {
   });
 
   it("keeps literal colors private to the theme primitives", () => {
-    const sourceFiles = import.meta.glob("../../**/*.{ts,tsx,js,jsx}", {
-      eager: true,
-      import: "default",
-      query: "?raw",
-    }) as Record<string, string>;
+    const sourceFiles = {
+      ...import.meta.glob("../../**/*.{ts,tsx,js,jsx}", {
+        eager: true,
+        import: "default",
+        query: "?raw",
+      }),
+      ...import.meta.glob("../../../index.html", {
+        eager: true,
+        import: "default",
+        query: "?raw",
+      }),
+    } as Record<string, string>;
     const findings = Object.entries(sourceFiles).flatMap(
       ([filePath, source]) => {
         if (!shouldScanSourceFile(filePath)) {

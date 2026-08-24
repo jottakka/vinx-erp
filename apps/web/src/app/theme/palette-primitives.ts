@@ -49,7 +49,8 @@ export const lightPalette = {
   },
   warning: {
     light: "#d3a04c",
-    main: "#9a6b1e",
+    // 4.764:1 sobre contrastText — AA com folga; #9a6b1e media 4.467:1.
+    main: "#94671c",
     dark: "#6f4b14",
     contrastText: "#fff9f2",
   },

@@ -1,10 +1,8 @@
-import {
-  BusinessCenterOutlined,
-  HelpOutlineRounded,
-  LogoutRounded,
-  NotificationsOutlined,
-  PaletteOutlined,
-} from "@mui/icons-material";
+import BusinessCenterOutlined from "@mui/icons-material/BusinessCenterOutlined";
+import HelpOutlineRounded from "@mui/icons-material/HelpOutlineRounded";
+import LogoutRounded from "@mui/icons-material/LogoutRounded";
+import NotificationsOutlined from "@mui/icons-material/NotificationsOutlined";
+import PaletteOutlined from "@mui/icons-material/PaletteOutlined";
 import { Box, Link, List, ListItem, Stack, Typography } from "@mui/material";
 import type { ReactElement } from "react";
 import { Link as RouterLink } from "react-router-dom";

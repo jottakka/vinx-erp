@@ -201,6 +201,10 @@ export function createVinxTheme(density: Density): Theme & {
                 backgroundColor: alpha("#f2ece3", 0.03),
               },
             },
+            "&:hover:not(.Mui-focused):not(.Mui-disabled) .MuiOutlinedInput-notchedOutline":
+              {
+                borderColor: vinxFieldBorder.hover,
+              },
           }),
           notchedOutline: {
             borderColor: vinxFieldBorder.rest,

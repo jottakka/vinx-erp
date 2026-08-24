@@ -96,7 +96,10 @@ test("Scenario: Authorized user visits modules, chooses themes and restores mobi
   ] as const) {
     await homeModuleSection.getByRole("link", { name }).click();
     await expect(page).toHaveURL(new RegExp(`${path}$`));
-    await expect(page.getByRole("heading", { name })).toBeVisible();
+    // exact: evita colisão de substring com "Novo atendimento" (h6 da página).
+    await expect(
+      page.getByRole("heading", { name, exact: true }),
+    ).toBeVisible();
     await sidebar.getByRole("link", { name: "Início" }).click();
     await expect(page.getByRole("heading", { name: "Início" })).toBeVisible();
   }
