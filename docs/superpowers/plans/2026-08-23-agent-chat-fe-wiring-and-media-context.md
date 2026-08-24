@@ -139,16 +139,17 @@ fechado e UI honesta sobre empresa/estado. Sem mudanças no BE.
 
 ### 2.4 Inventário (recalculado pós-review Sol, base `7a78177`)
 
-- **Novos (3):** `agent-client.ts`, `agent-client.test.ts`,
-  `docs/verification/2026-08-23-agent-fe-wiring-test-cases.md`.
+- **Novos (4):** `agent-client.ts`, `agent-client.test.ts`,
+  `docs/verification/2026-08-23-agent-fe-wiring-test-cases.md` e este
+  plano.
 - **Editados (7):** `agent-conversation-provider.tsx`, `agent-contract.ts`,
   `agent-conversation.tsx`, `agent-dock.tsx`, `agent-page.tsx`,
   `agent.test.tsx`, `e2e/module-prototypes.spec.ts` (cenário do agente
   reescrito contra o fluxo real com interceptação de rota — achado do review
   Sol do PR).
 - **Excluídos (1):** `agent-confirmation-card.tsx`.
-- Total 12 arquivos (incluindo este plano); **+1.581/−180 linhas** no diff
-  do PR — acima do teto orientador de 800. Justificativa: a matriz negativa
+- Total 12 arquivos; **+1.590/−180 linhas** no diff do PR — acima do teto
+  orientador de 800. Justificativa: a matriz negativa
   exigida pelo review (combinações status/HTTP cruzadas, envelopes por
   produtor, reasonCode desconhecido, UUID inválido) e as 5 classes BDD com
   concorrência/unmount/troca de empresa multiplicam os testes (~950 linhas
