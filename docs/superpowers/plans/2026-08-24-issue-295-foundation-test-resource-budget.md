@@ -1,37 +1,49 @@
-# Foundation Test Resource Budget Implementation Plan
+# Plano de implementação do orçamento de recursos Foundation
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Para agentes executores:** SUB-SKILL OBRIGATÓRIA: usar
+> `superpowers:subagent-driven-development` (recomendado) ou
+> `superpowers:executing-plans` para executar o plano tarefa por tarefa. As
+> etapas usam checkboxes (`- [ ]`) para acompanhamento.
 
-**Goal:** Limitar cada processo de `Vinx.Erp.Foundation.IntegrationTests` a duas collections xUnit concorrentes sem alterar isolamento, lifecycle ou produção.
+**Objetivo:** Limitar cada processo de
+`Vinx.Erp.Foundation.IntegrationTests` a duas collections xUnit concorrentes
+sem alterar isolamento, ciclo de vida ou produção.
 
-**Architecture:** Um atributo compilado no assembly define `MaxParallelThreads = 2` e preserva `CollectionPerClass`, paralelismo habilitado e algoritmo conservador. Um teste sem Docker fixa o contrato; o runbook e o manifesto registram o limite por processo e a coexistência independente de Docker Desktop e Colima.
+**Arquitetura:** Um atributo compilado no assembly define
+`MaxParallelThreads = 2` e preserva `CollectionPerClass`, paralelismo habilitado
+e algoritmo conservador. Um teste sem Docker fixa o contrato; o runbook e o
+manifesto registram o limite por processo e a coexistência independente de
+Docker Desktop e Colima.
 
-**Tech Stack:** .NET SDK 10.0.302, xUnit 2.9.3, xunit.runner.visualstudio 4.0.0, Testcontainers.PostgreSql 4.14.0 e `postgres:17.9-alpine`.
+**Stack técnico:** .NET SDK 10.0.302, xUnit 2.9.3,
+xunit.runner.visualstudio 4.0.0, Testcontainers.PostgreSql 4.14.0 e
+`postgres:17.9-alpine`.
 
-## Global Constraints
+## Restrições globais
 
 - Base e entrega: issue #295, branch `codex/issue-295-bound-testcontainers-concurrency`, PR única para `main`.
 - Teto exato: duas collections paralelas por processo; processos e worktrees continuam independentes.
 - Preservar PostgreSQL real, banco/usuário/senha/porta exclusivos por fixture e Ryuk habilitado.
-- Não alterar `FoundationPostgresFixture`, `FoundationApiFactory`, timeouts, retries, imagem, pacote, Supabase, produção ou CI.
-- Não adicionar lock, fila, semaphore, lease global, reuse, container compartilhado ou cleanup duplicado.
+- Não alterar `FoundationPostgresFixture`, `FoundationApiFactory`, timeouts,
+  retentativas, imagem, pacote, Supabase, produção ou CI.
+- Não adicionar lock, fila, semáforo, lease global, reutilização, container compartilhado ou descarte duplicado.
 - Não ler, listar nem executar `quality/private`.
 - Documentação em português; evidência transitória fica na issue/PR.
 - Executar `./scripts/verify-public.sh` uma vez, após congelar o escopo e antes do push.
 
 ---
 
-### Task 1: Fixar o orçamento do assembly com RED/GREEN
+### Tarefa 1: Fixar o orçamento do assembly com RED/GREEN
 
-**Files:**
-- Create: `tests/public/Vinx.Erp.Foundation.IntegrationTests/Infrastructure/TestAssemblyConfigurationTests.cs`
-- Create: `tests/public/Vinx.Erp.Foundation.IntegrationTests/TestAssemblyConfiguration.cs`
+**Arquivos:**
+- Criar: `tests/public/Vinx.Erp.Foundation.IntegrationTests/Infrastructure/TestAssemblyConfigurationTests.cs`
+- Criar: `tests/public/Vinx.Erp.Foundation.IntegrationTests/TestAssemblyConfiguration.cs`
 
 **Interfaces:**
-- Consumes: `Xunit.CollectionBehaviorAttribute` fornecido por xUnit 2.9.3.
-- Produces: atributo de assembly com `MaxParallelThreads = 2`; nenhum tipo de produção ou API pública.
+- Consome: `Xunit.CollectionBehaviorAttribute` fornecido por xUnit 2.9.3.
+- Produz: atributo de assembly com `MaxParallelThreads = 2`; nenhum tipo de produção ou API pública.
 
-- [ ] **Step 1: Escrever o teste RED do contrato do assembly**
+- [ ] **Etapa 1: Escrever o teste RED do contrato do assembly**
 
 ```csharp
 using System.Reflection;
@@ -56,9 +68,9 @@ public sealed class TestAssemblyConfigurationTests
 
 Quebra detectada: remoção do teto volta a permitir `ProcessorCount` collections; desabilitar todo paralelismo também viola o desenho.
 
-- [ ] **Step 2: Executar RED e confirmar a causa**
+- [ ] **Etapa 2: Executar RED e confirmar a causa**
 
-Run:
+Executar:
 
 ```bash
 dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj \
@@ -67,9 +79,9 @@ dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundatio
   --logger 'console;verbosity=normal'
 ```
 
-Expected: FAIL em `Assert.Single` porque `main` não declara `CollectionBehaviorAttribute`; nenhuma chamada Docker.
+Esperado: FAIL em `Assert.Single` porque `main` não declara `CollectionBehaviorAttribute`; nenhuma chamada Docker.
 
-- [ ] **Step 3: Adicionar a implementação mínima**
+- [ ] **Etapa 3: Adicionar a implementação mínima**
 
 ```csharp
 using Xunit;
@@ -77,9 +89,9 @@ using Xunit;
 [assembly: CollectionBehavior(MaxParallelThreads = 2)]
 ```
 
-- [ ] **Step 4: Executar GREEN e o teste focado sem rebuild**
+- [ ] **Etapa 4: Executar GREEN e o teste focado**
 
-Run:
+Executar:
 
 ```bash
 dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj \
@@ -88,11 +100,11 @@ dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundatio
   --logger 'console;verbosity=normal'
 ```
 
-Expected: PASS 1/1, 0 falhas e 0 skips.
+Esperado: PASS 1/1, 0 falhas e 0 skips.
 
-- [ ] **Step 5: Revisar o diff e commitar a unidade testável**
+- [ ] **Etapa 5: Revisar o diff e commitar a unidade testável**
 
-Run:
+Executar:
 
 ```bash
 git diff --check
@@ -103,17 +115,17 @@ git add \
 git commit -m 'test(infra): bound Foundation parallelism'
 ```
 
-### Task 2: Documentar contrato verificável e operação local
+### Tarefa 2: Documentar contrato verificável e operação local
 
-**Files:**
-- Create: `docs/verification/issue-295-foundation-test-resource-budget-test-cases.md`
-- Modify: `docs/runbooks/local-development.md:294`
+**Arquivos:**
+- Criar: `docs/verification/issue-295-foundation-test-resource-budget-test-cases.md`
+- Modificar: `docs/runbooks/local-development.md:294`
 
 **Interfaces:**
-- Consumes: atributo e teste da Task 1; diagnóstico durável da issue #295.
-- Produces: matriz BDD curta e procedimento seguro para reconhecer duas VMs de containers.
+- Consome: atributo e teste da Tarefa 1; diagnóstico durável da issue #295.
+- Produz: matriz BDD curta e procedimento seguro para reconhecer duas VMs de containers.
 
-- [ ] **Step 1: Criar o manifesto de verificação**
+- [ ] **Etapa 1: Criar o manifesto de verificação**
 
 ```markdown
 # Casos testados — orçamento de recursos Foundation (#295)
@@ -123,11 +135,11 @@ git commit -m 'test(infra): bound Foundation parallelism'
 | Sucesso — assembly limita collections sem remover paralelismo | `TestAssemblyConfigurationTests.Assembly_limits_parallel_test_collections_without_disabling_parallelism` | Impedir retorno ao teto por `ProcessorCount` | coberto |
 | Validação/erro — configuração ausente ou diferente de 2 falha | Mesmo teste, RED confirmado antes do atributo | Provar que o teste detecta remoção ou regressão do contrato | coberto |
 | Acesso — N/A | Revisão de diff restrita a testes e documentação | Não existe usuário, tenant, capability ou rota neste contrato | N/A — infraestrutura do runner |
-| Estado/exceções — lifecycle e cleanup continuam intactos | `FoundationPostgresFixtureTests` e `FoundationApiFactoryLifecycleTests` | Preservar falha primária, descarte e Ryuk sem cleanup duplicado | coberto |
-| Concorrência — amostra causal não excede dois PostgreSQL por processo | Comando focado da verificação + `docker ps --filter label=org.testcontainers=true` | Confirmar o efeito real do atributo no runner | coberto manualmente com evidência na PR |
+| Estado/exceções — ciclo de vida e descarte continuam intactos | `FoundationPostgresFixtureTests` e `FoundationApiFactoryLifecycleTests` | Preservar falha primária, descarte e Ryuk sem limpeza duplicada | coberto |
+| Concorrência — amostra causal selecionada observa até dois PostgreSQL | Comando focado da verificação + `docker ps --filter label=org.testcontainers=true` | Confirmar o efeito na amostra sem ampliar o contrato universal | coberto manualmente com evidência na PR |
 ```
 
-- [ ] **Step 2: Acrescentar o diagnóstico durável ao runbook**
+- [ ] **Etapa 2: Acrescentar o diagnóstico durável ao runbook**
 
 Adicionar em `## Diagnóstico e parada`, antes do comando de parada do Supabase:
 
@@ -143,9 +155,9 @@ de confirmar que nenhuma outra worktree ou projeto depende dessa instância; o
 repositório não para runtimes globais automaticamente.
 ```
 
-- [ ] **Step 3: Validar documentação e tamanho**
+- [ ] **Etapa 3: Validar documentação e tamanho**
 
-Run:
+Executar:
 
 ```bash
 git diff --check
@@ -153,11 +165,11 @@ git diff --stat origin/main...HEAD
 git diff -- docs/verification/issue-295-foundation-test-resource-budget-test-cases.md docs/runbooks/local-development.md
 ```
 
-Expected: sem whitespace inválido; documentação curta em português; nenhuma alteração fora do escopo.
+Esperado: sem whitespace inválido; documentação curta em português; nenhuma alteração fora do escopo.
 
-- [ ] **Step 4: Commitar documentação**
+- [ ] **Etapa 4: Commitar documentação**
 
-Run:
+Executar:
 
 ```bash
 git add \
@@ -166,18 +178,18 @@ git add \
 git commit -m 'docs(test): record container resource budget'
 ```
 
-### Task 3: Reproduzir o efeito, executar o gate e revisar
+### Tarefa 3: Reproduzir o efeito, executar o gate e revisar
 
-**Files:**
-- Verify only: all files changed since `origin/main`.
+**Arquivos:**
+- Somente verificar: todos os arquivos alterados desde `origin/main`.
 
 **Interfaces:**
-- Consumes: implementação e documentação das Tasks 1–2.
-- Produces: evidência focada, gate público completo e diff pronto para PR.
+- Consome: implementação e documentação das Tarefas 1–2.
+- Produz: evidência focada, gate público completo e diff pronto para PR.
 
-- [ ] **Step 1: Executar contratos de configuração, lifecycle e isolamento**
+- [ ] **Etapa 1: Executar contratos de configuração, ciclo de vida e isolamento**
 
-Run:
+Executar:
 
 ```bash
 dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj \
@@ -186,11 +198,13 @@ dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundatio
   --logger 'console;verbosity=normal'
 ```
 
-Expected: 0 falhas; no máximo dois PostgreSQL Testcontainers simultâneos.
+Esperado: 0 falhas e no máximo duas collections agendadas simultaneamente. A
+quantidade de PostgreSQL observada neste comando não é garantia universal,
+porque um teste pode criar múltiplos fixtures internamente.
 
-- [ ] **Step 2: Executar a amostra causal da issue #295**
+- [ ] **Etapa 2: Executar a amostra causal da issue #295**
 
-Run:
+Executar:
 
 ```bash
 dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj \
@@ -206,21 +220,23 @@ docker ps --filter label=org.testcontainers=true \
   --format '{{.Image}}\t{{.Label "org.testcontainers.session-id"}}'
 ```
 
-Expected: 10/10 verdes; até dois `postgres:17.9-alpine` mais um Ryuk na sessão; zero recursos da sessão após encerrar.
+Esperado: 10/10 verdes; nesta amostra específica, até dois
+`postgres:17.9-alpine` mais um Ryuk na sessão; zero recursos da sessão após
+encerrar. A observação da amostra não amplia o contrato para todo teste.
 
-- [ ] **Step 3: Congelar escopo e executar o gate público completo**
+- [ ] **Etapa 3: Congelar escopo e executar o gate público completo**
 
-Run:
+Executar:
 
 ```bash
 ./scripts/verify-public.sh
 ```
 
-Expected: exit 0 em instalação, lint, format, build, scripts Foundation e todos os projetos públicos; não executar novamente salvo correção de blocker.
+Esperado: exit 0 em instalação, lint, format, build, scripts Foundation e todos os projetos públicos; não executar novamente salvo correção de bloqueio.
 
-- [ ] **Step 4: Recalcular tamanho e conferir contratos**
+- [ ] **Etapa 4: Recalcular tamanho e conferir contratos**
 
-Run:
+Executar:
 
 ```bash
 git diff --check origin/main...HEAD
@@ -229,22 +245,22 @@ git diff --numstat origin/main...HEAD
 git status --short --branch
 ```
 
-Expected: 4 arquivos não-teste, 2 arquivos de teste/configuração, entre 380 e
+Esperado: 4 arquivos não-teste, 2 arquivos de teste/configuração, entre 380 e
 500 linhas manuais, zero geradas, sem arquivo inesperado ou alteração não
 commitada.
 
-- [ ] **Step 5: Solicitar revisão independente e consolidar uma correção**
+- [ ] **Etapa 5: Solicitar revisão independente e consolidar uma correção**
 
 Revisar `origin/main...HEAD` contra a issue #295 e o desenho, priorizando:
 
 - contrato real do atributo xUnit v2;
 - teste RED/GREEN honesto;
 - limite por processo e ausência de promessa global;
-- lifecycle/Ryuk intactos;
+- ciclo de vida/Ryuk intactos;
 - documentação sem instrução destrutiva ou automática.
 
 Corrigir findings Critical/Important em uma única rodada, repetir somente os testes afetados e, se o gate completo já estava verde, executar validação proporcional sem ampliar escopo.
 
-- [ ] **Step 6: Preparar push e PR**
+- [ ] **Etapa 6: Preparar push e PR**
 
 Confirmar branch, commits, base `main`, issue #295, evidência focada, gate público e revisão. Usar a descrição da PR para registrar medições transitórias e `Closes #295`; manter a worktree para feedback.
