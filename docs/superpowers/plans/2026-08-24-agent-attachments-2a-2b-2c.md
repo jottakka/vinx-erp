@@ -55,13 +55,14 @@ worktrees `.worktrees/issue-134a-*`, `.worktrees/agent-attachments-*`,
 2. **Implementação `FoundationAuthorizedDocumentSource`** (AI module,
    `DocumentContext/`, decisão Sol (a); comentário da interface e
    `docs/modules/ai.md` atualizados — deixam de dizer "owner Foundation"):
-   transação curta com RLS → membership ativa → capability
+   preflight curto em `RepeatableRead` com RLS → membership ativa → capability
    `foundation.files.read-ocr` Company → FileRecord company-scoped
    (soft-delete excluído pelo query filter) → **liberação = `confirmed` E
    metadados de scan duráveis completos** (`ScanEngine`, `ScanEngineVersion`,
    `ScanSignatureVersion` não vazios E `ScannedAtUtc != null` — finding 2:
    `MarkConfirmed` sozinho não prova scan) → `RetentionUntil > now`.
-   Negação = exceção tipada com reason estável (`membership_required`,
+   Negação do preflight é auditada e confirmada na mesma transação. Exceção
+   tipada usa reason estável (`membership_required`,
    `capability_denied`, `resource_not_found` — documento de outra empresa é
    invisível —, `document_not_released`, `retention_expired`); o normalizer
    já converte qualquer exceção em fail-closed.
@@ -70,7 +71,11 @@ worktrees `.worktrees/issue-134a-*`, `.worktrees/agent-attachments-*`,
    divergência = `checksum_mismatch` SEM abrir. Auditoria de decisão (allow
    E deny) na mesma transação: `AuditSource.Ai`, action
    `foundation.files.read-ocr`, resourceType `file`, resourceId, outcome +
-   reason; sem conteúdo/PII.
+   reason; sem conteúdo/PII. Depois de bufferizar, uma segunda transação curta
+   `RepeatableRead` limpa tracking antigo, reautoriza e compara a tupla final
+   `(ProviderKey, SizeBytes, Checksum, MimeType, Classification)` com a usada
+   para ler. Mudança nega `document_changed`; falha de auditoria allow/deny
+   nega `audit_unavailable` com um único log seguro, sem liberar conteúdo.
 4. **Stream limitado/seekable (ruling (c)):** ANTES de qualquer alocação,
    exigir `1 <= SizeBytes <= DocumentUploadPolicy.MaxSizeBytes` (25 MiB) —
    registro fora da política = `document_size_out_of_policy` sem tocar o
@@ -81,7 +86,9 @@ worktrees `.worktrees/issue-134a-*`, `.worktrees/agent-attachments-*`,
    `AddFilesReadOcrCapability` (INSERT id/name; Down remove somente se não
    referenciada, senão EXCEPTION — padrão do catálogo) +
    `CapabilityCatalogMigrationTests` atualizado.
-6. **Revogação:** leitura re-autorizada por chamada; nenhum cache/estado.
+6. **Revogação:** leitura re-autorizada por chamada e novamente antes de
+   liberar o buffer; nenhum cache/estado. O allow e qualquer negação final são
+   auditados atomicamente com a decisão final.
 
 **Testes (BDD):** sucesso (documento confirmed+scan durável+consentido abre
 stream seekable com cap); acesso (empresa errada invisível =
@@ -92,14 +99,19 @@ de outra empresa nunca vaza); estado (`quarantined`/`verification_failed`/
 (**registro `SizeBytes` 0 ou > 25 MiB nega `document_size_out_of_policy`
 sem alocação** — finding 3); integridade (checksum/size divergentes negam
 SEM chamar `OpenReadAsync` do storage; byte excedente na cópia =
-`object_size_divergence`); retry sem cache. Integração
+`object_size_divergence`; stream curto também nega); corrida coordenada
+(revogação ou mudança da tupla durante leitura nega antes de liberar);
+auditoria indisponível e cancelamento explícito do caller. Integração
 `Vinx.Erp.AI.IntegrationTests` com Postgres (Testcontainers) + storage fake
 `Clean`; execuções sujeitas ao protocolo Docker do responsável.
 
-**Arquivos:** 2 novos produção (source + migration), 3 editados
-(interface, normalizer, KnownCapabilities) + testes (~5) + docs
-(`docs/modules/ai.md` seção fronteira, manifesto de testes). Estimativa
-~600-700 linhas — dentro do teto.
+**Inventário recalculado:** o handoff revisado tinha 16 arquivos (11
+não-teste + 5 testes), 1.090 linhas manuais e 1.724 linhas geradas de
+migration/designer/snapshot. Após a correção de review: 1.527 linhas manuais
++ 1.724 geradas, na mesma base `a6e369e`. O total manual excede o alvo de 800,
+mas a exceção é coesa: contrato, fonte RLS/auditoria, migration, testes de
+segurança e documentação formam uma única fatia #298; separar a prova da
+correção enfraqueceria a revisão sem isolar um subsistema independente.
 
 ## 2B — #299: attachments no /agent/runs (stacked na 2A)
 

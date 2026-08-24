@@ -135,7 +135,11 @@ completo, retenção viva, tamanho 1..25 MiB dentro da política, integridade
 checksum/size do storage ANTES de abrir e stream seekable limitado a
 `SizeBytes` — sem URL assinada. Toda decisão é auditada (`AuditSource.Ai`,
 `foundation.files.read-ocr`) sem conteúdo; a leitura re-autoriza a cada
-chamada (revogação imediata, sem cache). Negações viram
+chamada e novamente após o buffer, antes de liberar bytes. A decisão final e
+sua auditoria compartilham uma transação `RepeatableRead`; a tupla de storage
+e classificação precisa continuar idêntica à do preflight. Mudança nega
+`document_changed`, e auditoria indisponível nega `audit_unavailable` sem
+liberar conteúdo (revogação imediata, sem cache). Negações viram
 `DocumentReadDeniedException` com reason estável e o normalizer converte em
 fail-closed. Sem engine de antimalware aprovado nenhum documento chega a
 `confirmed` e o OCR permanece fail-closed em produção.

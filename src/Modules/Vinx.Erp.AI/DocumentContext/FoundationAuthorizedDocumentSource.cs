@@ -1,4 +1,6 @@
+using System.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
@@ -37,6 +39,7 @@ public sealed class FoundationAuthorizedDocumentSource(
     private const string DocumentNotReleased = "document_not_released";
     private const string RetentionExpired = "retention_expired";
     private const string DocumentSizeOutOfPolicy = "document_size_out_of_policy";
+    private const string DocumentChanged = "document_changed";
     private const string ChecksumMismatch = "checksum_mismatch";
     private const string ObjectSizeDivergence = "object_size_divergence";
     private const string StorageUnavailable = "storage_unavailable";
@@ -54,22 +57,8 @@ public sealed class FoundationAuthorizedDocumentSource(
     {
         ArgumentNullException.ThrowIfNull(actor);
 
-        // Autorização em transação curta e somente-leitura: nada é gravado
-        // aqui; a auditoria da decisão final acontece em transação própria.
-        string? denial;
-        FileRecord file;
-        await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))
-        {
-            await FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
-            (file, denial) = await ResolveAuthorizedFileAsync(actor, companyId, fileRecordId, cancellationToken);
-            await transaction.RollbackAsync(cancellationToken);
-        }
-
-        database.ChangeTracker.Clear();
-        if (denial is not null)
-        {
-            return await DenyAsync(actor, companyId, fileRecordId, denial, cancellationToken);
-        }
+        var file = await ResolvePreflightAsync(actor, companyId, fileRecordId, cancellationToken);
+        var fileTuple = AuthorizedFileTuple.From(file);
 
         // Integridade antes de abrir: checksum E tamanho do objeto devem
         // bater com o registro (chave imutável; sem re-hash do conteúdo).
@@ -114,21 +103,16 @@ public sealed class FoundationAuthorizedDocumentSource(
             return await DenyAsync(actor, companyId, fileRecordId, ObjectSizeDivergence, cancellationToken);
         }
 
-        // Auditoria da decisão allow na fronteira, ANTES de liberar o
-        // conteúdo; falha de auditoria falha fechado.
-        try
-        {
-            await AuditAsync(actor, companyId, fileRecordId, AuditOutcome.Success, null, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            logger.LogError(exception, FailureTemplate, AuditUnavailable);
-            throw new DocumentReadDeniedException(AuditUnavailable);
-        }
+        // O storage pode ter demorado: descarte entidades do preflight e
+        // reautorize imediatamente antes de liberar os bytes. O allow é
+        // auditado atomicamente com esse snapshot final.
+        database.ChangeTracker.Clear();
+        file = await ReauthorizeAndAuditAllowAsync(
+            actor,
+            companyId,
+            fileRecordId,
+            fileTuple,
+            cancellationToken);
 
         return new AuthorizedDocument(
             fileRecordId,
@@ -136,6 +120,75 @@ public sealed class FoundationAuthorizedDocumentSource(
             file.MimeType,
             file.Classification,
             new MemoryStream(buffer, 0, buffer.Length, writable: false));
+    }
+
+    private async Task<FileRecord> ResolvePreflightAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid fileRecordId,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await database.Database.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead,
+            cancellationToken);
+        await FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
+        var (file, denial) = await ResolveAuthorizedFileAsync(actor, companyId, fileRecordId, cancellationToken);
+        if (denial is not null)
+        {
+            await CommitAuditOrThrowAsync(
+                transaction,
+                actor,
+                companyId,
+                fileRecordId,
+                AuditOutcome.Denied,
+                denial,
+                cancellationToken);
+
+            throw new DocumentReadDeniedException(denial);
+        }
+
+        await transaction.RollbackAsync(cancellationToken);
+        database.ChangeTracker.Clear();
+        return file;
+    }
+
+    private async Task<FileRecord> ReauthorizeAndAuditAllowAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid fileRecordId,
+        AuthorizedFileTuple fileTuple,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await database.Database.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead,
+            cancellationToken);
+        await FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
+        var (file, denial) = await ResolveAuthorizedFileAsync(actor, companyId, fileRecordId, cancellationToken);
+        denial ??= fileTuple.Matches(file) ? null : DocumentChanged;
+        if (denial is not null)
+        {
+            await CommitAuditOrThrowAsync(
+                transaction,
+                actor,
+                companyId,
+                fileRecordId,
+                AuditOutcome.Denied,
+                denial,
+                cancellationToken);
+
+            throw new DocumentReadDeniedException(denial);
+        }
+
+        await CommitAuditOrThrowAsync(
+            transaction,
+            actor,
+            companyId,
+            fileRecordId,
+            AuditOutcome.Success,
+            null,
+            cancellationToken);
+
+        return file;
     }
 
     private async Task<(FileRecord File, string? Denial)> ResolveAuthorizedFileAsync(
@@ -235,20 +288,7 @@ public sealed class FoundationAuthorizedDocumentSource(
         string reason,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            await AuditAsync(actor, companyId, fileRecordId, AuditOutcome.Denied, reason, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            // Negação permanece negação mesmo sem auditoria; a falha de
-            // auditoria é registrada sem jamais liberar o conteúdo.
-            logger.LogError(exception, FailureTemplate, AuditUnavailable);
-        }
+        await AuditAsync(actor, companyId, fileRecordId, AuditOutcome.Denied, reason, cancellationToken);
 
         throw new DocumentReadDeniedException(reason);
     }
@@ -273,8 +313,68 @@ public sealed class FoundationAuthorizedDocumentSource(
         string? reason,
         CancellationToken cancellationToken)
     {
-        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
-        await FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
+        try
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
+            await CommitAuditAsync(
+                transaction,
+                actor,
+                companyId,
+                fileRecordId,
+                outcome,
+                reason,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw AuditFailure(exception);
+        }
+    }
+
+    private async Task CommitAuditOrThrowAsync(
+        IDbContextTransaction transaction,
+        ActorContext actor,
+        Guid companyId,
+        Guid fileRecordId,
+        AuditOutcome outcome,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await CommitAuditAsync(
+                transaction,
+                actor,
+                companyId,
+                fileRecordId,
+                outcome,
+                reason,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw AuditFailure(exception);
+        }
+    }
+
+    private async Task CommitAuditAsync(
+        IDbContextTransaction transaction,
+        ActorContext actor,
+        Guid companyId,
+        Guid fileRecordId,
+        AuditOutcome outcome,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
         await auditAppender.AppendAsync(
             new AuditEventData(
                 actor.UserId,
@@ -291,5 +391,29 @@ public sealed class FoundationAuthorizedDocumentSource(
             cancellationToken);
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private DocumentReadDeniedException AuditFailure(Exception exception)
+    {
+        logger.LogError(exception, FailureTemplate, AuditUnavailable);
+        return new DocumentReadDeniedException(AuditUnavailable);
+    }
+
+    private sealed record AuthorizedFileTuple(
+        string ProviderKey,
+        long SizeBytes,
+        string Checksum,
+        string MimeType,
+        string Classification)
+    {
+        public static AuthorizedFileTuple From(FileRecord file) =>
+            new(file.ProviderKey, file.SizeBytes, file.Checksum, file.MimeType, file.Classification);
+
+        public bool Matches(FileRecord file) =>
+            string.Equals(ProviderKey, file.ProviderKey, StringComparison.Ordinal)
+            && SizeBytes == file.SizeBytes
+            && string.Equals(Checksum, file.Checksum, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(MimeType, file.MimeType, StringComparison.Ordinal)
+            && string.Equals(Classification, file.Classification, StringComparison.Ordinal);
     }
 }

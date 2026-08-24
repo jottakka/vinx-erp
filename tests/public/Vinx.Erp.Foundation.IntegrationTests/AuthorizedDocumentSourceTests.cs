@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
@@ -40,6 +42,7 @@ public sealed class AuthorizedDocumentSourceTests
         Assert.Equal(Payload.LongLength, document.Content.Length);
         using var reader = new StreamReader(document.Content);
         Assert.Equal("document content for the authorized read boundary", await reader.ReadToEndAsync());
+        Assert.Equal(1, storage.MetadataCount);
         Assert.Equal(1, storage.OpenCount);
         await AssertAuditAsync(factory, file.Id, AuditOutcome.Success, null);
     }
@@ -56,6 +59,7 @@ public sealed class AuthorizedDocumentSourceTests
             () => OpenAsync(factory, scenario, file.Id));
 
         Assert.Equal("document_not_released", denial.ReasonCode);
+        Assert.Equal(0, storage.MetadataCount);
         Assert.Equal(0, storage.OpenCount);
         await AssertAuditAsync(factory, file.Id, AuditOutcome.Denied, "document_not_released");
     }
@@ -72,6 +76,7 @@ public sealed class AuthorizedDocumentSourceTests
             () => OpenAsync(factory, scenario, foreign.Id));
 
         Assert.Equal("resource_not_found", denial.ReasonCode);
+        Assert.Equal(0, storage.MetadataCount);
         Assert.Equal(0, storage.OpenCount);
     }
 
@@ -95,6 +100,69 @@ public sealed class AuthorizedDocumentSourceTests
         var denial = await Assert.ThrowsAsync<DocumentReadDeniedException>(
             () => OpenAsync(factory, scenario, file.Id));
         Assert.Equal("membership_required", denial.ReasonCode);
+        Assert.Equal(1, storage.MetadataCount);
+        Assert.Equal(1, storage.OpenCount);
+    }
+
+    [Fact]
+    public async Task Membership_revoked_while_storage_is_read_denies_before_content_is_released()
+    {
+        var storage = new MemoryStorage { PauseOpenRead = true };
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, grantReadOcr: true);
+        var file = await CreateFileAsync(factory, scenario, storage, Payload, withScan: true, withState: "confirmed");
+
+        var pendingRead = OpenAsync(factory, scenario, file.Id);
+        try
+        {
+            await storage.OpenReadStarted.WaitAsync(TimeSpan.FromSeconds(10));
+            await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+            var membership = await administrator.Memberships.SingleAsync(candidate =>
+                candidate.Id == scenario.MembershipId);
+            membership.Revoke("revoked during storage read", factory.ActorUserId, Guid.NewGuid());
+            await administrator.SaveChangesAsync();
+        }
+        finally
+        {
+            storage.ReleaseOpenRead();
+        }
+
+        var denial = await Assert.ThrowsAsync<DocumentReadDeniedException>(() => pendingRead);
+
+        Assert.Equal("membership_required", denial.ReasonCode);
+        Assert.Equal(1, storage.OpenCount);
+        await AssertAuditAsync(factory, file.Id, AuditOutcome.Denied, "membership_required");
+        await AssertNoAuditAsync(factory, file.Id, AuditOutcome.Success);
+    }
+
+    [Fact]
+    public async Task File_tuple_changed_while_storage_is_read_invalidates_the_buffered_object()
+    {
+        var storage = new MemoryStorage { PauseOpenRead = true };
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, grantReadOcr: true);
+        var file = await CreateFileAsync(factory, scenario, storage, Payload, withScan: true, withState: "confirmed");
+        var changedChecksum = Checksum("different authoritative content"u8.ToArray());
+
+        var pendingRead = OpenAsync(factory, scenario, file.Id);
+        try
+        {
+            await storage.OpenReadStarted.WaitAsync(TimeSpan.FromSeconds(10));
+            await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+            await administrator.Database.ExecuteSqlAsync(
+                $"UPDATE foundation.files SET checksum = {changedChecksum} WHERE id = {file.Id}");
+        }
+        finally
+        {
+            storage.ReleaseOpenRead();
+        }
+
+        var denial = await Assert.ThrowsAsync<DocumentReadDeniedException>(() => pendingRead);
+
+        Assert.Equal("document_changed", denial.ReasonCode);
+        Assert.Equal(1, storage.OpenCount);
+        await AssertAuditAsync(factory, file.Id, AuditOutcome.Denied, "document_changed");
+        await AssertNoAuditAsync(factory, file.Id, AuditOutcome.Success);
     }
 
     [Fact]
@@ -109,17 +177,57 @@ public sealed class AuthorizedDocumentSourceTests
             () => OpenAsync(factory, scenario, file.Id));
 
         Assert.Equal("capability_denied", denial.ReasonCode);
+        Assert.Equal(0, storage.MetadataCount);
         Assert.Equal(0, storage.OpenCount);
     }
 
     [Fact]
-    public async Task Quarantined_deleted_and_retention_expired_documents_deny()
+    public async Task Failed_denial_audit_maps_to_audit_unavailable_with_one_safe_error_log()
+    {
+        var storage = new MemoryStorage();
+        var logger = new RecordingLogger();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, grantReadOcr: false);
+        var file = await CreateFileAsync(factory, scenario, storage, Payload, withScan: true, withState: "confirmed");
+        await RevokeAuditAppendAsync(factory);
+
+        var denial = await Assert.ThrowsAsync<DocumentReadDeniedException>(
+            () => OpenAsync(factory, scenario, file.Id, logger));
+
+        Assert.Equal("audit_unavailable", denial.ReasonCode);
+        Assert.Equal(0, storage.OpenCount);
+        AssertSingleSafeAuditFailureLog(logger, file);
+    }
+
+    [Fact]
+    public async Task Failed_allow_audit_maps_to_audit_unavailable_without_releasing_content()
+    {
+        var storage = new MemoryStorage();
+        var logger = new RecordingLogger();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, grantReadOcr: true);
+        var file = await CreateFileAsync(factory, scenario, storage, Payload, withScan: true, withState: "confirmed");
+        await RevokeAuditAppendAsync(factory);
+
+        var denial = await Assert.ThrowsAsync<DocumentReadDeniedException>(
+            () => OpenAsync(factory, scenario, file.Id, logger));
+
+        Assert.Equal("audit_unavailable", denial.ReasonCode);
+        Assert.Equal(1, storage.OpenCount);
+        AssertSingleSafeAuditFailureLog(logger, file);
+        await AssertNoAuditAsync(factory, file.Id, AuditOutcome.Success);
+    }
+
+    [Fact]
+    public async Task Quarantined_verification_failed_deleted_and_retention_expired_documents_deny()
     {
         var storage = new MemoryStorage();
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
         var scenario = await SeedScenarioAsync(factory, grantReadOcr: true);
 
         var quarantined = await CreateFileAsync(factory, scenario, storage, Payload, withScan: false, withState: "quarantined");
+        var verificationFailed = await CreateFileAsync(
+            factory, scenario, storage, Payload, withScan: false, withState: "verification_failed");
         var deleted = await CreateFileAsync(factory, scenario, storage, Payload, withScan: true, withState: "deleted");
         var expired = await CreateFileAsync(factory, scenario, storage, Payload, withScan: true, withState: "confirmed");
         await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
@@ -130,27 +238,33 @@ public sealed class AuthorizedDocumentSourceTests
 
         Assert.Equal("document_not_released",
             (await Assert.ThrowsAsync<DocumentReadDeniedException>(() => OpenAsync(factory, scenario, quarantined.Id))).ReasonCode);
+        Assert.Equal("document_not_released",
+            (await Assert.ThrowsAsync<DocumentReadDeniedException>(() => OpenAsync(factory, scenario, verificationFailed.Id))).ReasonCode);
         Assert.Equal("resource_not_found",
             (await Assert.ThrowsAsync<DocumentReadDeniedException>(() => OpenAsync(factory, scenario, deleted.Id))).ReasonCode);
         Assert.Equal("retention_expired",
             (await Assert.ThrowsAsync<DocumentReadDeniedException>(() => OpenAsync(factory, scenario, expired.Id))).ReasonCode);
+        Assert.Equal(0, storage.MetadataCount);
         Assert.Equal(0, storage.OpenCount);
     }
 
-    [Fact]
-    public async Task Record_size_outside_the_upload_policy_denies_before_any_allocation()
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(DocumentUploadPolicy.MaxSizeBytes + 1)]
+    public async Task Record_size_outside_the_upload_policy_denies_before_any_allocation(long sizeBytes)
     {
         var storage = new MemoryStorage();
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
         var scenario = await SeedScenarioAsync(factory, grantReadOcr: true);
-        var oversized = await CreateFileAsync(
+        var invalidSize = await CreateFileAsync(
             factory, scenario, storage, Payload, withScan: true, withState: "confirmed",
-            sizeBytesOverride: DocumentUploadPolicy.MaxSizeBytes + 1);
+            sizeBytesOverride: sizeBytes);
 
         var denial = await Assert.ThrowsAsync<DocumentReadDeniedException>(
-            () => OpenAsync(factory, scenario, oversized.Id));
+            () => OpenAsync(factory, scenario, invalidSize.Id));
 
         Assert.Equal("document_size_out_of_policy", denial.ReasonCode);
+        Assert.Equal(0, storage.MetadataCount);
         Assert.Equal(0, storage.OpenCount);
     }
 
@@ -167,6 +281,7 @@ public sealed class AuthorizedDocumentSourceTests
             () => OpenAsync(factory, scenario, file.Id));
 
         Assert.Equal("checksum_mismatch", denial.ReasonCode);
+        Assert.Equal(1, storage.MetadataCount);
         Assert.Equal(0, storage.OpenCount);
         await AssertAuditAsync(factory, file.Id, AuditOutcome.Denied, "checksum_mismatch");
     }
@@ -184,7 +299,25 @@ public sealed class AuthorizedDocumentSourceTests
             () => OpenAsync(factory, scenario, file.Id));
 
         Assert.Equal("object_size_divergence", denial.ReasonCode);
+        Assert.Equal(1, storage.MetadataCount);
         Assert.Equal(1, storage.OpenCount);
+    }
+
+    [Fact]
+    public async Task Object_shorter_than_the_registered_size_is_rejected_as_divergence()
+    {
+        var storage = new MemoryStorage { ShortStream = true };
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, grantReadOcr: true);
+        var file = await CreateFileAsync(factory, scenario, storage, Payload, withScan: true, withState: "confirmed");
+
+        var denial = await Assert.ThrowsAsync<DocumentReadDeniedException>(
+            () => OpenAsync(factory, scenario, file.Id));
+
+        Assert.Equal("object_size_divergence", denial.ReasonCode);
+        Assert.Equal(1, storage.MetadataCount);
+        Assert.Equal(1, storage.OpenCount);
+        await AssertAuditAsync(factory, file.Id, AuditOutcome.Denied, "object_size_divergence");
     }
 
     [Fact]
@@ -199,13 +332,48 @@ public sealed class AuthorizedDocumentSourceTests
             () => OpenAsync(factory, scenario, file.Id));
 
         Assert.Equal("storage_unavailable", denial.ReasonCode);
+        Assert.Equal(1, storage.MetadataCount);
         Assert.Equal(0, storage.OpenCount);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_during_storage_read_propagates_without_audit()
+    {
+        var storage = new MemoryStorage { PauseOpenRead = true };
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, grantReadOcr: true);
+        var file = await CreateFileAsync(factory, scenario, storage, Payload, withScan: true, withState: "confirmed");
+        using var cancellation = new CancellationTokenSource();
+
+        var pendingRead = OpenAsync(
+            factory,
+            scenario,
+            file.Id,
+            cancellationToken: cancellation.Token);
+        try
+        {
+            await storage.OpenReadStarted.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            storage.ReleaseOpenRead();
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pendingRead);
+
+        Assert.Equal(1, storage.MetadataCount);
+        Assert.Equal(1, storage.OpenCount);
+        await AssertNoAuditAsync(factory, file.Id, AuditOutcome.Success);
+        await AssertNoAuditAsync(factory, file.Id, AuditOutcome.Denied);
     }
 
     private static async Task<AuthorizedDocument> OpenAsync(
         FoundationApiFactory factory,
         UploadScenario scenario,
-        Guid fileRecordId)
+        Guid fileRecordId,
+        ILogger<FoundationAuthorizedDocumentSource>? logger = null,
+        CancellationToken cancellationToken = default)
     {
         await using var scope = factory.Services.CreateAsyncScope();
         var source = new FoundationAuthorizedDocumentSource(
@@ -213,12 +381,30 @@ public sealed class AuthorizedDocumentSourceTests
             scope.ServiceProvider.GetRequiredService<FileStorage>(),
             scope.ServiceProvider.GetRequiredService<CapabilityEvaluator>(),
             scope.ServiceProvider.GetRequiredService<AuditAppender>(),
-            NullLogger<FoundationAuthorizedDocumentSource>.Instance);
+            logger ?? NullLogger<FoundationAuthorizedDocumentSource>.Instance);
         return await source.OpenReadAsync(
             new ActorContext(factory.ActorUserId, Guid.NewGuid()),
             scenario.CompanyId,
             fileRecordId,
-            CancellationToken.None);
+            cancellationToken);
+    }
+
+    private static async Task RevokeAuditAppendAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "REVOKE EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) FROM vinx_runtime;",
+            administrator);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static void AssertSingleSafeAuditFailureLog(RecordingLogger logger, FileRecord file)
+    {
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Error, entry.Level);
+        Assert.Equal("Authorized document read failed with code audit_unavailable", entry.Message);
+        Assert.DoesNotContain(file.ProviderKey, entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(file.Checksum, entry.Message, StringComparison.Ordinal);
     }
 
     private static async Task<UploadScenario> SeedScenarioAsync(
@@ -280,6 +466,11 @@ public sealed class AuthorizedDocumentSourceTests
             }
         }
 
+        if (withState is "verification_failed")
+        {
+            file.MarkVerificationFailed("malware_detected", factory.ActorUserId, request);
+        }
+
         if (withState is "deleted")
         {
             file.MarkDeleted("deleted by test", factory.ActorUserId, request);
@@ -332,10 +523,40 @@ public sealed class AuthorizedDocumentSourceTests
         Assert.Equal("{}", audit.MetadataJson);
     }
 
+    private static async Task AssertNoAuditAsync(
+        FoundationApiFactory factory,
+        Guid fileRecordId,
+        AuditOutcome outcome)
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.False(await administrator.AuditEvents.AnyAsync(candidate =>
+            candidate.Action == FoundationAuthorizedDocumentSource.CommandName
+            && candidate.ResourceId == fileRecordId
+            && candidate.Outcome == outcome));
+    }
+
     private static string Checksum(byte[] payload) =>
         $"sha256:{Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant()}";
 
     private sealed record UploadScenario(Guid CompanyId, Guid MembershipId);
+
+    private sealed class RecordingLogger : ILogger<FoundationAuthorizedDocumentSource>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
+    }
 
     /// <summary>
     /// Storage em memória contável: checksum/size derivados do conteúdo
@@ -345,13 +566,28 @@ public sealed class AuthorizedDocumentSourceTests
     private sealed class MemoryStorage : FileStorage
     {
         private readonly Dictionary<string, byte[]> _objects = new(StringComparer.Ordinal);
+        private readonly TaskCompletionSource<bool> _openReadStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _releaseOpenRead =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _metadataCount;
         private int _openCount;
 
         public bool FailMetadata { get; set; }
 
         public bool ExtraStreamByte { get; set; }
 
+        public bool PauseOpenRead { get; set; }
+
+        public bool ShortStream { get; set; }
+
+        public int MetadataCount => Volatile.Read(ref _metadataCount);
+
         public int OpenCount => Volatile.Read(ref _openCount);
+
+        public Task OpenReadStarted => _openReadStarted.Task;
+
+        public void ReleaseOpenRead() => _releaseOpenRead.TrySetResult(true);
 
         public void Put(string providerKey, byte[] content) => _objects[providerKey] = content;
 
@@ -369,6 +605,7 @@ public sealed class AuthorizedDocumentSourceTests
 
         public Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref _metadataCount);
             if (FailMetadata)
             {
                 throw new InvalidOperationException("metadata unavailable");
@@ -382,18 +619,29 @@ public sealed class AuthorizedDocumentSourceTests
         public Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken)
+        public async Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _openCount);
+            _openReadStarted.TrySetResult(true);
+            if (PauseOpenRead)
+            {
+                await _releaseOpenRead.Task.WaitAsync(cancellationToken);
+            }
+
             var content = _objects[providerKey];
+            if (ShortStream)
+            {
+                return new MemoryStream(content[..^1], false);
+            }
+
             if (ExtraStreamByte)
             {
                 var withGuard = new byte[content.Length + 1];
                 content.CopyTo(withGuard, 0);
-                return Task.FromResult<Stream>(new MemoryStream(withGuard, 0, withGuard.Length, false));
+                return new MemoryStream(withGuard, 0, withGuard.Length, false);
             }
 
-            return Task.FromResult<Stream>(new MemoryStream(content, false));
+            return new MemoryStream(content, false);
         }
 
         public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
