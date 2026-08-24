@@ -285,11 +285,10 @@ Os dois primeiros comandos usam PostgreSQL descartável e não requerem a
 credencial de runtime. O último inicia e encerra a stack local, verifica o
 bucket privado `vinx-foundation-private` e não imprime credenciais.
 
-Para uma verificação pública completa antes de um PR de comportamento:
-
-```bash
-./scripts/verify-public.sh
-```
+Selecione testes e gates pela matriz de
+[`public-verification.md`](public-verification.md). O CI é o gate completo normal
+da PR; execute `./scripts/verify-public.sh` local somente uma vez, após congelar
+o escopo, quando um gatilho estratégico listado naquele runbook se aplicar.
 
 ## Diagnóstico e parada
 
@@ -297,6 +296,16 @@ O primeiro `npx supabase start` baixa imagens Docker. Em timeout transitório,
 aguarde e consulte `DOCKER_CONTEXT=desktop-linux npx supabase status`.
 `--ignore-health-check` serve apenas para diagnóstico. Se Docker Desktop e
 Colima coexistirem, confira antes `docker context show`.
+
+Os testes `Vinx.Erp.Foundation.IntegrationTests` permitem no máximo duas
+collections xUnit em paralelo por processo. Worktrees simultâneas permanecem
+processos independentes e multiplicam esse teto; não execute gates redundantes
+sem necessidade.
+
+Docker Desktop e Colima mantêm VMs distintas. Se `docker context show` retornar
+`desktop-linux`, consulte `colima status`. Execute `colima stop` somente depois
+de confirmar que nenhuma outra worktree ou projeto depende dessa instância; o
+repositório não para runtimes globais automaticamente.
 
 ```bash
 DOCKER_CONTEXT=desktop-linux npx supabase stop
