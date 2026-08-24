@@ -11,6 +11,14 @@ public static class KnownCapabilities
     public const string FilesConfirm = "foundation.files.confirm";
     public static readonly Guid FilesConfirmId = Guid.Parse("4687cfe7-2318-58ca-8ac9-fff0dad042b0");
 
+    // Leitura autorizada de documentos para contexto do agente (#134-A):
+    // menor privilégio — nunca reutiliza upload/confirm. UUID canônico por
+    // nome (UUIDv5 de https://vinx.erp/capabilities/foundation.files.read-ocr).
+    public const string FilesReadOcr = "foundation.files.read-ocr";
+    public static readonly Guid FilesReadOcrId = Guid.Parse(
+        "f9df3888-cadb-5344-bc68-3555b99dae86"
+    );
+
     public const string MembershipsRevoke = "foundation.memberships.revoke";
     public static readonly Guid MembershipsRevokeId = Guid.Parse(
         "46285f1b-bda6-5fba-b0e9-74515120b076"

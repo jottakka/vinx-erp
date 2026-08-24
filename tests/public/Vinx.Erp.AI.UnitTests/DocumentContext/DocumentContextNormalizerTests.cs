@@ -1,6 +1,7 @@
 using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Providers.OpenAiCompatible;
 using Vinx.Erp.AI.UnitTests.Providers;
+using Vinx.Erp.Foundation.Identity;
 using Xunit;
 
 namespace Vinx.Erp.AI.UnitTests.DocumentContext;
@@ -37,7 +38,7 @@ public sealed class DocumentContextNormalizerTests
         var handler = TestProviderHandler.RespondsWith("{}");
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.Ready, result.Status);
         var segment = Assert.Single(result.Segments);
@@ -64,7 +65,7 @@ public sealed class DocumentContextNormalizerTests
             TestProviderHandler.ChatCompletionJson(OcrJson("pagina transcrita")));
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.Ready, result.Status);
         Assert.Equal(2, result.Segments.Count);
@@ -94,7 +95,7 @@ public sealed class DocumentContextNormalizerTests
             TestProviderHandler.ChatCompletionJson(OcrJson("ocr")));
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.Ready, result.Status);
         Assert.Equal(2, result.Segments.Count);
@@ -113,7 +114,7 @@ public sealed class DocumentContextNormalizerTests
             TestProviderHandler.ChatCompletionJson(OcrJson("legenda")));
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.Ready, result.Status);
         var segment = Assert.Single(result.Segments);
@@ -135,7 +136,7 @@ public sealed class DocumentContextNormalizerTests
         var handler = TestProviderHandler.RespondsWith("{}");
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.NeedsClarification, result.Status);
         Assert.Contains("classification", result.ClarificationReason, StringComparison.Ordinal);
@@ -151,7 +152,7 @@ public sealed class DocumentContextNormalizerTests
         var handler = TestProviderHandler.RespondsWith("{}");
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.NeedsClarification, result.Status);
         Assert.Contains("not available", result.ClarificationReason, StringComparison.Ordinal);
@@ -167,7 +168,7 @@ public sealed class DocumentContextNormalizerTests
         var handler = TestProviderHandler.RespondsWith("{}");
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.NeedsClarification, result.Status);
         Assert.Equal(0, handler.CallCount);
@@ -182,7 +183,7 @@ public sealed class DocumentContextNormalizerTests
         var handler = TestProviderHandler.RespondsWith("{}");
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.NeedsClarification, result.Status);
         Assert.Equal(0, handler.CallCount);
@@ -203,7 +204,7 @@ public sealed class DocumentContextNormalizerTests
             TestProviderHandler.ChatCompletionJson("nao sou json"));
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.NeedsClarification, result.Status);
         Assert.Equal(1, handler.CallCount);
@@ -218,7 +219,7 @@ public sealed class DocumentContextNormalizerTests
         var handler = TestProviderHandler.RespondsWith("{}");
         var normalizer = CreateNormalizer(source, handler, l => l.MaxCharactersPerContext = 4);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.Ready, result.Status);
         Assert.True(result.Truncated);
@@ -234,8 +235,8 @@ public sealed class DocumentContextNormalizerTests
         var handler = TestProviderHandler.RespondsWith("{}");
         var normalizer = CreateNormalizer(source, handler);
 
-        await normalizer.BuildContextAsync(id, CancellationToken.None);
-        await normalizer.BuildContextAsync(id, CancellationToken.None);
+        await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
+        await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         // Sem cache: a fronteira é chamada novamente e o contexto reprocessado.
         Assert.Equal(2, source.OpenAttempts);
@@ -253,7 +254,7 @@ public sealed class DocumentContextNormalizerTests
         cancelled.Cancel();
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            () => normalizer.BuildContextAsync(id, cancelled.Token));
+            () => normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, cancelled.Token));
     }
 
     [Fact]
@@ -266,7 +267,7 @@ public sealed class DocumentContextNormalizerTests
         var handler = TestProviderHandler.RespondsWith("{}");
         var normalizer = CreateNormalizer(source, handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.NeedsClarification, result.Status);
         Assert.Contains("could not be produced safely", result.ClarificationReason, StringComparison.Ordinal);

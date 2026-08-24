@@ -15,7 +15,8 @@ public sealed class CapabilityCatalogMigrationTests
         (KnownCapabilities.RolesAssignId, KnownCapabilities.RolesAssign),
         (KnownCapabilities.FilesUploadId, KnownCapabilities.FilesUpload),
         (KnownCapabilities.FilesConfirmId, KnownCapabilities.FilesConfirm),
-        (KnownCapabilities.MembershipsRevokeId, KnownCapabilities.MembershipsRevoke)
+        (KnownCapabilities.MembershipsRevokeId, KnownCapabilities.MembershipsRevoke),
+        (KnownCapabilities.FilesReadOcrId, KnownCapabilities.FilesReadOcr)
     ];
 
     [Fact]

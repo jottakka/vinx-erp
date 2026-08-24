@@ -1,4 +1,5 @@
 using Vinx.Erp.AI.Providers.OpenAiCompatible;
+using Vinx.Erp.Foundation.Identity;
 
 namespace Vinx.Erp.AI.DocumentContext;
 
@@ -37,13 +38,17 @@ public sealed class DocumentContextNormalizer
     }
 
     public async Task<DocumentContextResult> BuildContextAsync(
+        ActorContext actor,
+        Guid companyId,
         Guid fileRecordId,
         CancellationToken cancellationToken)
     {
         AuthorizedDocument document;
         try
         {
-            document = await _source.OpenReadAsync(fileRecordId, cancellationToken).ConfigureAwait(false);
+            document = await _source
+                .OpenReadAsync(actor, companyId, fileRecordId, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

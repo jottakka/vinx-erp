@@ -126,11 +126,19 @@ visão vinculado: uma página por chamada e bytes codificados
 e rejeição segura. O PDFium não é thread-safe: rasterização é globalmente
 serializada por gate; timeout de parse/render é cooperativo.
 
-A fronteira de leitura é `IAuthorizedDocumentSource`, implementação owner da
-Foundation (fatia #134-A): RLS, membership ativa, capability dedicada de
-leitura/OCR, estado liberado, retenção e checksum, sem URL assinada. Sem a
-fonte real — e sem engine de antimalware aprovado — o OCR em runtime é
-fail-closed; os testes desta fatia usam fontes sintéticas controladas.
+A fronteira de leitura é `IAuthorizedDocumentSource`, implementada por
+`FoundationAuthorizedDocumentSource` no módulo AI (#134-A, issue #298) sobre
+FileRecord/Foundation: ator e empresa EXPLÍCITOS, RLS transacional, membership
+ativa, capability dedicada `foundation.files.read-ocr` (Company, menor
+privilégio), liberação = `confirmed` COM veredito de antimalware durável
+completo, retenção viva, tamanho 1..25 MiB dentro da política, integridade
+checksum/size do storage ANTES de abrir e stream seekable limitado a
+`SizeBytes` — sem URL assinada. Toda decisão é auditada (`AuditSource.Ai`,
+`foundation.files.read-ocr`) sem conteúdo; a leitura re-autoriza a cada
+chamada (revogação imediata, sem cache). Negações viram
+`DocumentReadDeniedException` com reason estável e o normalizer converte em
+fail-closed. Sem engine de antimalware aprovado nenhum documento chega a
+`confirmed` e o OCR permanece fail-closed em produção.
 
 ## Contrato de saída
 

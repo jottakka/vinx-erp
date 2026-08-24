@@ -1,10 +1,13 @@
+using Vinx.Erp.Foundation.Identity;
+
 namespace Vinx.Erp.AI.DocumentContext;
 
 /// <summary>
 /// Documento autorizado para leitura/OCR: stream limitado e seekable aberto
-/// pela fronteira da Foundation somente após RLS, membership ativa,
-/// capability dedicada de leitura/OCR, estado liberado, retenção, soft-delete
-/// e checksum — sem URL assinada. O conteúdo é dado não confiável.
+/// pela fronteira somente após RLS, membership ativa, capability dedicada de
+/// leitura/OCR, estado liberado com veredito durável, retenção, tamanho
+/// dentro da política e checksum — sem URL assinada. O conteúdo é dado não
+/// confiável.
 /// </summary>
 public sealed record AuthorizedDocument(
     Guid FileRecordId,
@@ -14,11 +17,16 @@ public sealed record AuthorizedDocument(
     Stream Content);
 
 /// <summary>
-/// Fronteira de leitura autorizada de documentos. A implementação real é
-/// owner da Foundation (fatia #134-A): sem ela, OCR em runtime é fail-closed.
-/// Testes usam fontes sintéticas `Clean` controladas.
+/// Fronteira de leitura autorizada de documentos. Ator e empresa são
+/// EXPLÍCITOS e confiam no chamador autenticado (nunca no request do
+/// cliente final). Implementação real: <see cref="FoundationAuthorizedDocumentSource"/>
+/// sobre FileRecord/Foundation; sem ela, OCR em runtime é fail-closed.
 /// </summary>
 public interface IAuthorizedDocumentSource
 {
-    Task<AuthorizedDocument> OpenReadAsync(Guid fileRecordId, CancellationToken cancellationToken);
+    Task<AuthorizedDocument> OpenReadAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid fileRecordId,
+        CancellationToken cancellationToken);
 }
