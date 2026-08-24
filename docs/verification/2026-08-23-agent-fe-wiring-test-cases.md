@@ -39,9 +39,16 @@ produção depende de seed `ai.read` + provider configurado (decisão do dono).
 
 ## Suítes
 
-- `npx vitest --run src/features/agent/` — 21/21 verdes (15 client + 6 workspace).
+- `npx vitest --run src/features/agent/` — 21/21 verdes (14 client + 7 workspace).
 - `npx playwright test -c playwright.prototypes.config.ts -g "agent dock"` —
   1/1 verde.
-- Gate completo: `./scripts/verify-public.sh` no HEAD exato (serializado;
-  suíte Docker de integração excluída por instrução do responsável nesta
-  janela de máquina).
+- Verificação executada no HEAD exato, SEM o gate integral: o
+  `./scripts/verify-public.sh` não permite excluir suítes — ele roda
+  incondicionalmente todos os projetos públicos, incluindo a integração
+  Docker. Por instrução do responsável (Docker instável na máquina), o gate
+  integral não foi re-executado no HEAD; a verificação parcial foi:
+  vitest integral 345/345 serializado (`--no-file-parallelism`), lint,
+  format, build e e2e do agente, todos verdes. Na base `4d68774` o gate
+  integral rodou: todas as suítes verdes exceto 5 testes de integração sob
+  contenção, reprovados como infra por re-run solo 5/5; o gate integral no
+  HEAD final fica pendente para janela de máquina estável.

@@ -147,14 +147,15 @@ fechado e UI honesta sobre empresa/estado. Sem mudanças no BE.
   reescrito contra o fluxo real com interceptação de rota — achado do review
   Sol do PR).
 - **Excluídos (1):** `agent-confirmation-card.tsx`.
-- Total 11 arquivos; **+1.561/−180 linhas** no diff do PR — acima do teto
-  orientador de 800. Justificativa: a matriz negativa exigida pelo review
-  (combinações status/HTTP cruzadas, envelopes por produtor, reasonCode
-  desconhecido, UUID inválido) e as 5 classes BDD com concorrência/unmount/
-  troca de empresa multiplicam os testes (~950 linhas de teste; produção
-  ~250; docs ~360, incluindo este plano e o manifesto). Fatia mantida como
-  vertical coesa com lista exclusiva; aprovação registrada no review Sol do
-  PR (delta) e a merge é decisão do responsável.
+- Total 12 arquivos (incluindo este plano); **+1.581/−180 linhas** no diff
+  do PR — acima do teto orientador de 800. Justificativa: a matriz negativa
+  exigida pelo review (combinações status/HTTP cruzadas, envelopes por
+  produtor, reasonCode desconhecido, UUID inválido) e as 5 classes BDD com
+  concorrência/unmount/troca de empresa multiplicam os testes (~950 linhas
+  de teste; produção ~250; docs ~380, incluindo este plano e o manifesto).
+  Fatia mantida como vertical coesa com lista exclusiva; aprovação
+  registrada no review Sol do PR (delta) e a merge é decisão do
+  responsável.
 
 ### 2.5 BDD mínimo (5 classes, mapeadas para teste/manifesto)
 
