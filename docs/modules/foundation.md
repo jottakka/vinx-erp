@@ -335,6 +335,22 @@ e-mail, chave, conexão ou corpo do provedor; sua saída é uma categoria estáv
 Reexecução do mesmo issuer e subject devolve `already_configured`, enquanto
 outro sujeito falha em conflito sem anexar identidade por e-mail.
 
+## Reprovisionamento offline de identidade
+
+`Vinx.Erp.PlatformBootstrap reprovision-identity` é uma recuperação offline e
+manual da mesma pessoa. Seleciona primeiro o `User` pelo ID exato configurado,
+exige que o subject antigo já retorne `NotFound` no Admin Auth, valida o novo
+subject e compara o e-mail confirmado apenas como guarda secundária. O e-mail
+nunca encontra, cria ou vincula uma pessoa. A função SQL ainda confere a tupla
+ID de usuário, ID de identidade, issuer e subject antigo antes da troca
+atômica, da invalidação de sessões e da auditoria.
+
+Não há rota HTTP, tela ou SQL direto para esta recuperação. O comando devolve
+somente `reprovisioned`, `already_configured`, `provider_not_deleted`,
+`provider_rejected`, `email_mismatch`, `tuple_mismatch`, `unavailable` ou
+`configuration_invalid`; não imprime identificadores, e-mail, credenciais nem
+payload do provedor.
+
 O resolver interno de contexto parte somente do `ActorContext` e materializa
 um snapshot sem filtro de memberships ativas, nome legível e capabilities por
 empresa. Um `CapabilityRequirement` de escopo `company` deriva desse snapshot

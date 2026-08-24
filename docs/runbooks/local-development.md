@@ -70,6 +70,10 @@ endereços e credenciais geradas apenas para uso local.
 | `SUPABASE_AUTH_SERVICE_ROLE_KEY` | Bootstrap de operador e Worker C# | Credencial Admin Auth exclusiva do servidor; nunca usar no browser. |
 | `PLATFORM_OPERATOR_SUBJECT` | Bootstrap de operador C# | Subject já confirmado no Supabase Auth para o único operador inicial. |
 | `PLATFORM_OPERATOR_DISPLAY_NAME` | Bootstrap de operador C# | Nome de apresentação validado no deployment; não participa da autorização. |
+| `REPROVISION_IDENTITY_USER_ID` | Recuperação offline de identidade | ID interno exato da mesma pessoa; nunca selecionar por e-mail. |
+| `REPROVISION_IDENTITY_EXPECTED_EXTERNAL_IDENTITY_ID` | Recuperação offline de identidade | ID exato do vínculo externo que pode trocar de subject. |
+| `REPROVISION_IDENTITY_EXPECTED_OLD_SUBJECT` | Recuperação offline de identidade | Subject que deve estar ausente no Admin Auth antes da recuperação. |
+| `REPROVISION_IDENTITY_NEW_SUBJECT` | Recuperação offline de identidade | Subject novo, confirmado e não anônimo no Admin Auth. |
 | `SUPABASE_AUTH_ISSUER` | API, MCP e Worker C# | Emissor JWT do Supabase Auth. |
 | `SUPABASE_AUTH_AUDIENCE` | API, MCP e Worker C# | Audiência JWT aceita. |
 | `SUPABASE_INVITE_REDIRECT_URL` | Worker C# | URL HTTPS permitida pelo Supabase para o convite inicial; o aceite ainda não é publicado nesta fatia. |
@@ -184,6 +188,27 @@ categoria estável: `created`, `already_configured`, `conflict`,
 `provider_rejected`, `unavailable` ou `configuration_invalid`. A repetição
 do mesmo subject é segura; outro subject exige investigação operacional, sem
 alterar dados diretamente no banco.
+
+## Recuperar uma identidade reprovisionada
+
+Use somente após confirmar, pelo procedimento operacional aprovado, que é a
+mesma pessoa e que o subject antigo foi removido do provedor. Com as quatro
+variáveis `REPROVISION_IDENTITY_*`, `FOUNDATION_MIGRATOR_CONNECTION`,
+`SUPABASE_AUTH_ISSUER`, `SUPABASE_AUTH_AUDIENCE` e a credencial Admin Auth já
+presentes no ambiente seguro, execute sem argumentos adicionais:
+
+```bash
+dotnet run --project src/Tools/Vinx.Erp.PlatformBootstrap -- reprovision-identity
+```
+
+Sucesso imprime somente `reprovisioned` ou `already_configured`. Antes de
+liberar acesso, confira o login com o novo subject e a nova sessão; sessões
+anteriores devem exigir nova autenticação. `provider_not_deleted`,
+`provider_rejected`, `email_mismatch`, `tuple_mismatch`, `unavailable` e
+`configuration_invalid` não autorizam retentativa cega: preserve o estado,
+investigue pelo canal seguro e escale para a operação de identidade. Não rode
+SQL direto, não altere a identidade por e-mail e não copie IDs, e-mails,
+payloads ou segredos para tickets ou logs.
 
 ## Provisionar o storage técnico do outbox e worker
 

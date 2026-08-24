@@ -20,5 +20,6 @@
     </ProjectReference>
     <ProjectReference Include="../../../src/Modules/Vinx.Erp.AI/Vinx.Erp.AI.csproj" />
     <ProjectReference Include="../../../src/Modules/Vinx.Erp.Atendimento/Vinx.Erp.Atendimento.csproj" />
+    <ProjectReference Include="../../../src/Tools/Vinx.Erp.PlatformBootstrap/Vinx.Erp.PlatformBootstrap.csproj" Aliases="platformbootstrap" />
   </ItemGroup>
 </Project>

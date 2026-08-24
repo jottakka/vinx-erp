@@ -1143,6 +1143,7 @@
           "Vinx.Erp.AI": "[1.0.0, )",
           "Vinx.Erp.ApiHost": "[1.0.0, )",
           "Vinx.Erp.Atendimento": "[1.0.0, )",
+          "Vinx.Erp.PlatformBootstrap": "[1.0.0, )",
           "Vinx.Erp.WorkerHost": "[1.0.0, )",
           "xunit": "[2.9.3, )"
         }
@@ -1161,6 +1162,12 @@
         "dependencies": {
           "Microsoft.EntityFrameworkCore": "[10.0.11, )",
           "Npgsql": "[10.0.3, )",
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
+      "vinx.erp.platformbootstrap": {
+        "type": "Project",
+        "dependencies": {
           "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },

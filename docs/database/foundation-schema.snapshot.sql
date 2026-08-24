@@ -866,6 +866,99 @@ END;
 $_$;
 
 
+-- Name: reprovision_external_identity(uuid, uuid, text, text, text, uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.reprovision_external_identity(p_user_id uuid, p_expected_identity_id uuid, p_expected_issuer text, p_expected_old_subject text, p_new_subject text, p_correlation_id uuid) RETURNS TABLE(status text)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_deployment_actor_id constant uuid := '00000000-0000-0000-0000-000000000001';
+    v_identity_user_id uuid;
+    v_identity_issuer text;
+    v_identity_subject text;
+    v_existing_new_identity_id uuid;
+    v_now timestamp with time zone;
+BEGIN
+    IF p_user_id IS NULL
+        OR p_expected_identity_id IS NULL
+        OR p_expected_issuer IS NULL
+        OR btrim(p_expected_issuer) = ''
+        OR char_length(p_expected_issuer) > 200
+        OR p_expected_old_subject IS NULL
+        OR btrim(p_expected_old_subject) = ''
+        OR char_length(p_expected_old_subject) > 400
+        OR p_new_subject IS NULL
+        OR btrim(p_new_subject) = ''
+        OR char_length(p_new_subject) > 400
+        OR p_correlation_id IS NULL THEN
+        RETURN QUERY SELECT 'invalid'::text;
+        RETURN;
+    END IF;
+
+    PERFORM 1 FROM foundation.users AS user_record
+    WHERE user_record.id = p_user_id FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'invalid'::text;
+        RETURN;
+    END IF;
+
+    SELECT identity_record.user_id, identity_record.issuer, identity_record.subject
+    INTO v_identity_user_id, v_identity_issuer, v_identity_subject
+    FROM foundation.external_identities AS identity_record
+    WHERE identity_record.id = p_expected_identity_id FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'invalid'::text;
+        RETURN;
+    END IF;
+
+    IF v_identity_user_id = p_user_id
+        AND v_identity_issuer = p_expected_issuer
+        AND v_identity_subject = p_new_subject THEN
+        RETURN QUERY SELECT 'already_configured'::text;
+        RETURN;
+    END IF;
+
+    IF v_identity_user_id <> p_user_id
+        OR v_identity_issuer <> p_expected_issuer
+        OR v_identity_subject <> p_expected_old_subject THEN
+        RETURN QUERY SELECT 'conflict'::text;
+        RETURN;
+    END IF;
+
+    SELECT identity_record.id INTO v_existing_new_identity_id
+    FROM foundation.external_identities AS identity_record
+    WHERE identity_record.issuer = p_expected_issuer
+      AND identity_record.subject = p_new_subject FOR UPDATE;
+    IF FOUND AND v_existing_new_identity_id <> p_expected_identity_id THEN
+        RETURN QUERY SELECT 'conflict'::text;
+        RETURN;
+    END IF;
+
+    v_now := pg_catalog.clock_timestamp();
+    UPDATE foundation.external_identities SET subject = p_new_subject
+    WHERE id = p_expected_identity_id;
+    UPDATE foundation.users
+    SET sessions_valid_after = CASE
+        WHEN sessions_valid_after IS NULL OR sessions_valid_after < v_now THEN v_now
+        ELSE sessions_valid_after
+    END
+    WHERE id = p_user_id;
+    UPDATE foundation.user_sessions
+    SET revoked_at = v_now,
+        revoked_by_user_id = p_user_id,
+        revocation_reason = 'identity_reprovisioned'
+    WHERE user_id = p_user_id AND revoked_at IS NULL;
+
+    PERFORM audit.append_event(
+        v_deployment_actor_id, 'global', NULL, 'worker', 'identity.external.reprovision',
+        'user', p_user_id, 'success', p_correlation_id,
+        'same_person_recovery', '{}'::jsonb);
+    RETURN QUERY SELECT 'reprovisioned'::text;
+END;
+$$;
+
+
 -- Name: revoke_all_user_sessions(uuid); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.revoke_all_user_sessions(p_user_id uuid) RETURNS integer
