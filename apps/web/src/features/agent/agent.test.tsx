@@ -5,8 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
 import { FeedbackProvider } from "../../shared/ui/feedback-provider";
 import { createMockSessionGateway } from "../auth/mock-session-gateway";
-import type { MockSessionGateway } from "../auth/session-contract";
-import { SessionProvider } from "../auth/session-provider";
+import type {
+  BootstrapSnapshot,
+  MockSessionGateway,
+} from "../auth/session-contract";
+import { SessionProvider, useSession } from "../auth/session-provider";
 import { AgentConversationProvider } from "./agent-conversation-provider";
 import { AgentDock } from "./agent-dock";
 import { AgentTrigger } from "./agent-trigger";
@@ -25,10 +28,24 @@ function Home() {
   );
 }
 
+// Gatilho de refresh do bootstrap dentro da sessão para simular troca de
+// empresa ativa enquanto uma execução está pendente.
+function RefreshBootstrapButton() {
+  const { refreshBootstrap } = useSession();
+  return (
+    <button onClick={() => void refreshBootstrap()} type="button">
+      Atualizar sessão
+    </button>
+  );
+}
+
 async function renderAgentWorkspace(
   route = "/",
-): Promise<{ router: ReturnType<typeof createMemoryRouter> }> {
-  const gateway: MockSessionGateway = createMockSessionGateway();
+  gateway: MockSessionGateway = createMockSessionGateway(),
+): Promise<{
+  router: ReturnType<typeof createMemoryRouter>;
+  unmount: () => void;
+}> {
   await gateway.login("maria");
   const router = createMemoryRouter(
     [
@@ -44,11 +61,12 @@ async function renderAgentWorkspace(
     { initialEntries: [route] },
   );
 
-  render(
+  const { unmount } = render(
     <VinxThemeProvider>
       <SessionProvider gateway={gateway}>
         <AgentConversationProvider>
           <FeedbackProvider>
+            <RefreshBootstrapButton />
             <RouterProvider router={router} />
           </FeedbackProvider>
         </AgentConversationProvider>
@@ -56,7 +74,7 @@ async function renderAgentWorkspace(
     </VinxThemeProvider>,
   );
 
-  return { router };
+  return { router, unmount };
 }
 
 async function openDockAndType(
@@ -316,5 +334,116 @@ describe("agent workspace", () => {
     expect(
       screen.getAllByText("mensagem compartilhada").length,
     ).toBeGreaterThan(0);
+  });
+
+  it("aborts and discards a pending reply when the workspace unmounts", async () => {
+    let resolveRun: (value: Response) => void = () => {};
+    const pendingRun = new Promise<Response>(
+      (resolve) => (resolveRun = resolve),
+    );
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(antiforgeryTokenResponse())
+      .mockImplementationOnce(() => pendingRun);
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    const { unmount } = await renderAgentWorkspace();
+
+    const dock = await openDockAndType(user, "consulta desmontada");
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+    await waitFor(() => expect(runCalls(fetchSpy)).toHaveLength(1));
+    const runSignal = runCalls(fetchSpy)[0][1].signal as AbortSignal;
+    expect(runSignal.aborted).toBe(false);
+
+    unmount();
+    expect(runSignal.aborted).toBe(true);
+
+    resolveRun(
+      agentRunResponse({
+        status: "result",
+        reasonCode: "ok",
+        text: "resposta pós-unmount",
+        sources: null,
+        correlationId,
+      }),
+    );
+    // Sem erro de act/setState após unmount: a resposta tardia foi descartada
+    // pelo epoch e nenhuma atualização de estado acontece.
+    await waitFor(() => expect(runSignal.aborted).toBe(true));
+  });
+
+  it("aborts, clears the conversation and switches the caption when the active company changes", async () => {
+    let snapshot: BootstrapSnapshot | null = null;
+    const gateway: MockSessionGateway = {
+      login: async () => {
+        if (!snapshot) throw new Error("sessão de teste não instalada");
+        return structuredClone(snapshot);
+      },
+      logout: async () => {
+        snapshot = null;
+      },
+      getBootstrap: async () => (snapshot ? structuredClone(snapshot) : null),
+    };
+    const { createBootstrapSnapshot, mockSessionProfiles } = await import(
+      "../auth/mock-session-fixtures"
+    );
+    snapshot = createBootstrapSnapshot(mockSessionProfiles.maria);
+    const betaFirst: BootstrapSnapshot = {
+      ...snapshot,
+      companies: [...snapshot.companies].reverse(),
+    };
+
+    const user = userEvent.setup();
+    let resolveRun: (value: Response) => void = () => {};
+    const pendingRun = new Promise<Response>(
+      (resolve) => (resolveRun = resolve),
+    );
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(antiforgeryTokenResponse())
+      .mockImplementationOnce(() => pendingRun);
+    vi.stubGlobal("fetch", fetchSpy);
+    await renderAgentWorkspace("/", gateway);
+
+    const dock = await openDockAndType(user, "consulta da Alfa");
+    expect(dock.getByText("Alfa · Consultas independentes")).toBeVisible();
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+    await waitFor(() => expect(runCalls(fetchSpy)).toHaveLength(1));
+    const [firstPath, firstInit] = runCalls(fetchSpy)[0];
+    expect(firstPath).toBe(agentRunsPath);
+    expect(JSON.parse(firstInit.body as string)).toMatchObject({
+      companyId: alfaCompanyId,
+    });
+    const runSignal = firstInit.signal as AbortSignal;
+
+    // O drawer modal aplica aria-hidden ao fundo: o gatilho de refresh é
+    // consultado com hidden enquanto o painel permanece aberto.
+    snapshot = betaFirst;
+    await user.click(
+      screen.getByRole("button", { name: "Atualizar sessão", hidden: true }),
+    );
+
+    expect(
+      await dock.findByText("Beta · Consultas independentes"),
+    ).toBeVisible();
+    expect(runSignal.aborted).toBe(true);
+    await waitFor(() =>
+      expect(dock.getByRole("note")).toHaveTextContent(
+        /consulta independente/i,
+      ),
+    );
+    expect(dock.queryByText("consulta da Alfa")).toBeNull();
+
+    resolveRun(
+      agentRunResponse({
+        status: "result",
+        reasonCode: "ok",
+        text: "resposta tardia da Alfa",
+        sources: null,
+        correlationId,
+      }),
+    );
+    await waitFor(() => expect(runSignal.aborted).toBe(true));
+    expect(dock.queryByText("resposta tardia da Alfa")).toBeNull();
   });
 });

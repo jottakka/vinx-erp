@@ -289,4 +289,96 @@ describe("agent run client", () => {
     expect(fetchSpy.mock.calls).toHaveLength(1);
     expect(fetchSpy.mock.calls[0][0]).toBe(antiforgeryPath);
   });
+
+  it("rejects crossed status/HTTP combinations as protocol failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(tokenResponse())
+        .mockResolvedValueOnce(runResponse(typedBody({ status: "conflict" })))
+        .mockResolvedValueOnce(tokenResponse())
+        .mockResolvedValueOnce(
+          runResponse(typedBody({ status: "result" }), 409),
+        ),
+    );
+    const client = createAgentRunClient();
+
+    await expect(client.send({ message: "a" })).resolves.toEqual({
+      ok: false,
+      failure: { kind: "protocol", status: 200 },
+    });
+    await expect(client.send({ message: "b" })).resolves.toEqual({
+      ok: false,
+      failure: { kind: "protocol", status: 409 },
+    });
+  });
+
+  it("rejects typed bodies whose correlationId is not a canonical uuid", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(tokenResponse())
+        .mockResolvedValueOnce(
+          runResponse(typedBody({ correlationId: "not-a-uuid" })),
+        ),
+    );
+    const client = createAgentRunClient();
+
+    await expect(client.send({ message: "a" })).resolves.toEqual({
+      ok: false,
+      failure: { kind: "protocol", status: 200 },
+    });
+  });
+
+  it("normalizes unknown reasonCodes to null instead of echoing them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(tokenResponse())
+        .mockResolvedValueOnce(
+          runResponse(typedBody({ reasonCode: "totally_new_code" })),
+        ),
+    );
+    const client = createAgentRunClient();
+
+    const result = await client.send({ message: "a" });
+
+    expect(result).toMatchObject({
+      ok: true,
+      run: { reasonCode: null, text: "Resposta do modelo" },
+    });
+  });
+
+  it("rejects envelope codes that belong to another HTTP status or extra fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(tokenResponse())
+        .mockResolvedValueOnce(runResponse({ code: "agent_timeout" }, 503))
+        .mockResolvedValueOnce(tokenResponse())
+        .mockResolvedValueOnce(runResponse({ code: "audit_unavailable" }, 504))
+        .mockResolvedValueOnce(tokenResponse())
+        .mockResolvedValueOnce(
+          runResponse({ code: "invalid_request", extra: 1 }, 400),
+        ),
+    );
+    const client = createAgentRunClient();
+
+    await expect(client.send({ message: "a" })).resolves.toEqual({
+      ok: false,
+      failure: { kind: "protocol", status: 503 },
+    });
+    await expect(client.send({ message: "b" })).resolves.toEqual({
+      ok: false,
+      failure: { kind: "protocol", status: 504 },
+    });
+    await expect(client.send({ message: "c" })).resolves.toEqual({
+      ok: false,
+      failure: { kind: "protocol", status: 400 },
+    });
+  });
 });

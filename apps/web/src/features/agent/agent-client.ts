@@ -21,37 +21,9 @@ const agentRunSourceSchema = z
   .object({ reference: z.string().min(1) })
   .strict();
 
-const agentRunStatusSchema = z.enum([
-  "result",
-  "needs_clarification",
-  "denied",
-  "requires_confirmation",
-  "validation_error",
-  "conflict",
-]);
-
-// Contrato tipado do endpoint: campos presentes e anuláveis, nunca ausentes.
-const agentRunResponseSchema = z
-  .object({
-    status: agentRunStatusSchema,
-    reasonCode: z.string().nullable(),
-    text: z.string().nullable(),
-    sources: z.array(agentRunSourceSchema).nullable(),
-    correlationId: z.string(),
-  })
-  .strict();
-
-// Envelope {"code"} documentado: antiforgery 400 e 5xx da fronteira.
-const envelopeCodeSchema = z.enum([
-  "invalid_request",
-  "provider_not_configured",
-  "agent_unavailable",
-  "audit_unavailable",
-  "agent_timeout",
-]);
-
-// reasonCodes estáveis da matriz da API (issue 138); desconhecido nunca é ecoado.
-const knownReasonCodes = new Set([
+// reasonCodes estáveis da matriz da API (issue 138); desconhecido é
+// normalizado para null — nunca ecoado cru.
+const knownReasonCodes = [
   "ok",
   "tool_proposal_requires_confirmation",
   "capability_denied",
@@ -64,15 +36,75 @@ const knownReasonCodes = new Set([
   "invalid_request",
   "idempotency_conflict",
   "integrity_conflict",
+] as const;
+
+export type AgentRunReasonCode = (typeof knownReasonCodes)[number];
+
+const knownReasonCodeSet = new Set<string>(knownReasonCodes);
+
+const normalizedReasonCode = z
+  .string()
+  .nullable()
+  .transform(
+    (value): AgentRunReasonCode | null =>
+      value !== null && knownReasonCodeSet.has(value)
+        ? (value as AgentRunReasonCode)
+        : null,
+  );
+
+// Campos do corpo tipado: presentes e anuláveis, nunca ausentes; cada
+// status HTTP aceita SOMENTE os status de contrato que ele produz.
+const typedResponseFields = {
+  reasonCode: normalizedReasonCode,
+  text: z.string().nullable(),
+  sources: z.array(agentRunSourceSchema).nullable(),
+  correlationId: z.uuid(),
+} as const;
+
+const okStatusSchema = z.enum([
+  "result",
+  "needs_clarification",
+  "denied",
+  "requires_confirmation",
 ]);
 
-export type AgentRunStatus = z.infer<typeof agentRunStatusSchema>;
+const runOkSchema = z
+  .object({ status: okStatusSchema, ...typedResponseFields })
+  .strict();
+const validationSchema = z
+  .object({ status: z.literal("validation_error"), ...typedResponseFields })
+  .strict();
+const conflictSchema = z
+  .object({ status: z.literal("conflict"), ...typedResponseFields })
+  .strict();
+
+// Envelopes {"code"} por produtor: antiforgery 400 e cada 5xx da fronteira
+// com a sua allow-list exata; objetos estritos (campos extras rejeitados).
+const antiforgeryEnvelopeSchema = z
+  .object({ code: z.literal("invalid_request") })
+  .strict();
+const unavailableEnvelopeSchema = z
+  .object({
+    code: z.enum([
+      "provider_not_configured",
+      "agent_unavailable",
+      "audit_unavailable",
+    ]),
+  })
+  .strict();
+const timeoutEnvelopeSchema = z
+  .object({ code: z.literal("agent_timeout") })
+  .strict();
+
+export type AgentRunStatus =
+  | z.infer<typeof okStatusSchema>
+  | "validation_error"
+  | "conflict";
 export type AgentRunSource = z.infer<typeof agentRunSourceSchema>;
-export type AgentRunEnvelopeCode = z.infer<typeof envelopeCodeSchema>;
 
 export type AgentRunResponse = {
   status: AgentRunStatus;
-  reasonCode: string | null;
+  reasonCode: AgentRunReasonCode | null;
   text: string | null;
   sources: readonly AgentRunSource[] | null;
   correlationId: string;
@@ -91,7 +123,7 @@ export type AgentRunFailureKind =
 export type AgentRunFailure = {
   kind: AgentRunFailureKind;
   status?: number;
-  code?: AgentRunEnvelopeCode;
+  code?: string;
   correlationId?: string;
 };
 
@@ -110,7 +142,7 @@ export type AgentRunGateway = {
 };
 
 export function isKnownAgentReasonCode(value: string | null): value is string {
-  return value !== null && knownReasonCodes.has(value);
+  return value !== null && knownReasonCodeSet.has(value);
 }
 
 /**
@@ -193,55 +225,63 @@ export function createAgentRunClient(
       return { ok: false, failure: statusFailure };
     }
 
+    if (response.status === 400) {
+      const body = await readBody(response);
+      if (body === "unreadable") {
+        return protocol(response.status, correlationId);
+      }
+      const typed = validationSchema.safeParse(body);
+      if (typed.success) {
+        return ok(typed.data, correlationId);
+      }
+      // 400 tem dois produtores: o endpoint (tipado, tratado acima) e o
+      // middleware de antiforgery antes dele (envelope {"code"}).
+      if (antiforgeryEnvelopeSchema.safeParse(body).success) {
+        return {
+          ok: false,
+          failure: failure("antiforgery", {
+            status: 400,
+            code: "invalid_request",
+            correlationId,
+          }),
+        };
+      }
+      return protocol(response.status, correlationId);
+    }
+
     if (response.status === 503 || response.status === 504) {
-      const code = await readEnvelopeCode(response);
+      const body = await readBody(response);
+      if (body === "unreadable") {
+        return protocol(response.status, correlationId);
+      }
+      const code =
+        response.status === 503
+          ? envelopeCode(body, unavailableEnvelopeSchema)
+          : envelopeCode(body, timeoutEnvelopeSchema);
       if (!code) {
         return protocol(response.status, correlationId);
       }
+      const kind = response.status === 504 ? "timeout" : "unavailable";
       return {
         ok: false,
-        failure:
-          response.status === 504 && code === "agent_timeout"
-            ? failure("timeout", {
-                status: response.status,
-                code,
-                correlationId,
-              })
-            : failure("unavailable", {
-                status: response.status,
-                code,
-                correlationId,
-              }),
+        failure: failure(kind, {
+          status: response.status,
+          code,
+          correlationId,
+        }),
       };
     }
 
-    if (![200, 400, 409].includes(response.status)) {
-      return protocol(response.status, correlationId);
-    }
-
-    const body = await readBody(response);
-    if (body === "unreadable") {
-      return protocol(response.status, correlationId);
-    }
-
-    const typed = agentRunResponseSchema.safeParse(body);
-    if (typed.success) {
-      return {
-        ok: true,
-        run: correlationId ? { ...typed.data, correlationId } : typed.data,
-      };
-    }
-
-    if (response.status === 400) {
-      // 400 tem dois produtores: o endpoint (tipado, tratado acima) e o
-      // middleware de antiforgery antes dele (envelope {"code"}).
-      const code = parseEnvelopeCode(body);
-      if (code === "invalid_request") {
-        return {
-          ok: false,
-          failure: failure("antiforgery", { status: 400, code, correlationId }),
-        };
+    if (response.status === 200 || response.status === 409) {
+      const body = await readBody(response);
+      if (body === "unreadable") {
+        return protocol(response.status, correlationId);
       }
+      const schema = response.status === 200 ? runOkSchema : conflictSchema;
+      const typed = schema.safeParse(body);
+      return typed.success
+        ? ok(typed.data, correlationId)
+        : protocol(response.status, correlationId);
     }
 
     return protocol(response.status, correlationId);
@@ -263,21 +303,12 @@ export function createAgentRunClient(
     return null;
   }
 
-  async function readEnvelopeCode(
-    response: Response,
-  ): Promise<AgentRunEnvelopeCode | null> {
-    const body = await readBody(response);
-    return body === "unreadable" ? null : parseEnvelopeCode(body);
-  }
-
-  function parseEnvelopeCode(body: unknown): AgentRunEnvelopeCode | null {
-    if (!body || typeof body !== "object") {
-      return null;
-    }
-    const parsed = envelopeCodeSchema.safeParse(
-      (body as { code?: unknown }).code,
-    );
-    return parsed.success ? parsed.data : null;
+  function envelopeCode(
+    body: unknown,
+    schema: z.ZodType<{ code: string }>,
+  ): string | null {
+    const parsed = schema.safeParse(body);
+    return parsed.success ? parsed.data.code : null;
   }
 
   async function readBody(response: Response): Promise<unknown | "unreadable"> {
@@ -294,6 +325,13 @@ export function createAgentRunClient(
     } catch {
       return "unreadable";
     }
+  }
+
+  function ok(
+    run: AgentRunResponse,
+    correlationId: string | undefined,
+  ): AgentRunSendResult {
+    return { ok: true, run: correlationId ? { ...run, correlationId } : run };
   }
 
   function protocol(
