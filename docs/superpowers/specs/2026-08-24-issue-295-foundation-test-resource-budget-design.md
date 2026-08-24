@@ -116,6 +116,6 @@ Não altera produção, banco, migrations, Supabase, CI, pacote, imagem ou
 configuração global da máquina. Não introduz retry, timeout, lock, fila,
 semaphore, reuse, container compartilhado ou limite de CPU/memória.
 
-Estimativa pré-código: 4 arquivos não-teste, 2 arquivos de teste/configuração,
-160–260 linhas manuais e nenhuma linha gerada. A fatia permanece abaixo de 25
-arquivos e 800 linhas manuais.
+Estimativa pré-código revisada após o plano: 4 arquivos não-teste, 2 arquivos
+de teste/configuração, 380–500 linhas manuais e nenhuma linha gerada. A fatia
+permanece abaixo de 25 arquivos e 800 linhas manuais.
