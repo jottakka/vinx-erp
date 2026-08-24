@@ -108,7 +108,7 @@ auditoria indisponível e cancelamento explícito do caller. Integração
 **Inventário recalculado:** o handoff revisado sobre `a6e369e` tinha 16
 arquivos (11 não-teste + 5 testes), 1.090 linhas manuais e 1.724 linhas
 geradas de migration/designer/snapshot. Após a correção e o rebase na `main`
-`16e4a47`: 1.527 linhas manuais + 1.724 geradas. O total manual excede o alvo
+`0abd6e0`: 1.528 linhas manuais + 1.724 geradas. O total manual excede o alvo
 de 800,
 mas a exceção é coesa: contrato, fonte RLS/auditoria, migration, testes de
 segurança e documentação formam uma única fatia #298; separar a prova da
