@@ -9,7 +9,6 @@ import {
   Typography,
 } from "@mui/material";
 import { type FormEvent, useState } from "react";
-import { AgentConfirmationCard } from "./agent-confirmation-card";
 import type { AgentMessage } from "./agent-contract";
 import { useAgentConversation } from "./agent-conversation-provider";
 
@@ -53,7 +52,7 @@ function MessageBubble({ message }: { message: AgentMessage }) {
 }
 
 export function AgentConversation() {
-  const { messages, proposal, sendMessage, status } = useAgentConversation();
+  const { messages, sendMessage, status } = useAgentConversation();
   const [draft, setDraft] = useState("");
   const thinking = status === "thinking";
 
@@ -81,8 +80,8 @@ export function AgentConversation() {
           ))
         ) : (
           <Alert role="note" severity="info">
-            Conversa local de demonstração. Envie uma mensagem para avaliar a
-            composição; nenhuma resposta real é consultada.
+            Cada envio é uma consulta independente ao agente da empresa ativa;
+            turnos anteriores não são relembrados.
           </Alert>
         )}
         {thinking ? (
@@ -92,9 +91,6 @@ export function AgentConversation() {
           </Stack>
         ) : null}
       </Box>
-      {proposal && !thinking ? (
-        <AgentConfirmationCard proposal={proposal} />
-      ) : null}
       <Stack component="form" direction="row" onSubmit={submit} spacing={1}>
         <TextField
           fullWidth

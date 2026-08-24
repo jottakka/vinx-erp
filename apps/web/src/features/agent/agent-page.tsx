@@ -7,7 +7,7 @@ import { AgentConversation } from "./agent-conversation";
 import { useAgentConversation } from "./agent-conversation-provider";
 
 export function AgentPage() {
-  const { openDock } = useAgentConversation();
+  const { companyName, openDock } = useAgentConversation();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -25,8 +25,8 @@ export function AgentPage() {
   return (
     <Stack spacing={3}>
       <PageHeader
-        description="Conversa compartilhada com o painel do agente, avaliada apenas em demonstração local."
-        eyebrow="Todas as empresas autorizadas · Página dedicada"
+        description="Cada mensagem é uma consulta independente ao agente da empresa ativa; turnos anteriores não fazem parte do contexto."
+        eyebrow={`${companyName ?? "Sem empresa"} · Página dedicada`}
         title="Agente"
       />
       <PrototypeNotice />

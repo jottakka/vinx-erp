@@ -11,11 +11,4 @@ export type AgentMessage = {
   text: string;
 };
 
-export type AgentProposal = {
-  amount: number;
-  id: string;
-  summary: string;
-  title: string;
-};
-
 export type AgentStatus = "idle" | "thinking";
