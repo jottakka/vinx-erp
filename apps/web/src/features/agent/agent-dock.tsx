@@ -18,7 +18,7 @@ import { useAgentConversation } from "./agent-conversation-provider";
 export const AGENT_DOCK_WIDTH = 380;
 
 function DockContent() {
-  const { closeDock, resetConversation } = useAgentConversation();
+  const { closeDock, companyName, resetConversation } = useAgentConversation();
   const navigate = useNavigate();
 
   return (
@@ -35,7 +35,9 @@ function DockContent() {
             Agente
           </Typography>
           <Typography color="text.secondary" variant="caption">
-            Todas as empresas autorizadas · Painel · Demonstração
+            {companyName
+              ? `${companyName} · Consultas independentes`
+              : "Sem empresa · Consultas independentes"}
           </Typography>
         </Stack>
         <IconButton

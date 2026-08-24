@@ -1,15 +1,20 @@
 import ArrowBackOutlinedIcon from "@mui/icons-material/ArrowBackOutlined";
-import { Button, Card, CardContent, Stack } from "@mui/material";
+import { Alert, Button, Card, CardContent, Stack } from "@mui/material";
 import { useLocation, useNavigate } from "react-router-dom";
 import { PageHeader } from "../../shared/ui/page-header";
-import { PrototypeNotice } from "../prototypes/prototype-notice";
 import { AgentConversation } from "./agent-conversation";
 import { useAgentConversation } from "./agent-conversation-provider";
 
 export function AgentPage() {
-  const { openDock } = useAgentConversation();
+  const { companyName, openDock } = useAgentConversation();
   const location = useLocation();
   const navigate = useNavigate();
+  const description = companyName
+    ? "Cada mensagem é uma consulta independente ao agente da empresa ativa; turnos anteriores não fazem parte do contexto."
+    : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar cada envio; turnos anteriores não fazem parte do contexto.";
+  const processingNotice = companyName
+    ? "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado."
+    : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar o envio.";
 
   function backToContext() {
     openDock();
@@ -25,11 +30,13 @@ export function AgentPage() {
   return (
     <Stack spacing={3}>
       <PageHeader
-        description="Conversa compartilhada com o painel do agente, avaliada apenas em demonstração local."
-        eyebrow="Todas as empresas autorizadas · Página dedicada"
+        description={description}
+        eyebrow={`${companyName ?? "Sem empresa"} · Página dedicada`}
         title="Agente"
       />
-      <PrototypeNotice />
+      <Alert role="note" severity="info" variant="outlined">
+        {processingNotice}
+      </Alert>
       <Card variant="outlined">
         <CardContent>
           <Stack sx={{ gap: 2, minHeight: { md: "60dvh" } }}>

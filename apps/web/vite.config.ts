@@ -2,6 +2,10 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, type UserConfig } from "vite";
 
 type VinxApiProxy = {
+  "^/agent/runs(?:\\?.*)?$": {
+    changeOrigin: false;
+    target: string;
+  };
   "/atendimento": {
     changeOrigin: false;
     target: string;
@@ -42,6 +46,10 @@ export function resolveDevelopmentApiProxy(
     }
 
     return {
+      "^/agent/runs(?:\\?.*)?$": {
+        changeOrigin: false,
+        target: target.origin,
+      },
       "/atendimento": {
         changeOrigin: false,
         target: target.origin,

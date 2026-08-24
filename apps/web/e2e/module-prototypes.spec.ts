@@ -169,10 +169,34 @@ test("Scenario: theme, keyboard, narrow viewport and axe remain usable", async (
   expect(results.violations).toEqual([]);
 });
 
-test("Scenario: agent dock shares the local conversation with the dedicated page", async ({
+test("Scenario: agent dock runs a typed agent run and shares the conversation with the dedicated page", async ({
   page,
 }) => {
   await enterHome(page);
+
+  // O chat consulta o POST /agent/runs real: a rota é interceptada com a
+  // resposta tipada do contrato (antiforgery já vem do installBffSession).
+  let runRequest: { body: unknown; headers: Record<string, string> } | null =
+    null;
+  await page.route("**/agent/runs", async (route) => {
+    const request = route.request();
+    runRequest = {
+      body: request.postDataJSON(),
+      headers: request.headers(),
+    };
+    await route.fulfill({
+      body: JSON.stringify({
+        correlationId: "0192b0c0-0000-7000-8000-000000000001",
+        reasonCode: "ok",
+        sources: [{ reference: "Solicitação Paguai nº 123" }],
+        status: "result",
+        text: "Resposta autorizada pelo gate",
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+
   await page.getByRole("button", { name: "Abrir painel do agente" }).click();
   const dock = page.getByRole("complementary", { name: "Painel do agente" });
   await expect(dock).toBeVisible();
@@ -182,10 +206,29 @@ test("Scenario: agent dock shares the local conversation with the dedicated page
     .fill("Preciso antecipar um pagamento");
   await dock.getByRole("button", { name: "Enviar" }).click();
   await expect(dock.getByText("Preciso antecipar um pagamento")).toBeVisible();
-  await expect(dock.getByText(/fontes locais/i)).toBeVisible();
+  await expect(dock.getByText("Resposta autorizada pelo gate")).toBeVisible();
+  await expect(dock.getByText("Solicitação Paguai nº 123")).toBeVisible();
+  // A ação proposta permanece opaca: nenhum botão de execução existe.
   await expect(
     dock.getByRole("button", { name: "Aprovar execução" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
+
+  expect(runRequest).not.toBeNull();
+  const capturedRun = runRequest as {
+    body: { requestId?: unknown };
+    headers: Record<string, string>;
+  };
+  expect(capturedRun.body).toMatchObject({
+    companyId: "33333333-3333-4333-8333-333333333333",
+    journey: "read_only_summarize_v1",
+    message: "Preciso antecipar um pagamento",
+  });
+  expect(capturedRun.body.requestId).toEqual(
+    expect.stringMatching(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    ),
+  );
+  expect(capturedRun.headers["x-csrf-token"]).toBe("test-csrf-token");
 
   await dock
     .getByRole("button", { name: "Abrir página dedicada do agente" })
