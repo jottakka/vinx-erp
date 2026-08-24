@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Vinx.Erp.AI.DocumentContext;
+using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.AI.Providers.OpenAiCompatible;
 using Xunit;
 
@@ -45,7 +46,7 @@ public sealed class DocumentContextAccessTests
         var id = Guid.NewGuid();
         var normalizer = CreateNormalizer(_ => null, out var handler);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.NeedsClarification, result.Status);
         Assert.Contains("not available", result.ClarificationReason, StringComparison.Ordinal);
@@ -62,9 +63,9 @@ public sealed class DocumentContextAccessTests
             _ => revoked ? null : document,
             out var handler);
 
-        var first = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var first = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
         revoked = true;
-        var second = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var second = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.Equal(DocumentContextStatus.Ready, first.Status);
         Assert.Equal(DocumentContextStatus.NeedsClarification, second.Status);
@@ -79,7 +80,7 @@ public sealed class DocumentContextAccessTests
         var normalizer = CreateNormalizer(
             _ => throw new InvalidOperationException("RLS: empresa 7 membership revogada"), out _);
 
-        var result = await normalizer.BuildContextAsync(id, CancellationToken.None);
+        var result = await normalizer.BuildContextAsync(new ActorContext(Guid.NewGuid(), Guid.NewGuid()), Guid.NewGuid(), id, CancellationToken.None);
 
         Assert.DoesNotContain("RLS", result.ClarificationReason ?? string.Empty, StringComparison.Ordinal);
         Assert.DoesNotContain("empresa", result.ClarificationReason ?? string.Empty, StringComparison.Ordinal);
@@ -141,7 +142,11 @@ public sealed class DocumentContextAccessTests
     private sealed class DenyingSource(Func<Guid, AuthorizedDocument?> resolver)
         : IAuthorizedDocumentSource
     {
-        public Task<AuthorizedDocument> OpenReadAsync(Guid fileRecordId, CancellationToken cancellationToken)
+        public Task<AuthorizedDocument> OpenReadAsync(
+            ActorContext actor,
+            Guid companyId,
+            Guid fileRecordId,
+            CancellationToken cancellationToken)
         {
             var document = resolver(fileRecordId) ?? throw new InvalidOperationException("denied");
             return Task.FromResult(document);
