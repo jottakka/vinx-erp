@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -15,6 +16,8 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 [Collection("notification-worker")]
 public sealed class MetaWhatsAppInboundAdmissionTests
 {
+    private const string BeforeTextImageCorrelation =
+        "20260823120000_AddInboundWhatsAppReplySendState";
     private const string WebhookPath = "/foundation/notifications/whatsapp/webhook";
     // Segredo de teste configurado no factory; nenhum valor real.
     private const string AppSecret = "test-meta-app-secret";
@@ -342,6 +345,197 @@ public sealed class MetaWhatsAppInboundAdmissionTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Admitted_text_and_uncaptioned_image_correlate_in_either_arrival_order(bool textFirst)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await NotificationIntentSeed.CreateCompanyWithRecipientAsync(factory);
+        await NotificationIntentSeed.SeedContactAsync(factory, seed.CompanyId, seed.RecipientUserId, $"+{SenderWaId}", true);
+        using var client = factory.CreateClient();
+        var text = TextPayload("wamid.in.text.pair", SenderWaId, "purchase inquiry");
+        var image = ImagePayload("wamid.in.image.pair", SenderWaId, "media.pair", null);
+
+        foreach (var payload in textFirst ? new[] { text, image } : new[] { image, text })
+        {
+            using var response = await PostSignedAsync(client, payload);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        var imageId = await ReadInboundIdAsync(factory, "wamid.in.image.pair");
+        Assert.Equal("purchase inquiry", await ClaimUserTextAsync(factory, imageId));
+    }
+
+    [Theory]
+    [InlineData("556198132902", false)]
+    [InlineData("556198132901", true)]
+    public async Task Correlation_requires_the_exact_sender_and_tenant_key(string textWaId, bool differentTenant)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var first = await NotificationIntentSeed.CreateCompanyWithRecipientAsync(factory);
+        var second = differentTenant ? await NotificationIntentSeed.CreateCompanyWithRecipientAsync(factory) : first;
+        var imageId = Guid.NewGuid();
+
+        Assert.Equal("created", await AdmitAsync(factory, imageId, "wamid.in.image.isolated", SenderWaId, "image", first));
+        Assert.Equal("created", await AdmitAsync(factory, Guid.NewGuid(), "wamid.in.text.isolated", textWaId, "text", second));
+        Assert.Equal("no_match", await CorrelateAsync(factory, imageId));
+        Assert.Null(await ClaimUserTextAsync(factory, imageId));
+    }
+
+    [Fact]
+    public async Task Unadmitted_text_never_correlates()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var imageId = Guid.NewGuid();
+        var identity = Identity.New();
+        await AdmitAsync(fixture, imageId, "wamid.in.image.admitted", SenderWaId, "image", identity);
+        await AdmitAsync(fixture, Guid.NewGuid(), "wamid.in.text.unbound", SenderWaId, "text", null);
+
+        Assert.Equal("no_match", await CorrelateAsync(fixture, imageId));
+    }
+
+    [Fact]
+    public async Task Multiple_candidates_are_ambiguous_and_a_text_is_linked_once()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var identity = Identity.New();
+        var imageId = Guid.NewGuid();
+        await AdmitAsync(fixture, imageId, "wamid.in.image.ambiguous", SenderWaId, "image", identity);
+        await AdmitAsync(fixture, Guid.NewGuid(), "wamid.in.text.ambiguous.1", SenderWaId, "text", identity);
+        await AdmitAsync(fixture, Guid.NewGuid(), "wamid.in.text.ambiguous.2", SenderWaId, "text", identity);
+
+        Assert.Equal("ambiguous", await CorrelateAsync(fixture, imageId));
+        Assert.Equal(3, await CountAsync(fixture, "failure_reason = 'correlation_ambiguous'"));
+    }
+
+    [Fact]
+    public async Task Concurrent_ingress_admission_and_correlation_create_one_link()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await NotificationIntentSeed.CreateCompanyWithRecipientAsync(factory);
+        await NotificationIntentSeed.SeedContactAsync(
+            factory,
+            seed.CompanyId,
+            seed.RecipientUserId,
+            $"+{SenderWaId}",
+            true);
+        using var client = factory.CreateClient();
+        var responses = await Task.WhenAll(
+            PostSignedAsync(client, ImagePayload("wamid.in.image.concurrent-correlation", SenderWaId, "media.concurrent", null)),
+            PostSignedAsync(client, TextPayload("wamid.in.text.concurrent-correlation", SenderWaId, "purchase inquiry")));
+
+        foreach (var response in responses)
+        {
+            using (response)
+            {
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            }
+        }
+
+        var imageId = await ReadInboundIdAsync(factory, "wamid.in.image.concurrent-correlation");
+        Assert.Equal("purchase inquiry", await ClaimUserTextAsync(factory, imageId));
+    }
+
+    [Fact]
+    public async Task Correlated_text_is_one_to_one_and_never_expires()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var identity = Identity.New();
+        var textId = Guid.NewGuid();
+        var firstImageId = Guid.NewGuid();
+        await AdmitAsync(fixture, textId, "wamid.in.text.one-to-one", SenderWaId, "text", identity);
+        await AdmitAsync(fixture, firstImageId, "wamid.in.image.one-to-one.1", SenderWaId, "image", identity);
+        await AdmitAsync(fixture, Guid.NewGuid(), "wamid.in.image.one-to-one.2", SenderWaId, "image", identity);
+
+        Assert.Equal("correlated", await CorrelateAsync(fixture, firstImageId));
+        Assert.Equal("no_match", await CorrelateAsync(fixture, await ReadIdAsync(fixture, "wamid.in.image.one-to-one.2")));
+        await ExpireDeadlineAsync(fixture, textId);
+        Assert.False(await ExpireAsync(fixture, textId));
+    }
+
+    [Fact]
+    public async Task Upgrade_and_downgrade_preserve_existing_images_and_predecessor_contracts()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(BeforeTextImageCorrelation);
+        var imageId = Guid.NewGuid();
+        await AdmitAsync(fixture, imageId, "wamid.in.image.migration", SenderWaId, "image", null);
+        var createdAt = await ReadTimestampAsync(fixture, imageId, "created_at");
+
+        await migrator.Database.MigrateAsync();
+        Assert.Equal(createdAt.AddSeconds(30), await ReadTimestampAsync(fixture, imageId, "correlation_deadline"));
+
+        var textId = Guid.NewGuid();
+        await AdmitAsync(
+            fixture,
+            textId,
+            "wamid.in.text.migration",
+            SenderWaId,
+            "text",
+            null);
+        var blocked = await Assert.ThrowsAsync<PostgresException>(() =>
+            migrator.Database.MigrateAsync(BeforeTextImageCorrelation));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, blocked.SqlState);
+        await using (var cleanup = await fixture.OpenAdministratorConnectionAsync())
+        {
+            await ScalarAsync(
+                cleanup,
+                "DELETE FROM notifications.inbound_whatsapp_messages WHERE id = @id RETURNING id",
+                ("id", textId));
+        }
+
+        await migrator.Database.MigrateAsync(BeforeTextImageCorrelation);
+
+        Assert.Equal(
+            "wamid.in.image.migration",
+            await ReadTextAsync(fixture, imageId, "message_id"));
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        var unknownReason = await Assert.ThrowsAsync<PostgresException>(() =>
+            ScalarAsync(
+                administrator,
+                "UPDATE notifications.inbound_whatsapp_messages "
+                    + "SET failure_reason = 'unknown_reason' WHERE id = @id RETURNING id",
+                ("id", imageId)));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, unknownReason.SqlState);
+        await AssertFunctionContractAsync(
+            administrator,
+            "notifications.admit_inbound_whatsapp_media(uuid, text, text, text, text, text, text, text, uuid, uuid, uuid)",
+            "vinx_runtime");
+        await AssertFunctionContractAsync(
+            administrator,
+            "notifications.claim_inbound_whatsapp_message(uuid)",
+            "vinx_worker");
+        Assert.True((bool)(await ScalarAsync(
+            administrator,
+            "SELECT to_regprocedure('notifications.admit_inbound_whatsapp_text(uuid, text, text, text, text, text, uuid, uuid, uuid)') IS NULL "
+                + "AND to_regprocedure('notifications.correlate_inbound_whatsapp_text_image(uuid)') IS NULL "
+                + "AND to_regprocedure('notifications.expire_inbound_whatsapp_text(uuid)') IS NULL"))!);
+        Assert.Equal("created", await AdmitAsync(fixture, Guid.NewGuid(), "wamid.in.image.downgrade", SenderWaId, "image", null));
+    }
+
+    [Fact]
+    public async Task Text_admission_enforces_4096_replay_conflict_and_expiration_contracts()
+    {
+        await using var fixture = await StartFixtureAsync();
+        var identity = Identity.New();
+        var textId = Guid.NewGuid();
+        const string messageId = "wamid.in.text.contract";
+        var body = new string('a', 4096);
+        Assert.Equal("created", await AdmitAsync(fixture, textId, messageId, SenderWaId, "text", identity, body));
+        var createdAt = await ReadTimestampAsync(fixture, textId, "created_at");
+        Assert.Equal(createdAt.AddSeconds(30), await ReadTimestampAsync(fixture, textId, "correlation_deadline"));
+        Assert.Equal("replay", await AdmitAsync(fixture, Guid.NewGuid(), messageId, SenderWaId, "text", identity, body));
+        Assert.Equal("conflict", await AdmitAsync(fixture, Guid.NewGuid(), messageId, SenderWaId, "text", identity, "different"));
+        await Assert.ThrowsAsync<PostgresException>(() => AdmitAsync(fixture, Guid.NewGuid(), "wamid.in.text.long", SenderWaId, "text", identity, body + "b"));
+        Assert.False(await ExpireAsync(fixture, textId));
+        await ExpireDeadlineAsync(fixture, textId);
+        Assert.True(await ExpireAsync(fixture, textId));
+        Assert.Equal("correlation_timeout", await ReadTextAsync(fixture, textId, "failure_reason"));
+    }
+
     [Fact]
     public async Task Media_admission_function_privileges_are_closed()
     {
@@ -365,12 +559,28 @@ public sealed class MetaWhatsAppInboundAdmissionTests
                 "has_function_privilege('vinx_worker', 'notifications.resolve_inbound_whatsapp_actor(text)', 'EXECUTE')"
             )
         );
-        Assert.False(
-            await HasPrivilegeAsync(
-                administrator,
-                "has_function_privilege('vinx_worker', 'notifications.admit_inbound_whatsapp_media(uuid, text, text, text, text, text, text, text, uuid, uuid, uuid)', 'EXECUTE')"
-            )
-        );
+        await AssertFunctionContractAsync(
+            administrator,
+            "notifications.admit_inbound_whatsapp_media(uuid, text, text, text, text, text, text, text, uuid, uuid, uuid)",
+            "vinx_runtime");
+        await AssertFunctionContractAsync(
+            administrator,
+            "notifications.admit_inbound_whatsapp_text(uuid, text, text, text, text, text, uuid, uuid, uuid)",
+            "vinx_runtime");
+        await AssertFunctionContractAsync(
+            administrator,
+            "notifications.correlate_inbound_whatsapp_text_image(uuid)",
+            "vinx_runtime",
+            "vinx_worker");
+        await AssertFunctionContractAsync(
+            administrator,
+            "notifications.expire_inbound_whatsapp_text(uuid)",
+            "vinx_worker");
+        await AssertFunctionContractAsync(
+            administrator,
+            "notifications.claim_inbound_whatsapp_message(uuid)",
+            "vinx_worker");
+        Assert.False(await HasPrivilegeAsync(administrator, "has_table_privilege('vinx_runtime', 'notifications.inbound_whatsapp_messages', 'UPDATE')"));
         await using (var dropped = new NpgsqlCommand(
             "SELECT to_regprocedure('notifications.record_inbound_whatsapp_message(uuid, text, text, text, text)') IS NULL",
             administrator
@@ -538,5 +748,171 @@ public sealed class MetaWhatsAppInboundAdmissionTests
           ]
         }
         """;
+    }
+
+    private sealed record Identity(Guid UserId, Guid CompanyId, Guid MembershipId)
+    {
+        public static Identity New() => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+    }
+
+    private static string TextPayload(string messageId, string waId, string body) => $$"""
+        { "entry": [{ "changes": [{ "value": { "metadata": { "phone_number_id": "{{ChannelPhoneNumberId}}" }, "messages": [{ "id": "{{messageId}}", "type": "text", "from": "{{waId}}", "text": { "body": "{{body}}" } }] } }] }] }
+        """;
+
+    private static async Task<Guid> ReadInboundIdAsync(FoundationApiFactory factory, string messageId)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        return (Guid)(await ScalarAsync(connection, "SELECT id FROM notifications.inbound_whatsapp_messages WHERE message_id = @id", ("id", messageId)))!;
+    }
+
+    private static async Task<string?> ClaimUserTextAsync(FoundationApiFactory factory, Guid inboundId)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        return await ScalarAsync(connection, "SELECT user_text FROM notifications.claim_inbound_whatsapp_message(@id)", ("id", inboundId)) as string;
+    }
+
+    private static async Task<string> AdmitAsync(FoundationApiFactory factory, Guid inboundId, string messageId, string waId, string type, NotificationCompanySeed identity, string body = "purchase inquiry")
+    {
+        await using var connection = await NotificationInboxSeed.OpenRuntimeConnectionAsync(factory);
+        await using var membership = await factory.Fixture.OpenAdministratorConnectionAsync();
+        var membershipId = (Guid)(await ScalarAsync(membership, "SELECT id FROM foundation.memberships WHERE company_id = @company AND user_id = @user AND deleted_at IS NULL", ("company", identity.CompanyId), ("user", identity.RecipientUserId)))!;
+        return await AdmitAsync(connection, inboundId, messageId, waId, type, new Identity(identity.RecipientUserId, identity.CompanyId, membershipId), body);
+    }
+
+    private static async Task<string> AdmitAsync(FoundationPostgresFixture fixture, Guid inboundId, string messageId, string waId, string type, Identity? identity, string body = "purchase inquiry")
+    {
+        await using var connection = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        await connection.OpenAsync();
+        return await AdmitAsync(connection, inboundId, messageId, waId, type, identity, body);
+    }
+
+    private static Task<string> AdmitAsync(NpgsqlConnection connection, Guid inboundId, string messageId, string waId, string type, Identity? identity, string body)
+    {
+        var sql = type == "text"
+            ? "SELECT notifications.admit_inbound_whatsapp_text(@inbound, @phone, @message, @wa, @body, @state, @user, @company, @membership)"
+            : "SELECT notifications.admit_inbound_whatsapp_media(@inbound, @phone, @message, @wa, 'image', @media, NULL, @state, @user, @company, @membership)";
+        return ScalarStringAsync(connection, sql,
+            ("inbound", inboundId), ("phone", ChannelPhoneNumberId), ("message", messageId), ("wa", waId),
+            ("body", body), ("media", $"media-{messageId}"), ("state", identity is null ? "unbound" : "admitted"),
+            ("user", (object?)identity?.UserId ?? DBNull.Value), ("company", (object?)identity?.CompanyId ?? DBNull.Value), ("membership", (object?)identity?.MembershipId ?? DBNull.Value));
+    }
+
+    private static async Task<string> CorrelateAsync(FoundationApiFactory factory, Guid inboundId)
+    {
+        await using var connection = await NotificationInboxSeed.OpenRuntimeConnectionAsync(factory);
+        return await CorrelateAsync(connection, inboundId);
+    }
+
+    private static async Task<string> CorrelateAsync(FoundationPostgresFixture fixture, Guid inboundId)
+    {
+        await using var connection = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        await connection.OpenAsync();
+        return await CorrelateAsync(connection, inboundId);
+    }
+
+    private static Task<string> CorrelateAsync(NpgsqlConnection connection, Guid inboundId) => ScalarStringAsync(connection, "SELECT notifications.correlate_inbound_whatsapp_text_image(@id)", ("id", inboundId));
+
+    private static async Task<FoundationPostgresFixture> StartFixtureAsync()
+    {
+        var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        return fixture;
+    }
+
+    private static async Task<int> CountAsync(FoundationPostgresFixture fixture, string predicate)
+    {
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        return Convert.ToInt32(await ScalarAsync(connection, $"SELECT count(*) FROM notifications.inbound_whatsapp_messages WHERE {predicate}"));
+    }
+
+    private static async Task<Guid> ReadIdAsync(FoundationPostgresFixture fixture, string messageId)
+    {
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        return (Guid)(await ScalarAsync(connection, "SELECT id FROM notifications.inbound_whatsapp_messages WHERE message_id = @id", ("id", messageId)))!;
+    }
+
+    private static async Task<DateTime> ReadTimestampAsync(FoundationPostgresFixture fixture, Guid id, string column)
+    {
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        return (DateTime)(await ScalarAsync(connection, $"SELECT {column} FROM notifications.inbound_whatsapp_messages WHERE id = @id", ("id", id)))!;
+    }
+
+    private static async Task ExpireDeadlineAsync(FoundationPostgresFixture fixture, Guid id)
+    {
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await ScalarAsync(
+            connection,
+            "UPDATE notifications.inbound_whatsapp_messages "
+                + "SET created_at = statement_timestamp() - interval '31 seconds', "
+                + "correlation_deadline = statement_timestamp() - interval '1 second' "
+                + "WHERE id = @id RETURNING id",
+            ("id", id));
+    }
+
+    private static async Task<bool> ExpireAsync(FoundationPostgresFixture fixture, Guid id)
+    {
+        await using var connection = new NpgsqlConnection(fixture.WorkerConnectionString);
+        await connection.OpenAsync();
+        return (bool)(await ScalarAsync(connection, "SELECT notifications.expire_inbound_whatsapp_text(@id)", ("id", id)))!;
+    }
+
+    private static async Task<string?> ReadTextAsync(FoundationPostgresFixture fixture, Guid id, string column)
+    {
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        return await ScalarAsync(connection, $"SELECT {column} FROM notifications.inbound_whatsapp_messages WHERE id = @id", ("id", id)) as string;
+    }
+
+    private static async Task AssertFunctionContractAsync(
+        NpgsqlConnection connection,
+        string signature,
+        params string[] executors)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT pg_get_userbyid(function_row.proowner),
+                   function_row.prosecdef,
+                   function_row.proconfig,
+                   NOT EXISTS (
+                       SELECT 1 FROM unnest(@executors::text[]) AS executor(role_name)
+                       WHERE NOT has_function_privilege(executor.role_name, function_row.oid, 'EXECUTE')),
+                   NOT has_function_privilege('public', function_row.oid, 'EXECUTE'),
+                   NOT has_function_privilege('vinx_migrator', function_row.oid, 'EXECUTE'),
+                   NOT EXISTS (
+                       SELECT 1
+                       FROM aclexplode(COALESCE(
+                           function_row.proacl,
+                           acldefault('f', function_row.proowner))) AS privilege
+                       WHERE privilege.privilege_type = 'EXECUTE'
+                         AND privilege.grantee <> function_row.proowner
+                         AND privilege.grantee <> ALL (
+                             SELECT oid FROM pg_roles WHERE rolname = ANY(@executors)))
+            FROM pg_proc AS function_row
+            WHERE function_row.oid = to_regprocedure(@signature);
+            """,
+            connection);
+        command.Parameters.AddWithValue("executors", executors);
+        command.Parameters.AddWithValue("signature", signature);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("vinx_notifications_owner", reader.GetString(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.Equal(
+            ["search_path=pg_catalog, notifications, pg_temp"],
+            reader.GetFieldValue<string[]>(2));
+        Assert.True(reader.GetBoolean(3));
+        Assert.True(reader.GetBoolean(4));
+        Assert.True(reader.GetBoolean(5));
+        Assert.True(reader.GetBoolean(6));
+        Assert.False(await reader.ReadAsync());
+    }
+
+    private static async Task<string> ScalarStringAsync(NpgsqlConnection connection, string sql, params (string Name, object Value)[] parameters) => (string)(await ScalarAsync(connection, sql, parameters))!;
+
+    private static async Task<object?> ScalarAsync(NpgsqlConnection connection, string sql, params (string Name, object Value)[] parameters)
+    {
+        await using var command = new NpgsqlCommand(sql, connection);
+        foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value);
+        return await command.ExecuteScalarAsync();
     }
 }

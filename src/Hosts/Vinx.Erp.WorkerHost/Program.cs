@@ -273,6 +273,7 @@ builder.Host.UseWolverine(options =>
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<NotificationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppImageReceivedHandler>();
+    options.Discovery.IncludeType<InboundWhatsAppTextCorrelationExpiredHandler>();
     options.Discovery.IncludeType<InboundWhatsAppDocumentReceivedHandler>();
     options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
     options

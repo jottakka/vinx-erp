@@ -1,3 +1,6 @@
+extern alias workerhost;
+
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -9,8 +12,13 @@ using Npgsql;
 using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
+using Wolverine;
+using Wolverine.Persistence.Durability;
+using Wolverine.Runtime.Serialization;
 using Xunit;
+using WorkerHostTypes = workerhost::Vinx.Erp.WorkerHost;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
 
@@ -23,14 +31,17 @@ public sealed class MetaWhatsAppInboundTests
     private const string ChannelPhoneNumberId = "111111111111111";
     private const string SenderWaId = "556198132901";
 
-    private static async Task SeedAdmittedSenderAsync(FoundationApiFactory factory)
+    private static async Task SeedAdmittedSenderAsync(
+        FoundationApiFactory factory,
+        string waId = SenderWaId
+    )
     {
         var seed = await NotificationIntentSeed.CreateCompanyWithRecipientAsync(factory);
         await NotificationIntentSeed.SeedContactAsync(
             factory,
             seed.CompanyId,
             seed.RecipientUserId,
-            $"+{SenderWaId}",
+            $"+{waId}",
             isValidated: true
         );
     }
@@ -93,6 +104,380 @@ public sealed class MetaWhatsAppInboundTests
     }
 
     [Fact]
+    public async Task Text_before_image_is_sent_with_ocr_in_one_ai_turn()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var meta = new FakeInboundMetaHandler();
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+
+        using (var text = await PostSignedAsync(
+            client,
+            TextPayload("wamid.in.text-before-image", SenderWaId, "check this purchase")
+        ))
+        {
+            Assert.Equal(HttpStatusCode.OK, text.StatusCode);
+        }
+
+        using (var image = await PostSignedAsync(
+            client,
+            ImagePayload("wamid.in.image-after-text", SenderWaId, "media.after-text", null)
+        ))
+        {
+            Assert.Equal(HttpStatusCode.OK, image.StatusCode);
+        }
+
+        var imageId = await ReadInboundIdAsync(factory, "wamid.in.image-after-text");
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+        await using (var database = CreateWorkerDatabase(factory))
+        {
+            await CreateInteractionService(database, services)
+                .ProcessAsync(imageId, CancellationToken.None);
+        }
+
+        using var request = JsonDocument.Parse(Assert.Single(textAi.RequestBodies));
+        var messages = request.RootElement.GetProperty("messages").EnumerateArray().ToArray();
+        Assert.Equal(2, messages.Length);
+        Assert.Equal("system", messages[0].GetProperty("role").GetString());
+        Assert.Equal("user", messages[1].GetProperty("role").GetString());
+        Assert.Equal(
+            "User text:\ncheck this purchase\n\nOCR transcription:\nRECIBO 250 REAIS",
+            messages[1].GetProperty("content").GetString()
+        );
+        Assert.Equal(1, meta.ReplyPosts);
+        Assert.Equal(
+            "completed",
+            (await NotificationIntentSeed.ReadInboundRowsAsync(factory))
+                .Single(row => row.MessageId == "wamid.in.image-after-text")
+                .Status
+        );
+    }
+
+    [Fact]
+    public async Task Image_without_text_processes_as_image_only_after_the_deadline()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var meta = new FakeInboundMetaHandler();
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        const string messageId = "wamid.in.image-only-delayed";
+
+        using (var posted = await PostSignedAsync(
+            client,
+            ImagePayload(messageId, SenderWaId, "media.image-only", null)
+        ))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var inboundId = await ReadInboundIdAsync(factory, messageId);
+        var queuedMessages = await ReadInboundQueueAsync(factory);
+        var queued = Assert.Single(queuedMessages);
+        Assert.True(queued.Scheduled);
+        Assert.EndsWith("InboundWhatsAppImageReceived", queued.MessageType, StringComparison.Ordinal);
+        Assert.Equal(inboundId, queued.InboundMessageId);
+        Assert.StartsWith("postgresql://", queued.Destination, StringComparison.Ordinal);
+        var createdAt = await ReadInboundTimestampAsync(factory, inboundId, "created_at");
+        Assert.InRange((queued.ExecutionTime!.Value - createdAt).TotalSeconds, 29, 31);
+        Assert.Equal((0, 0, 0, 0, 0), ExternalWork(meta, textAi, visionAi));
+
+        await ExpireCorrelationDeadlineAsync(factory, inboundId);
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+        await using (var database = CreateWorkerDatabase(factory))
+        {
+            await CreateInteractionService(database, services)
+                .ProcessAsync(inboundId, CancellationToken.None);
+        }
+
+        using var request = JsonDocument.Parse(Assert.Single(textAi.RequestBodies));
+        var messages = request.RootElement.GetProperty("messages").EnumerateArray().ToArray();
+        Assert.Equal(2, messages.Length);
+        Assert.Equal(
+            "OCR transcription:\nRECIBO 250 REAIS",
+            messages[1].GetProperty("content").GetString()
+        );
+        Assert.Equal(1, meta.ReplyPosts);
+    }
+
+    [Fact]
+    public async Task Text_without_image_expires_without_ai_or_meta_calls()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var meta = new FakeInboundMetaHandler();
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        const string messageId = "wamid.in.text-only-expiry";
+
+        using (var posted = await PostSignedAsync(
+            client,
+            TextPayload(messageId, SenderWaId, "text without image")
+        ))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var inboundId = await ReadInboundIdAsync(factory, messageId);
+        var queued = Assert.Single(await ReadInboundQueueAsync(factory));
+        Assert.True(queued.Scheduled);
+        Assert.EndsWith(
+            "InboundWhatsAppTextCorrelationExpired",
+            queued.MessageType,
+            StringComparison.Ordinal
+        );
+        Assert.Equal(inboundId, queued.InboundMessageId);
+        await ExpireCorrelationDeadlineAsync(factory, inboundId);
+
+        var logger = new CapturingLogger<WorkerHostTypes.InboundWhatsAppTextCorrelationExpiredHandler>();
+        await using (var database = CreateWorkerDatabase(factory))
+        {
+            var handler = new WorkerHostTypes.InboundWhatsAppTextCorrelationExpiredHandler(
+                database,
+                logger
+            );
+            await handler.Handle(
+                new InboundWhatsAppTextCorrelationExpired(inboundId),
+                CancellationToken.None
+            );
+        }
+
+        var row = (await NotificationIntentSeed.ReadInboundRowsAsync(factory))
+            .Single(row => row.MessageId == messageId);
+        Assert.Equal("failed", row.Status);
+        Assert.Equal("correlation_timeout", row.FailureReason);
+        Assert.Equal((0, 0, 0, 0, 0), ExternalWork(meta, textAi, visionAi));
+        var decision = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Information, decision.Level);
+        Assert.Equal("expired", decision.Properties["Result"]);
+        Assert.Equal("deadline_elapsed", decision.Properties["Reason"]);
+        Assert.DoesNotContain(inboundId.ToString("D"), decision.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Signed_webhook_with_two_admitted_texts_publishes_both_expiry_envelopes()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        var logs = new CapturingLoggerProvider();
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logs);
+        using var client = factory.CreateClient();
+        const string firstMessageId = "wamid.in.text-batch.1";
+        const string secondMessageId = "wamid.in.text-batch.2";
+        var payload = $$"""
+            {
+              "entry": [{
+                "changes": [{
+                  "value": {
+                    "metadata": { "phone_number_id": "{{ChannelPhoneNumberId}}" },
+                    "messages": [
+                      {
+                        "id": "{{firstMessageId}}",
+                        "type": "text",
+                        "from": "{{SenderWaId}}",
+                        "text": { "body": "first batch text" }
+                      },
+                      {
+                        "id": "{{secondMessageId}}",
+                        "type": "text",
+                        "from": "{{SenderWaId}}",
+                        "text": { "body": "second batch text" }
+                      }
+                    ]
+                  }
+                }]
+              }]
+            }
+            """;
+
+        using (var posted = await PostSignedAsync(client, payload))
+        {
+            Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
+        }
+
+        var firstInboundId = await ReadInboundIdAsync(factory, firstMessageId);
+        var secondInboundId = await ReadInboundIdAsync(factory, secondMessageId);
+        var scheduled = (await ReadInboundQueueAsync(factory))
+            .Where(envelope =>
+                envelope.MessageType.EndsWith(
+                    "InboundWhatsAppTextCorrelationExpired",
+                    StringComparison.Ordinal
+                )
+            )
+            .ToArray();
+        Assert.Equal(2, scheduled.Length);
+        Assert.All(scheduled, envelope => Assert.True(envelope.Scheduled));
+        Assert.All(
+            scheduled,
+            envelope => Assert.StartsWith(
+                "postgresql://",
+                envelope.Destination,
+                StringComparison.Ordinal
+            )
+        );
+        Assert.Equal(
+            new[] { firstInboundId, secondInboundId }.Order(),
+            scheduled.Select(envelope => envelope.InboundMessageId).Order()
+        );
+        Assert.DoesNotContain(
+            logs.Messages,
+            message => message.Contains(
+                "has already flushed its outgoing messages",
+                StringComparison.Ordinal
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Text_correlation_expiry_dead_letter_redacts_the_inbound_id()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        );
+        using var client = worker.CreateClient();
+        var interceptor = Assert.Single(
+            worker.Services.GetRequiredService<IEnumerable<IDeadLetterInterceptor>>()
+        );
+        var inboundId = Guid.NewGuid();
+        var envelope = new Envelope(new InboundWhatsAppTextCorrelationExpired(inboundId));
+        envelope.Headers["diagnostic"] = "sensitive";
+
+        await interceptor.BeforeStoreAsync(
+            envelope,
+            new InvalidOperationException("test failure"),
+            CancellationToken.None
+        );
+
+        Assert.Equal(
+            Guid.Empty,
+            Assert.IsType<InboundWhatsAppTextCorrelationExpired>(envelope.Message)
+                .InboundMessageId
+        );
+        Assert.Empty(envelope.Headers);
+        Assert.DoesNotContain(
+            inboundId.ToString("D"),
+            Encoding.UTF8.GetString(envelope.Data!),
+            StringComparison.OrdinalIgnoreCase
+        );
+    }
+
+    [Fact]
+    public async Task Image_before_text_is_sent_with_ocr_in_one_ai_turn()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        await PostOkAsync(
+            client,
+            ImagePayload("wamid.in.image-before-text", SenderWaId, "media.before-text", null)
+        );
+        await PostOkAsync(
+            client,
+            TextPayload("wamid.in.text-after-image", SenderWaId, "review this purchase")
+        );
+        var imageId = await ReadInboundIdAsync(factory, "wamid.in.image-before-text");
+        Assert.Equal(2, (await ReadInboundQueueAsync(factory)).Count);
+        await ExpireCorrelationDeadlineAsync(factory, imageId);
+
+        var (meta, textAi, _) = await ProcessImageAsync(factory, imageId);
+        Assert.Equal(
+            "User text:\nreview this purchase\n\nOCR transcription:\nRECIBO 250 REAIS",
+            ReadUserTurn(textAi)
+        );
+        Assert.Equal(1, meta.ReplyPosts);
+    }
+
+    [Fact]
+    public async Task Out_of_window_text_is_not_added_to_the_image_prompt()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        await PostOkAsync(
+            client,
+            TextPayload("wamid.in.text-out-of-window", SenderWaId, "private old context")
+        );
+        var textId = await ReadInboundIdAsync(factory, "wamid.in.text-out-of-window");
+        await ExpireCorrelationDeadlineAsync(factory, textId);
+        await PostOkAsync(
+            client,
+            ImagePayload("wamid.in.image-out-of-window", SenderWaId, "media.out-of-window", null)
+        );
+        var imageId = await ReadInboundIdAsync(factory, "wamid.in.image-out-of-window");
+        await ExpireCorrelationDeadlineAsync(factory, imageId);
+
+        var (meta, textAi, _) = await ProcessImageAsync(factory, imageId);
+        Assert.Equal("OCR transcription:\nRECIBO 250 REAIS", ReadUserTurn(textAi));
+        Assert.DoesNotContain("private old context", textAi.RequestBodies[0], StringComparison.Ordinal);
+        Assert.Equal(1, meta.ReplyPosts);
+    }
+
+    [Fact]
+    public async Task Concurrent_senders_on_the_same_channel_never_exchange_text_context()
+    {
+        const string secondSender = "556198132902";
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        await SeedAdmittedSenderAsync(factory, secondSender);
+        using var client = factory.CreateClient();
+        await Task.WhenAll(
+            PostOkAsync(
+                client,
+                TextPayload("wamid.in.text-sender-a", SenderWaId, "sender a private context")
+            ),
+            PostOkAsync(
+                client,
+                ImagePayload("wamid.in.image-sender-b", secondSender, "media.sender-b", null)
+            )
+        );
+        var imageId = await ReadInboundIdAsync(factory, "wamid.in.image-sender-b");
+        await ExpireCorrelationDeadlineAsync(factory, imageId);
+
+        var (meta, textAi, _) = await ProcessImageAsync(factory, imageId);
+        Assert.Equal("OCR transcription:\nRECIBO 250 REAIS", ReadUserTurn(textAi));
+        Assert.DoesNotContain("sender a private context", textAi.RequestBodies[0], StringComparison.Ordinal);
+        using var reply = JsonDocument.Parse(Assert.Single(meta.ReplyRequests).Body);
+        Assert.Equal(secondSender, reply.RootElement.GetProperty("to").GetString());
+    }
+
+    [Fact]
+    public async Task Text_and_image_replay_create_one_pair_and_one_internal_processing_result()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await SeedAdmittedSenderAsync(factory);
+        using var client = factory.CreateClient();
+        var textPayload = TextPayload("wamid.in.text-replay-pair", SenderWaId, "replay purchase");
+        var imagePayload = ImagePayload(
+            "wamid.in.image-replay-pair",
+            SenderWaId,
+            "media.replay-pair",
+            null
+        );
+        await PostOkAsync(client, textPayload);
+        await PostOkAsync(client, imagePayload);
+        await PostOkAsync(client, textPayload);
+        await PostOkAsync(client, imagePayload);
+        var imageId = await ReadInboundIdAsync(factory, "wamid.in.image-replay-pair");
+        var textId = await ReadInboundIdAsync(factory, "wamid.in.text-replay-pair");
+        Assert.Equal(2, (await ReadInboundQueueAsync(factory)).Count);
+
+        var (meta, textAi, visionAi) = await ProcessImageAsync(factory, imageId, processTwice: true);
+        Assert.Equal(
+            "User text:\nreplay purchase\n\nOCR transcription:\nRECIBO 250 REAIS",
+            ReadUserTurn(textAi)
+        );
+        Assert.Single(visionAi.RequestBodies);
+        Assert.Equal(1, meta.ReplyPosts);
+        Assert.Equal(1, await CountPairAsync(factory, imageId, textId));
+        Assert.Equal(2, (await NotificationIntentSeed.ReadInboundRowsAsync(factory)).Count);
+    }
+
+    [Fact]
     public async Task Whitespace_only_ai_reply_uses_the_fallback_before_the_reply_barrier()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -147,21 +532,20 @@ public sealed class MetaWhatsAppInboundTests
             Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
         }
 
-        await using var worker = new NotificationWorkerHostFactory(
-            factory.Fixture.WorkerConnectionString,
-            metaGraphHandler: meta,
-            configureInboundAi: true,
-            inboundTextAiHandler: new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText),
-            inboundVisionAiHandler: new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson)
-        );
-        using var _ = worker.CreateClient();
+        var inboundId = await ReadInboundIdAsync(factory, "wamid.in.once");
+        await ExpireCorrelationDeadlineAsync(factory, inboundId);
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+        await using (var database = CreateWorkerDatabase(factory))
+        {
+            var interaction = CreateInteractionService(database, services);
+            await interaction.ProcessAsync(inboundId, CancellationToken.None);
+            await interaction.ProcessAsync(inboundId, CancellationToken.None);
+        }
 
-        var row = await NotificationIntentSeed.WaitUntilInboundAsync(
-            factory,
-            "wamid.in.once",
-            "completed",
-            TimeSpan.FromSeconds(30)
-        );
+        var row = (await NotificationIntentSeed.ReadInboundRowsAsync(factory))
+            .Single(row => row.MessageId == "wamid.in.once");
         Assert.Equal("wamid.reply.test.1", row.ReplyMessageId);
         Assert.Equal(1, meta.ReplyPosts);
     }
@@ -389,18 +773,17 @@ public sealed class MetaWhatsAppInboundTests
             Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
         }
 
-        await using var worker = new NotificationWorkerHostFactory(
-            factory.Fixture.WorkerConnectionString,
-            metaGraphHandler: meta
-        );
-        using var _ = worker.CreateClient();
+        var inboundId = await ReadInboundIdAsync(factory, "wamid.in.noai");
+        await ExpireCorrelationDeadlineAsync(factory, inboundId);
+        using var services = CreateInteractionServices(meta);
+        await using (var database = CreateWorkerDatabase(factory))
+        {
+            await CreateInteractionService(database, services, configureAi: false)
+                .ProcessAsync(inboundId, CancellationToken.None);
+        }
 
-        var row = await NotificationIntentSeed.WaitUntilInboundAsync(
-            factory,
-            "wamid.in.noai",
-            "failed",
-            TimeSpan.FromSeconds(30)
-        );
+        var row = (await NotificationIntentSeed.ReadInboundRowsAsync(factory))
+            .Single(row => row.MessageId == "wamid.in.noai");
         Assert.Equal("ai_unconfigured", row.FailureReason);
         Assert.Equal(0, meta.MediaMetadataGets);
         Assert.Equal(0, meta.MediaDownloads);
@@ -420,21 +803,17 @@ public sealed class MetaWhatsAppInboundTests
             Assert.Equal(HttpStatusCode.OK, posted.StatusCode);
         }
 
-        await using var worker = new NotificationWorkerHostFactory(
-            factory.Fixture.WorkerConnectionString,
-            metaGraphHandler: meta,
-            configureInboundAi: true,
-            inboundTextAiHandler: new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText),
-            inboundVisionAiHandler: new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson)
-        );
-        using var _ = worker.CreateClient();
+        var inboundId = await ReadInboundIdAsync(factory, "wamid.in.404");
+        await ExpireCorrelationDeadlineAsync(factory, inboundId);
+        using var services = CreateInteractionServices(meta);
+        await using (var database = CreateWorkerDatabase(factory))
+        {
+            await CreateInteractionService(database, services)
+                .ProcessAsync(inboundId, CancellationToken.None);
+        }
 
-        var row = await NotificationIntentSeed.WaitUntilInboundAsync(
-            factory,
-            "wamid.in.404",
-            "failed",
-            TimeSpan.FromSeconds(30)
-        );
+        var row = (await NotificationIntentSeed.ReadInboundRowsAsync(factory))
+            .Single(row => row.MessageId == "wamid.in.404");
         Assert.Equal("media_unavailable", row.FailureReason);
         Assert.Equal(0, meta.ReplyPosts);
     }
@@ -543,7 +922,8 @@ public sealed class MetaWhatsAppInboundTests
         FoundationDbContext database,
         ServiceProvider services,
         ILogger<InboundWhatsAppInteractionService>? logger = null,
-        MetaWhatsAppOptions? options = null
+        MetaWhatsAppOptions? options = null,
+        bool configureAi = true
     ) =>
         new(
             database,
@@ -554,7 +934,7 @@ public sealed class MetaWhatsAppInboundTests
                 AccessToken = "test-meta-access-token",
                 WebAppBaseUrl = "https://app.example.test",
             },
-            InboundAiTestProfiles.Create(),
+            configureAi ? InboundAiTestProfiles.Create() : new InboundWhatsAppAiOptions(),
             logger ?? NullLogger<InboundWhatsAppInteractionService>.Instance
         );
 
@@ -616,5 +996,200 @@ public sealed class MetaWhatsAppInboundTests
           ]
         }
         """;
+    }
+
+    private static string TextPayload(string messageId, string waId, string body) => $$"""
+        {
+          "entry": [{
+            "changes": [{
+              "value": {
+                "metadata": { "phone_number_id": "{{ChannelPhoneNumberId}}" },
+                "messages": [{
+                  "id": "{{messageId}}",
+                  "type": "text",
+                  "from": "{{waId}}",
+                  "text": { "body": "{{body}}" }
+                }]
+              }
+            }]
+          }]
+        }
+        """;
+
+    private sealed record InboundQueueEnvelope(
+        string MessageType,
+        Guid InboundMessageId,
+        bool Scheduled,
+        DateTime? ExecutionTime,
+        string Destination
+    );
+
+    private static async Task<IReadOnlyList<InboundQueueEnvelope>> ReadInboundQueueAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT body, false, NULL::timestamp with time zone
+            FROM vinx_wolverine_queues.wolverine_queue_whatsapp_inbound
+            WHERE body IS NOT NULL
+            UNION ALL
+            SELECT body, true, execution_time
+            FROM vinx_wolverine_queues.wolverine_queue_whatsapp_inbound_scheduled
+            WHERE body IS NOT NULL
+            UNION ALL
+            SELECT body, false, NULL::timestamp with time zone
+            FROM vinx_wolverine.wolverine_outgoing_envelopes
+            WHERE body IS NOT NULL
+            UNION ALL
+            SELECT body, false, NULL::timestamp with time zone
+            FROM vinx_wolverine.wolverine_incoming_envelopes
+            WHERE body IS NOT NULL
+            """,
+            connection
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        var result = new List<InboundQueueEnvelope>();
+        while (await reader.ReadAsync())
+        {
+            var envelope = EnvelopeSerializer.Deserialize(reader.GetFieldValue<byte[]>(0));
+            using var payload = JsonDocument.Parse(envelope.Data!);
+            DateTime? executionTime = reader.IsDBNull(2) ? null : reader.GetDateTime(2);
+            if (executionTime is null && envelope.ScheduledTime.HasValue)
+            {
+                executionTime = envelope.ScheduledTime.Value.UtcDateTime;
+            }
+            result.Add(
+                new InboundQueueEnvelope(
+                    envelope.MessageType!,
+                    payload.RootElement.GetProperty("inboundMessageId").GetGuid(),
+                    reader.GetBoolean(1) || envelope.ScheduledTime.HasValue,
+                    executionTime,
+                    envelope.Destination?.ToString() ?? string.Empty
+                )
+            );
+        }
+
+        return result;
+    }
+
+    private static async Task<DateTime> ReadInboundTimestampAsync(
+        FoundationApiFactory factory,
+        Guid inboundId,
+        string column
+    )
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"SELECT {column} FROM notifications.inbound_whatsapp_messages WHERE id = @id",
+            connection
+        );
+        command.Parameters.AddWithValue("id", inboundId);
+        return (DateTime)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static async Task ExpireCorrelationDeadlineAsync(
+        FoundationApiFactory factory,
+        Guid inboundId
+    )
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE notifications.inbound_whatsapp_messages
+            SET created_at = statement_timestamp() - interval '31 seconds',
+                correlation_deadline = statement_timestamp() - interval '1 second'
+            WHERE id = @id
+            """,
+            connection
+        );
+        command.Parameters.AddWithValue("id", inboundId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private static async Task PostOkAsync(HttpClient client, string payload)
+    {
+        using var response = await PostSignedAsync(client, payload);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    private static async Task<(
+        FakeInboundMetaHandler Meta,
+        FakeInboundAiHandler TextAi,
+        FakeInboundAiHandler VisionAi
+    )> ProcessImageAsync(
+        FoundationApiFactory factory,
+        Guid inboundId,
+        bool processTwice = false
+    )
+    {
+        var meta = new FakeInboundMetaHandler();
+        var textAi = new FakeInboundAiHandler(HttpStatusCode.OK, AiReplyText);
+        var visionAi = new FakeInboundAiHandler(HttpStatusCode.OK, OcrStrictJson);
+        using var services = CreateInteractionServices(meta, textAi, visionAi);
+        await using var database = CreateWorkerDatabase(factory);
+        var interaction = CreateInteractionService(database, services);
+        await interaction.ProcessAsync(inboundId, CancellationToken.None);
+        if (processTwice)
+        {
+            await interaction.ProcessAsync(inboundId, CancellationToken.None);
+        }
+
+        return (meta, textAi, visionAi);
+    }
+
+    private static string ReadUserTurn(FakeInboundAiHandler textAi)
+    {
+        using var request = JsonDocument.Parse(Assert.Single(textAi.RequestBodies));
+        var messages = request.RootElement.GetProperty("messages").EnumerateArray().ToArray();
+        Assert.Equal(2, messages.Length);
+        Assert.Equal("system", messages[0].GetProperty("role").GetString());
+        Assert.Equal("user", messages[1].GetProperty("role").GetString());
+        return messages[1].GetProperty("content").GetString()!;
+    }
+
+    private static async Task<int> CountPairAsync(
+        FoundationApiFactory factory,
+        Guid imageId,
+        Guid textId
+    )
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM notifications.inbound_whatsapp_messages "
+                + "WHERE id = @image_id AND correlated_text_id = @text_id",
+            connection
+        );
+        command.Parameters.AddWithValue("image_id", imageId);
+        command.Parameters.AddWithValue("text_id", textId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<string> _messages = new();
+
+        public IReadOnlyCollection<string> Messages => _messages;
+
+        public ILogger CreateLogger(string categoryName) => new Sink(_messages);
+
+        public void Dispose() { }
+
+        private sealed class Sink(ConcurrentQueue<string> messages) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state)
+                where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter
+            ) => messages.Enqueue(formatter(state, exception));
+        }
     }
 }

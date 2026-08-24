@@ -16,6 +16,40 @@ public sealed class MetaWhatsAppInboundWebhookTests
     private const string SenderWaId = "556198132901";
 
     [Fact]
+    public async Task Signed_text_webhook_is_admitted_once_for_a_validated_sender()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await NotificationIntentSeed.CreateCompanyWithRecipientAsync(factory);
+        await NotificationIntentSeed.SeedContactAsync(
+            factory,
+            seed.CompanyId,
+            seed.RecipientUserId,
+            $"+{SenderWaId}",
+            isValidated: true
+        );
+        using var client = factory.CreateClient();
+        var payload = TextPayload("wamid.in.text.webhook.1", SenderWaId, "purchase inquiry");
+
+        using (var first = await PostSignedAsync(client, payload))
+        {
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        }
+        using (var replay = await PostSignedAsync(client, payload))
+        {
+            Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        }
+
+        var row = Assert.Single(await NotificationIntentSeed.ReadInboundRowsAsync(factory));
+        Assert.Equal("wamid.in.text.webhook.1", row.MessageId);
+        Assert.Equal(ChannelPhoneNumberId, row.PhoneNumberId);
+        Assert.Equal("text", row.MessageType);
+        Assert.Equal("admitted", row.ResolutionState);
+        Assert.Equal(seed.RecipientUserId, row.ResolvedUserId);
+        Assert.Equal(seed.CompanyId, row.ResolvedCompanyId);
+        Assert.Equal("pending", row.Status);
+    }
+
+    [Fact]
     public async Task Signed_image_message_creates_a_pending_admitted_inbound_row()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -73,7 +107,7 @@ public sealed class MetaWhatsAppInboundWebhookTests
     }
 
     [Fact]
-    public async Task Non_media_messages_are_ignored_without_any_row()
+    public async Task Blank_text_messages_are_ignored_without_any_row()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         using var client = factory.CreateClient();
@@ -94,7 +128,7 @@ public sealed class MetaWhatsAppInboundWebhookTests
                             "id": "wamid.in.text",
                             "type": "text",
                             "from": "556198132901",
-                            "text": { "body": "olá" }
+                            "text": { "body": "" }
                           }
                         ]
                       },
@@ -151,6 +185,36 @@ public sealed class MetaWhatsAppInboundWebhookTests
                         "type": "image",
                         "from": "{{waId}}",
                         "image": { "id": "{{mediaId}}"{{captionField}} }
+                      }
+                    ]
+                  },
+                  "field": "messages"
+                }
+              ]
+            }
+          ]
+        }
+        """;
+    }
+
+    private static string TextPayload(string messageId, string waId, string body)
+    {
+        return $$"""
+        {
+          "object": "whatsapp_business_account",
+          "entry": [
+            {
+              "id": "123",
+              "changes": [
+                {
+                  "value": {
+                    "metadata": { "phone_number_id": "{{ChannelPhoneNumberId}}" },
+                    "messages": [
+                      {
+                        "id": "{{messageId}}",
+                        "type": "text",
+                        "from": "{{waId}}",
+                        "text": { "body": "{{body}}" }
                       }
                     ]
                   },
