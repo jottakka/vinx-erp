@@ -285,11 +285,10 @@ Os dois primeiros comandos usam PostgreSQL descartável e não requerem a
 credencial de runtime. O último inicia e encerra a stack local, verifica o
 bucket privado `vinx-foundation-private` e não imprime credenciais.
 
-Para uma verificação pública completa antes de um PR de comportamento:
-
-```bash
-./scripts/verify-public.sh
-```
+Selecione testes e gates pela matriz de
+[`public-verification.md`](public-verification.md). O CI é o gate completo normal
+da PR; execute `./scripts/verify-public.sh` local somente uma vez, após congelar
+o escopo, quando um gatilho estratégico listado naquele runbook se aplicar.
 
 ## Diagnóstico e parada
 

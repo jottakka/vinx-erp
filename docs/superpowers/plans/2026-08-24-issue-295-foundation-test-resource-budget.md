@@ -237,7 +237,9 @@ Executar:
 ./scripts/verify-public.sh
 ```
 
-Esperado: exit 0 em instalação, lint, format, build, scripts Foundation e todos os projetos públicos; não executar novamente salvo correção de bloqueio.
+Esperado: exit 0 em instalação, lint, format, build, scripts Foundation e todos
+os projetos públicos. Se falhar, isolar e corrigir com testes focados; o próximo
+gate completo fica para o CI, sem segunda execução local.
 
 - [ ] **Etapa 4: Recalcular tamanho e conferir contratos**
 
@@ -275,6 +277,7 @@ Confirmar branch, commits, base `main`, issue #295, evidência focada, gate púb
 **Arquivos:**
 - Modificar: `AGENTS.md:3-12`
 - Modificar: `docs/runbooks/public-verification.md`
+- Modificar: `docs/runbooks/local-development.md:288-292`
 - Modificar: `docs/verification/issue-295-foundation-test-resource-budget-test-cases.md`
 
 **Interfaces:**
@@ -284,7 +287,8 @@ Confirmar branch, commits, base `main`, issue #295, evidência focada, gate púb
 - [ ] **Etapa 1: Substituir a regra genérica de testes em `AGENTS.md`**
 
 Manter as regras compactas e obrigatórias: RED/GREEN mínimo; projeto e
-consumidores diretamente afetados; CI como gate completo normal; gate local
+consumidores diretamente afetados, ou fatia completa definida antes do GREEN e
+somente ampliável para projeto misto pesado; CI como gate completo normal; gate local
 completo no máximo uma vez somente para mudança compartilhada, banco/segurança,
 mais de um projeto público, falha cruzada, CI indisponível ou pedido explícito;
 documentação somente com validação pertinente; Docker pesado nunca sobreposto a
@@ -293,25 +297,28 @@ matriz e os comandos.
 
 - [ ] **Etapa 2: Reescrever o runbook público em português**
 
-Preservar a descrição de `verify-public.sh`, dos verificadores EF e do job
-Storage. Adicionar, nesta ordem:
+Preservar a descrição de `verify-public.sh`, dos verificadores EF e do job Storage e adicionar, nesta ordem:
 
 1. fases `Investigação/RED`, `Implementação/GREEN`, `Correção` e `Fechamento`;
 2. matriz para documentação, web/Vitest/Playwright, AI, Foundation Unit,
    Foundation Integration, Hosts, BDD, EF/migrations e Storage;
 3. comandos exatos dos projetos/scripts já versionados;
 4. gatilhos do gate local completo e regra de consumidores transitivos;
-5. preflight de processos/sessões Docker, espera sem interrupção e confirmação
-   de cleanup próprio;
+5. contexto efetivo, PID/PPID/cwd/comando, Testcontainers, dois prefixos VINX e
+   stack Supabase; Storage bloqueado com stack/dono ambíguo;
 6. distinção entre evidência focada, gate local completo e CI.
+7. `local-development.md` aponta à matriz e não recomenda gate amplo por padrão.
 
 Documentar exatamente estes comandos de fechamento por área:
 
 ```bash
+npm ci
+(cd apps/web && npx playwright install)
 npm --workspace apps/web run lint
 npm --workspace apps/web run format:check
 npm --workspace apps/web run test -- --run
 npm --workspace apps/web run build
+npm --workspace apps/web run test:e2e
 npm run test:no-direct-supabase
 dotnet test tests/public/Vinx.Erp.AI.UnitTests/Vinx.Erp.AI.UnitTests.csproj --no-restore
 dotnet test tests/public/Vinx.Erp.AI.IntegrationTests/Vinx.Erp.AI.IntegrationTests.csproj --no-restore
@@ -331,10 +338,9 @@ método/classe realmente alterado, sem fornecer filtro genérico copiável.
 
 - [ ] **Etapa 3: Estender o manifesto BDD**
 
-Adicionar cinco linhas curtas para seleção de testes: mudança localizada;
-impacto ambíguo; acesso N/A; gate completo após freeze sem repetição documental;
-e concorrência entre worktrees. Mapear para `AGENTS.md`, o runbook e revisão
-manual justificada; não criar teste que apenas procure texto-fonte.
+Adicionar cinco linhas curtas: mudança localizada; impacto ambíguo; acesso N/A;
+gate completo após congelamento sem repetição; e concorrência entre worktrees.
+Mapear para `AGENTS.md`, runbook e revisão; não testar apenas texto-fonte.
 
 - [ ] **Etapa 4: Validar caminhos, comandos e documentação**
 
@@ -344,8 +350,13 @@ Executar:
 git diff --check
 test -f AGENTS.md
 test -f docs/runbooks/public-verification.md
+test -f docs/runbooks/local-development.md
 test -x scripts/verify-public.sh
 test -x scripts/verify-supabase-storage.sh
+test -x scripts/verify-foundation-database.sh
+test -x scripts/verify-ef-negative-guards.sh
+jq -e '.scripts.lint and .scripts["format:check"] and .scripts.test and .scripts.build and .scripts["test:e2e"]' apps/web/package.json >/dev/null
+jq -e '.scripts["test:no-direct-supabase"]' package.json >/dev/null
 git ls-files 'tests/public/**/*.csproj' | sort
 ```
 
@@ -355,9 +366,10 @@ ou projeto inexistente; nenhum workflow ou script alterado.
 - [ ] **Etapa 5: Commitar a política**
 
 ```bash
-git add AGENTS.md docs/runbooks/public-verification.md \
+git add AGENTS.md docs/runbooks/public-verification.md docs/runbooks/local-development.md \
   docs/verification/issue-295-foundation-test-resource-budget-test-cases.md \
-  docs/superpowers/plans/2026-08-24-issue-295-foundation-test-resource-budget.md
+  docs/superpowers/plans/2026-08-24-issue-295-foundation-test-resource-budget.md \
+  docs/superpowers/specs/2026-08-24-issue-295-foundation-test-resource-budget-design.md
 git commit -m 'docs(test): define strategic verification'
 ```
 
@@ -379,14 +391,15 @@ gate público completo porque a extensão não altera artefato executável.
 
 - [ ] **Etapa 2: Recalcular escopo**
 
-Esperado: 6 arquivos não-teste, 2 arquivos de teste/configuração, 720–790 linhas
-manuais, 0 geradas e nenhum arquivo de CI/script alterado.
+Esperado: 6 arquivos não-teste, 2 arquivos de teste/configuração, 810–850 linhas
+manuais, 0 geradas, nenhum arquivo de CI/script alterado e exceção coesa ao alvo
+flexível de 800 registrada no desenho e na PR.
 
 - [ ] **Etapa 3: Solicitar revisão independente**
 
 Revisar fases, matriz, comandos, consumidores transitivos, gatilhos, ausência de
-seleção automática, ownership Docker e coerência entre `AGENTS.md`, runbook,
-desenho, manifesto, issue e PR. Corrigir todo finding Critical/Important antes
+seleção automática, atribuição de recursos Docker e coerência entre `AGENTS.md`, runbook,
+desenho, manifesto, issue e PR. Corrigir todo achado Critical/Important antes
 do push.
 
 - [ ] **Etapa 4: Atualizar PR #297**

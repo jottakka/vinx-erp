@@ -108,8 +108,10 @@ caminho no CI.
    Não iniciam o gate completo, o projeto Foundation inteiro ou Supabase apenas
    para diagnosticar.
 2. Implementação e GREEN repetem o mesmo foco e, depois, o projeto público
-   diretamente afetado. Commits e comentários de revisão não disparam projetos
-   sem relação com a mudança.
+   diretamente afetado. Projeto explicitamente misto e pesado usa a fatia
+   estável definida na matriz; o projeto completo fica para CI ou gatilho
+   estratégico. Commits e comentários de revisão não disparam projetos sem
+   relação com a mudança.
 3. Correções executam os contratos afetados. Alteração somente documental usa
    `git diff --check` e contratos documentais pertinentes; mudança executável em
    dependência compartilhada amplia a verificação um nível.
@@ -126,7 +128,7 @@ caminho no CI.
 | Jornada ou rota de browser | Teste de componente primeiro; Playwright somente para a jornada afetada |
 | Módulo AI | Classe unitária afetada; AI Integration apenas para composição, contexto ou boundary real |
 | Foundation sem banco/HTTP | Classe afetada e projeto Foundation Unit |
-| Foundation HTTP, persistência, módulo ou worker | Filtro de integração afetado; projeto inteiro somente com gatilho estratégico |
+| Foundation HTTP, persistência, módulo ou worker | Filtros afetados; projeto Foundation Integration completo no CI ou com gatilho estratégico |
 | McpHost ou WorkerHost | Teste afetado e Hosts Integration; incluir consumidor direto quando necessário |
 | BDD | Cenário/tag afetado e, no fechamento, projeto Foundation BDD |
 | EF, migration, bootstrap SQL, RLS, grant ou snapshot | Testes afetados, verificadores de banco/EF e gate final estratégico |
@@ -137,6 +139,11 @@ O caminho alterado é indício, não decisão suficiente. O agente inclui
 consumidores transitivos do contrato e, em dúvida, amplia para o próximo projeto
 relevante em vez de saltar diretamente ao gate completo.
 
+No projeto misto e pesado Foundation Integration, a fatia estável é registrada
+antes do GREEN: todas as classes do módulo/contrato dono e os contratos
+compartilhados aplicáveis. Falha ou novo consumidor somente amplia essa lista;
+nunca a reduz para obter resultado verde.
+
 ### Gatilhos do gate local completo
 
 O `verify-public.sh` local é permitido quando muda infraestrutura compartilhada
@@ -145,10 +152,12 @@ um projeto público; quando teste focado revela falha cruzada; quando o CI está
 indisponível; ou por pedido explícito. Mudança localizada sem esses gatilhos usa
 verificação local focada e o CI completo da PR.
 
-Antes de comando Docker pesado, o agente atribui processos VINX e sessões
-Testcontainers ativos. Se outra worktree usa o mesmo daemon, não inicia gate
-redundante: espera ou coordena o dono, sem parar processo nem remover recurso
-alheio. Ao terminar, confirma que sua sessão desapareceu.
+Antes de comando Docker pesado, o agente resolve o contexto efetivo e atribui
+PID/PPID/cwd/comando, sessões Testcontainers, os dois prefixos de verificadores
+VINX e a stack `vinx-erp-groundwork`. Se outra worktree ou dono ambíguo usa o
+daemon, espera sem parar processo nem remover recurso alheio. Storage local é
+proibido com stack preexistente ou dono ambíguo; ao terminar, o agente confirma
+que somente sua sessão desapareceu.
 
 ## BDD verificável
 
@@ -166,11 +175,11 @@ alheio. Ao terminar, confirma que sua sessão desapareceu.
 
 | Classe | Resultado observável |
 |---|---|
-| Sucesso | Mudança localizada executa RED/GREEN e somente projetos consumidores antes do CI completo. |
+| Sucesso | Mudança localizada executa RED/GREEN, projeto afetado ou fatia pesada definida e consumidores necessários antes do CI completo. |
 | Validação/erros | Impacto ambíguo ou falha cruzada amplia para o próximo projeto relevante sem saltar direto ao gate total. |
 | Acesso | N/A — política de desenvolvimento não altera autenticação, autorização, tenant ou dado de produto. |
-| Estado/exceções | Gate local completo roda no máximo uma vez após o freeze; correção documental posterior não o repete. |
-| Concorrência | Worktree não inicia Docker pesado quando outra sessão VINX já ocupa o daemon; não interrompe recurso alheio. |
+| Estado/exceções | Gate local completo roda no máximo uma vez após o congelamento; correção documental posterior não o repete. |
+| Concorrência | Worktree atribui todos os recursos no contexto efetivo e não inicia Docker pesado com dono/stack ambíguo. |
 
 ## Verificação
 
@@ -198,5 +207,6 @@ retentativa, timeout, lock, fila, semáforo, reutilização, container compartil
 ou limite de CPU/memória.
 
 Estimativa revisada da PR completa: 6 arquivos não-teste, 2 arquivos de
-teste/configuração, 720–790 linhas manuais e nenhuma linha gerada. A fatia
-permanece abaixo de 25 arquivos e 800 linhas manuais.
+teste/configuração, 810–850 linhas manuais e nenhuma linha gerada. A exceção ao
+alvo flexível de 800 é coesa: separar regras obrigatórias da matriz de contexto,
+atribuição de dono e segurança Docker deixaria orientação incompleta e insegura.
