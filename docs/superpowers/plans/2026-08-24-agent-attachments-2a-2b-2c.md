@@ -105,10 +105,11 @@ auditoria indisponível e cancelamento explícito do caller. Integração
 `Vinx.Erp.AI.IntegrationTests` com Postgres (Testcontainers) + storage fake
 `Clean`; execuções sujeitas ao protocolo Docker do responsável.
 
-**Inventário recalculado:** o handoff revisado tinha 16 arquivos (11
-não-teste + 5 testes), 1.090 linhas manuais e 1.724 linhas geradas de
-migration/designer/snapshot. Após a correção de review: 1.527 linhas manuais
-+ 1.724 geradas, na mesma base `a6e369e`. O total manual excede o alvo de 800,
+**Inventário recalculado:** o handoff revisado sobre `a6e369e` tinha 16
+arquivos (11 não-teste + 5 testes), 1.090 linhas manuais e 1.724 linhas
+geradas de migration/designer/snapshot. Após a correção e o rebase na `main`
+`16e4a47`: 1.527 linhas manuais + 1.724 geradas. O total manual excede o alvo
+de 800,
 mas a exceção é coesa: contrato, fonte RLS/auditoria, migration, testes de
 segurança e documentação formam uma única fatia #298; separar a prova da
 correção enfraqueceria a revisão sem isolar um subsistema independente.
@@ -182,7 +183,7 @@ fatias anteriores; registro no PR).
    bloqueados, e a URL assinada NUNCA é logada nem persistida (decisão (i) —
    a assinatura bearer é a autorização). Intent completo (finding 1):
    `fileName`, `mimeType` (somente `application/pdf`/`image/jpeg`/
-   `image/png` — allowlist real de `DocumentUploadPolicy.cs:13-20`), 
+   `image/png` — allowlist real de `DocumentUploadPolicy.cs:13-20`),
    `sizeBytes` (1..25 MiB), `checksum` `sha256:<64 hex>` (WebCrypto SHA-256
    dos bytes), `classification` constante `agentic_attachment`, `origin`
    constante `web-agent-chat`, `retentionUntil` = now + 30 dias
