@@ -29,6 +29,7 @@ const knownReasonCodes = [
   "capability_denied",
   "company_not_authorized",
   "company_required",
+  "no_evidence",
   "message_empty",
   "message_too_long",
   "request_id_invalid",

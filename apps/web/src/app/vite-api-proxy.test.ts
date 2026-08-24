@@ -9,8 +9,12 @@ describe("development API proxy", () => {
     expect(resolveDevelopmentApiProxy()).toBeUndefined();
   });
 
-  it("proxies Foundation, Paguai, and Atendimento APIs to the exact loopback origin", () => {
+  it("proxies Agent, Foundation, Paguai, and Atendimento APIs to the exact loopback origin", () => {
     expect(resolveDevelopmentApiProxy("http://127.0.0.1:5080")).toEqual({
+      "/agent": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
       "/atendimento": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
@@ -44,6 +48,10 @@ describe("web Vite configuration", () => {
     const config = createWebViteConfig("development", "http://127.0.0.1:5080");
 
     expect(config.server?.proxy).toEqual({
+      "/agent": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
       "/atendimento": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,

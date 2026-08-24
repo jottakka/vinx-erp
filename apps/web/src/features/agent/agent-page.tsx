@@ -1,8 +1,7 @@
 import ArrowBackOutlinedIcon from "@mui/icons-material/ArrowBackOutlined";
-import { Button, Card, CardContent, Stack } from "@mui/material";
+import { Alert, Button, Card, CardContent, Stack } from "@mui/material";
 import { useLocation, useNavigate } from "react-router-dom";
 import { PageHeader } from "../../shared/ui/page-header";
-import { PrototypeNotice } from "../prototypes/prototype-notice";
 import { AgentConversation } from "./agent-conversation";
 import { useAgentConversation } from "./agent-conversation-provider";
 
@@ -29,7 +28,10 @@ export function AgentPage() {
         eyebrow={`${companyName ?? "Sem empresa"} · Página dedicada`}
         title="Agente"
       />
-      <PrototypeNotice />
+      <Alert role="note" severity="info" variant="outlined">
+        Os envios são reais, vinculados à empresa indicada e, quando disponível,
+        processados pelo provedor de IA configurado.
+      </Alert>
       <Card variant="outlined">
         <CardContent>
           <Stack sx={{ gap: 2, minHeight: { md: "60dvh" } }}>

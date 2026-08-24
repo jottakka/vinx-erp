@@ -81,7 +81,7 @@ endereços e credenciais geradas apenas para uso local.
 | `SUPABASE_AUTH_PUBLISHABLE_KEY` | API C# | Configuração de host somente servidor para login BFF; nunca expor como `VITE_*` nem usar para chamada direta do browser ao Supabase. |
 | `SUPABASE_STORAGE_URL` | API C# | URL do adapter de Storage. |
 | `SUPABASE_STORAGE_SERVICE_ROLE_KEY` | API C# | Credencial de serviço exclusiva do servidor. |
-| `VINX_API_ORIGIN` | Processo Vite de desenvolvimento | Origem local exata do ApiHost para o proxy de `/foundation`; aceitar somente `http://127.0.0.1:<porta>`, nunca prefixo `VITE_*` nem URL de provider. |
+| `VINX_API_ORIGIN` | Processo Vite de desenvolvimento | Origem local exata do ApiHost para o proxy de `/agent`, `/atendimento`, `/foundation` e `/paguai`; aceitar somente `http://127.0.0.1:<porta>`, nunca prefixo `VITE_*` nem URL de provider. |
 | `BROWSER_SESSION_DATA_PROTECTION_KEY_DIRECTORY` | API C# em produção | Diretório persistente, durável e compartilhado por todas as réplicas do host; acesso restrito ao processo. |
 | `BROWSER_SESSION_DATA_PROTECTION_APPLICATION_NAME` | API C# em produção | Nome estável, isolado por aplicação e ambiente; não compartilhar com outro sistema. |
 | `BROWSER_SESSION_DATA_PROTECTION_CERTIFICATE_PATH` | API C# em produção | Certificado disponível ao host para criptografar o key ring durável. |
@@ -91,13 +91,13 @@ endereços e credenciais geradas apenas para uso local.
 
 O frontend não define variável de provider. Para desenvolvimento local, o
 processo Vite pode receber `VINX_API_ORIGIN=http://127.0.0.1:5080`; ela é lida
-somente por `vite.config.ts` e encaminha apenas `/foundation` sem trocar a
-origem vista pelo browser. Nenhum `VITE_*` deve conter URL ou chave do
+somente por `vite.config.ts` e encaminha apenas `/agent`, `/atendimento`,
+`/foundation` e `/paguai` sem trocar a origem vista pelo browser. Nenhum `VITE_*` deve conter URL ou chave do
 Supabase, conexão PostgreSQL ou credencial de serviço. Em particular, não crie
 `VITE_SUPABASE_*`: o browser usa apenas rotas BFF da mesma origem e nunca chama
 Supabase diretamente. Preview e produção não usam esse proxy; o ingress TLS
-precisa encaminhar `/foundation` ao ApiHost sem redirect, CORS amplo ou perda
-de `Set-Cookie` e `X-Correlation-ID`.
+precisa encaminhar esses quatro prefixos ao ApiHost sem redirect, CORS amplo ou
+perda de `Set-Cookie` e `X-Correlation-ID`.
 Se uma variável, contrato ou serviço necessário não estiver confirmado, registre
 o bloqueio na issue correspondente. Não invente valor, crie segredo de produção
 ou libere acesso direto como atalho.
@@ -121,9 +121,9 @@ ASPNETCORE_URLS=http://127.0.0.1:5080 \
 
 A saúde da API fica em `http://127.0.0.1:5080/health`. A porta `54321` é o
 gateway local do Supabase, não a API C#. O web chama caminhos relativos de
-`/foundation`; em desenvolvimento, somente o proxy Vite usa
-`VINX_API_ORIGIN` para alcançar esta porta. Não configure base URL absoluta no
-cliente browser.
+`/agent`, `/atendimento`, `/foundation` e `/paguai`; em desenvolvimento,
+somente o proxy Vite usa `VINX_API_ORIGIN` para alcançar esta porta. Não
+configure base URL absoluta no cliente browser.
 
 ## Executar o agente (`POST /agent/runs`)
 

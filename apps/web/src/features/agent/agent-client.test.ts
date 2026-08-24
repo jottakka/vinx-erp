@@ -94,6 +94,37 @@ describe("agent run client", () => {
     expect(body).toMatchObject({ journey: "read_only_summarize_v1" });
   });
 
+  it("preserves the current no_evidence clarification reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(tokenResponse())
+        .mockResolvedValueOnce(
+          runResponse(
+            typedBody({
+              status: "needs_clarification",
+              reasonCode: "no_evidence",
+              text: null,
+            }),
+          ),
+        ),
+    );
+    const client = createAgentRunClient();
+
+    const result = await client.send({ message: "Resuma sem evidência" });
+
+    expect(result).toMatchObject({
+      ok: true,
+      run: {
+        status: "needs_clarification",
+        reasonCode: "no_evidence",
+        text: null,
+        sources: null,
+      },
+    });
+  });
+
   it("keeps nullable contract fields present and maps typed 400 validation errors", async () => {
     vi.stubGlobal(
       "fetch",

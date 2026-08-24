@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLayoutEffect } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
@@ -31,17 +32,58 @@ function Home() {
 // Gatilho de refresh do bootstrap dentro da sessão para simular troca de
 // empresa ativa enquanto uma execução está pendente.
 function RefreshBootstrapButton() {
-  const { refreshBootstrap } = useSession();
+  const { bootstrap, refreshBootstrap } = useSession();
   return (
-    <button onClick={() => void refreshBootstrap()} type="button">
+    <button
+      disabled={!bootstrap}
+      onClick={() => void refreshBootstrap()}
+      type="button"
+    >
       Atualizar sessão
     </button>
   );
 }
 
+type ScopeCommitSnapshot = {
+  companyId: string | null;
+  draft: string;
+  membershipId: string | null;
+  oldMessageVisible: boolean;
+  userId: string | null;
+};
+
+function ScopeCommitProbe({
+  onCommit,
+}: {
+  onCommit: (snapshot: ScopeCommitSnapshot) => void;
+}) {
+  const { bootstrap } = useSession();
+
+  useLayoutEffect(() => {
+    const company = bootstrap?.companies[0];
+    const dock = screen.queryAllByRole("complementary", {
+      name: "Painel do agente",
+    })[0];
+    const composer = screen.queryAllByLabelText("Mensagem para o agente")[0] as
+      | HTMLTextAreaElement
+      | undefined;
+    onCommit({
+      companyId: company?.companyId ?? null,
+      draft: composer?.value ?? "",
+      membershipId: company?.membershipId ?? null,
+      oldMessageVisible:
+        dock?.textContent?.includes("consulta da associação anterior") === true,
+      userId: bootstrap?.user.id ?? null,
+    });
+  }, [bootstrap, onCommit]);
+
+  return null;
+}
+
 async function renderAgentWorkspace(
   route = "/",
   gateway: MockSessionGateway = createMockSessionGateway(),
+  onScopeCommit?: (snapshot: ScopeCommitSnapshot) => void,
 ): Promise<{
   router: ReturnType<typeof createMemoryRouter>;
   unmount: () => void;
@@ -65,6 +107,7 @@ async function renderAgentWorkspace(
     <VinxThemeProvider>
       <SessionProvider gateway={gateway}>
         <AgentConversationProvider>
+          {onScopeCommit ? <ScopeCommitProbe onCommit={onScopeCommit} /> : null}
           <FeedbackProvider>
             <RefreshBootstrapButton />
             <RouterProvider router={router} />
@@ -72,6 +115,12 @@ async function renderAgentWorkspace(
         </AgentConversationProvider>
       </SessionProvider>
     </VinxThemeProvider>,
+  );
+
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Atualizar sessão" }),
+    ).toBeEnabled(),
   );
 
   return { router, unmount };
@@ -336,6 +385,20 @@ describe("agent workspace", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("describes the dedicated page as real company-scoped provider processing", async () => {
+    await renderAgentWorkspace("/agente");
+
+    expect(
+      await screen.findByRole("heading", { name: "Agente" }),
+    ).toBeVisible();
+    expect(screen.queryByText("Dados de demonstração")).toBeNull();
+    expect(
+      screen.getByText(
+        "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado.",
+      ),
+    ).toBeVisible();
+  });
+
   it("aborts and discards a pending reply when the workspace unmounts", async () => {
     let resolveRun: (value: Response) => void = () => {};
     const pendingRun = new Promise<Response>(
@@ -370,6 +433,112 @@ describe("agent workspace", () => {
     // Sem erro de act/setState após unmount: a resposta tardia foi descartada
     // pelo epoch e nenhuma atualização de estado acontece.
     await waitFor(() => expect(runSignal.aborted).toBe(true));
+  });
+
+  it("clears messages and the unsent draft when the authenticated membership scope changes", async () => {
+    let snapshot: BootstrapSnapshot | null = null;
+    const gateway: MockSessionGateway = {
+      login: async () => {
+        if (!snapshot) throw new Error("sessão de teste não instalada");
+        return structuredClone(snapshot);
+      },
+      logout: async () => {
+        snapshot = null;
+      },
+      getBootstrap: async () => (snapshot ? structuredClone(snapshot) : null),
+    };
+    const { createBootstrapSnapshot, mockSessionProfiles } = await import(
+      "../auth/mock-session-fixtures"
+    );
+    snapshot = createBootstrapSnapshot(mockSessionProfiles.maria);
+    const renewedMembership: BootstrapSnapshot = {
+      ...snapshot,
+      companies: snapshot.companies.map((company, index) =>
+        index === 0
+          ? {
+              ...company,
+              companyName: "Alfa renovada",
+              membershipId: "88888888-8888-4888-8888-888888888888",
+            }
+          : company,
+      ),
+      user: { displayName: "Joana", id: "joana" },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(antiforgeryTokenResponse())
+        .mockResolvedValueOnce(
+          agentRunResponse({
+            status: "result",
+            reasonCode: "ok",
+            text: "resposta da associação anterior",
+            sources: null,
+            correlationId,
+          }),
+        ),
+    );
+    const user = userEvent.setup();
+    const scopeCommits: ScopeCommitSnapshot[] = [];
+    await renderAgentWorkspace("/", gateway, (scope) =>
+      scopeCommits.push(scope),
+    );
+
+    const dock = await openDockAndType(user, "consulta da associação anterior");
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+    expect(
+      await dock.findByText("resposta da associação anterior"),
+    ).toBeVisible();
+    await user.type(
+      dock.getByLabelText("Mensagem para o agente"),
+      "rascunho privado da associação anterior",
+    );
+
+    snapshot = renewedMembership;
+    await user.click(
+      screen.getByRole("button", { name: "Atualizar sessão", hidden: true }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", {
+          name: "Atualizar sessão",
+          hidden: true,
+        }),
+      ).toBeEnabled(),
+    );
+
+    const refreshedDock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+    expect(
+      await refreshedDock.findByText("Alfa renovada · Consultas independentes"),
+    ).toBeVisible();
+    expect(
+      scopeCommits.filter((scope) => scope.userId === null).at(-1),
+    ).toEqual({
+      companyId: null,
+      draft: "",
+      membershipId: null,
+      oldMessageVisible: false,
+      userId: null,
+    });
+    expect(scopeCommits.find((scope) => scope.userId === "joana")).toEqual({
+      companyId: alfaCompanyId,
+      draft: "",
+      membershipId: "88888888-8888-4888-8888-888888888888",
+      oldMessageVisible: false,
+      userId: "joana",
+    });
+    expect
+      .soft(refreshedDock.queryByText("consulta da associação anterior"))
+      .toBeNull();
+    expect
+      .soft(refreshedDock.queryByText("resposta da associação anterior"))
+      .toBeNull();
+    expect(refreshedDock.getByLabelText("Mensagem para o agente")).toHaveValue(
+      "",
+    );
   });
 
   it("aborts, clears the conversation and switches the caption when the active company changes", async () => {
@@ -424,15 +593,18 @@ describe("agent workspace", () => {
     );
 
     expect(
-      await dock.findByText("Beta · Consultas independentes"),
+      await screen.findByText("Beta · Consultas independentes"),
     ).toBeVisible();
+    const refreshedDock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
     expect(runSignal.aborted).toBe(true);
     await waitFor(() =>
-      expect(dock.getByRole("note")).toHaveTextContent(
+      expect(refreshedDock.getByRole("note")).toHaveTextContent(
         /consulta independente/i,
       ),
     );
-    expect(dock.queryByText("consulta da Alfa")).toBeNull();
+    expect(refreshedDock.queryByText("consulta da Alfa")).toBeNull();
 
     resolveRun(
       agentRunResponse({
@@ -444,6 +616,6 @@ describe("agent workspace", () => {
       }),
     );
     await waitFor(() => expect(runSignal.aborted).toBe(true));
-    expect(dock.queryByText("resposta tardia da Alfa")).toBeNull();
+    expect(refreshedDock.queryByText("resposta tardia da Alfa")).toBeNull();
   });
 });

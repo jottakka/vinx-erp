@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { AuthorizedCompanyMembership } from "../auth/session-contract";
 import { useSession } from "../auth/session-provider";
 import {
   type AgentRunFailureKind,
@@ -127,9 +128,43 @@ export function AgentConversationProvider({
 }) {
   const { bootstrap } = useSession();
   const company = bootstrap?.companies[0] ?? null;
+  const [dockOpen, setDockOpen] = useState(false);
+  const openDock = useCallback(() => setDockOpen(true), []);
+  const closeDock = useCallback(() => setDockOpen(false), []);
+  const scopeKey = JSON.stringify([
+    bootstrap?.user.id ?? null,
+    company?.membershipId ?? null,
+    company?.companyId ?? null,
+  ]);
+
+  return (
+    <ScopedAgentConversationProvider
+      closeDock={closeDock}
+      company={company}
+      dockOpen={dockOpen}
+      key={scopeKey}
+      openDock={openDock}
+    >
+      {children}
+    </ScopedAgentConversationProvider>
+  );
+}
+
+function ScopedAgentConversationProvider({
+  children,
+  closeDock,
+  company,
+  dockOpen,
+  openDock,
+}: {
+  children: ReactNode;
+  closeDock: () => void;
+  company: AuthorizedCompanyMembership | null;
+  dockOpen: boolean;
+  openDock: () => void;
+}) {
   const companyId = company?.companyId ?? null;
 
-  const [dockOpen, setDockOpen] = useState(false);
   const [messages, setMessages] = useState<readonly AgentMessage[]>([]);
   const [status, setStatus] = useState<AgentStatus>("idle");
   const sequence = useRef(0);
@@ -150,17 +185,6 @@ export function AgentConversationProvider({
     setMessages([]);
     setStatus("idle");
   }, [cancelInFlight]);
-
-  const companyRef = useRef(companyId);
-  useEffect(() => {
-    if (companyRef.current !== companyId) {
-      companyRef.current = companyId;
-      resetConversation();
-    }
-  }, [companyId, resetConversation]);
-
-  const openDock = useCallback(() => setDockOpen(true), []);
-  const closeDock = useCallback(() => setDockOpen(false), []);
 
   const sendMessage = useCallback(
     (text: string) => {

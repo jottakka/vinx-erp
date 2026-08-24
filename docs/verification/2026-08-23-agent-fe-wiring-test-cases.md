@@ -17,11 +17,14 @@ produção depende de seed `ai.read` + provider configurado (decisão do dono).
 | validação | 400 tipado `validation_error` (campos anuláveis presentes) e 400 antiforgery `{"code":"invalid_request"}` mapeados separadamente. | Tipado vira run; envelope vira falha `antiforgery`. | `agent-client.test.ts` — "keeps nullable contract fields…" e "maps the antiforgery 400 envelope…" |
 | validação | 409 tipado `conflict`; 401/429 sem parse de corpo; 503/504 envelope com código allow-list EXATA por status (503 `provider_not_configured\|agent_unavailable\|audit_unavailable`, 504 somente `agent_timeout`); corpo/estado fora do schema → `protocol` sem ecoar conteúdo. | Falhas tipadas por classe; nada de body cru em resultado. | `agent-client.test.ts` — 409 / 401-429 / 503-504 / "turns unknown bodies…" / "rejects envelope codes…" |
 | validação | Combinações cruzadas status×HTTP (`200/conflict`, `409/result`), `correlationId` não-UUID e envelope com campo extra → `protocol`. reasonCode desconhecido → normalizado para `null` (nunca ecoado). | Rejeição determinística antes de qualquer UI. | `agent-client.test.ts` — "rejects crossed status/HTTP…" / "rejects typed bodies whose correlationId…" / "normalizes unknown reasonCodes…" |
+| validação | Resposta tipada `needs_clarification/no_evidence` do gate atual. | O código estável permanece tipado; não é normalizado para `null`. | `agent-client.test.ts` — "preserves the current no_evidence clarification reason" |
 | acesso | Antiforgery indisponível (401 no GET) → falha tipada e MUTAÇÃO NÃO OCORRE. | 1 chamada fetch (somente o GET); zero POST. | `agent-client.test.ts` — "stops before the mutation…" |
 | estado | `requires_confirmation` → mensagem fixa "exige confirmação explícita", SEM card, botão ou proposta (estado opaco v1). | Nenhum botão de execução na árvore. | `agent.test.tsx` — "renders a fixed confirmation notice…" |
 | estado | Reset durante voo aborta e descarta a resposta tardia (epoch); conversa volta ao estado vazio. | Resposta tardia não aparece; mensagem do usuário removida. | `agent.test.tsx` — "discards a late reply after resetting…" |
 | estado | Unmount durante voo aborta o POST (signal) e descarta a resposta tardia sem atualização de estado. | Signal abortado após unmount; nenhum erro de act/setState. | `agent.test.tsx` — "aborts and discards a pending reply when the workspace unmounts" |
 | estado | Troca de empresa ativa (bootstrap atualizado) com execução pendente → abort, conversa limpa, caption muda para a nova empresa; resposta tardia da empresa anterior nunca entra no contexto. | POST da empresa anterior abortado; caption `Beta`; mensagem antiga e resposta tardia ausentes. | `agent.test.tsx` — "aborts, clears the conversation and switches the caption…" |
+| estado | Troca de usuário, membership ou empresa autenticada com mensagens e rascunho local → remonta o escopo completo. | Nenhum commit visual expõe mensagem antiga; conversa e composer reiniciam vazios no novo escopo. | `agent.test.tsx` — "clears messages and the unsent draft when the authenticated membership scope changes" |
+| estado | Página dedicada do agente real. | Não exibe aviso de demonstração local; informa empresa e possível processamento pelo provedor configurado. | `agent.test.tsx` — "describes the dedicated page as real company-scoped provider processing" |
 | concorrência | Dupla submissão rápida com uma execução pendente → trava síncrona mantém 1 POST/1 `requestId`; envio seguinte aceito gera `requestId` distinto. | Exatamente 1 POST pendente; 2 POSTs no total; ids distintos. | `agent.test.tsx` — "blocks a second submission…" |
 | concorrência | Rede falha / abort / 429 / 503 / 504 → resultado final do turno, NUNCA retry (abort de POST é potencialmente cometido). | Falhas tipadas sem novas chamadas. | `agent-client.test.ts` — "maps network errors and aborts…" |
 
@@ -29,6 +32,8 @@ produção depende de seed `ai.read` + provider configurado (decisão do dono).
 
 - UI honesta: dock/página mostram o nome da empresa efetiva (`Alfa · Consultas
   independentes`) e o aviso de consultas independentes sem memória de turnos.
+- Proxy local: `vite-api-proxy.test.ts` exige `/agent` no mesmo destino loopback
+  seguro dos demais prefixos, sempre com `changeOrigin=false`.
 - Nenhum body bruto, `Error.message`, prompt, mensagem enviada ou erro de Zod
   aparece em UI, log ou resultado do client — somente mensagens fixas e
   `reasonCode`/`code` allow-listed.
@@ -39,7 +44,8 @@ produção depende de seed `ai.read` + provider configurado (decisão do dono).
 
 ## Suítes
 
-- `npx vitest --run src/features/agent/` — 21/21 verdes (14 client + 7 workspace).
+- `npx vitest --run src/features/agent/` — 24/24 verdes (15 client + 9 workspace).
+- `npx vitest --run src/app/vite-api-proxy.test.ts` — 11/11 verdes.
 - `npx playwright test -c playwright.prototypes.config.ts -g "agent dock"` —
   1/1 verde.
 - Verificação executada no HEAD exato, SEM o gate integral: o
