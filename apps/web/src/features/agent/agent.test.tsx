@@ -11,7 +11,10 @@ import type {
   MockSessionGateway,
 } from "../auth/session-contract";
 import { SessionProvider, useSession } from "../auth/session-provider";
-import { AgentConversationProvider } from "./agent-conversation-provider";
+import {
+  AgentConversationProvider,
+  createAgentConversationScopeKey,
+} from "./agent-conversation-provider";
 import { AgentDock } from "./agent-dock";
 import { AgentTrigger } from "./agent-trigger";
 
@@ -51,6 +54,10 @@ type ScopeCommitSnapshot = {
   oldMessageVisible: boolean;
   userId: string | null;
 };
+
+type AgentConversationScope = Parameters<
+  typeof createAgentConversationScopeKey
+>[0];
 
 function ScopeCommitProbe({
   onCommit,
@@ -180,6 +187,24 @@ function createCompanylessGateway(): MockSessionGateway {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("agent conversation scope key", () => {
+  const originalScope: AgentConversationScope = {
+    companyId: "company-1",
+    membershipId: "membership-1",
+    userId: "user-1",
+  };
+
+  it.each([
+    ["user", { userId: "user-2" }],
+    ["membership", { membershipId: "membership-2" }],
+    ["company", { companyId: "company-2" }],
+  ] as const)("changes when the %s scope changes", (_field, changedScope) => {
+    expect(
+      createAgentConversationScopeKey({ ...originalScope, ...changedScope }),
+    ).not.toBe(createAgentConversationScopeKey(originalScope));
+  });
+});
 
 describe("agent workspace", () => {
   it("sends the message to POST /agent/runs and renders the typed result with sources", async () => {
@@ -414,17 +439,23 @@ describe("agent workspace", () => {
     ).toBeVisible();
   });
 
-  it("does not claim company-bound processing when the bootstrap has no company", async () => {
+  it("uses no-company wording throughout the dedicated page and composer", async () => {
     await renderAgentWorkspace("/agente", createCompanylessGateway());
 
     expect(
       await screen.findByText("Sem empresa · Página dedicada"),
     ).toBeVisible();
     expect(
+      screen.getAllByText(
+        "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar o envio.",
+      ),
+    ).toHaveLength(2);
+    expect(
       screen.getByText(
-        "Sem empresa ativa. O servidor solicitará contexto antes de processar o envio.",
+        "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar cada envio; turnos anteriores não fazem parte do contexto.",
       ),
     ).toBeVisible();
+    expect(screen.queryByText(/empresa ativa/i)).toBeNull();
     expect(screen.queryByText(/vinculados à empresa indicada/i)).toBeNull();
   });
 
@@ -570,7 +601,7 @@ describe("agent workspace", () => {
     );
   });
 
-  it("aborts, clears the conversation and switches the caption when the active company changes", async () => {
+  it("aborts before the first new-scope layout commit and switches the caption when the active company changes", async () => {
     let snapshot: BootstrapSnapshot | null = null;
     const gateway: MockSessionGateway = {
       login: async () => {
@@ -601,7 +632,17 @@ describe("agent workspace", () => {
       .mockResolvedValueOnce(antiforgeryTokenResponse())
       .mockImplementationOnce(() => pendingRun);
     vi.stubGlobal("fetch", fetchSpy);
-    await renderAgentWorkspace("/", gateway);
+    let observeNewScope = false;
+    let oldRunSignal: AbortSignal | undefined;
+    let oldRunAbortedAtFirstNewScopeLayoutCommit: boolean | undefined;
+    await renderAgentWorkspace("/", gateway, () => {
+      if (
+        observeNewScope &&
+        oldRunAbortedAtFirstNewScopeLayoutCommit === undefined
+      ) {
+        oldRunAbortedAtFirstNewScopeLayoutCommit = oldRunSignal?.aborted;
+      }
+    });
 
     const dock = await openDockAndType(user, "consulta da Alfa");
     expect(dock.getByText("Alfa · Consultas independentes")).toBeVisible();
@@ -612,14 +653,17 @@ describe("agent workspace", () => {
     expect(JSON.parse(firstInit.body as string)).toMatchObject({
       companyId: alfaCompanyId,
     });
-    const runSignal = firstInit.signal as AbortSignal;
+    oldRunSignal = firstInit.signal as AbortSignal;
 
     // O drawer modal aplica aria-hidden ao fundo: o gatilho de refresh é
     // consultado com hidden enquanto o painel permanece aberto.
     snapshot = betaFirst;
+    observeNewScope = true;
     await user.click(
       screen.getByRole("button", { name: "Atualizar sessão", hidden: true }),
     );
+
+    expect(oldRunAbortedAtFirstNewScopeLayoutCommit).toBe(true);
 
     expect(
       await screen.findByText("Beta · Consultas independentes"),
@@ -627,7 +671,7 @@ describe("agent workspace", () => {
     const refreshedDock = within(
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
-    expect(runSignal.aborted).toBe(true);
+    expect(oldRunSignal.aborted).toBe(true);
     await waitFor(() =>
       expect(refreshedDock.getByRole("note")).toHaveTextContent(
         /consulta independente/i,
@@ -644,7 +688,7 @@ describe("agent workspace", () => {
         correlationId,
       }),
     );
-    await waitFor(() => expect(runSignal.aborted).toBe(true));
+    await waitFor(() => expect(oldRunSignal?.aborted).toBe(true));
     expect(refreshedDock.queryByText("resposta tardia da Alfa")).toBeNull();
   });
 });

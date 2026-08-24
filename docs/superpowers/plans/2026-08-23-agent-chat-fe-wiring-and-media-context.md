@@ -87,7 +87,7 @@ fechado e UI honesta sobre empresa/estado. Sem mudanças no BE.
 - `reasonCode` do contrato tipado em enum explícito (fonte: matriz
   `docs/verification/issue-138-agent-api-test-cases.md:32-49`): `ok`,
   `tool_proposal_requires_confirmation`, `capability_denied`,
-  `company_not_authorized`, `company_required`, `message_empty`,
+  `company_not_authorized`, `company_required`, `no_evidence`, `message_empty`,
   `message_too_long`, `request_id_invalid`, `journey_invalid`,
   `invalid_request`, `idempotency_conflict`, `integrity_conflict`.
   Desconhecido → tratado como genérico (nunca ecoado cru na UI).
@@ -149,12 +149,12 @@ fechado e UI honesta sobre empresa/estado. Sem mudanças no BE.
   Sol do PR), `vite.config.ts`, `src/app/vite-api-proxy.test.ts` e
   `docs/runbooks/local-development.md`.
 - **Excluídos (1):** `agent-confirmation-card.tsx`.
-- Total 15 arquivos; **+1.951/−194 linhas** no diff do PR — acima do teto
+- Total 15 arquivos; **+2.014/−196 linhas** no diff do PR — acima do teto
   orientador de 800. Justificativa: a matriz negativa
   exigida pelo review (combinações status/HTTP cruzadas, envelopes por
   produtor, reasonCode desconhecido, UUID inválido), o contrato do proxy local
   e as 5 classes BDD com concorrência/unmount/troca de empresa multiplicam os
-  testes (~1.085 linhas de teste; produção ~575; docs ~291, incluindo este plano
+  testes (~1.130 linhas de teste; produção ~593; docs ~291, incluindo este plano
   e o manifesto).
   Fatia mantida como vertical coesa com lista exclusiva; aprovação
   registrada no review Sol do PR (delta) e a merge é decisão do
@@ -169,7 +169,7 @@ fechado e UI honesta sobre empresa/estado. Sem mudanças no BE.
 | validação | `validation_error` tipado E 400 antiforgery `invalid_request`; `conflict` 409; corpo fora do schema → protocol | `agent-client.test.ts` |
 | validação | 401/429/503/504/rede/abort → erro estável sem retry, sem body na UI | `agent-client.test.ts` |
 | acesso | sem antiforgery token → falha tipada fixa; texto do servidor nunca vaza em erro | `agent-client.test.ts` |
-| estado | reset/unmount/troca de empresa abortam e invalidam resposta tardia (epoch); `thinking` durante; trava de in-flight | `agent.test.tsx` |
+| estado | reset/unmount/troca de empresa abortam em cleanup de layout antes do primeiro commit do novo escopo e invalidam resposta tardia (epoch); `thinking` durante; trava de in-flight | `agent.test.tsx` |
 | estado | `requires_confirmation` → mensagem fixa, sem card/botão | `agent.test.tsx` |
 | concorrência | duplo clique rápido → exatamente 1 POST/1 requestId; envios sequenciais isolados | `agent.test.tsx` |
 
@@ -205,7 +205,7 @@ Sol reprovou o bloco único; decomposição aprovada como issues separadas:
 ## 4. Verificação e processo
 
 - A evidência web atual do HEAD rebased fica no manifesto de verificação:
-  Vitest 353/353, lint, format, build, `test:no-direct-supabase` e Playwright
+  Vitest 356/356, lint, format, build, `test:no-direct-supabase` e Playwright
   do agente 1/1, conforme registro do coordenador. O
   `./scripts/verify-public.sh` não foi re-executado no HEAD rebased e continua
   pendente para uma janela Docker estável.

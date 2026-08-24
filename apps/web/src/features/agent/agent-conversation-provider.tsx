@@ -3,7 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useContext,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -117,6 +117,18 @@ const inertValue: AgentConversationContextValue = {
 const AgentConversationContext =
   createContext<AgentConversationContextValue>(inertValue);
 
+export function createAgentConversationScopeKey({
+  companyId,
+  membershipId,
+  userId,
+}: {
+  companyId: string | null;
+  membershipId: string | null;
+  userId: string | null;
+}) {
+  return JSON.stringify([userId, membershipId, companyId]);
+}
+
 export function isAgentWorkspaceEnabled() {
   return import.meta.env.DEV;
 }
@@ -131,11 +143,11 @@ export function AgentConversationProvider({
   const [dockOpen, setDockOpen] = useState(false);
   const openDock = useCallback(() => setDockOpen(true), []);
   const closeDock = useCallback(() => setDockOpen(false), []);
-  const scopeKey = JSON.stringify([
-    bootstrap?.user.id ?? null,
-    company?.membershipId ?? null,
-    company?.companyId ?? null,
-  ]);
+  const scopeKey = createAgentConversationScopeKey({
+    companyId: company?.companyId ?? null,
+    membershipId: company?.membershipId ?? null,
+    userId: bootstrap?.user.id ?? null,
+  });
 
   return (
     <ScopedAgentConversationProvider
@@ -178,7 +190,7 @@ function ScopedAgentConversationProvider({
     inFlight.current = null;
   }, []);
 
-  useEffect(() => cancelInFlight, [cancelInFlight]);
+  useLayoutEffect(() => cancelInFlight, [cancelInFlight]);
 
   const resetConversation = useCallback(() => {
     cancelInFlight();

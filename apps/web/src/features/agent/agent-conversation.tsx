@@ -52,9 +52,12 @@ function MessageBubble({ message }: { message: AgentMessage }) {
 }
 
 export function AgentConversation() {
-  const { messages, sendMessage, status } = useAgentConversation();
+  const { companyName, messages, sendMessage, status } = useAgentConversation();
   const [draft, setDraft] = useState("");
   const thinking = status === "thinking";
+  const emptyConversationNotice = companyName
+    ? "Cada envio é uma consulta independente ao agente da empresa ativa; turnos anteriores não são relembrados."
+    : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar o envio.";
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -80,8 +83,7 @@ export function AgentConversation() {
           ))
         ) : (
           <Alert role="note" severity="info">
-            Cada envio é uma consulta independente ao agente da empresa ativa;
-            turnos anteriores não são relembrados.
+            {emptyConversationNotice}
           </Alert>
         )}
         {thinking ? (

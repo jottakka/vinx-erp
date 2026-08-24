@@ -22,9 +22,9 @@ produção depende de seed `ai.read` + provider configurado (decisão do dono).
 | estado | `requires_confirmation` → mensagem fixa "exige confirmação explícita", SEM card, botão ou proposta (estado opaco v1). | Nenhum botão de execução na árvore. | `agent.test.tsx` — "renders a fixed confirmation notice…" |
 | estado | Reset durante voo aborta e descarta a resposta tardia (epoch); conversa volta ao estado vazio. | Resposta tardia não aparece; mensagem do usuário removida. | `agent.test.tsx` — "discards a late reply after resetting…" |
 | estado | Unmount durante voo aborta o POST (signal) e descarta a resposta tardia sem atualização de estado. | Signal abortado após unmount; nenhum erro de act/setState. | `agent.test.tsx` — "aborts and discards a pending reply when the workspace unmounts" |
-| estado | Troca de empresa ativa (bootstrap atualizado) com execução pendente → abort, conversa limpa, caption muda para a nova empresa; resposta tardia da empresa anterior nunca entra no contexto. | POST da empresa anterior abortado; caption `Beta`; mensagem antiga e resposta tardia ausentes. | `agent.test.tsx` — "aborts, clears the conversation and switches the caption…" |
-| estado | Troca de usuário, membership ou empresa autenticada com mensagens e rascunho local → remonta o escopo completo. | Nenhum commit visual expõe mensagem antiga; conversa e composer reiniciam vazios no novo escopo. | `agent.test.tsx` — "clears messages and the unsent draft when the authenticated membership scope changes" |
-| estado | Página dedicada do agente real. | Não exibe aviso de demonstração local; informa empresa e possível processamento pelo provedor configurado. | `agent.test.tsx` — "describes the dedicated page as real company-scoped provider processing" |
+| estado | Troca de empresa ativa (bootstrap atualizado) com execução pendente → cleanup de layout aborta o POST antes do primeiro commit do novo escopo, limpa a conversa e muda a caption; resposta tardia da empresa anterior nunca entra no contexto. | POST anterior já abortado no primeiro commit novo; caption `Beta`; mensagem antiga e resposta tardia ausentes. | `agent.test.tsx` — "aborts before the first new-scope layout commit…" |
+| estado | Troca de usuário, membership ou empresa autenticada com mensagens e rascunho local → remonta o escopo completo; a chave pura varia para cada identificador. | Nenhum commit visual expõe mensagem antiga; conversa e composer reiniciam vazios no novo escopo; user, membership e empresa geram chaves distintas. | `agent.test.tsx` — escopo puro e "clears messages and the unsent draft when the authenticated membership scope changes" |
+| estado | Página dedicada do agente real. | Não exibe aviso de demonstração local; informa empresa e possível processamento pelo provedor configurado, ou solicita contexto quando não há empresa. | `agent.test.tsx` — avisos com e sem empresa |
 | concorrência | Dupla submissão rápida com uma execução pendente → trava síncrona mantém 1 POST/1 `requestId`; envio seguinte aceito gera `requestId` distinto. | Exatamente 1 POST pendente; 2 POSTs no total; ids distintos. | `agent.test.tsx` — "blocks a second submission…" |
 | concorrência | Rede falha / abort / 429 / 503 / 504 → resultado final do turno, NUNCA retry (abort de POST é potencialmente cometido). | Falhas tipadas sem novas chamadas. | `agent-client.test.ts` — "maps network errors and aborts…" |
 
@@ -45,11 +45,11 @@ produção depende de seed `ai.read` + provider configurado (decisão do dono).
 
 ## Suítes
 
-- `npx vitest --run src/features/agent/` — 25/25 verdes (15 client + 10 workspace).
+- `npx vitest --run src/features/agent/` — 28/28 verdes (15 client + 13 workspace).
 - `npx vitest --run src/app/vite-api-proxy.test.ts` — 12/12 verdes.
 - `npx playwright test -c playwright.prototypes.config.ts -g "agent dock"` —
   1/1 verde no HEAD rebased, conforme evidência do coordenador.
-- Evidência atual do coordenador no HEAD rebased: Vitest integral 353/353,
+- Evidência atual do coordenador no HEAD rebased: Vitest integral 356/356,
   lint, format, build e `test:no-direct-supabase` verdes.
 - Evidência histórica pré-rebase: Vitest integral 345/345 serializado
   (`--no-file-parallelism`), lint, format, build e e2e do agente verdes.

@@ -9,9 +9,12 @@ export function AgentPage() {
   const { companyName, openDock } = useAgentConversation();
   const location = useLocation();
   const navigate = useNavigate();
+  const description = companyName
+    ? "Cada mensagem é uma consulta independente ao agente da empresa ativa; turnos anteriores não fazem parte do contexto."
+    : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar cada envio; turnos anteriores não fazem parte do contexto.";
   const processingNotice = companyName
     ? "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado."
-    : "Sem empresa ativa. O servidor solicitará contexto antes de processar o envio.";
+    : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar o envio.";
 
   function backToContext() {
     openDock();
@@ -27,7 +30,7 @@ export function AgentPage() {
   return (
     <Stack spacing={3}>
       <PageHeader
-        description="Cada mensagem é uma consulta independente ao agente da empresa ativa; turnos anteriores não fazem parte do contexto."
+        description={description}
         eyebrow={`${companyName ?? "Sem empresa"} · Página dedicada`}
         title="Agente"
       />
