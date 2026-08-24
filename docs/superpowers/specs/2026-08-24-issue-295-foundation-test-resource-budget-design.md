@@ -2,9 +2,9 @@
 
 ## Status
 
-Desenho aprovado para limitar o paralelismo por processo. A issue #295 mantém
-a evidência causal da reprodução; este documento registra somente decisões
-duráveis.
+Desenho aprovado para limitar o paralelismo por processo e selecionar testes
+locais conforme o risco da mudança. A issue #295 mantém a evidência causal da
+reprodução; este documento registra somente decisões duráveis.
 
 ## Objetivo
 
@@ -12,6 +12,11 @@ Impedir que o projeto `Vinx.Erp.Foundation.IntegrationTests` transforme todos
 os processadores visíveis em PostgreSQL descartáveis simultâneos. O teste
 continua usando PostgreSQL real e isolamento por fixture, mas cada processo
 executa no máximo duas collections xUnit em paralelo.
+
+Evitar gates pesados redundantes: desenvolvimento usa o menor teste que prova o
+comportamento alterado; a verificação local completa fica reservada a fronteiras
+compartilhadas e momentos finais, enquanto o CI continua como gate completo da
+PR.
 
 ## Causa confirmada
 
@@ -91,7 +96,63 @@ contexto efetivo for `desktop-linux`, o operador deve confirmar que nenhuma
 outra atividade depende de Colima antes de executar `colima stop`. O repositório
 não para nem reconfigura runtimes globais automaticamente.
 
+## Política de seleção de testes
+
+A política rege agentes e execuções locais. O workflow remoto continua rodando
+a verificação pública completa em cada PR; esta fatia não adiciona seleção por
+caminho no CI.
+
+### Fases obrigatórias
+
+1. Investigação e RED executam um método, classe, cenário ou comando mínimo.
+   Não iniciam o gate completo, o projeto Foundation inteiro ou Supabase apenas
+   para diagnosticar.
+2. Implementação e GREEN repetem o mesmo foco e, depois, o projeto público
+   diretamente afetado. Commits e comentários de revisão não disparam projetos
+   sem relação com a mudança.
+3. Correções executam os contratos afetados. Alteração somente documental usa
+   `git diff --check` e contratos documentais pertinentes; mudança executável em
+   dependência compartilhada amplia a verificação um nível.
+4. Fechamento usa o CI como gate completo normal. O gate local completo roda no
+   máximo uma vez, depois do congelamento de escopo, somente quando um gatilho
+   estratégico se aplica.
+
+### Matriz de impacto
+
+| Mudança | Verificação local esperada |
+|---|---|
+| Markdown, `AGENTS.md`, runbook ou plano | `git diff --check`; contrato público apenas quando consumir o documento |
+| React ou cliente web | Vitest afetado; no fechamento, lint, formato, testes, build e guarda no-direct-Supabase |
+| Jornada ou rota de browser | Teste de componente primeiro; Playwright somente para a jornada afetada |
+| Módulo AI | Classe unitária afetada; AI Integration apenas para composição, contexto ou boundary real |
+| Foundation sem banco/HTTP | Classe afetada e projeto Foundation Unit |
+| Foundation HTTP, persistência, módulo ou worker | Filtro de integração afetado; projeto inteiro somente com gatilho estratégico |
+| McpHost ou WorkerHost | Teste afetado e Hosts Integration; incluir consumidor direto quando necessário |
+| BDD | Cenário/tag afetado e, no fechamento, projeto Foundation BDD |
+| EF, migration, bootstrap SQL, RLS, grant ou snapshot | Testes afetados, verificadores de banco/EF e gate final estratégico |
+| Fixture, runner, pacote central, analyzer, build ou script de verificação | Contrato focado e um gate público completo após congelar o escopo |
+| Storage/Supabase local | Testes sem Supabase primeiro; verificador Storage somente para adapter/configuração Storage |
+
+O caminho alterado é indício, não decisão suficiente. O agente inclui
+consumidores transitivos do contrato e, em dúvida, amplia para o próximo projeto
+relevante em vez de saltar diretamente ao gate completo.
+
+### Gatilhos do gate local completo
+
+O `verify-public.sh` local é permitido quando muda infraestrutura compartilhada
+de teste/build, banco ou segurança transversal; quando o diff atravessa mais de
+um projeto público; quando teste focado revela falha cruzada; quando o CI está
+indisponível; ou por pedido explícito. Mudança localizada sem esses gatilhos usa
+verificação local focada e o CI completo da PR.
+
+Antes de comando Docker pesado, o agente atribui processos VINX e sessões
+Testcontainers ativos. Se outra worktree usa o mesmo daemon, não inicia gate
+redundante: espera ou coordena o dono, sem parar processo nem remover recurso
+alheio. Ao terminar, confirma que sua sessão desapareceu.
+
 ## BDD verificável
+
+### Orçamento do assembly
 
 | Classe | Resultado observável |
 |---|---|
@@ -100,6 +161,16 @@ não para nem reconfigura runtimes globais automaticamente.
 | Acesso | N/A — configuração do runner não altera usuário, tenant, capability, rota ou dado de produto. |
 | Estado/exceções | Falhas continuam usando `DisposeAsync` e Ryuk; nenhuma reutilização ou limpeza global é adicionada. |
 | Concorrência | Cada processo agenda no máximo duas collections; processos distintos permanecem independentes e sem lock compartilhado. |
+
+### Seleção e momento dos testes
+
+| Classe | Resultado observável |
+|---|---|
+| Sucesso | Mudança localizada executa RED/GREEN e somente projetos consumidores antes do CI completo. |
+| Validação/erros | Impacto ambíguo ou falha cruzada amplia para o próximo projeto relevante sem saltar direto ao gate total. |
+| Acesso | N/A — política de desenvolvimento não altera autenticação, autorização, tenant ou dado de produto. |
+| Estado/exceções | Gate local completo roda no máximo uma vez após o freeze; correção documental posterior não o repete. |
+| Concorrência | Worktree não inicia Docker pesado quando outra sessão VINX já ocupa o daemon; não interrompe recurso alheio. |
 
 ## Verificação
 
@@ -110,17 +181,22 @@ não para nem reconfigura runtimes globais automaticamente.
    máximo um fixture, executa classes distintas e observa no máximo dois
    PostgreSQL simultâneos no processo.
 4. Os testes focados de ciclo de vida e isolamento continuam verdes.
-5. `./scripts/verify-public.sh` executa uma vez antes do push.
+5. `./scripts/verify-public.sh` executa uma vez antes do push quando a mudança
+   possui gatilho estratégico.
+6. Extensão somente documental da política valida diff, caminhos/comandos,
+   contrato rápido do atributo e revisão independente; não repete gate completo
+   já verde sem alteração executável.
 
 Evidências transitórias de contagem, CPU, duração e containers pertencem à
 issue/PR, não a arquivos versionados.
 
 ## Limites e estimativa
 
-Não altera produção, banco, migrations, Supabase, CI, pacote, imagem ou
-configuração global da máquina. Não introduz retentativa, timeout, lock, fila,
-semáforo, reutilização, container compartilhado ou limite de CPU/memória.
+Não altera produção, banco, migrations, Supabase, workflow de CI, pacote, imagem
+ou configuração global da máquina. Não introduz seletor por caminho,
+retentativa, timeout, lock, fila, semáforo, reutilização, container compartilhado
+ou limite de CPU/memória.
 
-Estimativa pré-código revisada após o plano: 4 arquivos não-teste, 2 arquivos
-de teste/configuração, 380–500 linhas manuais e nenhuma linha gerada. A fatia
+Estimativa revisada da PR completa: 6 arquivos não-teste, 2 arquivos de
+teste/configuração, 560–680 linhas manuais e nenhuma linha gerada. A fatia
 permanece abaixo de 25 arquivos e 800 linhas manuais.
