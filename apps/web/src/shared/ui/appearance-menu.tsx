@@ -1,7 +1,16 @@
+import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import PaletteOutlinedIcon from "@mui/icons-material/PaletteOutlined";
-import { Divider, IconButton, Menu, MenuItem } from "@mui/material";
+import {
+  Divider,
+  IconButton,
+  ListItemIcon,
+  Menu,
+  MenuItem,
+  Typography,
+} from "@mui/material";
 import { useColorScheme } from "@mui/material/styles";
 import { useState } from "react";
+import { vinxShadow } from "../../app/theme/surface-tokens";
 import { useVisualPreferences } from "../../app/theme/vinx-theme-provider";
 import type { Density } from "../../app/theme/visual-preferences";
 
@@ -55,8 +64,29 @@ export function AppearanceMenu() {
           list: {
             "aria-labelledby": triggerId,
           },
+          paper: {
+            elevation: 0,
+            sx: {
+              borderRadius: 3,
+              minWidth: 216,
+              mt: 1,
+              px: 0.75,
+              py: 0.75,
+              boxShadow: vinxShadow.overlay,
+            },
+          },
         }}
       >
+        <MenuItem disabled aria-hidden="true" tabIndex={-1}>
+          <Typography
+            color="text.secondary"
+            component="span"
+            sx={{ fontSize: "0.7rem", fontWeight: 700 }}
+            variant="overline"
+          >
+            Aparência
+          </Typography>
+        </MenuItem>
         <MenuItem
           aria-checked={(mode ?? "light") === "light"}
           onClick={() => selectMode("light")}
@@ -64,6 +94,7 @@ export function AppearanceMenu() {
           selected={(mode ?? "light") === "light"}
         >
           Tema: claro
+          {(mode ?? "light") === "light" ? <SelectedCheck /> : null}
         </MenuItem>
         <MenuItem
           aria-checked={mode === "dark"}
@@ -72,8 +103,9 @@ export function AppearanceMenu() {
           selected={mode === "dark"}
         >
           Tema: escuro
+          {mode === "dark" ? <SelectedCheck /> : null}
         </MenuItem>
-        <Divider sx={{ my: 0.5 }} variant="middle" />
+        <Divider sx={{ my: 0.75 }} variant="middle" />
         <MenuItem
           aria-checked={density === "comfortable"}
           onClick={() => selectDensity("comfortable")}
@@ -81,6 +113,7 @@ export function AppearanceMenu() {
           selected={density === "comfortable"}
         >
           Densidade: confortável
+          {density === "comfortable" ? <SelectedCheck /> : null}
         </MenuItem>
         <MenuItem
           aria-checked={density === "compact"}
@@ -89,8 +122,17 @@ export function AppearanceMenu() {
           selected={density === "compact"}
         >
           Densidade: compacta
+          {density === "compact" ? <SelectedCheck /> : null}
         </MenuItem>
       </Menu>
     </>
+  );
+}
+
+function SelectedCheck() {
+  return (
+    <ListItemIcon sx={{ marginLeft: "auto", minWidth: 0, pl: 2 }}>
+      <CheckRoundedIcon fontSize="small" />
+    </ListItemIcon>
   );
 }

@@ -1,4 +1,5 @@
 import HelpOutlinedIcon from "@mui/icons-material/HelpOutlined";
+import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
 import NotificationsOutlinedIcon from "@mui/icons-material/NotificationsOutlined";
 import {
@@ -8,11 +9,13 @@ import {
   Box,
   Button,
   Chip,
+  Divider,
   IconButton,
   Toolbar,
   useScrollTrigger,
 } from "@mui/material";
 import { Link as RouterLink } from "react-router-dom";
+import { glassSurface, vinxTint } from "../../app/theme/surface-tokens";
 import { isAgentWorkspaceEnabled } from "../../features/agent/agent-conversation-provider";
 import { AgentTrigger } from "../../features/agent/agent-trigger";
 import { useNotifications } from "../../features/notifications/notifications-provider";
@@ -59,12 +62,17 @@ export function AppHeader({
       position="fixed"
       sx={(theme) => ({
         borderBottom: 1,
-        borderColor: "divider",
+        borderColor: elevated ? "divider" : "transparent",
         ml: { md: `${theme.vinx.layout.navigationWidth}px` },
         width: { md: `calc(100% - ${theme.vinx.layout.navigationWidth}px)` },
+        transition: theme.transitions.create(
+          ["background-color", "border-color", "box-shadow"],
+          { duration: theme.transitions.duration.short },
+        ),
+        ...(elevated ? glassSurface() : null),
       })}
     >
-      <Toolbar>
+      <Toolbar sx={{ gap: 0.5 }}>
         <IconButton
           aria-controls={
             mobileNavigationOpen ? "vinx-mobile-navigation" : undefined
@@ -72,14 +80,23 @@ export function AppHeader({
           aria-expanded={mobileNavigationOpen}
           aria-label="Abrir navegação"
           onClick={onOpenNavigation}
-          sx={{ display: { md: "none" }, mr: 1 }}
+          sx={{ display: { md: "none" }, mr: 0.5 }}
         >
           <MenuOutlinedIcon />
         </IconButton>
         <Box
           aria-label="Ir para início"
           component={RouterLink}
-          sx={{ color: "inherit", textDecoration: "none" }}
+          sx={{
+            borderRadius: 2,
+            color: "inherit",
+            textDecoration: "none",
+            transition: (theme) =>
+              theme.transitions.create("opacity", {
+                duration: theme.transitions.duration.shortest,
+              }),
+            "&:hover": { opacity: 0.85 },
+          }}
           to="/"
         >
           <AppLogo compact />
@@ -105,17 +122,24 @@ export function AppHeader({
             avatar={
               <Avatar
                 sx={(theme) => ({
-                  bgcolor: "primary.dark",
-                  fontSize: theme.typography.body2.fontSize,
+                  bgcolor: "primary.main",
+                  boxShadow: `inset 0 0 0 1px ${vinxTint.contrastRing}`,
+                  fontSize: theme.typography.caption.fontSize,
+                  fontWeight: 700,
                 })}
               >
                 {initialsFromName(userName)}
               </Avatar>
             }
             label={userName}
-            sx={{ mr: 1, maxWidth: { xs: "8rem", sm: "none" } }}
+            sx={{ mr: 0.5, maxWidth: { xs: "8rem", sm: "none" } }}
           />
         ) : null}
+        <Divider
+          orientation="vertical"
+          flexItem
+          sx={{ display: { xs: "none", sm: "block" }, mx: 0.75, my: 1 }}
+        />
         <AppearanceMenu />
         {isAgentWorkspaceEnabled() ? <AgentTrigger /> : null}
         <IconButton aria-label="Abrir ajuda" component={RouterLink} to="/ajuda">
@@ -124,7 +148,11 @@ export function AppHeader({
         <Button
           disabled={isSigningOut}
           onClick={onSignOut}
-          sx={(theme) => ({ minHeight: theme.vinx.layout.controlMinHeight })}
+          startIcon={<LogoutRoundedIcon />}
+          sx={(theme) => ({
+            minHeight: theme.vinx.layout.controlMinHeight,
+            mr: 0.25,
+          })}
         >
           {isSigningOut ? "Saindo…" : "Sair"}
         </Button>

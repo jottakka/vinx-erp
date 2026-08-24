@@ -1,10 +1,12 @@
 import {
+  alpha,
   createTheme,
   type StorageManager,
   type Theme,
 } from "@mui/material/styles";
 import "./theme-augmentation";
 import { darkPalette, lightPalette } from "./palette-primitives";
+import { displayFontFamily, vinxFieldBorder } from "./surface-tokens";
 import type { Density } from "./visual-preferences";
 
 export type VinxLayoutTokens = {
@@ -14,6 +16,9 @@ export type VinxLayoutTokens = {
   controlMinHeight: number;
   navigationWidth: number;
 };
+
+const bodyFontFamily =
+  'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
 const supportedModes = new Set(["light", "dark"]);
 const supportedSchemes = new Set(["light", "dark"]);
@@ -146,11 +151,81 @@ export function createVinxTheme(density: Density): Theme & {
       MuiButton: {
         defaultProps: { disableElevation: true },
         styleOverrides: {
-          root: { textTransform: "none" },
+          root: {
+            borderRadius: 10,
+            textTransform: "none",
+            "&.Mui-focusVisible": {
+              outline: "2px solid var(--vinx-palette-primary-main)",
+              outlineOffset: 2,
+            },
+          },
+          sizeLarge: { paddingLeft: 24, paddingRight: 24 },
         },
       },
       MuiCard: {
         defaultProps: { elevation: 0 },
+        styleOverrides: {
+          root: { backgroundImage: "none", borderRadius: 12 },
+        },
+      },
+      MuiPaper: {
+        styleOverrides: {
+          root: { backgroundImage: "none" },
+        },
+      },
+      MuiChip: {
+        styleOverrides: {
+          root: { borderRadius: 8, fontWeight: 600 },
+        },
+      },
+      MuiOutlinedInput: {
+        styleOverrides: {
+          root: ({ theme }) => ({
+            borderRadius: 10,
+            backgroundColor: alpha("#292521", 0.03),
+            transition: theme.transitions.create("background-color", {
+              duration: theme.transitions.duration.shortest,
+            }),
+            "&:hover:not(.Mui-focused)": {
+              backgroundColor: alpha("#292521", 0.05),
+            },
+            "&.Mui-focused": {
+              backgroundColor: alpha("#292521", 0.02),
+            },
+            [theme.getColorSchemeSelector("dark")]: {
+              backgroundColor: alpha("#f2ece3", 0.04),
+              "&:hover:not(.Mui-focused)": {
+                backgroundColor: alpha("#f2ece3", 0.07),
+              },
+              "&.Mui-focused": {
+                backgroundColor: alpha("#f2ece3", 0.03),
+              },
+            },
+            "&:hover:not(.Mui-focused):not(.Mui-disabled) .MuiOutlinedInput-notchedOutline":
+              {
+                borderColor: vinxFieldBorder.hover,
+              },
+          }),
+          notchedOutline: {
+            borderColor: vinxFieldBorder.rest,
+          },
+        },
+      },
+      MuiAlert: {
+        styleOverrides: {
+          root: { borderRadius: 10 },
+        },
+      },
+      MuiListItemButton: {
+        styleOverrides: {
+          root: {
+            borderRadius: 10,
+            "&.Mui-focusVisible": {
+              outline: "2px solid var(--vinx-palette-primary-main)",
+              outlineOffset: -2,
+            },
+          },
+        },
       },
       MuiCssBaseline: {
         styleOverrides: {
@@ -175,6 +250,21 @@ export function createVinxTheme(density: Density): Theme & {
               color: "FieldText !important",
             },
           },
+          "@media (prefers-reduced-motion: reduce)": {
+            "*, *::before, *::after": {
+              animationDuration: "0.01ms !important",
+              animationIterationCount: "1 !important",
+              transitionDuration: "0.01ms !important",
+            },
+          },
+          ":focus-visible": {
+            outline: "2px solid var(--vinx-palette-primary-main)",
+            outlineOffset: 2,
+          },
+          "::selection": {
+            backgroundColor: "var(--vinx-palette-primary-main)",
+            color: "var(--vinx-palette-primary-contrastText)",
+          },
         },
       },
     },
@@ -186,17 +276,40 @@ export function createVinxTheme(density: Density): Theme & {
       light: { palette: lightPalette },
       dark: { palette: darkPalette },
     },
-    shape: { borderRadius: 10 },
+    shape: { borderRadius: 12 },
     typography: {
-      fontFamily:
-        'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      h1: { fontWeight: 600, letterSpacing: "-0.02em" },
-      h2: { fontWeight: 600, letterSpacing: "-0.015em" },
-      h3: { fontWeight: 600 },
-      h4: { fontWeight: 600 },
+      fontFamily: bodyFontFamily,
+      h1: {
+        fontFamily: displayFontFamily,
+        fontWeight: 700,
+        letterSpacing: "-0.025em",
+      },
+      h2: {
+        fontFamily: displayFontFamily,
+        fontWeight: 700,
+        letterSpacing: "-0.02em",
+      },
+      h3: {
+        fontFamily: displayFontFamily,
+        fontWeight: 700,
+        letterSpacing: "-0.015em",
+      },
+      h4: {
+        fontFamily: displayFontFamily,
+        fontWeight: 700,
+        fontSize: "1.9rem",
+        lineHeight: 1.22,
+        letterSpacing: "-0.02em",
+      },
       h5: { fontWeight: 600 },
-      h6: { fontWeight: 600 },
-      button: { fontWeight: 600 },
+      h6: { fontWeight: 600, fontSize: "1.05rem", lineHeight: 1.35 },
+      subtitle1: { fontWeight: 600 },
+      overline: {
+        fontWeight: 700,
+        letterSpacing: "0.18em",
+        fontSize: "0.7rem",
+      },
+      button: { fontWeight: 600, letterSpacing: "0.01em" },
     },
     vinx: { layout: layoutTokens[density] },
   }) as Theme & { colorSchemes: VinxColorSchemes };

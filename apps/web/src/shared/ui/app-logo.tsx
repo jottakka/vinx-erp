@@ -1,5 +1,6 @@
 import { Box, Typography } from "@mui/material";
 import { useId } from "react";
+import { displayFontFamily, vinxShadow } from "../../app/theme/surface-tokens";
 
 export function AppLogo({ compact = false }: { compact?: boolean }) {
   const gradientId = useId();
@@ -15,8 +16,9 @@ export function AppLogo({ compact = false }: { compact?: boolean }) {
         aria-hidden="true"
         component="svg"
         sx={{
-          borderRadius: "26%",
+          borderRadius: "28%",
           display: "block",
+          filter: vinxShadow.markFilter,
           height: compact ? 30 : 38,
           width: compact ? 30 : 38,
         }}
@@ -25,19 +27,41 @@ export function AppLogo({ compact = false }: { compact?: boolean }) {
         <defs>
           <linearGradient id={gradientId} x1="0" x2="1" y1="0" y2="1">
             <stop offset="0%" stopColor="var(--vinx-palette-primary-light)" />
+            <stop offset="55%" stopColor="var(--vinx-palette-primary-main)" />
             <stop offset="100%" stopColor="var(--vinx-palette-primary-dark)" />
           </linearGradient>
         </defs>
         <rect
           height="38"
-          rx="11"
+          rx="12"
           style={{ fill: `url(#${gradientId})` }}
           width="38"
           x="1"
           y="1"
         />
+        <rect
+          fill="none"
+          height="32"
+          rx="9"
+          stroke="var(--vinx-palette-primary-contrastText)"
+          strokeOpacity="0.24"
+          strokeWidth="1"
+          width="32"
+          x="4"
+          y="4"
+        />
         <path
-          d="M11.5 13.5 L20 28.5 L28.5 13.5"
+          d="M13 14.5 L20 26 L27 14.5"
+          fill="none"
+          stroke="var(--vinx-palette-primary-contrastText)"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeOpacity="0.35"
+          strokeWidth="3"
+          transform="translate(2.2 -2.2)"
+        />
+        <path
+          d="M11.5 15.5 L20 28 L28.5 15.5"
           fill="none"
           stroke="var(--vinx-palette-primary-contrastText)"
           strokeLinecap="round"
@@ -51,7 +75,11 @@ export function AppLogo({ compact = false }: { compact?: boolean }) {
       >
         <Typography
           component="span"
-          sx={{ fontWeight: 800, letterSpacing: "0.14em" }}
+          sx={{
+            fontFamily: displayFontFamily,
+            fontWeight: 700,
+            letterSpacing: "0.16em",
+          }}
           variant={compact ? "subtitle1" : "h6"}
         >
           VINX
@@ -60,7 +88,7 @@ export function AppLogo({ compact = false }: { compact?: boolean }) {
           <Typography
             color="text.secondary"
             component="span"
-            sx={{ fontWeight: 600, letterSpacing: "0.3em" }}
+            sx={{ fontWeight: 600, letterSpacing: "0.34em" }}
             variant="caption"
           >
             ERP

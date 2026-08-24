@@ -24,13 +24,18 @@ import {
 } from "../shared/routing/app-paths";
 import { HelpPage } from "./help-page";
 import { HomePage } from "./home-page";
+import type { CompanyAppearanceSlot } from "./theme/company-appearance-slot";
 
 export type AppRouteDefinition = AppRouteCatalogEntry & {
+  appearanceSlot?: CompanyAppearanceSlot;
   element: ReactElement;
+  featured?: boolean;
   icon: SvgIconComponent;
 };
 
 export type AppNavigationLink = CatalogNavigationLink & {
+  appearanceSlot?: CompanyAppearanceSlot;
+  featured?: boolean;
   icon: SvgIconComponent;
 };
 
@@ -39,6 +44,8 @@ type AppRouteRenderer = (
 ) => ReactElement;
 
 type AppRoutePresentation = {
+  appearanceSlot?: CompanyAppearanceSlot;
+  featured?: boolean;
   icon: SvgIconComponent;
   render: AppRouteRenderer;
 };
@@ -58,19 +65,24 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
     icon: HelpOutlinedIcon,
     render: (navigationLinks) => <HelpPage navigationLinks={navigationLinks} />,
   },
-  "/paguai": {
-    icon: PaymentsOutlinedIcon,
-    render: () => <PaguaiPage />,
-  },
   "/atendimento": {
+    appearanceSlot: "beta",
     icon: SupportAgentOutlinedIcon,
     render: () => <AtendimentoPage />,
   },
   "/kanban": {
+    appearanceSlot: "gamma",
     icon: ViewKanbanOutlinedIcon,
     render: () => <AtendimentoPage title="Kanban" />,
   },
+  "/paguai": {
+    appearanceSlot: "alpha",
+    featured: true,
+    icon: PaymentsOutlinedIcon,
+    render: () => <PaguaiPage />,
+  },
   "/pessoas": {
+    appearanceSlot: "neutral",
     icon: GroupsOutlinedIcon,
     render: () => <PeoplePage />,
   },
@@ -88,13 +100,17 @@ const productRouteDefinitions = appRouteCatalog.map((route) => ({
 export const appNavigationLinks: readonly AppNavigationLink[] =
   productRouteDefinitions
     .filter((route) => route.navigation)
-    .map(({ group, icon, label, navigation, path }) => ({
-      group,
-      icon,
-      label,
-      navigation,
-      path,
-    }));
+    .map(
+      ({ appearanceSlot, featured, group, icon, label, navigation, path }) => ({
+        appearanceSlot,
+        featured,
+        group,
+        icon,
+        label,
+        navigation,
+        path,
+      }),
+    );
 
 const productRouteManifest: readonly AppRouteDefinition[] =
   productRouteDefinitions.map(({ render, ...route }) => ({

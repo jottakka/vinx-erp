@@ -1,9 +1,10 @@
+import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import { Box, Card, Stack, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import type { ReactNode } from "react";
 import { AppLogo } from "../shared/ui/app-logo";
 import { AppearanceMenu } from "../shared/ui/appearance-menu";
 import { InkBackground } from "./ink-background";
+import { veilSurface, vinxShadow, vinxTint } from "./theme/surface-tokens";
 
 const heroHighlights = [
   "Protótipos navegáveis sem backend",
@@ -93,23 +94,20 @@ export function PublicLayout({ children }: { children: ReactNode }) {
                 >
                   <Box
                     aria-hidden="true"
-                    sx={(theme) => ({
-                      bgcolor: alpha(
-                        theme.palette.primary.main,
-                        theme.palette.mode === "dark" ? 0.16 : 0.1,
-                      ),
+                    sx={{
+                      alignItems: "center",
+                      bgcolor: vinxTint.primaryMuted,
                       border: 1,
-                      borderColor: "divider",
+                      borderColor: vinxTint.primaryEdge,
                       borderRadius: "50%",
                       color: "primary.main",
                       display: "flex",
-                      fontSize: 13,
-                      height: 22,
+                      height: 26,
                       justifyContent: "center",
-                      width: 22,
-                    })}
+                      width: 26,
+                    }}
                   >
-                    ✓
+                    <CheckCircleRoundedIcon fontSize="small" />
                   </Box>
                   <Typography color="text.secondary">{item}</Typography>
                 </Stack>
@@ -120,12 +118,11 @@ export function PublicLayout({ children }: { children: ReactNode }) {
 
         <Card
           sx={(theme) => ({
-            bgcolor: "background.paper",
+            ...veilSurface(),
             border: 1,
             borderColor: "divider",
-            borderRadius: 3,
-            boxShadow:
-              theme.palette.mode === "dark" ? "none" : theme.shadows[4],
+            borderRadius: 4,
+            boxShadow: vinxShadow.lift,
             justifySelf: { xs: "stretch", md: "end" },
             maxWidth: "30rem",
             minWidth: 0,
