@@ -4,6 +4,7 @@ import {
   createVinxTheme,
   vinxTheme,
 } from "./create-vinx-theme";
+import { vinxFieldBorder } from "./surface-tokens";
 import { readDensity } from "./visual-preferences";
 
 function relativeLuminance(color: string) {
@@ -34,6 +35,52 @@ function contrastRatio(foreground: string, background: string) {
   const darker = Math.min(foregroundLuminance, backgroundLuminance);
 
   return (lighter + 0.05) / (darker + 0.05);
+}
+
+function compositeHex(foreground: string, opacity: number, background: string) {
+  const foregroundChannels = foreground
+    .match(/^#([\da-f]{6})$/i)?.[1]
+    ?.match(/.{2}/g)
+    ?.map((channel) => Number.parseInt(channel, 16));
+  const backgroundChannels = background
+    .match(/^#([\da-f]{6})$/i)?.[1]
+    ?.match(/.{2}/g)
+    ?.map((channel) => Number.parseInt(channel, 16));
+
+  if (!foregroundChannels || !backgroundChannels) {
+    throw new Error("Field contrast colors must be six-digit hex values.");
+  }
+
+  return `#${foregroundChannels
+    .map((channel, index) => {
+      const backgroundChannel = backgroundChannels[index];
+
+      if (backgroundChannel === undefined) {
+        throw new Error(
+          "Field contrast colors must use matching RGB channels.",
+        );
+      }
+
+      return Math.round(channel * opacity + backgroundChannel * (1 - opacity));
+    })
+    .map((channel) => channel.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function colorMixOpacity(value: string) {
+  const match = value.match(/\s(\d+)%\s*,\s*transparent\)$/);
+
+  if (!match) {
+    throw new Error(`Expected a transparent color-mix token: ${value}`);
+  }
+
+  const percentage = match[1];
+
+  if (percentage === undefined) {
+    throw new Error(`Expected an opacity percentage: ${value}`);
+  }
+
+  return Number.parseInt(percentage, 10) / 100;
 }
 
 const palettes = [
@@ -136,6 +183,27 @@ describe("vinx semantic theme", () => {
       }
     }
   });
+
+  it.each([
+    ["light", vinxTheme.colorSchemes.light.palette, 0.03],
+    ["dark", vinxTheme.colorSchemes.dark.palette, 0.04],
+  ] as const)(
+    "keeps 3:1 non-text contrast on the unfocused %s field boundary",
+    (_scheme, palette, fieldFillOpacity) => {
+      const fieldFill = compositeHex(
+        palette.text.primary,
+        fieldFillOpacity,
+        palette.background.default,
+      );
+      const fieldBorder = compositeHex(
+        palette.text.primary,
+        colorMixOpacity(vinxFieldBorder.rest),
+        fieldFill,
+      );
+
+      expect(contrastRatio(fieldBorder, fieldFill)).toBeGreaterThanOrEqual(3);
+    },
+  );
 
   it("normalizes mode storage defaults and invalid values to light", () => {
     const events = new Map<string, EventListener>();

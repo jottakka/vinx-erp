@@ -31,7 +31,7 @@ export const vinxTint = {
 
 // Borda de campo com contraste não textual >= 3:1 nos dois esquemas.
 export const vinxFieldBorder = {
-  rest: "color-mix(in srgb, var(--vinx-palette-text-primary) 48%, transparent)",
+  rest: "color-mix(in srgb, var(--vinx-palette-text-primary) 52%, transparent)",
   hover:
     "color-mix(in srgb, var(--vinx-palette-text-primary) 64%, transparent)",
 } as const;
