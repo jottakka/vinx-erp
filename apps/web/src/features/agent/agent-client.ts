@@ -45,11 +45,10 @@ const knownReasonCodeSet = new Set<string>(knownReasonCodes);
 const normalizedReasonCode = z
   .string()
   .nullable()
-  .transform(
-    (value): AgentRunReasonCode | null =>
-      value !== null && knownReasonCodeSet.has(value)
-        ? (value as AgentRunReasonCode)
-        : null,
+  .transform((value): AgentRunReasonCode | null =>
+    value !== null && knownReasonCodeSet.has(value)
+      ? (value as AgentRunReasonCode)
+      : null,
   );
 
 // Campos do corpo tipado: presentes e anuláveis, nunca ausentes; cada

@@ -137,16 +137,24 @@ fechado e UI honesta sobre empresa/estado. Sem mudanças no BE.
   `agent-confirmation-card.tsx` e os testes do botão demonstrativo em
   `agent.test.tsx:74-91` (substituídos pelos novos BDD).
 
-### 2.4 Inventário (recalculado)
+### 2.4 Inventário (recalculado pós-review Sol, base `7a78177`)
 
 - **Novos (3):** `agent-client.ts`, `agent-client.test.ts`,
   `docs/verification/2026-08-23-agent-fe-wiring-test-cases.md`.
-- **Editados (6):** `agent-conversation-provider.tsx`, `agent-contract.ts`,
+- **Editados (7):** `agent-conversation-provider.tsx`, `agent-contract.ts`,
   `agent-conversation.tsx`, `agent-dock.tsx`, `agent-page.tsx`,
-  `agent.test.tsx`.
+  `agent.test.tsx`, `e2e/module-prototypes.spec.ts` (cenário do agente
+  reescrito contra o fluxo real com interceptação de rota — achado do review
+  Sol do PR).
 - **Excluídos (1):** `agent-confirmation-card.tsx`.
-- Total 10 arquivos; estimativa ~550-650 linhas manuais com testes — dentro
-  do teto de 800.
+- Total 11 arquivos; **+1.561/−180 linhas** no diff do PR — acima do teto
+  orientador de 800. Justificativa: a matriz negativa exigida pelo review
+  (combinações status/HTTP cruzadas, envelopes por produtor, reasonCode
+  desconhecido, UUID inválido) e as 5 classes BDD com concorrência/unmount/
+  troca de empresa multiplicam os testes (~950 linhas de teste; produção
+  ~250; docs ~360, incluindo este plano e o manifesto). Fatia mantida como
+  vertical coesa com lista exclusiva; aprovação registrada no review Sol do
+  PR (delta) e a merge é decisão do responsável.
 
 ### 2.5 BDD mínimo (5 classes, mapeadas para teste/manifesto)
 

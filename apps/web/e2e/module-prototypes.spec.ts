@@ -214,17 +214,21 @@ test("Scenario: agent dock runs a typed agent run and shares the conversation wi
   ).toHaveCount(0);
 
   expect(runRequest).not.toBeNull();
-  expect(runRequest?.body).toMatchObject({
+  const capturedRun = runRequest as {
+    body: { requestId?: unknown };
+    headers: Record<string, string>;
+  };
+  expect(capturedRun.body).toMatchObject({
     companyId: "33333333-3333-4333-8333-333333333333",
     journey: "read_only_summarize_v1",
     message: "Preciso antecipar um pagamento",
   });
-  expect((runRequest?.body as { requestId?: unknown }).requestId).toEqual(
+  expect(capturedRun.body.requestId).toEqual(
     expect.stringMatching(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     ),
   );
-  expect(runRequest?.headers["x-csrf-token"]).toBe("test-csrf-token");
+  expect(capturedRun.headers["x-csrf-token"]).toBe("test-csrf-token");
 
   await dock
     .getByRole("button", { name: "Abrir página dedicada do agente" })
