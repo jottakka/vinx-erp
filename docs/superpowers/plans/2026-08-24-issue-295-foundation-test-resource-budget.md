@@ -7,13 +7,16 @@
 
 **Objetivo:** Limitar cada processo de
 `Vinx.Erp.Foundation.IntegrationTests` a duas collections xUnit concorrentes
-sem alterar isolamento, ciclo de vida ou produção.
+e selecionar verificações locais proporcionais ao impacto, sem alterar
+isolamento, ciclo de vida, produção ou CI.
 
 **Arquitetura:** Um atributo compilado no assembly define
 `MaxParallelThreads = 2` e preserva `CollectionPerClass`, paralelismo habilitado
 e algoritmo conservador. Um teste sem Docker fixa o contrato; o runbook e o
 manifesto registram o limite por processo e a coexistência independente de
-Docker Desktop e Colima.
+Docker Desktop e Colima. `AGENTS.md` e o runbook público definem fases, matriz de
+impacto e gatilhos para que gates pesados ocorram somente em momentos
+estratégicos.
 
 **Stack técnico:** .NET SDK 10.0.302, xUnit 2.9.3,
 xunit.runner.visualstudio 4.0.0, Testcontainers.PostgreSql 4.14.0 e
@@ -29,7 +32,9 @@ xunit.runner.visualstudio 4.0.0, Testcontainers.PostgreSql 4.14.0 e
 - Não adicionar lock, fila, semáforo, lease global, reutilização, container compartilhado ou descarte duplicado.
 - Não ler, listar nem executar `quality/private`.
 - Documentação em português; evidência transitória fica na issue/PR.
-- Executar `./scripts/verify-public.sh` uma vez, após congelar o escopo e antes do push.
+- O CI continua executando o gate completo da PR; não alterar `.github/workflows/ci.yml` nem adicionar seletor por caminho.
+- Gate local completo roda no máximo uma vez após o congelamento de escopo e somente com gatilho estratégico.
+- A extensão documental posterior ao gate já verde usa validação proporcional e não repete `verify-public.sh`.
 
 ---
 
@@ -264,3 +269,127 @@ Corrigir findings Critical/Important em uma única rodada, repetir somente os te
 - [ ] **Etapa 6: Preparar push e PR**
 
 Confirmar branch, commits, base `main`, issue #295, evidência focada, gate público e revisão. Usar a descrição da PR para registrar medições transitórias e `Closes #295`; manter a worktree para feedback.
+
+### Tarefa 4: Definir seleção proporcional e gates estratégicos
+
+**Arquivos:**
+- Modificar: `AGENTS.md:3-12`
+- Modificar: `docs/runbooks/public-verification.md`
+- Modificar: `docs/verification/issue-295-foundation-test-resource-budget-test-cases.md`
+
+**Interfaces:**
+- Consome: política aprovada no desenho da issue #295 e comandos públicos já existentes.
+- Produz: regras obrigatórias curtas em `AGENTS.md`, matriz operacional completa no runbook e BDD rastreável no manifesto.
+
+- [ ] **Etapa 1: Substituir a regra genérica de testes em `AGENTS.md`**
+
+Manter as regras compactas e obrigatórias: RED/GREEN mínimo; projeto e
+consumidores diretamente afetados; CI como gate completo normal; gate local
+completo no máximo uma vez somente para mudança compartilhada, banco/segurança,
+mais de um projeto público, falha cruzada, CI indisponível ou pedido explícito;
+documentação somente com validação pertinente; Docker pesado nunca sobreposto a
+outra sessão VINX. Referenciar `docs/runbooks/public-verification.md` para a
+matriz e os comandos.
+
+- [ ] **Etapa 2: Reescrever o runbook público em português**
+
+Preservar a descrição de `verify-public.sh`, dos verificadores EF e do job
+Storage. Adicionar, nesta ordem:
+
+1. fases `Investigação/RED`, `Implementação/GREEN`, `Correção` e `Fechamento`;
+2. matriz para documentação, web/Vitest/Playwright, AI, Foundation Unit,
+   Foundation Integration, Hosts, BDD, EF/migrations e Storage;
+3. comandos exatos dos projetos/scripts já versionados;
+4. gatilhos do gate local completo e regra de consumidores transitivos;
+5. preflight de processos/sessões Docker, espera sem interrupção e confirmação
+   de cleanup próprio;
+6. distinção entre evidência focada, gate local completo e CI.
+
+Documentar exatamente estes comandos de fechamento por área:
+
+```bash
+npm --workspace apps/web run lint
+npm --workspace apps/web run format:check
+npm --workspace apps/web run test -- --run
+npm --workspace apps/web run build
+npm run test:no-direct-supabase
+dotnet test tests/public/Vinx.Erp.AI.UnitTests/Vinx.Erp.AI.UnitTests.csproj --no-restore
+dotnet test tests/public/Vinx.Erp.AI.IntegrationTests/Vinx.Erp.AI.IntegrationTests.csproj --no-restore
+dotnet test tests/public/Vinx.Erp.ArchitectureTests/Vinx.Erp.ArchitectureTests.csproj --no-restore
+dotnet test tests/public/Vinx.Erp.Foundation.UnitTests/Vinx.Erp.Foundation.UnitTests.csproj --no-restore
+dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj --no-restore --filter 'Category!=SupabaseStorage'
+dotnet test tests/public/Vinx.Erp.Foundation.Bdd/Vinx.Erp.Foundation.Bdd.csproj --no-restore
+dotnet test tests/public/Vinx.Erp.Hosts.IntegrationTests/Vinx.Erp.Hosts.IntegrationTests.csproj --no-restore
+./scripts/verify-foundation-database.sh
+./scripts/verify-ef-negative-guards.sh
+./scripts/verify-supabase-storage.sh
+./scripts/verify-public.sh
+```
+
+Para RED/GREEN, o runbook orienta acrescentar `--filter` com o nome completo do
+método/classe realmente alterado, sem fornecer filtro genérico copiável.
+
+- [ ] **Etapa 3: Estender o manifesto BDD**
+
+Adicionar cinco linhas curtas para seleção de testes: mudança localizada;
+impacto ambíguo; acesso N/A; gate completo após freeze sem repetição documental;
+e concorrência entre worktrees. Mapear para `AGENTS.md`, o runbook e revisão
+manual justificada; não criar teste que apenas procure texto-fonte.
+
+- [ ] **Etapa 4: Validar caminhos, comandos e documentação**
+
+Executar:
+
+```bash
+git diff --check
+test -f AGENTS.md
+test -f docs/runbooks/public-verification.md
+test -x scripts/verify-public.sh
+test -x scripts/verify-supabase-storage.sh
+git ls-files 'tests/public/**/*.csproj' | sort
+```
+
+Esperado: exit 0; sete projetos públicos listados; nenhuma referência a script
+ou projeto inexistente; nenhum workflow ou script alterado.
+
+- [ ] **Etapa 5: Commitar a política**
+
+```bash
+git add AGENTS.md docs/runbooks/public-verification.md \
+  docs/verification/issue-295-foundation-test-resource-budget-test-cases.md \
+  docs/superpowers/plans/2026-08-24-issue-295-foundation-test-resource-budget.md
+git commit -m 'docs(test): define strategic verification'
+```
+
+### Tarefa 5: Verificar, revisar e atualizar a PR
+
+**Arquivos:**
+- Somente verificar: todos os arquivos alterados desde `origin/main`.
+
+**Interfaces:**
+- Consome: política da Tarefa 4 e contrato xUnit já verificado.
+- Produz: documentação revisada, branch remota e PR #297 atualizada.
+
+- [ ] **Etapa 1: Executar verificação proporcional final**
+
+Executar `git diff --check`, repetir
+`TestAssemblyConfigurationTests` com `--no-build --no-restore`, confirmar árvore
+limpa e ausência de processos/sessões Testcontainers próprios. Não repetir o
+gate público completo porque a extensão não altera artefato executável.
+
+- [ ] **Etapa 2: Recalcular escopo**
+
+Esperado: 6 arquivos não-teste, 2 arquivos de teste/configuração, 720–790 linhas
+manuais, 0 geradas e nenhum arquivo de CI/script alterado.
+
+- [ ] **Etapa 3: Solicitar revisão independente**
+
+Revisar fases, matriz, comandos, consumidores transitivos, gatilhos, ausência de
+seleção automática, ownership Docker e coerência entre `AGENTS.md`, runbook,
+desenho, manifesto, issue e PR. Corrigir todo finding Critical/Important antes
+do push.
+
+- [ ] **Etapa 4: Atualizar PR #297**
+
+Push sem force, atualizar título/corpo com a política seletiva, manter
+`Closes #295` e ler de volta base, head, estado, mergeabilidade e descrição.

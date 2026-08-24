@@ -198,5 +198,5 @@ retentativa, timeout, lock, fila, semáforo, reutilização, container compartil
 ou limite de CPU/memória.
 
 Estimativa revisada da PR completa: 6 arquivos não-teste, 2 arquivos de
-teste/configuração, 560–680 linhas manuais e nenhuma linha gerada. A fatia
+teste/configuração, 720–790 linhas manuais e nenhuma linha gerada. A fatia
 permanece abaixo de 25 arquivos e 800 linhas manuais.
