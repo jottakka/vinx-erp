@@ -164,6 +164,21 @@ function runCalls(fetchSpy: ReturnType<typeof vi.fn>) {
   return fetchSpy.mock.calls.filter(([path]) => path === agentRunsPath);
 }
 
+function createCompanylessGateway(): MockSessionGateway {
+  const snapshot: BootstrapSnapshot = {
+    companies: [],
+    flags: {},
+    platform: { isPlatformOperator: false },
+    user: { displayName: "Usuária sem empresa", id: "user-without-company" },
+  };
+
+  return {
+    getBootstrap: async () => structuredClone(snapshot),
+    login: async () => structuredClone(snapshot),
+    logout: async () => {},
+  };
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("agent workspace", () => {
@@ -397,6 +412,20 @@ describe("agent workspace", () => {
         "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado.",
       ),
     ).toBeVisible();
+  });
+
+  it("does not claim company-bound processing when the bootstrap has no company", async () => {
+    await renderAgentWorkspace("/agente", createCompanylessGateway());
+
+    expect(
+      await screen.findByText("Sem empresa · Página dedicada"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Sem empresa ativa. O servidor solicitará contexto antes de processar o envio.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/vinculados à empresa indicada/i)).toBeNull();
   });
 
   it("aborts and discards a pending reply when the workspace unmounts", async () => {

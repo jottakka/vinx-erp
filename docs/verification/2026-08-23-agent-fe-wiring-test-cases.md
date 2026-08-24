@@ -32,8 +32,9 @@ produção depende de seed `ai.read` + provider configurado (decisão do dono).
 
 - UI honesta: dock/página mostram o nome da empresa efetiva (`Alfa · Consultas
   independentes`) e o aviso de consultas independentes sem memória de turnos.
-- Proxy local: `vite-api-proxy.test.ts` exige `/agent` no mesmo destino loopback
-  seguro dos demais prefixos, sempre com `changeOrigin=false`.
+- Proxy local: `vite-api-proxy.test.ts` exige somente `/agent/runs` no mesmo
+  destino loopback seguro dos demais prefixos, sempre com `changeOrigin=false`;
+  a rota SPA `/agente` permanece no Vite.
 - Nenhum body bruto, `Error.message`, prompt, mensagem enviada ou erro de Zod
   aparece em UI, log ou resultado do client — somente mensagens fixas e
   `reasonCode`/`code` allow-listed.
@@ -44,17 +45,18 @@ produção depende de seed `ai.read` + provider configurado (decisão do dono).
 
 ## Suítes
 
-- `npx vitest --run src/features/agent/` — 24/24 verdes (15 client + 9 workspace).
-- `npx vitest --run src/app/vite-api-proxy.test.ts` — 11/11 verdes.
+- `npx vitest --run src/features/agent/` — 25/25 verdes (15 client + 10 workspace).
+- `npx vitest --run src/app/vite-api-proxy.test.ts` — 12/12 verdes.
 - `npx playwright test -c playwright.prototypes.config.ts -g "agent dock"` —
-  1/1 verde.
-- Verificação executada no HEAD exato, SEM o gate integral: o
+  1/1 verde no HEAD rebased, conforme evidência do coordenador.
+- Evidência atual do coordenador no HEAD rebased: Vitest integral 353/353,
+  lint, format, build e `test:no-direct-supabase` verdes.
+- Evidência histórica pré-rebase: Vitest integral 345/345 serializado
+  (`--no-file-parallelism`), lint, format, build e e2e do agente verdes.
+- O gate integral continua pendente no HEAD rebased: o
   `./scripts/verify-public.sh` não permite excluir suítes — ele roda
   incondicionalmente todos os projetos públicos, incluindo a integração
   Docker. Por instrução do responsável (Docker instável na máquina), o gate
-  integral não foi re-executado no HEAD; a verificação parcial foi:
-  vitest integral 345/345 serializado (`--no-file-parallelism`), lint,
-  format, build e e2e do agente, todos verdes. Na base `4d68774` o gate
+  integral não foi re-executado no HEAD rebased. Na base `4d68774` o gate
   integral rodou: todas as suítes verdes exceto 5 testes de integração sob
-  contenção, reprovados como infra por re-run solo 5/5; o gate integral no
-  HEAD final fica pendente para janela de máquina estável.
+  contenção, reprovados como infra por re-run solo 5/5.

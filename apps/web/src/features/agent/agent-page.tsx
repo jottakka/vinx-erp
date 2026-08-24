@@ -9,6 +9,9 @@ export function AgentPage() {
   const { companyName, openDock } = useAgentConversation();
   const location = useLocation();
   const navigate = useNavigate();
+  const processingNotice = companyName
+    ? "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado."
+    : "Sem empresa ativa. O servidor solicitará contexto antes de processar o envio.";
 
   function backToContext() {
     openDock();
@@ -29,8 +32,7 @@ export function AgentPage() {
         title="Agente"
       />
       <Alert role="note" severity="info" variant="outlined">
-        Os envios são reais, vinculados à empresa indicada e, quando disponível,
-        processados pelo provedor de IA configurado.
+        {processingNotice}
       </Alert>
       <Card variant="outlined">
         <CardContent>

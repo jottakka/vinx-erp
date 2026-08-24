@@ -149,12 +149,12 @@ fechado e UI honesta sobre empresa/estado. Sem mudanças no BE.
   Sol do PR), `vite.config.ts`, `src/app/vite-api-proxy.test.ts` e
   `docs/runbooks/local-development.md`.
 - **Excluídos (1):** `agent-confirmation-card.tsx`.
-- Total 15 arquivos; **+1.858/−194 linhas** no diff do PR — acima do teto
+- Total 15 arquivos; **+1.951/−194 linhas** no diff do PR — acima do teto
   orientador de 800. Justificativa: a matriz negativa
   exigida pelo review (combinações status/HTTP cruzadas, envelopes por
   produtor, reasonCode desconhecido, UUID inválido), o contrato do proxy local
   e as 5 classes BDD com concorrência/unmount/troca de empresa multiplicam os
-  testes (~999 linhas de teste; produção ~573; docs ~286, incluindo este plano
+  testes (~1.085 linhas de teste; produção ~575; docs ~291, incluindo este plano
   e o manifesto).
   Fatia mantida como vertical coesa com lista exclusiva; aprovação
   registrada no review Sol do PR (delta) e a merge é decisão do
@@ -204,8 +204,11 @@ Sol reprovou o bloco único; decomposição aprovada como issues separadas:
 
 ## 4. Verificação e processo
 
-- `npm test` em `apps/web` (vitest) + `./scripts/verify-public.sh` EXIT:0 no
-  HEAD exato, SERIALIZADO (checar `pgrep -fl dotnet; docker stats` antes).
+- A evidência web atual do HEAD rebased fica no manifesto de verificação:
+  Vitest 353/353, lint, format, build, `test:no-direct-supabase` e Playwright
+  do agente 1/1, conforme registro do coordenador. O
+  `./scripts/verify-public.sh` não foi re-executado no HEAD rebased e continua
+  pendente para uma janela Docker estável.
 - Sol revisa o PR final (delta desta rev. 2 primeiro); Terra revisa o diff
   final antes do freeze se disponível.
 - PR draft `codex/fe-chat-media-context` base main; evidência no comentário;
