@@ -424,6 +424,25 @@ test("runLauncher terminates and awaits the host group after readiness timeout",
   );
 });
 
+test("runLauncher reports cleanup failure over a preceding startup failure", async () => {
+  const harness = createHarness({
+    readinessTimeoutMs: 5,
+    spawnProcess: (command, args, options) => {
+      harness.spawns.push({ command, args, options });
+      queueMicrotask(() => harness.host.emit("spawn"));
+      return harness.host;
+    },
+    killProcessGroup: () => {
+      throw new Error("/sensitive/cleanup/path");
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: child_cleanup_failed$/,
+  );
+});
+
 test("runLauncher forwards a signal received during host startup", async () => {
   const harness = createHarness({
     onHostSpawn: () => harness.signalTarget.emit("SIGINT"),

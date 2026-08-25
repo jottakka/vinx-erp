@@ -475,8 +475,8 @@ export async function runLauncher(overrides = {}) {
     signals.dispose();
   }
 
-  if (primaryError) throw primaryError;
   if (cleanupError) throw cleanupError;
+  if (primaryError) throw primaryError;
   return 0;
 }
 
