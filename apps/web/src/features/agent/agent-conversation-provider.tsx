@@ -100,6 +100,7 @@ function replySources(result: AgentRunSendResult) {
 
 type AgentConversationContextValue = {
   attachments: readonly AgentConversationAttachment[];
+  attachmentSelectionAvailable: boolean;
   attachmentSelectionLimitReached: boolean;
   closeDock: () => void;
   companyName: string | null;
@@ -129,6 +130,7 @@ export type AgentConversationAttachment = {
  */
 const inertValue: AgentConversationContextValue = {
   attachments: [],
+  attachmentSelectionAvailable: false,
   attachmentSelectionLimitReached: false,
   closeDock: () => {},
   companyName: null,
@@ -204,6 +206,9 @@ function ScopedAgentConversationProvider({
   openDock: () => void;
 }) {
   const companyId = company?.companyId ?? null;
+  const attachmentSelectionAvailable = Boolean(
+    companyId && company?.companyName,
+  );
 
   const [messages, setMessages] = useState<readonly AgentMessage[]>([]);
   const [attachments, setAttachments] = useState<
@@ -282,7 +287,7 @@ function ScopedAgentConversationProvider({
 
   const selectAttachments = useCallback(
     (files: readonly File[]) => {
-      if (!files.length) {
+      if (!companyId || !attachmentSelectionAvailable || !files.length) {
         return;
       }
       if (attachmentSnapshot.current.length + files.length > 3) {
@@ -302,17 +307,6 @@ function ScopedAgentConversationProvider({
         };
       });
       replaceAttachments([...attachmentSnapshot.current, ...selected]);
-
-      if (!companyId) {
-        replaceAttachments(
-          attachmentSnapshot.current.map((attachment) =>
-            selected.some(({ localId }) => localId === attachment.localId)
-              ? { ...attachment, errorStage: "validation", state: "failed" }
-              : attachment,
-          ),
-        );
-        return;
-      }
 
       const selectionEpoch = attachmentEpoch.current;
       for (const selection of selected) {
@@ -375,7 +369,7 @@ function ScopedAgentConversationProvider({
           });
       }
     },
-    [companyId, replaceAttachments],
+    [attachmentSelectionAvailable, companyId, replaceAttachments],
   );
 
   const sendMessage = useCallback(
@@ -403,6 +397,7 @@ function ScopedAgentConversationProvider({
 
       sequence.current += 1;
       replaceAttachments([]);
+      setAttachmentSelectionLimitReached(false);
       setMessages((previous) => [
         ...previous,
         {
@@ -464,6 +459,7 @@ function ScopedAgentConversationProvider({
   const value = useMemo(
     () => ({
       attachments,
+      attachmentSelectionAvailable,
       attachmentSelectionLimitReached,
       closeDock,
       companyName: company?.companyName ?? null,
@@ -483,6 +479,7 @@ function ScopedAgentConversationProvider({
       messages,
       openDock,
       attachmentSelectionLimitReached,
+      attachmentSelectionAvailable,
       attachments,
       removeAttachment,
       resetConversation,

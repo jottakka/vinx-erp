@@ -538,6 +538,49 @@ describe("agent workspace", () => {
     expect(screen.queryByText(/vinculados à empresa indicada/i)).toBeNull();
   });
 
+  it("disables attachment selection without a company while keeping text-only sends", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(antiforgeryTokenResponse())
+      .mockResolvedValueOnce(
+        agentRunResponse({
+          status: "result",
+          reasonCode: "ok",
+          text: "Resposta sem empresa",
+          sources: null,
+          correlationId,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace("/", createCompanylessGateway());
+    await user.click(
+      screen.getByRole("button", { name: "Abrir painel do agente" }),
+    );
+    const dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+    const picker = dock.getByLabelText("Anexar documentos ao agente");
+
+    expect(
+      dock.getByText("Selecione uma empresa para anexar documentos ao agente."),
+    ).toBeVisible();
+    expect(dock.getByRole("button", { name: "Anexar" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(picker).toBeDisabled();
+    await user.upload(picker, attachmentFile("sem-empresa.pdf"));
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await user.type(dock.getByLabelText("Mensagem para o agente"), "consulta");
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+    expect(await dock.findByText("Resposta sem empresa")).toBeVisible();
+    const body = JSON.parse(runCalls(fetchSpy)[0][1].body as string);
+    expect(body).not.toHaveProperty("attachments");
+    expect(body).not.toHaveProperty("companyId");
+  });
+
   it("aborts and discards a pending reply when the workspace unmounts", async () => {
     let resolveRun: (value: Response) => void = () => {};
     const pendingRun = new Promise<Response>(
@@ -886,7 +929,7 @@ describe("agent workspace", () => {
     resolveToken(antiforgeryTokenResponse());
   });
 
-  it("sends ready IDs in selection order once and clears the accepted selection", async () => {
+  it("sends three ready IDs in order after rejecting a fourth and clears the warning", async () => {
     const fileIds = [
       "44444444-4444-4444-8444-444444444444",
       "55555555-5555-4555-8555-555555555555",
@@ -904,6 +947,11 @@ describe("agent workspace", () => {
       attachmentFile("terceiro.pdf"),
     ]);
     await waitFor(() => expect(dock.getAllByText("Pronto")).toHaveLength(3));
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("quarto.pdf"),
+    );
+    expect(await dock.findByText(/no máximo três anexos/i)).toBeVisible();
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
     expect(await dock.findByText("Resposta autorizada")).toBeVisible();
@@ -912,6 +960,7 @@ describe("agent workspace", () => {
     expect(
       dock.queryByRole("list", { name: "Anexos selecionados" }),
     ).toBeNull();
+    expect(dock.queryByText(/no máximo três anexos/i)).toBeNull();
   });
 
   it("blocks partial send when a ready attachment has a failed companion", async () => {

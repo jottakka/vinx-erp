@@ -81,6 +81,7 @@ function attachmentFailureText(
 export function AgentConversation() {
   const {
     attachments,
+    attachmentSelectionAvailable,
     attachmentSelectionLimitReached,
     companyName,
     messages,
@@ -139,6 +140,11 @@ export function AgentConversation() {
         ) : null}
       </Box>
       <Stack component="form" onSubmit={submit} spacing={1}>
+        {!attachmentSelectionAvailable ? (
+          <Alert severity="info">
+            Selecione uma empresa para anexar documentos ao agente.
+          </Alert>
+        ) : null}
         {attachmentSelectionLimitReached ? (
           <Alert severity="error">
             Você pode selecionar no máximo três anexos.
@@ -192,11 +198,15 @@ export function AgentConversation() {
             size="small"
             value={draft}
           />
-          <Button component="label" disabled={thinking}>
+          <Button
+            component="label"
+            disabled={thinking || !attachmentSelectionAvailable}
+          >
             Anexar
             <input
               accept="application/pdf,image/jpeg,image/png"
               aria-label="Anexar documentos ao agente"
+              disabled={thinking || !attachmentSelectionAvailable}
               multiple
               onChange={selectFiles}
               style={{ display: "none" }}

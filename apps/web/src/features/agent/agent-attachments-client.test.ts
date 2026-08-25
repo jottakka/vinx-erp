@@ -104,9 +104,14 @@ function expectFailure(
   error: Record<string, unknown>,
 ) {
   expect(result).toEqual({ ok: false, error });
-  expect(JSON.stringify(result)).not.toContain("storage.test.invalid");
-  expect(JSON.stringify(result)).not.toContain("untrusted response body");
-  expect(JSON.stringify(result)).not.toContain("raw failure");
+  const serialized = JSON.stringify(result);
+  expect(serialized).not.toContain("storage.test.invalid");
+  expect(serialized).not.toContain("untrusted response body");
+  expect(serialized).not.toContain("raw failure");
+  if (!result.ok && result.error.stage === "storage") {
+    expect(result.error).not.toHaveProperty("status");
+    expect(result.error).not.toHaveProperty("code");
+  }
 }
 
 describe("agent attachment upload client", () => {
@@ -374,7 +379,7 @@ describe("agent attachment upload client", () => {
       rejectedStorage,
     ]);
 
-    expectFailure(result, { kind: "protocol", stage: "storage", status: 403 });
+    expectFailure(result, { kind: "protocol", stage: "storage" });
     expect(rejectedStorage.bodyUsed).toBe(false);
   });
 
@@ -396,7 +401,7 @@ describe("agent attachment upload client", () => {
     [
       "HTTP",
       response("untrusted response body", 403, false),
-      { kind: "protocol", stage: "storage", status: 403 },
+      { kind: "protocol", stage: "storage" },
     ],
     [
       "network",

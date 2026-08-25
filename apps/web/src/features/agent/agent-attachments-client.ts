@@ -323,7 +323,7 @@ export function createAgentAttachmentClient({
       }
       return response.status >= 200 && response.status < 300
         ? { ok: true }
-        : fail("storage", "protocol", response.status);
+        : fail("storage", "protocol");
     } catch {
       return fail("storage", signal.aborted ? "aborted" : "network");
     }

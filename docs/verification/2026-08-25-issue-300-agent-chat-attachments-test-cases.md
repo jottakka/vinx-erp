@@ -12,8 +12,8 @@ retry, WebP e credenciais de storage permanecem fora desta fatia.
 | --- | --- | --- |
 | Client | Nome, tipo, WebP, tamanho zero, +1 byte, 25 MiB exato e cancelamento após digest preservam a admissão local. | `agent-attachments-client.test.ts` |
 | Client | SHA-256, bytes originais, request IDs distintos, antiforgery por mutação, PUT sem credenciais e confirmação produzem somente metadados seguros. | `agent-attachments-client.test.ts` |
-| Client | HTTPS e loopback DEV são os únicos targets aceitos; HTTP externo, userinfo, fragmento, resposta inválida, rede e cancelamento por etapa convergem em falha tipada sem retry nem corpo. | `agent-attachments-client.test.ts` |
-| Provider/UI | Três arquivos preservam ordem e estado; teto limpa ao remover; falho e pendente bloqueiam envio parcial; remoção é individual. | `agent.test.tsx` |
+| Client | HTTPS e loopback DEV são os únicos targets aceitos; HTTP externo, userinfo, fragmento, resposta inválida, rede e cancelamento por etapa convergem em falha tipada sem retry, corpo ou status do storage. | `agent-attachments-client.test.ts` |
+| Provider/UI | Três arquivos preservam ordem e estado; teto limpa ao remover ou enviar; falho e pendente bloqueiam envio parcial; sem empresa, picker e input ficam acessivelmente desabilitados sem impedir texto. | `agent.test.tsx` |
 | Provider/UI | Reset, unmount e troca de membership abortam upload e descartam resposta tardia; dock e página usam a mesma seleção. | `agent.test.tsx` |
 | Agent client | Sem IDs, o corpo histórico não muda; com IDs prontos, a cópia em ordem segue no request; `document_context_unavailable` mantém reason e orientação fixa. | `agent-client.test.ts`, `agent.test.tsx` |
 | Browser | Rotas antiforgery, intenção, PUT, confirmação e run são interceptadas; após remover o primeiro arquivo, somente o segundo ID alcança o run. | `module-prototypes.spec.ts` |

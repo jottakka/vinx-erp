@@ -233,8 +233,13 @@ matriz cobre cancelamento durante parsers de intenção/confirmação, PUT que
 resolve após cancelamento, limites exatos, targets permitidos e bloqueio de
 envio parcial; helpers de teste passam a concentrar cenários repetidos.
 
+**Correção de revisão 2/5:** falha de storage não expõe status do provedor;
+envio aceito limpa o aviso de teto junto da seleção; sem empresa, o picker
+visível e seu input ficam desabilitados com orientação fixa, e a jornada
+textual continua sem anexos.
+
 **Arquivos:** 11 (client, provider, UI, contrato do agent, Vitest, Playwright
-e documentação), 1.739 adições e 21 remoções manuais. O total de 1.760 linhas
+e documentação), 1.805 adições e 21 remoções manuais. O total de 1.826 linhas
 alteradas excede o alvo de 800, mas a fatia continua coesa: a fronteira de
 upload, o estado compartilhado, o contrato do run e as provas de cancelamento
 e não-vazamento são necessários para não expor uma seleção parcial.
