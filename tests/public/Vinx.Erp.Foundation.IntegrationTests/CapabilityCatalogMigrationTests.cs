@@ -10,6 +10,7 @@ public sealed class CapabilityCatalogMigrationTests
 {
     private const string BeforeCapabilityCatalog = "20260810231256_AddSessionGateAndSelfRevocation";
     private const string BeforeFilesReadOcr = "20260823150831_AddExternalIdentityReprovisioning";
+    private const string BeforeAiRead = "20260824164540_AddFilesReadOcrCapability";
 
     private static readonly (Guid Id, string Name)[] ExpectedCapabilities =
     [
@@ -17,7 +18,8 @@ public sealed class CapabilityCatalogMigrationTests
         (KnownCapabilities.FilesUploadId, KnownCapabilities.FilesUpload),
         (KnownCapabilities.FilesConfirmId, KnownCapabilities.FilesConfirm),
         (KnownCapabilities.MembershipsRevokeId, KnownCapabilities.MembershipsRevoke),
-        (KnownCapabilities.FilesReadOcrId, KnownCapabilities.FilesReadOcr)
+        (KnownCapabilities.FilesReadOcrId, KnownCapabilities.FilesReadOcr),
+        (KnownCapabilities.AiReadId, KnownCapabilities.AiRead)
     ];
 
     [Fact]
@@ -182,6 +184,47 @@ public sealed class CapabilityCatalogMigrationTests
         await using var migrator = fixture.CreateMigratorDbContext();
         var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
             await migrator.Database.MigrateAsync(BeforeFilesReadOcr));
+
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
+    }
+
+    [Fact]
+    public async Task Ai_read_downgrade_fails_closed_when_the_capability_is_referenced()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var companyId = Guid.NewGuid();
+        var groupId = Guid.NewGuid();
+        var roleId = Guid.NewGuid();
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var insert = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.groups (id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+            VALUES (@group_id, 'Grupo AI', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp());
+            INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+            VALUES (@company_id, @group_id, 'Empresa AI', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp());
+            INSERT INTO foundation.roles (id, company_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+            VALUES (@role_id, @company_id, 'Leitor AI', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp());
+            INSERT INTO foundation.role_capabilities (id, company_id, role_id, capability_id, scope, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+            VALUES (gen_random_uuid(), @company_id, @role_id, @capability_id, 'company', @actor_id, @actor_id, @request_id, clock_timestamp(), clock_timestamp());
+            """, administrator))
+        {
+            insert.Parameters.AddWithValue("group_id", groupId);
+            insert.Parameters.AddWithValue("company_id", companyId);
+            insert.Parameters.AddWithValue("role_id", roleId);
+            insert.Parameters.AddWithValue("actor_id", actorId);
+            insert.Parameters.AddWithValue("request_id", requestId);
+            insert.Parameters.AddWithValue("capability_id", KnownCapabilities.AiReadId);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        await using var migrator = fixture.CreateMigratorDbContext();
+        var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
+            await migrator.Database.MigrateAsync(BeforeAiRead));
 
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
     }

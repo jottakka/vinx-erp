@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Guardrails;
 using Vinx.Erp.Foundation.Identity;
 
@@ -21,7 +23,8 @@ public sealed class AgentRunner(
     IAgentModel? model,
     ILogger<AgentRunner> logger,
     Func<string, AgentTaskProfile?>? profileCatalog = null,
-    AgentOutputGate? outputGate = null)
+    AgentOutputGate? outputGate = null,
+    DocumentContextNormalizer? documentContextNormalizer = null)
 {
     private const string Operation = "run";
     private const string Module = "Vinx.Erp.AI";
@@ -31,13 +34,23 @@ public sealed class AgentRunner(
 
     private readonly Func<string, AgentTaskProfile?> lookupProfile = profileCatalog ?? LookupInCatalog;
 
+    public Task<AgentOutcome> RunAsync(
+        ActorContext actor,
+        string profileId,
+        string message,
+        Guid? requestedCompanyId,
+        CancellationToken cancellationToken) =>
+        RunAsync(actor, profileId, message, requestedCompanyId, Array.Empty<Guid>(), cancellationToken);
+
     public async Task<AgentOutcome> RunAsync(
         ActorContext actor,
         string profileId,
         string message,
         Guid? requestedCompanyId,
+        IReadOnlyList<Guid> attachmentIds,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(attachmentIds);
         var stopwatch = Stopwatch.StartNew();
 
         // 1. Validação antes de qualquer consulta ou modelo.
@@ -48,11 +61,53 @@ public sealed class AgentRunner(
             return Finish(AgentOutcomeStatus.Invalid, invalidReason, actor, stopwatch);
         }
 
+        if (attachmentIds.Count > 0 && !profile!.AllowDocumentAttachments)
+        {
+            return Finish(AgentOutcomeStatus.Invalid, AgentOutcomeReason.AttachmentsNotAllowed, actor, stopwatch);
+        }
+
         // 2. Contexto confiável resolvido ANTES do modelo; reason copiado.
         var resolution = await contextResolver.ResolveAsync(actor, profile!, requestedCompanyId, cancellationToken);
         if (resolution.Status != AgentContextResolutionStatus.Resolved)
         {
             return Finish(MapResolutionStatus(resolution.Status), resolution.ReasonCode, actor, stopwatch);
+        }
+
+        if (attachmentIds.Count > 0 && documentContextNormalizer is null)
+        {
+            return Finish(
+                AgentOutcomeStatus.NeedsClarification,
+                AgentOutcomeReason.DocumentContextUnavailable,
+                actor,
+                stopwatch);
+        }
+
+        var turnText = message;
+        if (attachmentIds.Count > 0)
+        {
+            var documentContexts = new List<DocumentContextResult>(attachmentIds.Count);
+            foreach (var attachmentId in attachmentIds)
+            {
+                var documentContext = await documentContextNormalizer!
+                    .BuildContextAsync(
+                        actor,
+                        resolution.Context!.CompanyId,
+                        attachmentId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (documentContext.Status is not DocumentContextStatus.Ready)
+                {
+                    return Finish(
+                        AgentOutcomeStatus.NeedsClarification,
+                        AgentOutcomeReason.DocumentContextUnavailable,
+                        actor,
+                        stopwatch);
+                }
+
+                documentContexts.Add(documentContext);
+            }
+
+            turnText = ComposeTurn(message, documentContexts);
         }
 
         // 3. Provider não atribuído ou cliente ausente: fail-closed até #135.
@@ -62,7 +117,7 @@ public sealed class AgentRunner(
         }
 
         // 4. Turn normalizado: uma única mensagem do usuário, uma chamada.
-        var messages = new List<ChatMessage> { new(ChatRole.User, message) };
+        var messages = new List<ChatMessage> { new(ChatRole.User, turnText) };
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linkedCts.CancelAfter(profile.Timeout);
 
@@ -159,6 +214,26 @@ public sealed class AgentRunner(
             CitedSources: [],
             Confidence: null,
             HasToolProposal: hasToolProposal);
+    }
+
+    private static string ComposeTurn(string message, IReadOnlyList<DocumentContextResult> documentContexts)
+    {
+        var context = JsonSerializer.Serialize(new
+        {
+            untrusted = true,
+            documents = documentContexts.Select(document => new
+            {
+                truncated = document.Truncated,
+                totalCharacters = document.TotalCharacters,
+                segments = document.Segments.Select(segment => new
+                {
+                    source = segment.SourceRef,
+                    untrusted = segment.Untrusted,
+                    text = segment.Text,
+                }),
+            }),
+        });
+        return $"{message}\n\n--- BEGIN UNTRUSTED DOCUMENT CONTEXT ---\n{context}\n--- END UNTRUSTED DOCUMENT CONTEXT ---";
     }
 
     private AgentOutcome Finish(

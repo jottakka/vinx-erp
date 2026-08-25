@@ -108,6 +108,7 @@ public sealed class AgentTaskProfileTests
         Assert.Equal("summarize", profile!.Journey);
         Assert.Equal(AgentJourneyScope.Company, profile.Scope);
         Assert.Equal(AgentCapabilities.Read, profile.RequiredCapabilityName);
+        Assert.True(profile.AllowDocumentAttachments);
 
         Assert.False(AgentTaskProfileCatalog.TryGet("inventado", out var unknown));
         Assert.Null(unknown);
@@ -154,6 +155,14 @@ public sealed class AgentTaskProfileTests
     }
 
     [Fact]
+    public void Document_attachments_default_to_off_for_existing_profiles()
+    {
+        var profile = BuildProfile();
+
+        Assert.False(profile.AllowDocumentAttachments);
+    }
+
+    [Fact]
     public void CreateApprovedProfile_carries_catalog_values_with_server_side_selection()
     {
         var selection = new AgentModelSelection("openai-compatible", "modelo-aprovado");
@@ -170,6 +179,7 @@ public sealed class AgentTaskProfileTests
         Assert.Empty(profile.AllowedTools);
         Assert.False(profile.SourcesRequired);
         Assert.Null(profile.RequiredOutputFields);
+        Assert.True(profile.AllowDocumentAttachments);
     }
 
     [Fact]

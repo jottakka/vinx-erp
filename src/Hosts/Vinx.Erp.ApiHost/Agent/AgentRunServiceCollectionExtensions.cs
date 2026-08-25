@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Vinx.Erp.AI;
+using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Guardrails;
 using Vinx.Erp.AI.Providers;
 using Vinx.Erp.AI.Providers.DeepSeek;
@@ -23,6 +24,7 @@ internal static class AgentRunServiceCollectionExtensions
 {
     private const string ConfigurationSection = "AgentRun";
     private const string ProviderHttpClientName = "agent-provider";
+    private const string VisionHttpClientName = "agent-document-vision";
 
     /// <summary>Registra options, gates, provider client, runner e o serviço de aplicação de POST /agent/runs.</summary>
     public static IServiceCollection AddAgentRunSurface(
@@ -73,13 +75,39 @@ internal static class AgentRunServiceCollectionExtensions
                     serviceProvider.GetService<ILoggerFactory>())));
         }
 
+        if (agentRun.Vision is { } vision)
+        {
+            var visionProfile = vision.ToProviderOptions();
+            var allowedClassifications = vision.ToClassificationAllowlist();
+            services.AddHttpClient(
+                VisionHttpClientName,
+                client =>
+                {
+                    client.BaseAddress = visionProfile.Endpoint;
+                    client.Timeout = visionProfile.Timeout;
+                });
+            services.AddScoped<IAuthorizedDocumentSource, FoundationAuthorizedDocumentSource>();
+            services.AddScoped(serviceProvider =>
+            {
+                var visionClient = new OpenAiCompatibleChatClient(
+                    visionProfile,
+                    serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(VisionHttpClientName),
+                    serviceProvider.GetService<ILoggerFactory>()?.CreateLogger<OpenAiCompatibleChatClient>());
+                return new DocumentContextNormalizer(
+                    serviceProvider.GetRequiredService<IAuthorizedDocumentSource>(),
+                    new DocumentVisionOcr(visionClient),
+                    DocumentContextLimits.FromVisionProfile(visionProfile, allowedClassifications));
+            });
+        }
+
         services.AddScoped(serviceProvider => new AgentRunner(
             serviceProvider.GetRequiredService<IAgentContextResolver>(),
             // Sem provider registrado o model é null: o runner falha fechado.
             serviceProvider.GetService<IAgentModel>(),
             serviceProvider.GetRequiredService<ILogger<AgentRunner>>(),
             profileCatalog: CreateProfileCatalog(selection),
-            outputGate: serviceProvider.GetRequiredService<AgentOutputGate>()));
+            outputGate: serviceProvider.GetRequiredService<AgentOutputGate>(),
+            documentContextNormalizer: serviceProvider.GetService<DocumentContextNormalizer>()));
         services.AddScoped<AgentExecutionApplicationService>();
         return services;
     }

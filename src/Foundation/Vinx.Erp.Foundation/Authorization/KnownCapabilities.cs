@@ -37,6 +37,11 @@ public static class KnownCapabilities
         "9e77f769-2093-55a5-a482-85ed3e83dc88"
     );
 
+    public const string AiRead = "ai.read";
+    public static readonly Guid AiReadId = Guid.Parse(
+        "46db8e9e-5bd5-59ea-a371-0312ba8fafb8"
+    );
+
     public const string PaguaiDraftRead = "paguai.draft.read";
     public static readonly Guid PaguaiDraftReadId = Guid.Parse(
         "766bdb56-80c0-5dee-982f-be7f0d3eaea8"

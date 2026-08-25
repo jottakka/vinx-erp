@@ -328,6 +328,41 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             {
                 builder.UseSetting("AgentRun:Timeout", agentRunOptions.Timeout.ToString());
             }
+
+            if (agentRunOptions.Vision is { } vision)
+            {
+                if (vision.Provider is not null)
+                {
+                    builder.UseSetting("AgentRun:Vision:Provider", vision.Provider);
+                }
+
+                if (vision.Endpoint is not null)
+                {
+                    builder.UseSetting("AgentRun:Vision:Endpoint", vision.Endpoint.ToString());
+                }
+
+                if (vision.ApiKey is not null)
+                {
+                    builder.UseSetting("AgentRun:Vision:ApiKey", vision.ApiKey);
+                }
+
+                if (vision.Model is not null)
+                {
+                    builder.UseSetting("AgentRun:Vision:Model", vision.Model);
+                }
+
+                if (vision.Timeout != default)
+                {
+                    builder.UseSetting("AgentRun:Vision:Timeout", vision.Timeout.ToString());
+                }
+
+                for (var index = 0; index < vision.AllowedClassifications.Count; index++)
+                {
+                    builder.UseSetting(
+                        $"AgentRun:Vision:AllowedClassifications:{index}",
+                        vision.AllowedClassifications[index]);
+                }
+            }
         }
 
         // Segredos de teste sem valor real; o webhook valida assinatura

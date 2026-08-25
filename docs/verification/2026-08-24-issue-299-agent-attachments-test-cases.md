@@ -1,0 +1,17 @@
+# Casos testados — anexos no agente (#299)
+
+| Classe | Cenário/BDD | Teste ou caminho | Situação |
+|---|---|---|---|
+| sucesso | Zero, um ou três anexos preservam o turno único; anexos repetidos mantêm a primeira ordem e o contexto chega marcado como não confiável | `AgentRunnerTests`; `AgentRunnerAttachmentTests`; `AgentHttpContractTests.Attachments_are_deduplicated_in_first_seen_order` | coberto |
+| validação | Null, forma não-array, elemento não-string, UUID inválido/zero/não canônico e mais de três IDs distintos falham com reason estável | `AgentHttpContractTests.Invalid_attachment_shapes_and_ids_are_rejected_with_the_attachment_code`; `More_than_three_distinct_attachments_is_rejected_after_deduplication` | coberto |
+| validação | Perfil sem permissão nega antes do provider; visão parcial, inválida ou sem allowlist falha na partida sem ecoar configuração | `AgentRunnerAttachmentTests.Profile_without_document_permission_rejects_attachments_before_the_provider`; `AgentRunCompositionTests.Partial_or_empty_document_vision_configuration_fails_with_a_fixed_message` | coberto |
+| acesso | Empresa sem acesso continua negada antes do modelo; falta de capability documental converge em `document_context_unavailable` | `AgentEndpointTests.Forged_company_denies_without_consulting_the_model`; `Attachment_without_document_read_capability_converges_to_context_unavailable` | coberto |
+| acesso | Documento/empresa/capability negados na fonte e classificação fora da allowlist falham fechado; classificação informada no upload não concede OCR | `AuthorizedDocumentSourceTests`; `DocumentContextNormalizerTests.Source_denial_is_fail_closed`; `Classification_outside_the_allowlist_is_denied_before_any_work` | coberto |
+| estado | Normalizer ausente, falha em anexo posterior, timeout de extração e cancelamento não produzem resposta parcial no provider principal | `AgentRunnerAttachmentTests.Missing_document_normalizer_needs_clarification_after_trusted_context_resolution`; `Later_attachment_failure_discards_prior_context_before_the_main_provider`; `Caller_cancellation_during_attachment_normalization_propagates_without_main_response`; `DocumentContextNormalizerTests` | coberto |
+| concorrência | Lista canônica idêntica faz replay; lista diferente ou reordenada retorna 409; isolamento concorrente anterior permanece | `AgentEndpointTests.Canonical_attachment_order_participates_in_idempotency`; `Same_requestId_replays_same_body_without_a_second_call`; `Parallel_requests_isolate_outcomes_and_correlations` | coberto |
+| catálogo | Migration registra `ai.read` com UUID canônico, sem grant automático, e downgrade referenciado falha fechado | `CapabilityCatalogMigrationTests.Migration_seeds_each_known_capability_once_without_runtime_mutation_privileges`; `Ai_read_downgrade_fails_closed_when_the_capability_is_referenced`; `AgentEndpointTests.SeedScenarioAsync` | coberto |
+| contrato | OpenAPI publica `attachments` opcional como array de UUID com `maxItems: 3` | `OpenApiInferenceContractPinTests.Agent_run_exposes_optional_bounded_uuid_attachments` | coberto |
+
+O gate público completo permanece responsabilidade do CI. A verificação local
+desta fatia usa AI Unit, Foundation Unit, filtros Foundation Integration e os
+verificadores de banco/EF previstos no runbook público.

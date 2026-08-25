@@ -8,7 +8,9 @@ OpenAI-compatible (`OpenAiCompatibleChatClient`) atrás de `IChatClient`
 (Microsoft.Extensions.AI) com SDK oficial OpenAI 2.x; o DeepSeek v4 Flash é
 um perfil nomeado do núcleo, e perfis de visão podem ser declarados para o
 OCR de #134. Desde #138 a API supervisionada `POST /agent/runs` expõe o
-núcleo no ApiHost (ver seção API supervisionada). Não existe Anthropic,
+núcleo no ApiHost (ver seção API supervisionada). Desde #299 essa API aceita
+até três referências opacas de documentos e as normaliza pelo pipeline
+autorizado antes da única chamada principal. Não existe Anthropic,
 OpenCode, memória longa, vector store, streaming nem persistência de
 conversa.
 
@@ -177,15 +179,20 @@ execução de ferramenta.
 
 O ApiHost expõe `POST /agent/runs` (grupo `/agent` com autorização de sessão
 interna e rate limit `foundation`): o corpo aceita SOMENTE
-`{ requestId, journey, message, companyId? }` sob parse estrito (campos
-fechados, tipos exatos, cap de 24 KiB por bytes efetivamente lidos) e o
+`{ requestId, journey, message, companyId?, attachments? }` sob parse estrito
+(campos fechados, tipos exatos, cap de 24 KiB por bytes efetivamente lidos).
+`attachments` é um array opcional de UUIDs canônicos, deduplicado na primeira
+ordem enviada e limitado a três IDs distintos. A lista canônica participa do
+hash de idempotência: reordenação ou troca com o mesmo `requestId` recebe 409,
+nunca replay de outro conjunto. O
 cliente nunca envia provider, modelo, capability ou veredito. A ordem completa
 é: autenticação → rate limit `foundation` → session gate interno → parse estrito (400 tipado `validation_error`
 sem eco do payload) → idempotência por `requestId`/commandName `agent.run`
 (replay devolve o mesmo corpo sem nova chamada; hash divergente vira 409
 `idempotency_conflict` auditado) → validação de entrada → contexto confiável
 (membership + `ai.read` escopo Company; empresa forjada nega sem consultar o
-modelo) → gate de provider (fail-closed `provider_not_configured`) → UMA
+modelo) → contexto efêmero de cada anexo, quando presente → gate de provider
+(fail-closed `provider_not_configured`) → UMA
 chamada de modelo com seleção composta server-side → `AgentOutputGate` na
 ordem fixa → resposta tipada `result | needs_clarification | denied |
 validation_error | conflict | requires_confirmation` com correlation;
@@ -199,6 +206,17 @@ bruta, transcript ou PII — o `ResultJson` guarda somente a resposta segura.
 Execução local (sem key → 503 `provider_not_configured`; com key via env) no
 runbook `docs/runbooks/local-development.md`; matriz BDD em
 `docs/verification/issue-138-agent-api-test-cases.md`.
+
+Somente `read_only_summarize_v1` permite anexos. Cada referência é lida pela
+fronteira Foundation e normalizada em ordem; qualquer negação, indisponibilidade
+ou falha de extração converge em `document_context_unavailable`, sem chamada ao
+provider principal. Um sucesso monta uma única mensagem de usuário com bloco
+JSON marcado `untrusted`, fontes `fileId:pN` e os limites/truncagem já aplicados.
+O perfil opcional `AgentRun:Vision` é exclusivamente server-side e exige
+provider OpenAI-compatible, endpoint, chave, modelo, timeout e allowlist não
+vazia de classificações. Se ausente, o normalizer não é registrado. Se parcial
+ou inválido, a partida falha com mensagem fixa. A classificação declarada no
+upload nunca amplia a allowlist.
 
 ## Ownership
 
@@ -239,9 +257,16 @@ não atende.
 
 ## Contract version
 
-`2.4` — mudança intencional sobre a 2.3: adiciona a superfície HTTP
-supervisionada `POST /agent/runs` (#138) — parse estrito do corpo
-`{ requestId, journey, message, companyId? }`, idempotência por `requestId`
+`2.5` — mudança intencional sobre a 2.4: #299 adiciona `attachments?` ao
+`POST /agent/runs`, com teto de três UUIDs distintos, canonicalização estável,
+idempotência vinculada à ordem canônica, normalização autorizada e contexto
+`untrusted` em turno único. A composição de visão é opcional e fail-closed; a
+allowlist server-side é a única autoridade de classificação. A capability
+canônica `ai.read` é registrada, mas não concedida automaticamente.
+
+A 2.4 adicionou a superfície HTTP supervisionada `POST /agent/runs` (#138) —
+parse estrito do corpo `{ requestId, journey, message, companyId? }`,
+idempotência por `requestId`
 (commandName `agent.run`, `ResultJson` somente com a resposta segura),
 auditoria `AuditSource.Ai` com metadata `{status, reasonCode}`, composição
 server-side do provider (`AddAgentRunSurface`, fail-closed
@@ -261,7 +286,10 @@ O módulo não mantém dados para excluir; nenhuma conversa é persistida. Aprov
 
 ## Migration notes
 
-O módulo não possui migrações. As tabelas, policies, grants e capabilities de
-aprovação permanecem migrações da Foundation. A chave do provider mora no cofre
+O módulo não possui migrações próprias. A Foundation registra `ai.read` com o
+UUID canônico `46db8e9e-5bd5-59ea-a371-0312ba8fafb8`; essa migration atualiza
+somente o catálogo e não concede a capability a papel algum. As tabelas,
+policies, grants e capabilities de aprovação permanecem migrações da
+Foundation. A chave do provider mora no cofre
 de configuração do host; nenhum endpoint ou segredo é versionado neste
 documento ou no código de teste.

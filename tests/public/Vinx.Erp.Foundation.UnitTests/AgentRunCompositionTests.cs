@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.AI;
+using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Guardrails;
 using Vinx.Erp.AI.Providers;
 using Vinx.Erp.ApiHost.Agent;
@@ -111,6 +112,66 @@ public sealed class AgentRunCompositionTests
         Assert.Throws<InvalidOperationException>(
             () => CreateBaseServices().AddAgentRunSurface(configuration));
     }
+
+    [Fact]
+    public void Complete_document_vision_configuration_registers_the_normalizer_as_scoped()
+    {
+        var configuration = CreateConfiguration(
+            ("AgentRun:Vision:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
+            ("AgentRun:Vision:Model", "approved-vision-model"),
+            ("AgentRun:Vision:ApiKey", "test-vision-api-key"),
+            ("AgentRun:Vision:Timeout", TimeSpan.FromSeconds(20).ToString()),
+            ("AgentRun:Vision:AllowedClassifications:0", "fiscal"));
+        var services = CreateBaseServices();
+
+        services.AddAgentRunSurface(configuration);
+
+        var normalizer = Assert.Single(services, descriptor =>
+            descriptor.ServiceType == typeof(DocumentContextNormalizer));
+        Assert.Equal(ServiceLifetime.Scoped, normalizer.Lifetime);
+        var source = Assert.Single(services, descriptor =>
+            descriptor.ServiceType == typeof(IAuthorizedDocumentSource));
+        Assert.Equal(ServiceLifetime.Scoped, source.Lifetime);
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidVisionConfigurations))]
+    public void Partial_or_empty_document_vision_configuration_fails_with_a_fixed_message(
+        (string Key, string? Value)[] values)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => CreateBaseServices().AddAgentRunSurface(CreateConfiguration(values)));
+
+        Assert.Equal("Agent run configuration is invalid.", exception.Message);
+        Assert.DoesNotContain("vision.example.com", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("test-vision-api-key", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("approved-vision-model", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("fiscal", exception.Message, StringComparison.Ordinal);
+    }
+
+    public static TheoryData<(string Key, string? Value)[]> InvalidVisionConfigurations => new()
+    {
+        new[]
+        {
+            ("AgentRun:Vision:Provider", (string?)AgentRunOptions.OpenAiCompatibleProvider),
+        },
+        new[]
+        {
+            ("AgentRun:Vision:Provider", (string?)AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
+            ("AgentRun:Vision:Model", "approved-vision-model"),
+            ("AgentRun:Vision:ApiKey", "test-vision-api-key"),
+        },
+        new[]
+        {
+            ("AgentRun:Vision:Provider", (string?)"unsupported"),
+            ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
+            ("AgentRun:Vision:Model", "approved-vision-model"),
+            ("AgentRun:Vision:ApiKey", "test-vision-api-key"),
+            ("AgentRun:Vision:AllowedClassifications:0", "fiscal"),
+        },
+    };
 
     // Mesma base do host: persistência, auditoria e resolvedor de empresas
     // pertencem à Foundation/Program.cs; a composição só agrega a sua superfície.

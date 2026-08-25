@@ -14,6 +14,20 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class OpenApiInferenceContractPinTests
 {
     [Fact]
+    public async Task Agent_run_exposes_optional_bounded_uuid_attachments()
+    {
+        using var document = await LoadDocumentAsync();
+        var schema = RequestSchemaOf(document.RootElement.GetProperty("paths"), "/agent/runs");
+
+        Assert.Equal(["journey", "message", "requestId"], RequiredOf(schema).Order());
+        AssertClosedObject(schema);
+        var attachments = schema.GetProperty("properties").GetProperty("attachments");
+        Assert.Equal("array", attachments.GetProperty("type").GetString());
+        Assert.Equal(3, attachments.GetProperty("maxItems").GetInt32());
+        AssertUuid(attachments.GetProperty("items"));
+    }
+
+    [Fact]
     public async Task Paguai_create_pins_the_sole_json_media_type_and_the_inferred_request_schema()
     {
         using var document = await LoadDocumentAsync();

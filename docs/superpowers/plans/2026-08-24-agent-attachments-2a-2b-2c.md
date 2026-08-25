@@ -119,6 +119,10 @@ correção enfraqueceria a revisão sem isolar um subsistema independente.
 **Branch:** `codex/agent-attachments` (base = head 2A; re-target main após
 merge serial).
 
+**Estado em 2026-08-24:** implementado sobre `ca5910f` após os merges de 2A e
+do chat FE textual. A evidência executável está no manifesto
+`docs/verification/2026-08-24-issue-299-agent-attachments-test-cases.md`.
+
 1. **Contrato HTTP:** `attachments` opcional no corpo: array de UUID
    strings, deduplicado, máx `ApiConstants.MaxAgentAttachments` (3), ordem
    canônica = ordem enviada pós-dedup. Parser cresce reasons
@@ -172,6 +176,12 @@ categoria fora da allowlist server-side**; seed `ai.read` no catálogo
 **Arquivos:** ~6 produção editados/novos + ~6 testes + docs. Estimativa
 ~700-900 linhas — teto justificado pela matriz negativa (mesmo regime das
 fatias anteriores; registro no PR).
+
+**Realizado:** 25 arquivos; 928 linhas manuais alteradas (889 adições e 39
+remoções) e 1.718 linhas geradas da migration/designer. O total manual excede
+800, mas permanece uma fatia vertical indivisível: aceitar referências sem
+vinculá-las à idempotência, à autorização documental, à composição fail-closed
+e ao catálogo `ai.read` deixaria uma fronteira parcialmente segura.
 
 ## 2C — #300: FE (postponed; base = 2B + #296)
 

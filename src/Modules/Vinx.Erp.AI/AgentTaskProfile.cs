@@ -31,7 +31,8 @@ public sealed record AgentTaskProfile(
     int MaxTotalTokens,
     IReadOnlyList<string> AllowedTools,
     bool SourcesRequired = false,
-    IReadOnlySet<string>? RequiredOutputFields = null)
+    IReadOnlySet<string>? RequiredOutputFields = null,
+    bool AllowDocumentAttachments = false)
 {
     /// <summary>
     /// Constrói o perfil já validado; lança <see cref="ArgumentException"/>
@@ -46,7 +47,8 @@ public sealed record AgentTaskProfile(
         TimeSpan timeout,
         int turnLimit,
         int maxTotalTokens,
-        IReadOnlyList<string> allowedTools)
+        IReadOnlyList<string> allowedTools,
+        bool allowDocumentAttachments = false)
     {
         var profile = new AgentTaskProfile(
             profileId,
@@ -57,7 +59,8 @@ public sealed record AgentTaskProfile(
             timeout,
             turnLimit,
             maxTotalTokens,
-            allowedTools);
+            allowedTools,
+            AllowDocumentAttachments: allowDocumentAttachments);
         profile.Validate();
         return profile;
     }

@@ -55,5 +55,6 @@ public sealed class AgentTaskProfileCatalog
             timeout: TimeSpan.FromSeconds(30),
             turnLimit: 1,
             maxTotalTokens: 8_000,
-            allowedTools: []);
+            allowedTools: [],
+            allowDocumentAttachments: true);
 }
