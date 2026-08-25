@@ -183,10 +183,18 @@ function attachmentFile(name: string, bytes = new Uint8Array([1])): File {
   return file;
 }
 
-function attachmentFetch(fileIds: readonly string[]) {
+function attachmentFetch(
+  fileIds: readonly string[],
+  blockedAntiforgery?: { at: number; response: Promise<Response> },
+) {
+  let antiforgeryCalls = 0;
   let intended = 0;
   return vi.fn(async (path: string, init?: RequestInit) => {
     if (path === antiforgeryPath) {
+      antiforgeryCalls += 1;
+      if (blockedAntiforgery?.at === antiforgeryCalls) {
+        return blockedAntiforgery.response;
+      }
       return antiforgeryTokenResponse();
     }
     if (path === intentionPath) {
@@ -806,8 +814,12 @@ describe("agent workspace", () => {
     ).toHaveTextContent("primeiro.pdf");
   });
 
-  it("rejects a fourth selection before any upload request", async () => {
-    const fetchSpy = vi.fn<typeof fetch>();
+  it("clears the selection-limit notice after removing one of three ready attachments", async () => {
+    const fetchSpy = attachmentFetch([
+      "44444444-4444-4444-8444-444444444444",
+      "55555555-5555-4555-8555-555555555555",
+      "66666666-6666-4666-8666-666666666666",
+    ]);
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     await renderAgentWorkspace();
@@ -822,17 +834,25 @@ describe("agent workspace", () => {
       attachmentFile("um.pdf"),
       attachmentFile("dois.pdf"),
       attachmentFile("tres.pdf"),
+    ]);
+    await waitFor(() => expect(dock.getAllByText("Pronto")).toHaveLength(3));
+
+    await user.upload(dock.getByLabelText("Anexar documentos ao agente"), [
       attachmentFile("quatro.pdf"),
     ]);
 
     expect(await dock.findByText(/no máximo três anexos/i)).toBeVisible();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    await user.click(dock.getByRole("button", { name: "Remover um.pdf" }));
+    expect(dock.queryByText(/no máximo três anexos/i)).toBeNull();
   });
 
-  it("blocks sending while an attachment uploads, then removes and aborts only that upload", async () => {
+  it("blocks partial send while a ready attachment has a pending companion", async () => {
     let resolveToken: (response: Response) => void = () => {};
     const token = new Promise<Response>((resolve) => (resolveToken = resolve));
-    const fetchSpy = vi.fn<typeof fetch>().mockImplementationOnce(() => token);
+    const fetchSpy = attachmentFetch(["44444444-4444-4444-8444-444444444444"], {
+      at: 3,
+      response: token,
+    });
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     await renderAgentWorkspace();
@@ -840,12 +860,22 @@ describe("agent workspace", () => {
 
     await user.upload(
       dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("pronto.pdf"),
+    );
+    expect(await dock.findByText("Pronto")).toBeVisible();
+
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
       attachmentFile("pendente.pdf"),
     );
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-    const signal = fetchSpy.mock.calls[0][1]?.signal as AbortSignal;
+    await waitFor(() => expect(dock.getByText("Enviando")).toBeVisible());
+    const antiforgeryCalls = fetchSpy.mock.calls.filter(
+      ([path]) => path === antiforgeryPath,
+    );
+    const signal = antiforgeryCalls[2][1]?.signal as AbortSignal;
     expect(dock.getByText("Enviando")).toBeVisible();
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    expect(runCalls(fetchSpy)).toHaveLength(0);
 
     await user.click(
       dock.getByRole("button", { name: "Remover pendente.pdf" }),
@@ -857,34 +887,45 @@ describe("agent workspace", () => {
   });
 
   it("sends ready IDs in selection order once and clears the accepted selection", async () => {
-    const fileId = "44444444-4444-4444-8444-444444444444";
-    const fetchSpy = attachmentFetch([fileId]);
+    const fileIds = [
+      "44444444-4444-4444-8444-444444444444",
+      "55555555-5555-4555-8555-555555555555",
+      "66666666-6666-4666-8666-666666666666",
+    ];
+    const fetchSpy = attachmentFetch(fileIds);
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     await renderAgentWorkspace();
     const dock = await openDockAndType(user, "resuma o anexo pronto");
+
+    await user.upload(dock.getByLabelText("Anexar documentos ao agente"), [
+      attachmentFile("primeiro.pdf"),
+      attachmentFile("segundo.pdf"),
+      attachmentFile("terceiro.pdf"),
+    ]);
+    await waitFor(() => expect(dock.getAllByText("Pronto")).toHaveLength(3));
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+
+    expect(await dock.findByText("Resposta autorizada")).toBeVisible();
+    const body = JSON.parse(runCalls(fetchSpy)[0][1].body as string);
+    expect(body.attachments).toEqual(fileIds);
+    expect(
+      dock.queryByRole("list", { name: "Anexos selecionados" }),
+    ).toBeNull();
+  });
+
+  it("blocks partial send when a ready attachment has a failed companion", async () => {
+    const fetchSpy = attachmentFetch(["44444444-4444-4444-8444-444444444444"]);
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
+    const dock = await openDockAndType(user, "resuma o anexo inválido");
 
     await user.upload(
       dock.getByLabelText("Anexar documentos ao agente"),
       attachmentFile("pronto.pdf"),
     );
     expect(await dock.findByText("Pronto")).toBeVisible();
-    await user.click(dock.getByRole("button", { name: "Enviar" }));
-
-    expect(await dock.findByText("Resposta autorizada")).toBeVisible();
-    const body = JSON.parse(runCalls(fetchSpy)[0][1].body as string);
-    expect(body.attachments).toEqual([fileId]);
-    expect(
-      dock.queryByRole("list", { name: "Anexos selecionados" }),
-    ).toBeNull();
-  });
-
-  it("keeps a failed attachment removable and blocks sending without a request", async () => {
-    const fetchSpy = vi.fn<typeof fetch>();
-    vi.stubGlobal("fetch", fetchSpy);
-    const user = userEvent.setup();
-    await renderAgentWorkspace();
-    const dock = await openDockAndType(user, "resuma o anexo inválido");
 
     await user.upload(
       dock.getByLabelText("Anexar documentos ao agente"),
@@ -896,7 +937,7 @@ describe("agent workspace", () => {
       dock.getByText("O anexo não atende aos requisitos permitidos."),
     ).toBeVisible();
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(runCalls(fetchSpy)).toHaveLength(0);
     await user.click(dock.getByRole("button", { name: "Remover vazio.pdf" }));
     expect(dock.getByRole("button", { name: "Enviar" })).toBeEnabled();
   });

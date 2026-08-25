@@ -270,6 +270,7 @@ function ScopedAgentConversationProvider({
     (localId: string) => {
       attachmentUploads.current.get(localId)?.abort();
       attachmentUploads.current.delete(localId);
+      setAttachmentSelectionLimitReached(false);
       replaceAttachments(
         attachmentSnapshot.current.filter(
           (attachment) => attachment.localId !== localId,

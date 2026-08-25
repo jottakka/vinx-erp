@@ -10,12 +10,12 @@ retry, WebP e credenciais de storage permanecem fora desta fatia.
 
 | Área | Cenário | Evidência |
 | --- | --- | --- |
-| Client | Tipo, tamanho zero e abort após digest falham antes de rede. | `agent-attachments-client.test.ts` |
-| Client | SHA-256, payload da intenção, antiforgery por mutação, PUT sem credenciais e confirmação produzem somente metadados seguros. | `agent-attachments-client.test.ts` |
-| Client | URL não segura, resposta/mismatch inválido, HTTP de storage, rede e abort convergem em falha tipada, sem retry nem corpo. | `agent-attachments-client.test.ts` |
-| Provider/UI | Três arquivos preservam ordem e estado; quarto arquivo não inicia upload; falho e pendente bloqueiam envio; remoção é individual. | `agent.test.tsx` |
+| Client | Nome, tipo, WebP, tamanho zero, +1 byte, 25 MiB exato e cancelamento após digest preservam a admissão local. | `agent-attachments-client.test.ts` |
+| Client | SHA-256, bytes originais, request IDs distintos, antiforgery por mutação, PUT sem credenciais e confirmação produzem somente metadados seguros. | `agent-attachments-client.test.ts` |
+| Client | HTTPS e loopback DEV são os únicos targets aceitos; HTTP externo, userinfo, fragmento, resposta inválida, rede e cancelamento por etapa convergem em falha tipada sem retry nem corpo. | `agent-attachments-client.test.ts` |
+| Provider/UI | Três arquivos preservam ordem e estado; teto limpa ao remover; falho e pendente bloqueiam envio parcial; remoção é individual. | `agent.test.tsx` |
 | Provider/UI | Reset, unmount e troca de membership abortam upload e descartam resposta tardia; dock e página usam a mesma seleção. | `agent.test.tsx` |
-| Agent client | Sem IDs, o corpo histórico não muda; com IDs, a cópia em ordem segue no request; `document_context_unavailable` mantém reason e orientação fixa. | `agent-client.test.ts`, `agent.test.tsx` |
+| Agent client | Sem IDs, o corpo histórico não muda; com IDs prontos, a cópia em ordem segue no request; `document_context_unavailable` mantém reason e orientação fixa. | `agent-client.test.ts`, `agent.test.tsx` |
 | Browser | Rotas antiforgery, intenção, PUT, confirmação e run são interceptadas; após remover o primeiro arquivo, somente o segundo ID alcança o run. | `module-prototypes.spec.ts` |
 
 ## Limites verificados

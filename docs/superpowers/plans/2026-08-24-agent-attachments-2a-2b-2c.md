@@ -227,8 +227,14 @@ escopo. O POST `/agent/runs` recebe somente IDs opacos confirmados na primeira
 ordem de seleção. A matriz executável está em
 `docs/verification/2026-08-25-issue-300-agent-chat-attachments-test-cases.md`.
 
+**Correção de revisão 1/5:** cada fronteira aguardada do upload revalida o
+cancelamento antes de interpretar resposta ou iniciar a próxima mutação. A
+matriz cobre cancelamento durante parsers de intenção/confirmação, PUT que
+resolve após cancelamento, limites exatos, targets permitidos e bloqueio de
+envio parcial; helpers de teste passam a concentrar cenários repetidos.
+
 **Arquivos:** 11 (client, provider, UI, contrato do agent, Vitest, Playwright
-e documentação), 1.655 adições e 21 remoções manuais. O total de 1.676 linhas
+e documentação), 1.739 adições e 21 remoções manuais. O total de 1.760 linhas
 alteradas excede o alvo de 800, mas a fatia continua coesa: a fronteira de
 upload, o estado compartilhado, o contrato do run e as provas de cancelamento
 e não-vazamento são necessários para não expor uma seleção parcial.

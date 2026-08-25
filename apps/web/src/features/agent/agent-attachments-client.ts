@@ -96,6 +96,9 @@ export function createAgentAttachmentClient({
       init,
       (kind) => failure(stage, kind),
     );
+    if (init.signal?.aborted) {
+      return failure(stage, "aborted");
+    }
     return "response" in result ? { response: result.response } : result;
   }
 
@@ -109,6 +112,9 @@ export function createAgentAttachmentClient({
       async (response) => failure(stage, "protocol", response.status),
       signal,
     );
+    if (signal.aborted) {
+      return failure(stage, "aborted");
+    }
     return token;
   }
 
@@ -119,6 +125,9 @@ export function createAgentAttachmentClient({
     signal: AbortSignal,
   ): Promise<{ response: Response } | AgentAttachmentUploadFailure> {
     const token = await readAntiforgeryToken(stage, signal);
+    if (signal.aborted) {
+      return failure(stage, "aborted");
+    }
     if (!("requestToken" in token)) {
       return token;
     }
@@ -193,11 +202,17 @@ export function createAgentAttachmentClient({
       }),
       signal,
     );
+    if (signal.aborted) {
+      return fail("intention", "aborted");
+    }
     if (!("response" in intention)) {
       return { ok: false, error: intention };
     }
 
-    const intent = await parseIntention(intention.response);
+    const intent = await parseIntention(intention.response, signal);
+    if (signal.aborted) {
+      return fail("intention", "aborted");
+    }
     if (!intent.ok) {
       return intent;
     }
@@ -211,6 +226,9 @@ export function createAgentAttachmentClient({
       bytes,
       signal,
     );
+    if (signal.aborted) {
+      return fail("storage", "aborted");
+    }
     if (!storage.ok) {
       return storage;
     }
@@ -225,6 +243,9 @@ export function createAgentAttachmentClient({
       }),
       signal,
     );
+    if (signal.aborted) {
+      return fail("confirmation", "aborted");
+    }
     if (!("response" in confirmation)) {
       return { ok: false, error: confirmation };
     }
@@ -232,6 +253,7 @@ export function createAgentAttachmentClient({
     const confirmed = await parseConfirmation(
       confirmation.response,
       intent.fileId,
+      signal,
     );
     if (signal.aborted) {
       return fail("confirmation", "aborted");
@@ -253,14 +275,21 @@ export function createAgentAttachmentClient({
 
   async function parseIntention(
     response: Response,
+    signal: AbortSignal,
   ): Promise<
     | { ok: true; fileId: string; uploadUrl: string }
     | { ok: false; error: AgentAttachmentUploadFailure }
   > {
+    if (signal.aborted) {
+      return fail("intention", "aborted");
+    }
     if (response.status !== 200) {
       return fail("intention", "protocol", response.status);
     }
     const body = await readJson(response);
+    if (signal.aborted) {
+      return fail("intention", "aborted");
+    }
     const parsed = intentionResponseSchema.safeParse(body);
     if (!parsed.success || !isAllowedUploadUrl(parsed.data.uploadUrl)) {
       return fail("intention", "protocol", response.status);
@@ -289,6 +318,9 @@ export function createAgentAttachmentClient({
         redirect: "error",
         signal,
       });
+      if (signal.aborted) {
+        return fail("storage", "aborted");
+      }
       return response.status >= 200 && response.status < 300
         ? { ok: true }
         : fail("storage", "protocol", response.status);
@@ -300,13 +332,20 @@ export function createAgentAttachmentClient({
   async function parseConfirmation(
     response: Response,
     intendedFileId: string,
+    signal: AbortSignal,
   ): Promise<
     { ok: true } | { ok: false; error: AgentAttachmentUploadFailure }
   > {
+    if (signal.aborted) {
+      return fail("confirmation", "aborted");
+    }
     if (response.status !== 200) {
       return fail("confirmation", "protocol", response.status);
     }
     const body = await readJson(response);
+    if (signal.aborted) {
+      return fail("confirmation", "aborted");
+    }
     const parsed = confirmationResponseSchema.safeParse(body);
     return parsed.success && parsed.data.fileId === intendedFileId
       ? { ok: true }

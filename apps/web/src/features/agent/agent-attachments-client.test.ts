@@ -1,97 +1,183 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAgentAttachmentClient } from "./agent-attachments-client";
+import {
+  type AgentAttachmentUploadResult,
+  createAgentAttachmentClient,
+} from "./agent-attachments-client";
 
 const companyId = "33333333-3333-4333-8333-333333333333";
 const fileId = "44444444-4444-4444-8444-444444444444";
+const otherFileId = "55555555-5555-4555-8555-555555555555";
 const now = new Date("2026-08-25T12:00:00.000Z");
+const maxFileSizeBytes = 26_214_400;
+const uploadTarget = "https://storage.test.invalid/upload-object";
 const expectedChecksum =
   "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
-function fileWithBytes(
-  name = "evidence.pdf",
-  type = "application/pdf",
+type FetchStep = Error | Response | (() => Promise<Response>);
+
+function fileWith({
   bytes = new Uint8Array([0x61, 0x62, 0x63]),
-): File {
+  name = "evidence.pdf",
+  onRead,
+  size = bytes.byteLength,
+  type = "application/pdf",
+}: {
+  bytes?: Uint8Array<ArrayBuffer>;
+  name?: string;
+  onRead?: () => void;
+  size?: number;
+  type?: string;
+} = {}): File {
   const file = new File([bytes], name, { type });
-  Object.defineProperty(file, "arrayBuffer", {
-    value: async () => bytes.buffer.slice(0),
+  Object.defineProperties(file, {
+    arrayBuffer: {
+      value: async () => {
+        onRead?.();
+        return bytes.buffer.slice(0);
+      },
+    },
+    size: { value: size },
   });
   return file;
 }
 
-function antiforgeryResponse() {
-  return new Response(JSON.stringify({ requestToken: "csrf-token" }), {
-    headers: { "Content-Type": "application/json" },
-    status: 200,
+function response(body: unknown, status = 200, contentType = true) {
+  return new Response(typeof body === "string" ? body : JSON.stringify(body), {
+    headers: contentType ? { "Content-Type": "application/json" } : {},
+    status,
   });
 }
 
-function intentionResponse() {
-  return new Response(
-    JSON.stringify({
-      fileId,
-      processingState: "quarantined",
-      uploadUrl: "https://storage.test.invalid/upload-object",
-    }),
-    { headers: { "Content-Type": "application/json" }, status: 200 },
-  );
+function antiforgery() {
+  return response({ requestToken: "csrf-token" });
 }
 
-function confirmationResponse(id = fileId, state = "confirmed") {
-  return new Response(JSON.stringify({ fileId: id, processingState: state }), {
-    headers: { "Content-Type": "application/json" },
-    status: 200,
+function intention(target = uploadTarget) {
+  return response({
+    fileId,
+    processingState: "quarantined",
+    uploadUrl: target,
   });
+}
+
+function confirmation(id = fileId, state = "confirmed") {
+  return response({ fileId: id, processingState: state });
+}
+
+function successSteps(last: FetchStep = confirmation()): FetchStep[] {
+  return [
+    antiforgery(),
+    intention(),
+    new Response(null, { status: 204 }),
+    antiforgery(),
+    last,
+  ];
+}
+
+function queuedFetch(steps: FetchStep[]) {
+  return vi.fn<typeof fetch>(async () => {
+    const step = steps.shift();
+    if (step instanceof Error) throw step;
+    if (typeof step === "function") return step();
+    if (!step) throw new Error();
+    return step;
+  });
+}
+
+async function upload(
+  steps: FetchStep[],
+  {
+    controller = new AbortController(),
+    file = fileWith(),
+  }: { controller?: AbortController; file?: File } = {},
+) {
+  const fetchImplementation = queuedFetch(steps);
+  const result = await createAgentAttachmentClient({
+    fetchImplementation,
+    now: () => now,
+  }).upload({ companyId, file, signal: controller.signal });
+  return { fetchImplementation, result };
+}
+
+function expectFailure(
+  result: AgentAttachmentUploadResult,
+  error: Record<string, unknown>,
+) {
+  expect(result).toEqual({ ok: false, error });
+  expect(JSON.stringify(result)).not.toContain("storage.test.invalid");
+  expect(JSON.stringify(result)).not.toContain("untrusted response body");
+  expect(JSON.stringify(result)).not.toContain("raw failure");
 }
 
 describe("agent attachment upload client", () => {
-  it("rejects a disallowed type and an empty file before network access", async () => {
-    const fetchImplementation = vi.fn<typeof fetch>();
-    const client = createAgentAttachmentClient({
-      fetchImplementation,
-      now: () => now,
+  it.each([
+    ["blank name", { name: "   " }],
+    ["empty file", { size: 0 }],
+    ["file over 25 MiB", { size: maxFileSizeBytes + 1 }],
+    ["WebP", { type: "image/webp" }],
+  ])("rejects %s before network access", async (_case, file) => {
+    const { fetchImplementation, result } = await upload([], {
+      file: fileWith(file),
     });
 
-    const wrongType = await client.upload({
-      companyId,
-      file: fileWithBytes("evidence.gif", "image/gif"),
-      signal: new AbortController().signal,
-    });
-    const empty = await client.upload({
-      companyId,
-      file: fileWithBytes("evidence.pdf", "application/pdf", new Uint8Array()),
-      signal: new AbortController().signal,
-    });
-
-    expect(wrongType).toEqual({
-      ok: false,
-      error: { kind: "validation", stage: "validation" },
-    });
-    expect(empty).toEqual({
-      ok: false,
-      error: { kind: "validation", stage: "validation" },
-    });
+    expectFailure(result, { kind: "validation", stage: "validation" });
     expect(fetchImplementation).not.toHaveBeenCalled();
   });
 
-  it("uploads checked bytes through the exact BFF and storage contract without retaining the upload URL", async () => {
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(intentionResponse())
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(confirmationResponse());
-    const client = createAgentAttachmentClient({
+  it.each(["application/pdf", "image/jpeg", "image/png"])(
+    "accepts %s",
+    async (type) => {
+      const { result } = await upload(successSteps(), {
+        file: fileWith({ type }),
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        attachment: { mimeType: type },
+      });
+    },
+  );
+
+  it("aborts after digest before making a BFF request", async () => {
+    const controller = new AbortController();
+    const fetchImplementation = queuedFetch([]);
+    const result = await createAgentAttachmentClient({
+      cryptoImplementation: {
+        randomUUID: () => fileId,
+        subtle: {
+          digest: async () => {
+            controller.abort();
+            return new ArrayBuffer(32);
+          },
+        },
+      },
       fetchImplementation,
       now: () => now,
+    }).upload({ companyId, file: fileWith(), signal: controller.signal });
+
+    expectFailure(result, { kind: "aborted", stage: "validation" });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it("accepts exactly 25 MiB and reads the original bytes once for storage", async () => {
+    let reads = 0;
+    const bytes = new Uint8Array([0x61, 0x62, 0x63]);
+    const { fetchImplementation, result } = await upload(successSteps(), {
+      file: fileWith({ bytes, onRead: () => reads++, size: maxFileSizeBytes }),
     });
 
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: new AbortController().signal,
+    expect(result).toMatchObject({
+      ok: true,
+      attachment: { sizeBytes: maxFileSizeBytes },
     });
+    expect(reads).toBe(1);
+    expect(
+      new Uint8Array(fetchImplementation.mock.calls[2][1]?.body as ArrayBuffer),
+    ).toEqual(bytes);
+  });
+
+  it("sends exact BFF payloads with distinct request IDs and no retained upload target", async () => {
+    const { fetchImplementation, result } = await upload(successSteps());
 
     expect(result).toEqual({
       ok: true,
@@ -104,341 +190,252 @@ describe("agent attachment upload client", () => {
     });
     expect(JSON.stringify(result)).not.toContain("storage.test.invalid");
     expect(fetchImplementation).toHaveBeenCalledTimes(5);
-
     const [
-      antiforgeryForIntention,
-      intention,
-      storage,
+      ,
+      intentionCall,
+      storageCall,
       antiforgeryForConfirm,
-      confirmation,
+      confirmationCall,
     ] = fetchImplementation.mock.calls;
-    expect(antiforgeryForIntention).toEqual([
-      "/foundation/identity/browser-session/antiforgery",
-      expect.objectContaining({
-        cache: "no-store",
-        credentials: "same-origin",
-        method: "GET",
-        mode: "same-origin",
-        redirect: "error",
-      }),
-    ]);
-    expect(JSON.parse(intention[1]?.body as string)).toEqual({
+    const intentionBody = JSON.parse(intentionCall[1]?.body as string);
+    const confirmationBody = JSON.parse(confirmationCall[1]?.body as string);
+    expect(intentionBody).toEqual({
       checksum: expectedChecksum,
       classification: "agentic_attachment",
       companyId,
       fileName: "evidence.pdf",
       mimeType: "application/pdf",
       origin: "web-agent-chat",
-      requestId: expect.stringMatching(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-      ),
+      requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
       retentionUntil: "2026-09-24T12:00:00.000Z",
       sizeBytes: 3,
     });
-    expect(intention).toEqual([
-      "/foundation/files/upload-intentions",
+    expect(confirmationBody).toEqual({
+      companyId,
+      fileId,
+      requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+    expect(intentionBody.requestId).not.toBe(confirmationBody.requestId);
+    expect(intentionCall[1]).toEqual(
       expect.objectContaining({
         cache: "no-store",
         credentials: "same-origin",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "X-CSRF-TOKEN": "csrf-token",
-        },
+        headers: expect.objectContaining({ "X-CSRF-TOKEN": "csrf-token" }),
         method: "POST",
         mode: "same-origin",
         redirect: "error",
       }),
-    ]);
-    expect(storage).toEqual([
-      "https://storage.test.invalid/upload-object",
+    );
+    expect(antiforgeryForConfirm[0]).toBe(
+      "/foundation/identity/browser-session/antiforgery",
+    );
+    expect(storageCall[1]).toEqual(
       expect.objectContaining({
-        body: expect.any(ArrayBuffer),
         credentials: "omit",
         headers: { "Content-Type": "application/pdf" },
         method: "PUT",
         redirect: "error",
       }),
-    ]);
-    expect(antiforgeryForConfirm[0]).toBe(
-      "/foundation/identity/browser-session/antiforgery",
-    );
-    expect(JSON.parse(confirmation[1]?.body as string)).toEqual({
-      companyId,
-      fileId,
-      requestId: expect.stringMatching(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-      ),
-    });
-    expect(confirmation[1]).toEqual(
-      expect.objectContaining({
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "X-CSRF-TOKEN": "csrf-token",
-        },
-        method: "POST",
-        mode: "same-origin",
-        redirect: "error",
-      }),
     );
   });
 
-  it("fails closed at confirmation when the server confirms another file", async () => {
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(intentionResponse())
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(
-        confirmationResponse("55555555-5555-4555-8555-555555555555"),
-      );
-    const client = createAgentAttachmentClient({
-      fetchImplementation,
-      now: () => now,
-    });
+  it.each([
+    ["HTTPS", uploadTarget, true],
+    ["DEV loopback HTTP", "http://127.0.0.1:54321/object", true],
+    ["non-loopback HTTP", "http://storage.test.invalid/object", false],
+    ["userinfo", "https://user@storage.test.invalid/object", false],
+    ["fragment", "https://storage.test.invalid/object#fragment", false],
+    ["invalid target", "not an absolute URL", false],
+  ])(
+    "accepts only the allowed %s upload target",
+    async (_case, target, accepted) => {
+      const { fetchImplementation, result } = await upload([
+        antiforgery(),
+        intention(target),
+        ...successSteps().slice(2),
+      ]);
 
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: new AbortController().signal,
-    });
+      if (accepted) {
+        expect(result).toMatchObject({ ok: true });
+      } else {
+        expectFailure(result, {
+          kind: "protocol",
+          stage: "intention",
+          status: 200,
+        });
+        expect(fetchImplementation).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
 
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "protocol", stage: "confirmation", status: 200 },
-    });
-    expect(JSON.stringify(result)).not.toContain("storage.test.invalid");
-  });
+  it.each([
+    [
+      "HTTP",
+      [antiforgery(), response({}, 500)],
+      { kind: "protocol", stage: "intention", status: 500 },
+    ],
+    [
+      "invalid body",
+      [antiforgery(), response("untrusted response body")],
+      { kind: "protocol", stage: "intention", status: 200 },
+    ],
+    [
+      "network",
+      [antiforgery(), new Error("raw failure")],
+      { kind: "network", stage: "intention" },
+    ],
+  ])(
+    "maps intention %s failures without leaking details",
+    async (_case, steps, error) => {
+      const { result } = await upload(steps);
 
-  it("maps a storage network failure to a fixed typed error with no retry", async () => {
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(intentionResponse())
-      .mockRejectedValueOnce(new Error());
-    const client = createAgentAttachmentClient({
-      fetchImplementation,
-      now: () => now,
-    });
+      expectFailure(result, error);
+    },
+  );
 
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: new AbortController().signal,
+  it("stops at intention when JSON parsing observes cancellation", async () => {
+    const controller = new AbortController();
+    const abortedIntention = intention();
+    vi.spyOn(abortedIntention, "json").mockImplementation(async () => {
+      controller.abort();
+      return {
+        fileId,
+        processingState: "quarantined",
+        uploadUrl: uploadTarget,
+      };
     });
+    const { fetchImplementation, result } = await upload(
+      [antiforgery(), abortedIntention],
+      { controller },
+    );
 
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "network", stage: "storage" },
-    });
-    expect(fetchImplementation).toHaveBeenCalledTimes(3);
-  });
-
-  it("rejects an insecure intention target before making the storage request", async () => {
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            fileId,
-            processingState: "quarantined",
-            uploadUrl: "http://storage.test.invalid/upload-object",
-          }),
-          { headers: { "Content-Type": "application/json" }, status: 200 },
-        ),
-      );
-    const client = createAgentAttachmentClient({
-      fetchImplementation,
-      now: () => now,
-    });
-
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: new AbortController().signal,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "protocol", stage: "intention", status: 200 },
-    });
+    expectFailure(result, { kind: "aborted", stage: "intention" });
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 
-  it("does not read a non-successful storage response body", async () => {
-    const rejectedStorageResponse = new Response("untrusted response body", {
-      status: 403,
-    });
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(intentionResponse())
-      .mockResolvedValueOnce(rejectedStorageResponse);
-    const client = createAgentAttachmentClient({
-      fetchImplementation,
-      now: () => now,
-    });
-
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: new AbortController().signal,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "protocol", stage: "storage", status: 403 },
-    });
-    expect(rejectedStorageResponse.bodyUsed).toBe(false);
-  });
-
-  it("fails closed when confirmation does not return the confirmed state", async () => {
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(intentionResponse())
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(confirmationResponse(fileId, "quarantined"));
-    const client = createAgentAttachmentClient({
-      fetchImplementation,
-      now: () => now,
-    });
-
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: new AbortController().signal,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "protocol", stage: "confirmation", status: 200 },
-    });
-  });
-
-  it("reports an aborted storage operation without starting confirmation", async () => {
-    const abortError = Object.assign(new Error(), { name: "AbortError" });
+  it("stops at intention when antiforgery parsing observes cancellation", async () => {
     const controller = new AbortController();
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(intentionResponse())
-      .mockImplementationOnce(() => {
-        controller.abort();
-        return Promise.reject(abortError);
-      });
-    const client = createAgentAttachmentClient({
-      fetchImplementation,
-      now: () => now,
+    const cancelledAntiforgery = antiforgery();
+    vi.spyOn(cancelledAntiforgery, "json").mockImplementation(async () => {
+      controller.abort();
+      return { requestToken: "csrf-token" };
     });
-
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: controller.signal,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "aborted", stage: "storage" },
-    });
-    expect(fetchImplementation).toHaveBeenCalledTimes(3);
-  });
-
-  it("stops after a digest that was cancelled before any BFF request", async () => {
-    const controller = new AbortController();
-    const fetchImplementation = vi.fn<typeof fetch>();
-    const client = createAgentAttachmentClient({
-      cryptoImplementation: {
-        randomUUID: () => "11111111-1111-4111-8111-111111111111",
-        subtle: {
-          digest: async () => {
-            controller.abort();
-            return new ArrayBuffer(32);
-          },
-        } as Pick<SubtleCrypto, "digest">,
+    const { fetchImplementation, result } = await upload(
+      [cancelledAntiforgery],
+      {
+        controller,
       },
-      fetchImplementation,
-      now: () => now,
-    });
+    );
 
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: controller.signal,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "aborted", stage: "validation" },
-    });
-    expect(fetchImplementation).not.toHaveBeenCalled();
+    expectFailure(result, { kind: "aborted", stage: "intention" });
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
 
-  it("maps a confirmation request abort to the confirmation stage", async () => {
-    const abortError = Object.assign(new Error(), { name: "AbortError" });
-    const controller = new AbortController();
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(intentionResponse())
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockImplementationOnce(() => {
-        controller.abort();
-        return Promise.reject(abortError);
-      });
-    const client = createAgentAttachmentClient({
-      fetchImplementation,
-      now: () => now,
-    });
+  it.each([
+    [
+      "HTTP",
+      response({}, 500),
+      { kind: "protocol", stage: "confirmation", status: 500 },
+    ],
+    [
+      "invalid body",
+      response("untrusted response body"),
+      { kind: "protocol", stage: "confirmation", status: 200 },
+    ],
+    [
+      "mismatched file",
+      confirmation(otherFileId),
+      { kind: "protocol", stage: "confirmation", status: 200 },
+    ],
+    [
+      "wrong state",
+      confirmation(fileId, "quarantined"),
+      { kind: "protocol", stage: "confirmation", status: 200 },
+    ],
+    [
+      "network",
+      new Error("raw failure"),
+      { kind: "network", stage: "confirmation" },
+    ],
+  ])(
+    "maps confirmation %s failures without leaking details",
+    async (_case, last, error) => {
+      const { result } = await upload(successSteps(last));
 
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: controller.signal,
-    });
+      expectFailure(result, error);
+    },
+  );
 
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "aborted", stage: "confirmation" },
-    });
-    expect(fetchImplementation).toHaveBeenCalledTimes(4);
+  it("does not consume a failed storage response body", async () => {
+    const rejectedStorage = response("untrusted response body", 403, false);
+    const { result } = await upload([
+      antiforgery(),
+      intention(),
+      rejectedStorage,
+    ]);
+
+    expectFailure(result, { kind: "protocol", stage: "storage", status: 403 });
+    expect(rejectedStorage.bodyUsed).toBe(false);
   });
 
-  it("fails closed when cancellation happens while confirmation is parsed", async () => {
+  it("stops at confirmation when JSON parsing observes cancellation", async () => {
     const controller = new AbortController();
-    const confirmation = confirmationResponse();
-    vi.spyOn(confirmation, "json").mockImplementation(async () => {
+    const abortedConfirmation = confirmation();
+    vi.spyOn(abortedConfirmation, "json").mockImplementation(async () => {
       controller.abort();
       return { fileId, processingState: "confirmed" };
     });
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(intentionResponse())
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockResolvedValueOnce(antiforgeryResponse())
-      .mockResolvedValueOnce(confirmation);
-    const client = createAgentAttachmentClient({
+    const { result } = await upload(successSteps(abortedConfirmation), {
+      controller,
+    });
+
+    expectFailure(result, { kind: "aborted", stage: "confirmation" });
+  });
+
+  it.each([
+    [
+      "HTTP",
+      response("untrusted response body", 403, false),
+      { kind: "protocol", stage: "storage", status: 403 },
+    ],
+    [
+      "network",
+      new Error("raw failure"),
+      { kind: "network", stage: "storage" },
+    ],
+  ])(
+    "maps storage %s failures without reading response details",
+    async (_case, storage, error) => {
+      const { result } = await upload([antiforgery(), intention(), storage]);
+
+      expectFailure(result, error);
+    },
+  );
+
+  it("does not advance when storage resolves after cancellation", async () => {
+    const controller = new AbortController();
+    let resolveStorage: (value: Response) => void = () => {};
+    const storage = new Promise<Response>(
+      (resolve) => (resolveStorage = resolve),
+    );
+    const fetchImplementation = queuedFetch([
+      antiforgery(),
+      intention(),
+      () => storage,
+      antiforgery(),
+      confirmation(),
+    ]);
+    const pending = createAgentAttachmentClient({
       fetchImplementation,
       now: () => now,
-    });
+    }).upload({ companyId, file: fileWith(), signal: controller.signal });
+    await vi.waitFor(() =>
+      expect(fetchImplementation).toHaveBeenCalledTimes(3),
+    );
+    controller.abort();
+    resolveStorage(new Response(null, { status: 204 }));
 
-    const result = await client.upload({
-      companyId,
-      file: fileWithBytes(),
-      signal: controller.signal,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "aborted", stage: "confirmation" },
-    });
+    expectFailure(await pending, { kind: "aborted", stage: "storage" });
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
   });
 });
