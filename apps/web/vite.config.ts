@@ -14,6 +14,10 @@ type VinxApiProxy = {
     changeOrigin: false;
     target: string;
   };
+  "/notifications": {
+    changeOrigin: false;
+    target: string;
+  };
   "/paguai": {
     changeOrigin: false;
     target: string;
@@ -55,6 +59,10 @@ export function resolveDevelopmentApiProxy(
         target: target.origin,
       },
       "/foundation": {
+        changeOrigin: false,
+        target: target.origin,
+      },
+      "/notifications": {
         changeOrigin: false,
         target: target.origin,
       },
