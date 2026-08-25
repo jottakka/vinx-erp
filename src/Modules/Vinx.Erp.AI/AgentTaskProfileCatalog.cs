@@ -36,16 +36,22 @@ public sealed class AgentTaskProfileCatalog
     /// valores do catálogo + seleção informada. Seleção nula deixa o runner
     /// fail-closed em provider_not_configured (comportamento atual, #135).
     /// </summary>
-    public static AgentTaskProfile CreateApprovedProfile(AgentModelSelection? modelSelection) =>
-        CreateReadOnlySummarize(modelSelection);
+    public static AgentTaskProfile CreateApprovedProfile(
+        AgentModelSelection? modelSelection,
+        int maxInputCharacters = AgentInputLimits.MainTurnMaxCharacters) =>
+        CreateReadOnlySummarize(modelSelection, maxInputCharacters);
 
     private static Dictionary<string, AgentTaskProfile> CreateProfiles() =>
         new Dictionary<string, AgentTaskProfile>
         {
-            [ReadOnlySummarizeProfileId] = CreateReadOnlySummarize(modelSelection: null),
+            [ReadOnlySummarizeProfileId] = CreateReadOnlySummarize(
+                modelSelection: null,
+                AgentInputLimits.MainTurnMaxCharacters),
         };
 
-    private static AgentTaskProfile CreateReadOnlySummarize(AgentModelSelection? modelSelection) =>
+    private static AgentTaskProfile CreateReadOnlySummarize(
+        AgentModelSelection? modelSelection,
+        int maxInputCharacters) =>
         AgentTaskProfile.CreateValidated(
             ReadOnlySummarizeProfileId,
             "summarize",
@@ -56,5 +62,6 @@ public sealed class AgentTaskProfileCatalog
             turnLimit: 1,
             maxTotalTokens: 8_000,
             allowedTools: [],
-            allowDocumentAttachments: true);
+            allowDocumentAttachments: true,
+            maxInputCharacters);
 }

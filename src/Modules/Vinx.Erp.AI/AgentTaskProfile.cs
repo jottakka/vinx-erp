@@ -1,5 +1,11 @@
 namespace Vinx.Erp.AI;
 
+/// <summary>Limites compartilhados entre o perfil do agente e o adapter principal.</summary>
+public static class AgentInputLimits
+{
+    public const int MainTurnMaxCharacters = 96_000;
+}
+
 /// <summary>
 /// Escopo do journey aprovado. <see cref="Company"/> é o único valor: não existe
 /// execução de agente fora do contexto de empresa.
@@ -32,7 +38,8 @@ public sealed record AgentTaskProfile(
     IReadOnlyList<string> AllowedTools,
     bool SourcesRequired = false,
     IReadOnlySet<string>? RequiredOutputFields = null,
-    bool AllowDocumentAttachments = false)
+    bool AllowDocumentAttachments = false,
+    int MaxInputCharacters = AgentInputLimits.MainTurnMaxCharacters)
 {
     /// <summary>
     /// Constrói o perfil já validado; lança <see cref="ArgumentException"/>
@@ -48,7 +55,8 @@ public sealed record AgentTaskProfile(
         int turnLimit,
         int maxTotalTokens,
         IReadOnlyList<string> allowedTools,
-        bool allowDocumentAttachments = false)
+        bool allowDocumentAttachments = false,
+        int maxInputCharacters = AgentInputLimits.MainTurnMaxCharacters)
     {
         var profile = new AgentTaskProfile(
             profileId,
@@ -60,7 +68,8 @@ public sealed record AgentTaskProfile(
             turnLimit,
             maxTotalTokens,
             allowedTools,
-            AllowDocumentAttachments: allowDocumentAttachments);
+            AllowDocumentAttachments: allowDocumentAttachments,
+            MaxInputCharacters: maxInputCharacters);
         profile.Validate();
         return profile;
     }
@@ -96,6 +105,13 @@ public sealed record AgentTaskProfile(
         if (MaxTotalTokens <= 0)
         {
             throw new ArgumentException("The total token budget must be positive.", nameof(MaxTotalTokens));
+        }
+
+        if (MaxInputCharacters is < 1 or > 1_000_000)
+        {
+            throw new ArgumentException(
+                "The input character limit must be between 1 and 1000000.",
+                nameof(MaxInputCharacters));
         }
     }
 

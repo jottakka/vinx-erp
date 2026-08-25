@@ -12,6 +12,18 @@ public sealed class AgentHttpContractTests
     private static MemoryStream Body(string json) => new(Encoding.UTF8.GetBytes(json));
 
     [Fact]
+    public void Direct_four_argument_construction_has_a_real_immutable_empty_attachment_list()
+    {
+        var request = new AgentRunHttpRequest(RequestId, "j", "m", CompanyId);
+
+        Assert.NotNull(request.Attachments);
+        Assert.Empty(request.Attachments);
+        Assert.False(request.Attachments is Guid[]);
+        var collection = Assert.IsAssignableFrom<ICollection<Guid>>(request.Attachments);
+        Assert.Throws<NotSupportedException>(() => collection.Add(Guid.NewGuid()));
+    }
+
+    [Fact]
     public void Attachments_are_optional_and_materialize_as_an_empty_immutable_list()
     {
         var ok = AgentHttpContract.TryParse(

@@ -163,6 +163,15 @@ public sealed class AgentTaskProfileTests
     }
 
     [Fact]
+    public void Main_input_character_limit_is_part_of_the_approved_profile()
+    {
+        var profile = AgentTaskProfileCatalog.CreateApprovedProfile(
+            new AgentModelSelection("openai-compatible", "modelo-aprovado"));
+
+        Assert.Equal(96_000, profile.MaxInputCharacters);
+    }
+
+    [Fact]
     public void CreateApprovedProfile_carries_catalog_values_with_server_side_selection()
     {
         var selection = new AgentModelSelection("openai-compatible", "modelo-aprovado");

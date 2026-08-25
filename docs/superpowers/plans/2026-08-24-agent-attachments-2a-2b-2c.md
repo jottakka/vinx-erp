@@ -141,7 +141,9 @@ do chat FE textual. A evidência executável está no manifesto
    por anexos anteriores do mesmo turno — não prometemos zero chamadas de
    visão sem preflight de todos os anexos); sucesso → turno único =
    mensagem + bloco `untrusted` com segmentos (`fileId:pN`), truncagem
-   pelos limits.
+   pelos limits. O teto único de 96.000 caracteres cobre mensagem, framing,
+   JSON serializado e escaping; truncagem agregada preserva ordem e pares
+   substitutos Unicode e usa o mesmo valor do adapter principal.
 4. **Host/composição (ruling (g) + finding 1):** `AgentRunOptions` ganha
    seção de visão opcional com provider/endpoint/api-key/modelo/timeout E a
    **allowlist server-side de classificações consentidas**
@@ -162,7 +164,8 @@ do chat FE textual. A evidência executável está no manifesto
    aleatória, `AgentEndpointTests.cs:447`). Grant permanece default-deny: a
    seed registra a capability no catálogo; concessão a papéis é operação
    explícita do dono — sem grant, journey continua negado.
-6. **OpenAPI:** request schema re-pinado; contract/boundary tests.
+6. **OpenAPI:** request schema re-pinado sem `maxItems` bruto, pois o limite de
+   três vale para IDs distintos após deduplicação; contract/boundary tests.
 
 **Testes (BDD):** parser (matriz negativa completa); idempotência
 (divergente 409 / igual replay); runner (anexo ok vira contexto untrusted
@@ -173,11 +176,16 @@ registrado → needs_clarification); **allowlist de classificação (finding
 categoria fora da allowlist server-side**; seed `ai.read` no catálogo
 (integração) com grant default-deny; concorrência inalterada.
 
+**Correção de revisão 1/5:** compositor agregado coberto contra o adapter real
+com um anexo máximo, três anexos grandes e fronteiras de escaping/Unicode; DTO
+de quatro argumentos materializa lista vazia imutável; truncagem por segmento
+marca o contexto; OpenAPI não contradiz a canonicalização pós-deduplicação.
+
 **Arquivos:** ~6 produção editados/novos + ~6 testes + docs. Estimativa
 ~700-900 linhas — teto justificado pela matriz negativa (mesmo regime das
 fatias anteriores; registro no PR).
 
-**Realizado:** 25 arquivos; 928 linhas manuais alteradas (889 adições e 39
+**Realizado:** 25 arquivos; 1.369 linhas manuais alteradas (1.317 adições e 52
 remoções) e 1.718 linhas geradas da migration/designer. O total manual excede
 800, mas permanece uma fatia vertical indivisível: aceitar referências sem
 vinculá-las à idempotência, à autorização documental, à composição fail-closed

@@ -14,7 +14,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class OpenApiInferenceContractPinTests
 {
     [Fact]
-    public async Task Agent_run_exposes_optional_bounded_uuid_attachments()
+    public async Task Agent_run_exposes_optional_uuid_attachments_without_a_raw_item_cap()
     {
         using var document = await LoadDocumentAsync();
         var schema = RequestSchemaOf(document.RootElement.GetProperty("paths"), "/agent/runs");
@@ -23,7 +23,7 @@ public sealed class OpenApiInferenceContractPinTests
         AssertClosedObject(schema);
         var attachments = schema.GetProperty("properties").GetProperty("attachments");
         Assert.Equal("array", attachments.GetProperty("type").GetString());
-        Assert.Equal(3, attachments.GetProperty("maxItems").GetInt32());
+        Assert.False(attachments.TryGetProperty("maxItems", out _));
         AssertUuid(attachments.GetProperty("items"));
     }
 

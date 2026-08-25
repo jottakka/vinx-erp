@@ -34,7 +34,7 @@ Limites do perfil:
 | --- | --- |
 | `Timeout` (1s–5min) | Latência máxima por chamada, com cancelamento vinculado ao token do chamador |
 | `MaxMessages` | Teto de mensagens por conversa normalizada |
-| `MaxInputCharacters` | Teto determinístico de entrada antes de qualquer chamada HTTP |
+| `MaxInputCharacters` | Teto determinístico do turno completo antes de qualquer chamada HTTP |
 | `MaxOutputTokens` | Teto de tokens de saída enviado ao provider (clamp; nunca excede o perfil) |
 | `MaxTotalTokensPerCall` | Orçamento por execução: teto relacional que precisa cobrir o limite de saída |
 | `MaxImagesPerRequest` / `MaxImageBytesPerImage` / `MaxImageBytesPerRequest` | Tetos de contagem e bytes (individual e agregado) quando o perfil aceita imagem |
@@ -212,6 +212,11 @@ fronteira Foundation e normalizada em ordem; qualquer negação, indisponibilida
 ou falha de extração converge em `document_context_unavailable`, sem chamada ao
 provider principal. Um sucesso monta uma única mensagem de usuário com bloco
 JSON marcado `untrusted`, fontes `fileId:pN` e os limites/truncagem já aplicados.
+O teto único `AgentInputLimits.MainTurnMaxCharacters` (96.000 caracteres) é
+usado pelo perfil, pelo compositor e pelo adapter principal. O compositor conta
+mensagem, delimitadores, estrutura JSON e escaping serializado; quando precisa
+reduzir, preserva a primeira ordem dos documentos/segmentos, marca o documento
+como truncado e nunca corta um par substituto Unicode.
 O perfil opcional `AgentRun:Vision` é exclusivamente server-side e exige
 provider OpenAI-compatible, endpoint, chave, modelo, timeout e allowlist não
 vazia de classificações. Se ausente, o normalizer não é registrado. Se parcial
@@ -260,7 +265,10 @@ não atende.
 `2.5` — mudança intencional sobre a 2.4: #299 adiciona `attachments?` ao
 `POST /agent/runs`, com teto de três UUIDs distintos, canonicalização estável,
 idempotência vinculada à ordem canônica, normalização autorizada e contexto
-`untrusted` em turno único. A composição de visão é opcional e fail-closed; a
+`untrusted` em turno único. O schema não publica `maxItems`, porque o teto vale
+após deduplicação, não sobre a contagem bruta do array. O turno final inteiro
+compartilha o teto de 96.000 caracteres com o adapter principal. A composição
+de visão é opcional e fail-closed; a
 allowlist server-side é a única autoridade de classificação. A capability
 canônica `ai.read` é registrada, mas não concedida automaticamente.
 

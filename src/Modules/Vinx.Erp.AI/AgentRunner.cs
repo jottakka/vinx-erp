@@ -107,7 +107,7 @@ public sealed class AgentRunner(
                 documentContexts.Add(documentContext);
             }
 
-            turnText = ComposeTurn(message, documentContexts);
+            turnText = ComposeTurn(message, documentContexts, profile!.MaxInputCharacters);
         }
 
         // 3. Provider não atribuído ou cliente ausente: fail-closed até #135.
@@ -216,24 +216,104 @@ public sealed class AgentRunner(
             HasToolProposal: hasToolProposal);
     }
 
-    private static string ComposeTurn(string message, IReadOnlyList<DocumentContextResult> documentContexts)
+    private static string ComposeTurn(
+        string message,
+        IReadOnlyList<DocumentContextResult> documentContexts,
+        int maxInputCharacters)
     {
-        var context = JsonSerializer.Serialize(new
+        var totalTextCharacters = checked(documentContexts.Sum(document =>
+            document.Segments.Sum(segment => segment.Text.Length)));
+        var fullTurn = BuildTurn(message, documentContexts, totalTextCharacters);
+        if (fullTurn.Length <= maxInputCharacters)
         {
-            untrusted = true,
-            documents = documentContexts.Select(document => new
+            return fullTurn;
+        }
+
+        var lower = 0;
+        var upper = totalTextCharacters;
+        string? admitted = null;
+        while (lower <= upper)
+        {
+            var candidateTextCharacters = lower + ((upper - lower) / 2);
+            var candidate = BuildTurn(message, documentContexts, candidateTextCharacters);
+            if (candidate.Length <= maxInputCharacters)
             {
-                truncated = document.Truncated,
-                totalCharacters = document.TotalCharacters,
-                segments = document.Segments.Select(segment => new
+                admitted = candidate;
+                lower = candidateTextCharacters + 1;
+            }
+            else
+            {
+                upper = candidateTextCharacters - 1;
+            }
+        }
+
+        return admitted ?? throw new InvalidOperationException(
+            "The approved main input limit cannot contain the document context framing.");
+    }
+
+    private static string BuildTurn(
+        string message,
+        IReadOnlyList<DocumentContextResult> documentContexts,
+        int textCharacterBudget)
+    {
+        var remaining = textCharacterBudget;
+        var documents = documentContexts.Select(document =>
+        {
+            var aggregateTruncated = false;
+            var segments = document.Segments.Select(segment =>
+            {
+                string text;
+                if (remaining >= segment.Text.Length)
+                {
+                    text = segment.Text;
+                    remaining -= segment.Text.Length;
+                }
+                else
+                {
+                    var safeLength = SafePrefixLength(segment.Text, remaining);
+                    text = segment.Text[..safeLength];
+                    remaining = 0;
+                    aggregateTruncated = true;
+                }
+
+                return new
                 {
                     source = segment.SourceRef,
                     untrusted = segment.Untrusted,
-                    text = segment.Text,
-                }),
-            }),
+                    text,
+                };
+            }).ToArray();
+            return new
+            {
+                truncated = document.Truncated || aggregateTruncated,
+                totalCharacters = document.TotalCharacters,
+                segments,
+            };
+        }).ToArray();
+        var context = JsonSerializer.Serialize(new
+        {
+            untrusted = true,
+            documents,
         });
         return $"{message}\n\n--- BEGIN UNTRUSTED DOCUMENT CONTEXT ---\n{context}\n--- END UNTRUSTED DOCUMENT CONTEXT ---";
+    }
+
+    private static int SafePrefixLength(string text, int requestedLength)
+    {
+        if (requestedLength <= 0)
+        {
+            return 0;
+        }
+
+        if (requestedLength >= text.Length)
+        {
+            return text.Length;
+        }
+
+        return char.IsHighSurrogate(text[requestedLength - 1])
+            && char.IsLowSurrogate(text[requestedLength])
+                ? requestedLength - 1
+                : requestedLength;
     }
 
     private AgentOutcome Finish(

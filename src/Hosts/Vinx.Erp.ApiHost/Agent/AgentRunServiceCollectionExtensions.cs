@@ -105,7 +105,7 @@ internal static class AgentRunServiceCollectionExtensions
             // Sem provider registrado o model é null: o runner falha fechado.
             serviceProvider.GetService<IAgentModel>(),
             serviceProvider.GetRequiredService<ILogger<AgentRunner>>(),
-            profileCatalog: CreateProfileCatalog(selection),
+            profileCatalog: CreateProfileCatalog(selection, AgentInputLimits.MainTurnMaxCharacters),
             outputGate: serviceProvider.GetRequiredService<AgentOutputGate>(),
             documentContextNormalizer: serviceProvider.GetService<DocumentContextNormalizer>()));
         services.AddScoped<AgentExecutionApplicationService>();
@@ -151,6 +151,7 @@ internal static class AgentRunServiceCollectionExtensions
                     ApiKey = options.ApiKey ?? string.Empty,
                     Model = model,
                     Timeout = options.Timeout,
+                    MaxInputCharacters = AgentInputLimits.MainTurnMaxCharacters,
                 },
                 httpClient,
                 loggerFactory?.CreateLogger<DeepSeekChatClient>())
@@ -161,6 +162,7 @@ internal static class AgentRunServiceCollectionExtensions
                     ApiKey = options.ApiKey ?? string.Empty,
                     Model = model,
                     Timeout = options.Timeout,
+                    MaxInputCharacters = AgentInputLimits.MainTurnMaxCharacters,
                 },
                 httpClient,
                 loggerFactory?.CreateLogger<OpenAiCompatibleChatClient>());
@@ -169,9 +171,11 @@ internal static class AgentRunServiceCollectionExtensions
     // Catálogo fixo: perfis aprovados do catálogo central com a seleção de
     // provider decidida na composição; sem provider a seleção permanece nula e
     // o runner falha fechado antes de qualquer chamada externa.
-    private static Func<string, AgentTaskProfile?> CreateProfileCatalog(AgentModelSelection? selection) =>
+    private static Func<string, AgentTaskProfile?> CreateProfileCatalog(
+        AgentModelSelection? selection,
+        int maxInputCharacters) =>
         profileId =>
             AgentTaskProfileCatalog.TryGet(profileId, out _)
-                ? AgentTaskProfileCatalog.CreateApprovedProfile(selection)
+                ? AgentTaskProfileCatalog.CreateApprovedProfile(selection, maxInputCharacters)
                 : null;
 }

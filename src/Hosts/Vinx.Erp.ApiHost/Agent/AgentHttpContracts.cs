@@ -1,4 +1,3 @@
-using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using Vinx.Erp.ApiHost.Contracts;
 using Vinx.Erp.ApiHost.Constants;
@@ -36,7 +35,18 @@ public sealed record AgentRunHttpRequest(
     string Journey,
     string Message,
     Guid? CompanyId = null,
-    [property: MaxLength(ApiConstants.MaxAgentAttachments)] IReadOnlyList<Guid> Attachments = null!);
+    IReadOnlyList<Guid> Attachments = null!)
+{
+    private static readonly IReadOnlyList<Guid> NoAttachments =
+        Array.AsReadOnly(Array.Empty<Guid>());
+
+    public IReadOnlyList<Guid> Attachments { get; private init; } = Freeze(Attachments);
+
+    private static IReadOnlyList<Guid> Freeze(IReadOnlyList<Guid>? attachments) =>
+        attachments is null || attachments.Count == 0
+            ? NoAttachments
+            : Array.AsReadOnly(attachments.ToArray());
+}
 
 /// <summary>Resposta tipada de uma execução; texto somente o do modelo liberado pelo gate, sem prompt ou resposta bruta.</summary>
 public sealed record AgentRunHttpResponse(
