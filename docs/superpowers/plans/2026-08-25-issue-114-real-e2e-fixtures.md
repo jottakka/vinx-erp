@@ -398,19 +398,18 @@ git diff --check
 
 - [ ] **Step 5: Recalcular e commit**
 
-Registrar exatamente 20 arquivos totais (19 manuais/source/docs e 1 lockfile
-gerado) ou atualizar a contagem real. Estimativa por tarefa, incluindo as 613
-linhas já commitadas de design/plano:
+Registrar 20 arquivos totais: 19 manuais/source/docs e um lockfile gerado.
+Contagem final do diff:
 
-| Task | Linhas manuais estimadas |
+| Fatia final | Linhas manuais |
 |---|---:|
-| Design/plano já commitidos | 613 |
-| Task 1 — catálogo/seed/teste | 450–600 |
-| Task 2 — factory/host/readback/concorrência | 350–500 |
-| Task 3 — CLI/processo | 120–200 |
-| Task 4 — launcher/testes | 260–380 |
-| Task 5 — proxy/runbooks/manifesto | 120–200 |
-| **Total** | **1.913–2.493** |
+| Design e plano | 613 |
+| Seed e assinaturas canônicas | 1.024 |
+| Factory, host, CLI e solution | 1.300 |
+| Launcher, testes Node e package | 1.306 |
+| Proxy, runbooks e manifesto | 219 |
+| **Total manual** | **4.462** |
+| Lockfile gerado, fora do total manual | 1.347 |
 
 A exceção ao alvo de 800 é explícita: sem seed+host+launcher+proxy não existe o
 comando manual pedido. Dividir antes do commit somente se ultrapassar 25
@@ -432,8 +431,8 @@ alheia. Com escopo congelado, executar exatamente uma vez:
 git diff --check origin/main...HEAD
 ```
 
-Depois executar o smoke real do launcher com
-`VINX_RUN_REAL_E2E_SMOKE=1 node --test scripts/run-real-e2e.test.mjs`. Se verde,
+Depois executar os smokes reais direto e pelo launcher com
+`VINX_RUN_REAL_E2E_HOST_SMOKE=1 VINX_RUN_REAL_E2E_SMOKE=1 node --test scripts/run-real-e2e.test.mjs`. Se verdes,
 iniciar `npm run dev:real-e2e -- --profile maria`, confirmar somente um
 PostgreSQL/ApiHost/Vite, entregar a URL a Luna e encerrar por SIGINT através do
 launcher. O CI continua sendo o gate remoto; o gate local acima existe uma

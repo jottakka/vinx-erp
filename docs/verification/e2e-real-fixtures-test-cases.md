@@ -12,7 +12,7 @@
 
 ## Inspeção manual Luna
 
-Executar serialmente com um único launcher/container/browser:
+Executar serialmente com `maria` e um único launcher/container/browser:
 
 1. `/` — bootstrap e seletor mostram somente empresas autorizadas.
 2. `/pessoas` — as pessoas acompanham a empresa selecionada; cargos e

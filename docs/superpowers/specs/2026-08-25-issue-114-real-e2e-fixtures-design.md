@@ -158,12 +158,13 @@ Vite adiciona o prefixo `/notifications`; `/agent/runs`, `/foundation`,
 
 ## Escopo e limites
 
-Alvo de 20 arquivos totais: 19 arquivos manuais/source/documentação e um
-lockfile gerado. Estimativa de 1.900–2.500 linhas manuais, incluindo as 613
-linhas já versionadas de desenho/plano; o seed rico torna a estimativa inicial
-de 450–650 irreal. A exceção ao alvo de 800 é explícita e indivisível: seed,
-host, launcher e proxy compõem o único comando consumível solicitado. Continua
-abaixo de 25 arquivos, sem dependência ou migration nova.
+Escopo final de 20 arquivos: 19 arquivos manuais/source/documentação e um
+lockfile gerado. O diff real tem 4.462 linhas manuais e 1.347 linhas
+geradas de lockfile; as assinaturas canônicas completas, quatro profiles reais
+e supervisão de processos tornaram a estimativa inicial insuficiente. A exceção
+ao alvo de 800 permanece coesa: seed, host, launcher e proxy compõem o único
+comando consumível solicitado. Continua abaixo de 25 arquivos, sem dependência
+ou migration nova.
 
 ## Adiamentos
 

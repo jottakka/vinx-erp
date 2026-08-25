@@ -69,7 +69,10 @@ seed no mesmo banco falha fechado; não faz merge com estado anterior.
 
 ## Roteiro manual mínimo
 
-1. Em `/`, confirme as empresas visíveis para o profile selecionado.
+Execute o roteiro completo com `maria`; os demais profiles validam acessos
+específicos no startup real.
+
+1. Em `/`, confirme Alfa e Beta e a ausência de Gama.
 2. Em `/pessoas`, alterne somente entre empresas autorizadas e confira as
    pessoas de cada empresa.
 3. Em `/paguai`, confira os rascunhos da empresa selecionada.
