@@ -21,13 +21,13 @@ describe("development API proxy", () => {
     expect(resolveDevelopmentApiProxy()).toBeUndefined();
   });
 
-  it("proxies Agent, Foundation, Paguai, and Atendimento APIs to the exact loopback origin", () => {
+  it("proxies Agent, Foundation, Paguai, Atendimento, and Notifications APIs to the exact loopback origin", () => {
     expect(resolveDevelopmentApiProxy("http://127.0.0.1:5080")).toEqual({
       "^/agent/runs(?:\\?.*)?$": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
-      "/atendimento": {
+      "^/atendimento/cards(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
@@ -35,14 +35,36 @@ describe("development API proxy", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
-      "/paguai": {
+      "/notifications": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "^/paguai/requests(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
     });
   });
 
-  it("proxies only agent run URLs and leaves the dedicated agent SPA route local", async () => {
+  it.each(["/paguai", "/atendimento"])(
+    "leaves the module SPA route %s outside every API proxy context",
+    (route) => {
+      const proxy = resolveDevelopmentApiProxy("http://127.0.0.1:5080");
+      expect(proxy).toBeDefined();
+      if (!proxy) {
+        throw new Error("Development API proxy was not configured");
+      }
+
+      for (const context of Object.keys(proxy)) {
+        const matches = context.startsWith("^")
+          ? new RegExp(context).test(route)
+          : route.startsWith(context);
+        expect(matches).toBe(false);
+      }
+    },
+  );
+
+  it("proxies API URLs and leaves the dedicated Agent and Notifications SPA routes local", async () => {
     const api = createHttpServer((request, response) => {
       response.writeHead(200, { "Content-Type": "text/plain" });
       response.end(request.url);
@@ -74,13 +96,31 @@ describe("development API proxy", () => {
         http.all(`${origin}/*`, () => passthrough()),
         http.all(`${apiOrigin}/*`, () => passthrough()),
       );
-
       const run = await fetch(`${origin}/agent/runs?source=test`);
       expect(await run.text()).toBe("/agent/runs?source=test");
+
+      const notifications = await fetch(`${origin}/notifications/inbox`);
+      expect(await notifications.text()).toBe("/notifications/inbox");
+
+      const paguai = await fetch(`${origin}/paguai/requests?companyId=test`);
+      expect(await paguai.text()).toBe("/paguai/requests?companyId=test");
+
+      const atendimento = await fetch(
+        `${origin}/atendimento/cards?companyId=test`,
+      );
+      expect(await atendimento.text()).toBe(
+        "/atendimento/cards?companyId=test",
+      );
 
       const page = await fetch(`${origin}/agente`);
       expect(page.headers.get("content-type")).toContain("text/html");
       expect(await page.text()).toContain('<div id="root"></div>');
+
+      const notificationsPage = await fetch(`${origin}/notificacoes`);
+      expect(notificationsPage.headers.get("content-type")).toContain(
+        "text/html",
+      );
+      expect(await notificationsPage.text()).toContain('<div id="root"></div>');
     } finally {
       await vite.close();
       await closeHttpServer(api);
@@ -109,7 +149,7 @@ describe("web Vite configuration", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
-      "/atendimento": {
+      "^/atendimento/cards(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
@@ -117,7 +157,11 @@ describe("web Vite configuration", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
-      "/paguai": {
+      "/notifications": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "^/paguai/requests(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
