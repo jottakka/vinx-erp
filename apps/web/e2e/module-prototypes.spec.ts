@@ -251,3 +251,105 @@ test("Scenario: agent dock runs a typed agent run and shares the conversation wi
     .analyze();
   expect(agentScan.violations).toEqual([]);
 });
+
+test("Scenario: agent chat uploads, removes, and sends the remaining attachment in order", async ({
+  page,
+}) => {
+  await enterHome(page);
+
+  const fileIds = [
+    "44444444-4444-4444-8444-444444444444",
+    "55555555-5555-4555-8555-555555555555",
+  ];
+  const confirmationIds: string[] = [];
+  let antiforgeryRequests = 0;
+  let intentIndex = 0;
+  let storagePuts = 0;
+  let runBody: { attachments?: string[] } | null = null;
+  await page.route(
+    "**/foundation/identity/browser-session/antiforgery",
+    async (route) => {
+      antiforgeryRequests += 1;
+      await route.fulfill({
+        body: JSON.stringify({ requestToken: "test-csrf-token" }),
+        contentType: "application/json",
+        status: 200,
+      });
+    },
+  );
+  await page.route("**/foundation/files/upload-intentions", async (route) => {
+    expect(route.request().headers()["x-csrf-token"]).toBe("test-csrf-token");
+    const fileId = fileIds[intentIndex++];
+    await route.fulfill({
+      body: JSON.stringify({
+        fileId,
+        processingState: "quarantined",
+        uploadUrl: `https://storage.test.invalid/${fileId}`,
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.route("https://storage.test.invalid/**", async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    expect(route.request().headers()["content-type"]).toBe("application/pdf");
+    storagePuts += 1;
+    await route.fulfill({ status: 204 });
+  });
+  await page.route("**/foundation/files/confirmations", async (route) => {
+    expect(route.request().headers()["x-csrf-token"]).toBe("test-csrf-token");
+    const body = route.request().postDataJSON() as { fileId: string };
+    confirmationIds.push(body.fileId);
+    await route.fulfill({
+      body: JSON.stringify({
+        fileId: body.fileId,
+        processingState: "confirmed",
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+  await page.route("**/agent/runs", async (route) => {
+    runBody = route.request().postDataJSON() as { attachments?: string[] };
+    await route.fulfill({
+      body: JSON.stringify({
+        correlationId: "0192b0c0-0000-7000-8000-000000000001",
+        reasonCode: "ok",
+        sources: null,
+        status: "result",
+        text: "Resposta autorizada pelo gate",
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+
+  await page.getByRole("button", { name: "Abrir painel do agente" }).click();
+  const dock = page.getByRole("complementary", { name: "Painel do agente" });
+  await dock.getByLabel("Anexar documentos ao agente").setInputFiles([
+    {
+      buffer: Buffer.from([1]),
+      mimeType: "application/pdf",
+      name: "primeiro.pdf",
+    },
+    {
+      buffer: Buffer.from([2]),
+      mimeType: "application/pdf",
+      name: "segundo.pdf",
+    },
+  ]);
+  await expect(dock.getByText("Pronto")).toHaveCount(2);
+  await dock.getByRole("button", { name: "Remover primeiro.pdf" }).click();
+  await expect(dock.getByText("primeiro.pdf")).toHaveCount(0);
+
+  await dock
+    .getByLabel("Mensagem para o agente")
+    .fill("Resuma o documento restante");
+  await dock.getByRole("button", { name: "Enviar" }).click();
+  await expect(dock.getByText("Resposta autorizada pelo gate")).toBeVisible();
+
+  expect(antiforgeryRequests).toBe(5);
+  expect(storagePuts).toBe(2);
+  expect(confirmationIds).toEqual(fileIds);
+  expect(runBody?.attachments).toEqual([fileIds[1]]);
+});

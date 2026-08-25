@@ -13,12 +13,16 @@ import type {
 import { SessionProvider, useSession } from "../auth/session-provider";
 import {
   AgentConversationProvider,
+  agentReplyText,
   createAgentConversationScopeKey,
 } from "./agent-conversation-provider";
 import { AgentDock } from "./agent-dock";
 import { AgentTrigger } from "./agent-trigger";
 
 const agentRunsPath = "/agent/runs";
+const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
+const confirmationPath = "/foundation/files/confirmations";
+const intentionPath = "/foundation/files/upload-intentions";
 const alfaCompanyId = "33333333-3333-4333-8333-333333333333";
 const correlationId = "0192b0c0-0000-7000-8000-000000000001";
 
@@ -171,6 +175,54 @@ function runCalls(fetchSpy: ReturnType<typeof vi.fn>) {
   return fetchSpy.mock.calls.filter(([path]) => path === agentRunsPath);
 }
 
+function attachmentFile(name: string, bytes = new Uint8Array([1])): File {
+  const file = new File([bytes], name, { type: "application/pdf" });
+  Object.defineProperty(file, "arrayBuffer", {
+    value: async () => bytes.buffer.slice(0),
+  });
+  return file;
+}
+
+function attachmentFetch(fileIds: readonly string[]) {
+  let intended = 0;
+  return vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === antiforgeryPath) {
+      return antiforgeryTokenResponse();
+    }
+    if (path === intentionPath) {
+      const id = fileIds[intended++];
+      return new Response(
+        JSON.stringify({
+          fileId: id,
+          processingState: "quarantined",
+          uploadUrl: `https://storage.test.invalid/${id}`,
+        }),
+        { headers: { "Content-Type": "application/json" }, status: 200 },
+      );
+    }
+    if (path === confirmationPath) {
+      const body = JSON.parse(init?.body as string) as { fileId: string };
+      return new Response(
+        JSON.stringify({ fileId: body.fileId, processingState: "confirmed" }),
+        { headers: { "Content-Type": "application/json" }, status: 200 },
+      );
+    }
+    if (path.startsWith("https://storage.test.invalid/")) {
+      return new Response(null, { status: 204 });
+    }
+    if (path === agentRunsPath) {
+      return agentRunResponse({
+        status: "result",
+        reasonCode: "ok",
+        text: "Resposta autorizada",
+        sources: null,
+        correlationId,
+      });
+    }
+    throw new Error("unexpected request");
+  });
+}
+
 function createCompanylessGateway(): MockSessionGateway {
   const snapshot: BootstrapSnapshot = {
     companies: [],
@@ -203,6 +255,25 @@ describe("agent conversation scope key", () => {
     expect(
       createAgentConversationScopeKey({ ...originalScope, ...changedScope }),
     ).not.toBe(createAgentConversationScopeKey(originalScope));
+  });
+});
+
+describe("agent attachment clarification", () => {
+  it("gives a fixed remove-or-verify instruction for unavailable document context", () => {
+    expect(
+      agentReplyText({
+        ok: true,
+        run: {
+          correlationId,
+          reasonCode: "document_context_unavailable",
+          sources: null,
+          status: "needs_clarification",
+          text: null,
+        },
+      }),
+    ).toBe(
+      "Não foi possível usar o anexo. Remova-o ou verifique-o antes de tentar novamente. (document_context_unavailable)",
+    );
   });
 });
 
@@ -690,5 +761,240 @@ describe("agent workspace", () => {
     );
     await waitFor(() => expect(oldRunSignal?.aborted).toBe(true));
     expect(refreshedDock.queryByText("resposta tardia da Alfa")).toBeNull();
+  });
+
+  it("keeps three ready attachments in selection order and shares them with the dedicated page", async () => {
+    const fileIds = [
+      "44444444-4444-4444-8444-444444444444",
+      "55555555-5555-4555-8555-555555555555",
+      "66666666-6666-4666-8666-666666666666",
+    ];
+    vi.stubGlobal("fetch", attachmentFetch(fileIds));
+    const user = userEvent.setup();
+    const { router } = await renderAgentWorkspace();
+    await user.click(
+      screen.getByRole("button", { name: "Abrir painel do agente" }),
+    );
+    const dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+
+    await user.upload(dock.getByLabelText("Anexar documentos ao agente"), [
+      attachmentFile("primeiro.pdf"),
+      attachmentFile("segundo.pdf"),
+      attachmentFile("terceiro.pdf"),
+    ]);
+
+    await waitFor(() => expect(dock.getAllByText("Pronto")).toHaveLength(3));
+    const selected = dock.getByRole("list", { name: "Anexos selecionados" });
+    expect(
+      within(selected)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual([
+      expect.stringContaining("primeiro.pdf"),
+      expect.stringContaining("segundo.pdf"),
+      expect.stringContaining("terceiro.pdf"),
+    ]);
+
+    await user.click(
+      dock.getByRole("button", { name: "Abrir página dedicada do agente" }),
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe("/agente"));
+    expect(
+      screen.getByRole("list", { name: "Anexos selecionados" }),
+    ).toHaveTextContent("primeiro.pdf");
+  });
+
+  it("rejects a fourth selection before any upload request", async () => {
+    const fetchSpy = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
+    await user.click(
+      screen.getByRole("button", { name: "Abrir painel do agente" }),
+    );
+    const dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+
+    await user.upload(dock.getByLabelText("Anexar documentos ao agente"), [
+      attachmentFile("um.pdf"),
+      attachmentFile("dois.pdf"),
+      attachmentFile("tres.pdf"),
+      attachmentFile("quatro.pdf"),
+    ]);
+
+    expect(await dock.findByText(/no máximo três anexos/i)).toBeVisible();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks sending while an attachment uploads, then removes and aborts only that upload", async () => {
+    let resolveToken: (response: Response) => void = () => {};
+    const token = new Promise<Response>((resolve) => (resolveToken = resolve));
+    const fetchSpy = vi.fn<typeof fetch>().mockImplementationOnce(() => token);
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
+    const dock = await openDockAndType(user, "resuma o anexo");
+
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("pendente.pdf"),
+    );
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    const signal = fetchSpy.mock.calls[0][1]?.signal as AbortSignal;
+    expect(dock.getByText("Enviando")).toBeVisible();
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+
+    await user.click(
+      dock.getByRole("button", { name: "Remover pendente.pdf" }),
+    );
+    expect(signal.aborted).toBe(true);
+    expect(dock.queryByText("pendente.pdf")).toBeNull();
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeEnabled();
+    resolveToken(antiforgeryTokenResponse());
+  });
+
+  it("sends ready IDs in selection order once and clears the accepted selection", async () => {
+    const fileId = "44444444-4444-4444-8444-444444444444";
+    const fetchSpy = attachmentFetch([fileId]);
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
+    const dock = await openDockAndType(user, "resuma o anexo pronto");
+
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("pronto.pdf"),
+    );
+    expect(await dock.findByText("Pronto")).toBeVisible();
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+
+    expect(await dock.findByText("Resposta autorizada")).toBeVisible();
+    const body = JSON.parse(runCalls(fetchSpy)[0][1].body as string);
+    expect(body.attachments).toEqual([fileId]);
+    expect(
+      dock.queryByRole("list", { name: "Anexos selecionados" }),
+    ).toBeNull();
+  });
+
+  it("keeps a failed attachment removable and blocks sending without a request", async () => {
+    const fetchSpy = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
+    const dock = await openDockAndType(user, "resuma o anexo inválido");
+
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("vazio.pdf", new Uint8Array()),
+    );
+
+    expect(await dock.findByText("Falhou")).toBeVisible();
+    expect(
+      dock.getByText("O anexo não atende aos requisitos permitidos."),
+    ).toBeVisible();
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await user.click(dock.getByRole("button", { name: "Remover vazio.pdf" }));
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeEnabled();
+  });
+
+  it("aborts and clears attachment uploads on reset and workspace unmount", async () => {
+    let resolveFirst: (response: Response) => void = () => {};
+    let resolveSecond: (response: Response) => void = () => {};
+    const first = new Promise<Response>((resolve) => (resolveFirst = resolve));
+    const second = new Promise<Response>(
+      (resolve) => (resolveSecond = resolve),
+    );
+    const fetchSpy = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(() => first)
+      .mockImplementationOnce(() => second);
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    const { unmount } = await renderAgentWorkspace();
+    await user.click(
+      screen.getByRole("button", { name: "Abrir painel do agente" }),
+    );
+    const dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("reset.pdf"),
+    );
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    const resetSignal = fetchSpy.mock.calls[0][1]?.signal as AbortSignal;
+    await user.click(
+      dock.getByRole("button", { name: "Reiniciar conversa do agente" }),
+    );
+    expect(resetSignal.aborted).toBe(true);
+    expect(dock.queryByText("reset.pdf")).toBeNull();
+
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("unmount.pdf"),
+    );
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    const unmountSignal = fetchSpy.mock.calls[1][1]?.signal as AbortSignal;
+    unmount();
+    expect(unmountSignal.aborted).toBe(true);
+    resolveFirst(antiforgeryTokenResponse());
+    resolveSecond(antiforgeryTokenResponse());
+  });
+
+  it("aborts and discards a pending attachment before the new membership scope commits", async () => {
+    let snapshot: BootstrapSnapshot | null = null;
+    const gateway: MockSessionGateway = {
+      login: async () => {
+        if (!snapshot) throw new Error();
+        return structuredClone(snapshot);
+      },
+      logout: async () => {
+        snapshot = null;
+      },
+      getBootstrap: async () => (snapshot ? structuredClone(snapshot) : null),
+    };
+    const { createBootstrapSnapshot, mockSessionProfiles } = await import(
+      "../auth/mock-session-fixtures"
+    );
+    snapshot = createBootstrapSnapshot(mockSessionProfiles.maria);
+    const nextScope = {
+      ...snapshot,
+      companies: [...snapshot.companies].reverse(),
+    };
+    let resolveToken: (response: Response) => void = () => {};
+    const token = new Promise<Response>((resolve) => (resolveToken = resolve));
+    const fetchSpy = vi.fn<typeof fetch>().mockImplementationOnce(() => token);
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace("/", gateway);
+    await user.click(
+      screen.getByRole("button", { name: "Abrir painel do agente" }),
+    );
+    const dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("escopo-antigo.pdf"),
+    );
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    const signal = fetchSpy.mock.calls[0][1]?.signal as AbortSignal;
+    snapshot = nextScope;
+    await user.click(
+      screen.getByRole("button", { name: "Atualizar sessão", hidden: true }),
+    );
+
+    expect(signal.aborted).toBe(true);
+    expect(
+      await screen.findByText("Beta · Consultas independentes"),
+    ).toBeVisible();
+    expect(screen.queryByText("escopo-antigo.pdf")).toBeNull();
+    resolveToken(antiforgeryTokenResponse());
   });
 });

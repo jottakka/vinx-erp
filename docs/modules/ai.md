@@ -207,6 +207,15 @@ Execução local (sem key → 503 `provider_not_configured`; com key via env) no
 runbook `docs/runbooks/local-development.md`; matriz BDD em
 `docs/verification/issue-138-agent-api-test-cases.md`.
 
+No workspace web de desenvolvimento, o picker aceita no máximo três
+PDF/JPEG/PNG de 1..25 MiB. Para cada seleção, o browser calcula SHA-256,
+obtém intenção autenticada, envia o arquivo diretamente ao storage e confirma
+o ciclo no BFF antes de liberar o ID ao turno. URL temporária, bytes, checksum,
+corpo de resposta e detalhes de falha não entram no estado, logs ou UI. Só IDs
+opacos confirmados, na primeira ordem de seleção, seguem como `attachments`;
+remover, resetar, desmontar ou trocar usuário/membership/empresa aborta e
+descarta o upload pendente.
+
 Somente `read_only_summarize_v1` permite anexos. Cada referência é lida pela
 fronteira Foundation e normalizada em ordem; qualquer negação, indisponibilidade
 ou falha de extração converge em `document_context_unavailable`, sem chamada ao

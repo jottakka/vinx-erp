@@ -37,6 +37,7 @@ const knownReasonCodes = [
   "invalid_request",
   "idempotency_conflict",
   "integrity_conflict",
+  "document_context_unavailable",
 ] as const;
 
 export type AgentRunReasonCode = (typeof knownReasonCodes)[number];
@@ -132,6 +133,7 @@ export type AgentRunSendResult =
   | { ok: false; failure: AgentRunFailure };
 
 export type AgentRunInput = {
+  attachments?: readonly string[];
   message: string;
   companyId?: string;
   signal?: AbortSignal;
@@ -184,6 +186,7 @@ export function createAgentRunClient(
   }
 
   async function send(input: AgentRunInput): Promise<AgentRunSendResult> {
+    const attachments = input.attachments?.slice();
     const token = await readAntiforgeryToken(input.signal);
     if (!("requestToken" in token)) {
       return { ok: false, failure: token };
@@ -194,6 +197,7 @@ export function createAgentRunClient(
       journey: agentJourney,
       message: input.message,
       ...(input.companyId ? { companyId: input.companyId } : {}),
+      ...(attachments?.length ? { attachments } : {}),
     });
 
     const result = await requestBff(agentRunsPath, {
