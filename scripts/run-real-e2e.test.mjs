@@ -1,15 +1,121 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import { createConnection } from "node:net";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   parseLauncherArgs,
   parseReadyOrigin,
   runLauncher,
 } from "./run-real-e2e.mjs";
+
+const REPOSITORY_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+const E2E_HOST_PROJECT =
+  "tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj";
+const E2E_HOST_OUTPUT_DIRECTORY = path.join(
+  REPOSITORY_ROOT,
+  "tests/tools/Vinx.Erp.Foundation.E2eHost/bin/Debug/net10.0",
+);
+
+function builtE2eHostDll() {
+  const artifactNames = [
+    "Vinx.Erp.Foundation.E2eHost.dll",
+    "Vinx.Erp.Foundation.E2eHost.deps.json",
+    "Vinx.Erp.Foundation.E2eHost.runtimeconfig.json",
+  ];
+  for (const artifactName of artifactNames) {
+    assert.equal(
+      existsSync(path.join(E2E_HOST_OUTPUT_DIRECTORY, artifactName)),
+      true,
+      `Build precondition: run dotnet build ${E2E_HOST_PROJECT} before this test.`,
+    );
+  }
+  return path.join(E2E_HOST_OUTPUT_DIRECTORY, artifactNames[0]);
+}
+
+function startDirectE2eHost(profile) {
+  const child = spawn("dotnet", [builtE2eHostDll(), "--profile", profile], {
+    cwd: REPOSITORY_ROOT,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  let standardOutput = "";
+  let standardError = "";
+  let parsedOutputLength = 0;
+  let resolveReady;
+  let rejectReady;
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  let readySettled = false;
+  const settleReady = (operation) => {
+    if (readySettled) return;
+    readySettled = true;
+    operation();
+  };
+  child.stdout.on("data", (chunk) => {
+    standardOutput += chunk;
+    let newlineIndex;
+    while ((newlineIndex = standardOutput.indexOf("\n", parsedOutputLength)) >= 0) {
+      const line = standardOutput
+        .slice(parsedOutputLength, newlineIndex)
+        .replace(/\r$/, "");
+      parsedOutputLength = newlineIndex + 1;
+      if (!line.startsWith("E2E_API_ORIGIN=")) continue;
+      try {
+        const origin = parseReadyOrigin(line);
+        settleReady(() => resolveReady(origin));
+      } catch (error) {
+        settleReady(() => rejectReady(error));
+      }
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    standardError += chunk;
+  });
+  let resolveOutcome;
+  const outcome = new Promise((resolve) => {
+    resolveOutcome = resolve;
+  });
+  child.once("error", () => {
+    settleReady(() => rejectReady(new Error("direct E2E host spawn failed")));
+    resolveOutcome({ code: null, kind: "error", signal: null });
+  });
+  child.once("exit", (code, signal) => {
+    settleReady(() => rejectReady(new Error("direct E2E host exited before readiness")));
+    resolveOutcome({ code, kind: "exit", signal });
+  });
+  return {
+    child,
+    closed,
+    outcome,
+    output: () => ({ standardError, standardOutput }),
+    ready,
+  };
+}
+
+async function stopDirectE2eHost(child, outcome) {
+  if (child.exitCode !== null || child.signalCode !== null) return outcome;
+  child.kill("SIGTERM");
+  try {
+    return await withTestTimeout(outcome, 30_000);
+  } catch {
+    child.kill("SIGKILL");
+    return withTestTimeout(outcome, 5_000);
+  }
+}
 
 function createFakeChild(label, pid) {
   const child = new EventEmitter();
@@ -194,6 +300,26 @@ test("parseLauncherArgs rejects missing, extra, duplicate, and unknown arguments
       /E2E launcher failed: invalid_arguments/,
     );
   }
+});
+
+test("direct E2E host rejects unknown arguments without output or readiness", () => {
+  const result = spawnSync(
+    "dotnet",
+    [builtE2eHostDll(), "--profile", "unknown"],
+    {
+      cwd: REPOSITORY_ROOT,
+      encoding: "utf8",
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 2);
+  assert.equal(result.signal, null);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.doesNotMatch(result.stdout, /E2E_API_ORIGIN=/);
 });
 
 test("parseReadyOrigin accepts only an exact loopback HTTP origin", () => {
@@ -543,6 +669,76 @@ test("runLauncher checks the browser port before spawning either child", async (
   );
   assert.equal(harness.spawns.length, 0);
 });
+
+test(
+  "direct E2E host smoke handles SIGTERM and removes its owned resources",
+  {
+    skip: process.env.VINX_RUN_REAL_E2E_HOST_SMOKE !== "1",
+    timeout: 180_000,
+  },
+  async () => {
+    const baselineContainers = runningFixtureContainerIds();
+    const direct = startDirectE2eHost("maria");
+    let apiOrigin;
+    let apiPort;
+    let exitResult;
+    let ownedContainerId;
+
+    try {
+      apiOrigin = await withTestTimeout(
+        Promise.race([
+          direct.ready,
+          direct.outcome.then(() => {
+            throw new Error("direct E2E host exited before readiness");
+          }),
+        ]),
+        120_000,
+      );
+      apiPort = Number(new URL(apiOrigin).port);
+      assert.equal((await fetch(`${apiOrigin}/health`)).status, 200);
+      assert.equal(
+        await pollUntil(() => {
+          const added = [...runningFixtureContainerIds()].filter(
+            (id) => !baselineContainers.has(id),
+          );
+          if (added.length !== 1) return false;
+          [ownedContainerId] = added;
+          return true;
+        }, 5_000),
+        true,
+      );
+
+      assert.equal(direct.child.kill("SIGTERM"), true);
+      exitResult = await withTestTimeout(direct.outcome, 30_000);
+      assert.deepEqual(exitResult, { code: 0, kind: "exit", signal: null });
+      await withTestTimeout(direct.closed, 5_000);
+    } finally {
+      if (exitResult === undefined) {
+        exitResult = await stopDirectE2eHost(direct.child, direct.outcome);
+        await withTestTimeout(direct.closed, 5_000);
+      }
+    }
+
+    const output = direct.output();
+    assert.equal(output.standardOutput, `E2E_API_ORIGIN=${apiOrigin}\n`);
+    assert.equal(output.standardError, "");
+    assert.equal(
+      output.standardOutput.match(/E2E_API_ORIGIN=/g)?.length,
+      1,
+    );
+    assert.equal(
+      await pollUntil(async () => !(await isPortOpen(apiPort)), 15_000),
+      true,
+    );
+    assert.equal(
+      await pollUntil(
+        () => !runningFixtureContainerIds().has(ownedContainerId),
+        30_000,
+      ),
+      true,
+    );
+  },
+);
 
 test(
   "real launcher smoke closes both ports and its PostgreSQL Testcontainer",

@@ -19,6 +19,19 @@ Antes de iniciar, atribua containers e processos VINX já ativos. Não interromp
 recursos de outra worktree nem a stack Supabase. O launcher cria e remove apenas
 os grupos de processo e o Testcontainer desta execução.
 
+O teste Node executa o DLL do host diretamente para provar o contrato de processo
+sem iniciar Docker quando os argumentos são inválidos. Portanto, no gate, mantenha
+esta ordem explícita:
+
+```bash
+dotnet restore tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj --locked-mode
+dotnet build tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj --no-restore
+node --test scripts/run-real-e2e.test.mjs
+```
+
+O teste Node falha com uma instrução de build quando esses artefatos não existem;
+ele não compila o host implicitamente em cada execução.
+
 ## Iniciar
 
 Na raiz do repositório:

@@ -20,6 +20,98 @@ public sealed class E2eFixtureHostException(
     public E2eFixtureHostFailurePhase Phase { get; } = phase;
 }
 
+public static class E2eFixtureHostOptions
+{
+    /// <summary>Aceita somente um argumento de profile exato e allow-listed.</summary>
+    public static bool TryParse(string[] arguments, out string profile)
+    {
+        profile = string.Empty;
+        if (arguments is not ["--profile", var candidate]
+            || !E2eFixtureProfileCatalog.TryGet(candidate, out _))
+        {
+            return false;
+        }
+
+        profile = candidate;
+        return true;
+    }
+}
+
+public static class E2eFixtureHostProcessPolicy
+{
+    /// <summary>Reconhece apenas cancelamento solicitado sem falha agregada de cleanup.</summary>
+    public static bool IsCleanCancellation(Exception exception, bool cancellationRequested) =>
+        cancellationRequested
+        && (exception is OperationCanceledException
+            || exception is E2eFixtureHostException
+            {
+                InnerException: OperationCanceledException,
+            });
+}
+
+/// <summary>
+/// Suprime logs do host filho e preserva apenas os canais fixos de prontidão e falha.
+/// </summary>
+public sealed class E2eFixtureHostOutput : IDisposable
+{
+    private readonly TextWriter _standardOutput;
+    private readonly TextWriter _standardError;
+    private int _disposed;
+
+    private E2eFixtureHostOutput(TextWriter standardOutput, TextWriter standardError)
+    {
+        _standardOutput = standardOutput;
+        _standardError = standardError;
+    }
+
+    public static E2eFixtureHostOutput SuppressHostConsole()
+    {
+        var standardOutput = Console.Out;
+        var standardError = Console.Error;
+        Console.SetOut(TextWriter.Null);
+        Console.SetError(TextWriter.Null);
+        return new E2eFixtureHostOutput(standardOutput, standardError);
+    }
+
+    public Task WriteReadinessAsync(Uri origin)
+    {
+        ArgumentNullException.ThrowIfNull(origin);
+        return WriteLineAsync(
+            _standardOutput,
+            $"E2E_API_ORIGIN={origin.GetLeftPart(UriPartial.Authority)}");
+    }
+
+    public Task WriteFailureAsync(E2eFixtureHostFailurePhase phase)
+    {
+        var category = phase switch
+        {
+            E2eFixtureHostFailurePhase.FixtureStart => "fixture_start_failed",
+            E2eFixtureHostFailurePhase.Seed => "seed_failed",
+            E2eFixtureHostFailurePhase.HostStart => "host_start_failed",
+            E2eFixtureHostFailurePhase.Readback => "readback_failed",
+            _ => throw new ArgumentOutOfRangeException(nameof(phase)),
+        };
+        return WriteLineAsync(_standardError, $"E2E_HOST_FAILED={category}");
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        Console.SetOut(_standardOutput);
+        Console.SetError(_standardError);
+    }
+
+    private static async Task WriteLineAsync(TextWriter writer, string value)
+    {
+        await writer.WriteLineAsync(value);
+        await writer.FlushAsync();
+    }
+}
+
 public sealed class E2eFixtureHost : IAsyncDisposable
 {
     private static readonly TimeSpan ReadbackTimeout = TimeSpan.FromSeconds(20);

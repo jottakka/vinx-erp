@@ -384,6 +384,8 @@ evidência complementar.
 Executar:
 
 ```bash
+dotnet restore tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj --locked-mode
+dotnet build tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj --no-restore
 node --test scripts/run-real-e2e.test.mjs
 npm --workspace apps/web run test -- --run src/app/vite-api-proxy.test.ts
 npm --workspace apps/web run lint
@@ -391,8 +393,6 @@ npm --workspace apps/web run format:check
 npm --workspace apps/web run build
 npm run test:no-direct-supabase
 dotnet test tests/public/Vinx.Erp.Foundation.IntegrationTests/Vinx.Erp.Foundation.IntegrationTests.csproj --no-restore --filter 'FullyQualifiedName~E2eFixture'
-dotnet restore tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj --locked-mode
-dotnet build tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj --no-restore
 git diff --check
 ```
 

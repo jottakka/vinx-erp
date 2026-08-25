@@ -29,11 +29,20 @@ arquivo.
 
 ## Gate público desta fatia
 
+- Restore locked e build do executável test-only antes dos testes Node, porque o
+  contrato de subprocesso executa o DLL já verificado e não faz build implícito.
 - Testes focados C# de seeder, host real e parser.
 - Testes Node do launcher e smoke real serial condicionado.
 - Teste Vitest do proxy, lint, format, build e proibição de Supabase direto.
-- Restore locked e build do executável test-only.
 - `./scripts/verify-public.sh` uma vez após congelar o escopo, porque a fatia
   altera infraestrutura compartilhada de teste e banco.
+
+Ordem mínima do trecho executável:
+
+```bash
+dotnet restore tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj --locked-mode
+dotnet build tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj --no-restore
+node --test scripts/run-real-e2e.test.mjs
+```
 
 O gate não amplia o escopo para `quality/private` nem para #115.

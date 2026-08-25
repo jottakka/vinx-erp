@@ -111,6 +111,12 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         ?? throw new InvalidOperationException("The factory is not configured with a counting identity provider.");
     public ClaimsPrincipal? AuthenticatedJwtPrincipal { get; private set; }
 
+    internal static string ResolveE2eContentRoot() => Path.Combine(
+        WolverineStorageDeployment.FindRepositoryRoot(),
+        "src",
+        "Hosts",
+        "Vinx.Erp.ApiHost");
+
     public string CreateJwtToken(JwtTokenVariation variation) =>
         (_jwtAuthority ?? throw new InvalidOperationException("The factory is not configured for JWT bearer testing."))
         .CreateToken(variation);
@@ -343,6 +349,11 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        if (_disableWolverineForE2e)
+        {
+            builder.UseContentRoot(ResolveE2eContentRoot());
+        }
+
         builder.UseSetting("FOUNDATION_RUNTIME_CONNECTION", _fixture.RuntimeConnectionString);
         builder.UseSetting("SUPABASE_STORAGE_URL", "http://127.0.0.1:54321");
         builder.UseSetting("SUPABASE_STORAGE_SERVICE_ROLE_KEY", "test-service-role-key");
