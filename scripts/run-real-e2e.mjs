@@ -75,7 +75,10 @@ function waitForHostOrigin(stream, timeoutMs) {
       lines.off("line", onLine);
       lines.close();
       if (error) reject(error);
-      else resolve(origin);
+      else {
+        stream.resume();
+        resolve(origin);
+      }
     };
     const onClose = () => finish(new LauncherError("host_exit"));
     const onLine = (line) => {

@@ -257,6 +257,27 @@ test("runLauncher rejects invalid host readiness before starting Vite", async ()
   assert.equal(harness.spawns.length, 1);
 });
 
+test("runLauncher keeps draining host stdout after readiness without relaying it", async () => {
+  let acceptedEveryWrite = true;
+  const harness = createHarness({
+    waitForHttp: async () => {
+      const chunk = Buffer.alloc(4_096, 120);
+      for (let index = 0; index < 64; index += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        acceptedEveryWrite = harness.host.stdout.write(chunk) && acceptedEveryWrite;
+      }
+    },
+  });
+
+  await runLauncher(harness.deps);
+
+  assert.equal(acceptedEveryWrite, true);
+  assert.deepEqual(harness.output, [
+    "E2E_BROWSER_URL=http://127.0.0.1:4174",
+    "E2E_PROFILE=maria",
+  ]);
+});
+
 test("runLauncher terminates and awaits the host group after readiness timeout", async () => {
   const harness = createHarness({
     readinessTimeoutMs: 5,
