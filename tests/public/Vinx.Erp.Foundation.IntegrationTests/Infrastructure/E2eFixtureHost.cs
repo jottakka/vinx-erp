@@ -1,0 +1,483 @@
+using System.Net;
+using System.Text.Json;
+using Npgsql;
+
+namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+
+public enum E2eFixtureHostFailurePhase
+{
+    FixtureStart,
+    Seed,
+    HostStart,
+    Readback,
+}
+
+public sealed class E2eFixtureHostException(
+    E2eFixtureHostFailurePhase phase,
+    Exception innerException)
+    : Exception("E2E fixture host failed.", innerException)
+{
+    public E2eFixtureHostFailurePhase Phase { get; } = phase;
+}
+
+public sealed class E2eFixtureHost : IAsyncDisposable
+{
+    private static readonly TimeSpan ReadbackTimeout = TimeSpan.FromSeconds(20);
+    private readonly HttpClient _client;
+    private readonly object _disposeLock = new();
+    private readonly FoundationApiFactory _factory;
+    private Task? _disposeTask;
+
+    private E2eFixtureHost(
+        E2eFixtureFactoryContext context,
+        HttpClient client,
+        Uri origin)
+    {
+        _factory = context.Factory;
+        _client = client;
+        Origin = origin;
+        ProfileName = context.Profile.Name;
+        Receipt = context.Receipt;
+        DatabaseHost = context.Factory.Fixture.Endpoint.Host;
+        DatabasePort = context.Factory.Fixture.Endpoint.Port;
+        DatabaseName = context.Factory.Fixture.Endpoint.Database;
+    }
+
+    public Uri Origin { get; }
+    public string ProfileName { get; }
+    public E2eDatasetReceipt Receipt { get; }
+    internal string DatabaseHost { get; }
+    internal int DatabasePort { get; }
+    internal string DatabaseName { get; }
+
+    public static async Task<E2eFixtureHost> StartAsync(
+        string profileName,
+        CancellationToken cancellationToken)
+    {
+        E2eFixtureFactoryContext? context = null;
+        HttpClient? client = null;
+        var phase = E2eFixtureHostFailurePhase.FixtureStart;
+        try
+        {
+            context = await FoundationApiFactory.CreateWithE2eProfileAsync(
+                profileName,
+                cancellationToken);
+
+            phase = E2eFixtureHostFailurePhase.HostStart;
+            context.Factory.UseKestrel(0);
+            client = context.Factory.CreateClient();
+            client.Timeout = Timeout.InfiniteTimeSpan;
+            var origin = RequireLoopbackOrigin(client.BaseAddress);
+
+            phase = E2eFixtureHostFailurePhase.Readback;
+            using var readbackCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken);
+            readbackCancellation.CancelAfter(ReadbackTimeout);
+            await VerifyReadbackAsync(
+                client,
+                context.Profile,
+                context.Receipt,
+                readbackCancellation.Token);
+
+            return new E2eFixtureHost(context, client, origin);
+        }
+        catch (ArgumentException) when (context is null)
+        {
+            throw;
+        }
+        catch (E2eFixtureHostException) when (context is null)
+        {
+            throw;
+        }
+        catch (Exception primaryFailure)
+        {
+            var combinedFailure = await DisposeStartFailureAsync(
+                context,
+                client,
+                primaryFailure);
+            throw new E2eFixtureHostException(phase, combinedFailure);
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (_disposeLock)
+        {
+            _disposeTask ??= DisposeCoreAsync();
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    internal static (Guid CompanyId, string CompanyName)[] ExpectedCompaniesForProfile(
+        string profileName,
+        E2eDatasetReceipt receipt) => profileName switch
+        {
+            "maria" =>
+            [
+                (receipt.AlfaCompanyId, "Alfa"),
+                (receipt.BetaCompanyId, "Beta"),
+            ],
+            "beatriz" => [(receipt.AlfaCompanyId, "Alfa")],
+            "joao" => [(receipt.BetaCompanyId, "Beta")],
+            "clara" => [(receipt.GamaCompanyId, "Gama")],
+            _ => throw new ArgumentException("Unknown E2E fixture profile.", nameof(profileName)),
+        };
+
+    internal async Task<bool> WolverineStorageExistsAsync()
+    {
+        await using var connection = await _factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT to_regclass('vinx_wolverine.wolverine_nodes') IS NOT NULL
+                OR to_regclass('vinx_wolverine.wolverine_outgoing_envelopes') IS NOT NULL
+                OR to_regclass('vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery') IS NOT NULL
+            """,
+            connection);
+        return await command.ExecuteScalarAsync() is true;
+    }
+
+    private static Uri RequireLoopbackOrigin(Uri? origin)
+    {
+        if (origin is null
+            || !string.Equals(origin.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal)
+            || !string.Equals(origin.Host, IPAddress.Loopback.ToString(), StringComparison.Ordinal)
+            || origin.Port <= 0
+            || !string.IsNullOrEmpty(origin.UserInfo)
+            || !string.Equals(origin.AbsolutePath, "/", StringComparison.Ordinal)
+            || !string.IsNullOrEmpty(origin.Query)
+            || !string.IsNullOrEmpty(origin.Fragment))
+        {
+            throw new InvalidOperationException("E2E fixture origin is not an HTTP loopback origin.");
+        }
+
+        return origin;
+    }
+
+    private static async Task VerifyReadbackAsync(
+        HttpClient client,
+        E2eFixtureProfile profile,
+        E2eDatasetReceipt receipt,
+        CancellationToken cancellationToken)
+    {
+        using (var health = await client.GetAsync("/health", cancellationToken))
+        {
+            if (health.StatusCode != HttpStatusCode.OK)
+            {
+                throw new InvalidOperationException("E2E health readback failed.");
+            }
+        }
+
+        using (var bootstrap = await ReadSuccessJsonAsync(
+            client,
+            "/foundation/bootstrap",
+            cancellationToken))
+        {
+            var root = bootstrap.RootElement;
+            var companies = root.GetProperty("companies").EnumerateArray().ToArray();
+            var expectedCompanies = ExpectedCompaniesForProfile(profile.Name, receipt);
+            if (root.GetProperty("user").GetProperty("id").GetGuid() != profile.UserId
+                || !string.Equals(
+                    root.GetProperty("user").GetProperty("displayName").GetString(),
+                    profile.DisplayName,
+                    StringComparison.Ordinal)
+                || !companies
+                    .Select(company => company.GetProperty("companyName").GetString())
+                    .SequenceEqual(expectedCompanies.Select(company => company.CompanyName))
+                || !companies
+                    .Select(company => company.GetProperty("companyId").GetGuid())
+                    .SequenceEqual(expectedCompanies.Select(company => company.CompanyId)))
+            {
+                throw new InvalidOperationException("E2E bootstrap readback failed.");
+            }
+        }
+
+        if (string.Equals(profile.Name, "beatriz", StringComparison.Ordinal))
+        {
+            await VerifyBeatrizReadbackAsync(client, receipt, cancellationToken);
+            return;
+        }
+
+        if (string.Equals(profile.Name, "joao", StringComparison.Ordinal))
+        {
+            await VerifyJoaoReadbackAsync(client, receipt, cancellationToken);
+            return;
+        }
+
+        if (string.Equals(profile.Name, "clara", StringComparison.Ordinal))
+        {
+            await VerifyClaraReadbackAsync(client, receipt, cancellationToken);
+            return;
+        }
+
+        using (var employees = await ReadSuccessJsonAsync(
+            client,
+            $"/foundation/companies/{receipt.AlfaCompanyId}/employees",
+            cancellationToken))
+        {
+            var names = employees.RootElement
+                .EnumerateArray()
+                .Select(employee => employee.GetProperty("displayName").GetString())
+                .OrderBy(name => name, StringComparer.Ordinal);
+            if (!names.SequenceEqual(["Beatriz Costa", "Maria Silva"]))
+            {
+                throw new InvalidOperationException("E2E employee readback failed.");
+            }
+        }
+
+        using (var paguai = await ReadSuccessJsonAsync(
+            client,
+            $"/paguai/requests?companyId={receipt.BetaCompanyId}",
+            cancellationToken))
+        {
+            var drafts = paguai.RootElement.EnumerateArray().ToArray();
+            if (drafts.Length != 1
+                || drafts[0].GetProperty("companyId").GetGuid() != receipt.BetaCompanyId
+                || !string.Equals(
+                    drafts[0].GetProperty("title").GetString(),
+                    "Serviços contábeis",
+                    StringComparison.Ordinal)
+                || drafts[0].GetProperty("amount").ValueKind != JsonValueKind.String
+                || !string.Equals(
+                    drafts[0].GetProperty("amount").GetString(),
+                    "8500.00",
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("E2E Paguai readback failed.");
+            }
+        }
+
+        using (var atendimento = await ReadSuccessJsonAsync(
+            client,
+            $"/atendimento/cards?companyId={receipt.AlfaCompanyId}",
+            cancellationToken))
+        {
+            var cards = atendimento.RootElement.EnumerateArray().ToArray();
+            if (cards.Length != 3
+                || cards.Any(card =>
+                    card.GetProperty("companyId").GetGuid() != receipt.AlfaCompanyId)
+                || !cards
+                    .Select(card => card.GetProperty("column").GetString())
+                    .OrderBy(column => column, StringComparer.Ordinal)
+                    .SequenceEqual(["concluido", "em_andamento", "novo"]))
+            {
+                throw new InvalidOperationException("E2E Atendimento readback failed.");
+            }
+        }
+
+        using (var inbox = await ReadSuccessJsonAsync(
+            client,
+            "/notifications/inbox?limit=10",
+            cancellationToken))
+        {
+            var notifications = inbox.RootElement.GetProperty("items").EnumerateArray().ToArray();
+            if (notifications.Length != 3
+                || notifications.Count(notification =>
+                    notification.GetProperty("readAt").ValueKind == JsonValueKind.String) != 1
+                || notifications.Any(notification =>
+                    notification.GetProperty("companyId").GetGuid() == receipt.GamaCompanyId)
+                || notifications.Any(notification =>
+                    !IsKnownNotificationAction(notification.GetProperty("action"))))
+            {
+                throw new InvalidOperationException("E2E notifications readback failed.");
+            }
+        }
+
+        await RequireCapabilityDeniedAsync(
+            client,
+            $"/foundation/companies/{receipt.GamaCompanyId}/employees",
+            cancellationToken);
+        await RequireCapabilityDeniedAsync(
+            client,
+            $"/paguai/requests?companyId={receipt.GamaCompanyId}",
+            cancellationToken);
+    }
+
+    private static async Task VerifyBeatrizReadbackAsync(
+        HttpClient client,
+        E2eDatasetReceipt receipt,
+        CancellationToken cancellationToken)
+    {
+        using (var employees = await ReadSuccessJsonAsync(
+            client,
+            $"/foundation/companies/{receipt.AlfaCompanyId}/employees",
+            cancellationToken))
+        {
+            var names = employees.RootElement
+                .EnumerateArray()
+                .Select(employee => employee.GetProperty("displayName").GetString())
+                .OrderBy(name => name, StringComparer.Ordinal);
+            if (!names.SequenceEqual(["Beatriz Costa", "Maria Silva"]))
+            {
+                throw new InvalidOperationException("E2E Beatriz employee readback failed.");
+            }
+        }
+
+        using var atendimento = await ReadSuccessJsonAsync(
+            client,
+            $"/atendimento/cards?companyId={receipt.AlfaCompanyId}",
+            cancellationToken);
+        var cards = atendimento.RootElement.EnumerateArray().ToArray();
+        if (cards.Length != 3
+            || cards.Any(card =>
+                card.GetProperty("companyId").GetGuid() != receipt.AlfaCompanyId)
+            || !cards
+                .Select(card => card.GetProperty("column").GetString())
+                .OrderBy(column => column, StringComparer.Ordinal)
+                .SequenceEqual(["concluido", "em_andamento", "novo"]))
+        {
+            throw new InvalidOperationException("E2E Beatriz Atendimento readback failed.");
+        }
+    }
+
+    private static async Task VerifyJoaoReadbackAsync(
+        HttpClient client,
+        E2eDatasetReceipt receipt,
+        CancellationToken cancellationToken)
+    {
+        using var paguai = await ReadSuccessJsonAsync(
+            client,
+            $"/paguai/requests?companyId={receipt.BetaCompanyId}",
+            cancellationToken);
+        var drafts = paguai.RootElement.EnumerateArray().ToArray();
+        if (drafts.Length != 1
+            || drafts[0].GetProperty("companyId").GetGuid() != receipt.BetaCompanyId
+            || !string.Equals(
+                drafts[0].GetProperty("title").GetString(),
+                "Hospedagem em nuvem",
+                StringComparison.Ordinal)
+            || drafts[0].GetProperty("amount").ValueKind != JsonValueKind.String
+            || !string.Equals(
+                drafts[0].GetProperty("amount").GetString(),
+                "2340.75",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("E2E João Paguai readback failed.");
+        }
+    }
+
+    private static async Task VerifyClaraReadbackAsync(
+        HttpClient client,
+        E2eDatasetReceipt receipt,
+        CancellationToken cancellationToken)
+    {
+        using (var atendimento = await ReadSuccessJsonAsync(
+            client,
+            $"/atendimento/cards?companyId={receipt.GamaCompanyId}",
+            cancellationToken))
+        {
+            var cards = atendimento.RootElement.EnumerateArray().ToArray();
+            if (cards.Length != 1
+                || cards[0].GetProperty("companyId").GetGuid() != receipt.GamaCompanyId
+                || !string.Equals(
+                    cards[0].GetProperty("title").GetString(),
+                    "Caso restrito",
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    cards[0].GetProperty("column").GetString(),
+                    "em_andamento",
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("E2E Clara Atendimento readback failed.");
+            }
+        }
+
+        using var inbox = await ReadSuccessJsonAsync(
+            client,
+            "/notifications/inbox?limit=10",
+            cancellationToken);
+        var notifications = inbox.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        if (notifications.Length != 1
+            || notifications[0].GetProperty("companyId").GetGuid() != receipt.GamaCompanyId
+            || notifications[0].GetProperty("readAt").ValueKind != JsonValueKind.Null
+            || !IsKnownNotificationAction(notifications[0].GetProperty("action"))
+            || !string.Equals(
+                notifications[0].GetProperty("action").GetProperty("href").GetString(),
+                "/atendimento",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("E2E Clara notifications readback failed.");
+        }
+    }
+
+    private static bool IsKnownNotificationAction(JsonElement action)
+    {
+        if (action.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var href = action.GetProperty("href").GetString();
+        return string.Equals(href, "/paguai", StringComparison.Ordinal)
+            || string.Equals(href, "/atendimento", StringComparison.Ordinal);
+    }
+
+    private static async Task<JsonDocument> ReadSuccessJsonAsync(
+        HttpClient client,
+        string requestUri,
+        CancellationToken cancellationToken)
+    {
+        using var response = await client.GetAsync(requestUri, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException("E2E HTTP readback returned an unexpected status.");
+        }
+
+        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
+    }
+
+    private static async Task RequireCapabilityDeniedAsync(
+        HttpClient client,
+        string requestUri,
+        CancellationToken cancellationToken)
+    {
+        using var response = await client.GetAsync(requestUri, cancellationToken);
+        if (response.StatusCode != HttpStatusCode.Forbidden
+            || !string.Equals(
+                await response.Content.ReadAsStringAsync(cancellationToken),
+                "{\"code\":\"capability_denied\"}",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("E2E authorization readback failed.");
+        }
+    }
+
+    private static async Task<Exception> DisposeStartFailureAsync(
+        E2eFixtureFactoryContext? context,
+        HttpClient? client,
+        Exception primaryFailure)
+    {
+        if (context is null)
+        {
+            return primaryFailure;
+        }
+
+        try
+        {
+            await FixtureCleanup.CompleteAsync(
+                primaryFailure,
+                () => DisposeClientAsync(client),
+                context.Factory.DisposeAsync);
+        }
+        catch (Exception combinedFailure)
+        {
+            return combinedFailure;
+        }
+
+        return primaryFailure;
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        await FixtureCleanup.CompleteAsync(
+            primaryFailure: null,
+            () => DisposeClientAsync(_client),
+            _factory.DisposeAsync);
+    }
+
+    private static ValueTask DisposeClientAsync(HttpClient? client)
+    {
+        client?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

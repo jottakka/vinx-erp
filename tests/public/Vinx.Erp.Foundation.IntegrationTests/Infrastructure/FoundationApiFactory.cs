@@ -31,8 +31,14 @@ using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Files;
+using Wolverine;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+
+public sealed record E2eFixtureFactoryContext(
+    FoundationApiFactory Factory,
+    E2eFixtureProfile Profile,
+    E2eDatasetReceipt Receipt);
 
 public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyncDisposable
 {
@@ -54,6 +60,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly Func<ValueTask>? _disposeJwtAsync;
     private readonly bool _useJwtBearer;
     private readonly bool _provisionWolverineStorage;
+    private readonly bool _disableWolverineForE2e;
 
     private FoundationApiFactory(
         Guid actorUserId,
@@ -72,7 +79,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Func<ValueTask>? disposeHostAsync = null,
         Func<ValueTask>? disposeJwtAsync = null,
         bool provisionWolverineStorage = true,
-        DbCommandInterceptor? testCommandInterceptor = null)
+        DbCommandInterceptor? testCommandInterceptor = null,
+        bool disableWolverineForE2e = false)
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
@@ -92,6 +100,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _disposeJwtAsync = disposeJwtAsync;
         _useJwtBearer = jwtAuthority is not null;
         _provisionWolverineStorage = provisionWolverineStorage;
+        _disableWolverineForE2e = disableWolverineForE2e;
     }
 
     public Guid ActorUserId { get; }
@@ -127,6 +136,48 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     internal static async Task<FoundationApiFactory> CreateWithoutWolverineStorageAsync(string? aal = null)
     {
         return await CreateAsync(aal: aal, provisionWolverineStorage: false);
+    }
+
+    public static async Task<E2eFixtureFactoryContext> CreateWithE2eProfileAsync(
+        string profileName,
+        CancellationToken cancellationToken)
+    {
+        if (!E2eFixtureProfileCatalog.TryGet(profileName, out var profile) || profile is null)
+        {
+            throw new ArgumentException("Unknown E2E fixture profile.", nameof(profileName));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var correlationId = Guid.NewGuid();
+        var factory = new FoundationApiFactory(
+            profile.UserId,
+            correlationId,
+            CreateE2ePrincipalClaims(profile, correlationId),
+            provisionWolverineStorage: false,
+            disableWolverineForE2e: true);
+
+        try
+        {
+            await PrepareAsync(factory);
+        }
+        catch (Exception exception)
+        {
+            throw new E2eFixtureHostException(
+                E2eFixtureHostFailurePhase.FixtureStart,
+                exception);
+        }
+
+        try
+        {
+            var receipt = await E2eFixtureSeeder.SeedAsync(factory.Fixture, cancellationToken);
+            await E2eFixtureSeeder.VerifyAsync(factory.Fixture, receipt, cancellationToken);
+            return new E2eFixtureFactoryContext(factory, profile, receipt);
+        }
+        catch (Exception primaryFailure)
+        {
+            var combinedFailure = await DisposeAfterFailureAsync(factory, primaryFailure);
+            throw new E2eFixtureHostException(E2eFixtureHostFailurePhase.Seed, combinedFailure);
+        }
     }
 
     private static async Task<FoundationApiFactory> CreateAsync(
@@ -374,6 +425,12 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         builder.UseSetting("META_WHATSAPP_WEBHOOK_VERIFY_TOKEN", "test-meta-verify-token");
         builder.ConfigureTestServices(services =>
         {
+            if (_disableWolverineForE2e)
+            {
+                services.DisableAllExternalWolverineTransports();
+                services.DisableAllWolverineMessagePersistence();
+            }
+
             services.AddTransient<IStartupFilter, AllowAnonymousTestEndpointStartupFilter>();
             services.RemoveAll<DbContextOptions<FoundationDbContext>>();
             services.AddDbContext<FoundationDbContext>((_, options) =>
@@ -561,6 +618,41 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 new AmrEntry("token_refresh", issuedAt - 5)
             ],
             aal);
+    }
+
+    private static TestPrincipalClaims CreateE2ePrincipalClaims(
+        E2eFixtureProfile profile,
+        Guid correlationId)
+    {
+        var issuedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        return new TestPrincipalClaims(
+            E2eFixtureProfileCatalog.Issuer,
+            profile.Subject,
+            profile.Email,
+            correlationId.ToString("D"),
+            Guid.NewGuid().ToString("D"),
+            issuedAt,
+            issuedAt + (long)TimeSpan.FromHours(8).TotalSeconds,
+            [
+                new AmrEntry("password", issuedAt - 10),
+                new AmrEntry("email", issuedAt - 20)
+            ]);
+    }
+
+    private static async Task<Exception> DisposeAfterFailureAsync(
+        FoundationApiFactory factory,
+        Exception primaryFailure)
+    {
+        try
+        {
+            await FixtureCleanup.CompleteAsync(primaryFailure, factory.DisposeAsync);
+        }
+        catch (Exception combinedFailure)
+        {
+            return combinedFailure;
+        }
+
+        return primaryFailure;
     }
 }
 
