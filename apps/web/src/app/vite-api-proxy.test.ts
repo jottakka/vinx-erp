@@ -27,7 +27,7 @@ describe("development API proxy", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
-      "/atendimento": {
+      "^/atendimento/cards(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
@@ -39,12 +39,30 @@ describe("development API proxy", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
-      "/paguai": {
+      "^/paguai/requests(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
     });
   });
+
+  it.each(["/paguai", "/atendimento"])(
+    "leaves the module SPA route %s outside every API proxy context",
+    (route) => {
+      const proxy = resolveDevelopmentApiProxy("http://127.0.0.1:5080");
+      expect(proxy).toBeDefined();
+      if (!proxy) {
+        throw new Error("Development API proxy was not configured");
+      }
+
+      for (const context of Object.keys(proxy)) {
+        const matches = context.startsWith("^")
+          ? new RegExp(context).test(route)
+          : route.startsWith(context);
+        expect(matches).toBe(false);
+      }
+    },
+  );
 
   it("proxies API URLs and leaves the dedicated Agent and Notifications SPA routes local", async () => {
     const api = createHttpServer((request, response) => {
@@ -78,12 +96,21 @@ describe("development API proxy", () => {
         http.all(`${origin}/*`, () => passthrough()),
         http.all(`${apiOrigin}/*`, () => passthrough()),
       );
-
       const run = await fetch(`${origin}/agent/runs?source=test`);
       expect(await run.text()).toBe("/agent/runs?source=test");
 
       const notifications = await fetch(`${origin}/notifications/inbox`);
       expect(await notifications.text()).toBe("/notifications/inbox");
+
+      const paguai = await fetch(`${origin}/paguai/requests?companyId=test`);
+      expect(await paguai.text()).toBe("/paguai/requests?companyId=test");
+
+      const atendimento = await fetch(
+        `${origin}/atendimento/cards?companyId=test`,
+      );
+      expect(await atendimento.text()).toBe(
+        "/atendimento/cards?companyId=test",
+      );
 
       const page = await fetch(`${origin}/agente`);
       expect(page.headers.get("content-type")).toContain("text/html");
@@ -122,7 +149,7 @@ describe("web Vite configuration", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
-      "/atendimento": {
+      "^/atendimento/cards(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
@@ -134,7 +161,7 @@ describe("web Vite configuration", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
-      "/paguai": {
+      "^/paguai/requests(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },

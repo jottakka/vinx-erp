@@ -360,16 +360,18 @@ git commit -m "test(e2e): add one-command real fixture launcher"
 
 **Interfaces:**
 - Adds development proxy `/notifications` com target loopback existente.
+- Restringe Paguai e Atendimento aos contextos de API, preservando as rotas SPA.
 - Documents one-command lifecycle and exact verification boundary.
 
 - [ ] **Step 1: RED do proxy**
 
-Estender `vite-api-proxy.test.ts`: `/notifications/inbox` chega ao stub API e
-`/notificacoes` continua SPA local. Rodar teste e observar RED.
+Estender `vite-api-proxy.test.ts`: inbox, requests e cards chegam ao stub API;
+`/notificacoes`, `/paguai` e `/atendimento` permanecem SPA. Observar RED.
 
 - [ ] **Step 2: GREEN mínimo**
 
-Adicionar apenas `/notifications` ao map existente; sem rewrite/changeOrigin.
+Adicionar `/notifications` e ancorar Paguai/Atendimento nos endpoints de API;
+sem rewrite/changeOrigin.
 
 - [ ] **Step 3: Documentar**
 
@@ -403,12 +405,12 @@ Contagem final do diff:
 
 | Fatia final | Linhas manuais |
 |---|---:|
-| Design e plano | 613 |
+| Design e plano | 616 |
 | Seed e assinaturas canônicas | 1.024 |
 | Factory, host, CLI e solution | 1.300 |
-| Launcher, testes Node e package | 1.306 |
-| Proxy, runbooks e manifesto | 219 |
-| **Total manual** | **4.462** |
+| Launcher, testes Node e package | 1.325 |
+| Proxy, runbooks e manifesto | 268 |
+| **Total manual** | **4.533** |
 | Lockfile gerado, fora do total manual | 1.347 |
 
 A exceção ao alvo de 800 é explícita: sem seed+host+launcher+proxy não existe o

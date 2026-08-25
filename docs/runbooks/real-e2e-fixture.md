@@ -73,8 +73,8 @@ Execute o roteiro completo com `maria`; os demais profiles validam acessos
 específicos no startup real.
 
 1. Em `/`, confirme Alfa e Beta e a ausência de Gama.
-2. Em `/pessoas`, alterne somente entre empresas autorizadas e confira as
-   pessoas de cada empresa.
+2. Em `/pessoas`, selecione Alfa e confira Maria e Beatriz. Beta não aparece
+   porque o cargo de Maria nessa empresa não concede o diretório de pessoas.
 3. Em `/paguai`, confira os rascunhos da empresa selecionada.
 4. Em `/atendimento` e `/kanban`, confira cards nos estados esperados.
 5. Em `/notificacoes`, confira itens lidos e não lidos.

@@ -6,7 +6,7 @@ type VinxApiProxy = {
     changeOrigin: false;
     target: string;
   };
-  "/atendimento": {
+  "^/atendimento/cards(?:/|\\?|$)": {
     changeOrigin: false;
     target: string;
   };
@@ -18,7 +18,7 @@ type VinxApiProxy = {
     changeOrigin: false;
     target: string;
   };
-  "/paguai": {
+  "^/paguai/requests(?:/|\\?|$)": {
     changeOrigin: false;
     target: string;
   };
@@ -54,7 +54,7 @@ export function resolveDevelopmentApiProxy(
         changeOrigin: false,
         target: target.origin,
       },
-      "/atendimento": {
+      "^/atendimento/cards(?:/|\\?|$)": {
         changeOrigin: false,
         target: target.origin,
       },
@@ -66,7 +66,7 @@ export function resolveDevelopmentApiProxy(
         changeOrigin: false,
         target: target.origin,
       },
-      "/paguai": {
+      "^/paguai/requests(?:/|\\?|$)": {
         changeOrigin: false,
         target: target.origin,
       },

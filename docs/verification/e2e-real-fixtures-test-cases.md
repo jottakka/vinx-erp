@@ -15,9 +15,9 @@
 Executar serialmente com `maria` e um único launcher/container/browser:
 
 1. `/` — bootstrap e seletor mostram somente empresas autorizadas.
-2. `/pessoas` — as pessoas acompanham a empresa selecionada; cargos e
-   capabilities são dados de autorização do seed, não conteúdo exibido nessa
-   página.
+2. `/pessoas` — Alfa mostra Maria e Beatriz; Beta fica fora do seletor porque o
+   cargo de Maria não concede o diretório nessa empresa. Cargos/capabilities não
+   são conteúdo exibido na página.
 3. `/paguai` — rascunhos pertencem à empresa selecionada.
 4. `/atendimento` e `/kanban` — cards aparecem nos estados esperados.
 5. `/notificacoes` — itens lidos e não lidos aparecem sem payload bruto.

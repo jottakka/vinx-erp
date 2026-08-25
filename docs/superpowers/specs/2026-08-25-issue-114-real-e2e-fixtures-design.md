@@ -128,8 +128,9 @@ subject, claims, e-mail, IDs do dataset ou payloads.
 - imprime apenas URL do browser e profile;
 - encaminha SIGINT/SIGTERM e espera cleanup dos dois filhos.
 
-Vite adiciona o prefixo `/notifications`; `/agent/runs`, `/foundation`,
-`/paguai` e `/atendimento` continuam inalterados.
+Vite encaminha apenas os contextos de API `/agent/runs`, `/foundation`,
+`/notifications`, `/paguai/requests` e `/atendimento/cards`; as rotas SPA
+`/paguai` e `/atendimento` continuam válidas em acesso direto e refresh.
 
 ## Testes
 
@@ -159,7 +160,7 @@ Vite adiciona o prefixo `/notifications`; `/agent/runs`, `/foundation`,
 ## Escopo e limites
 
 Escopo final de 20 arquivos: 19 arquivos manuais/source/documentação e um
-lockfile gerado. O diff real tem 4.462 linhas manuais e 1.347 linhas
+lockfile gerado. O diff real tem 4.533 linhas manuais e 1.347 linhas
 geradas de lockfile; as assinaturas canônicas completas, quatro profiles reais
 e supervisão de processos tornaram a estimativa inicial insuficiente. A exceção
 ao alvo de 800 permanece coesa: seed, host, launcher e proxy compõem o único
