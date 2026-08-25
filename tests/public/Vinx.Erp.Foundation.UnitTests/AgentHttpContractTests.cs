@@ -12,6 +12,100 @@ public sealed class AgentHttpContractTests
     private static MemoryStream Body(string json) => new(Encoding.UTF8.GetBytes(json));
 
     [Fact]
+    public void Direct_four_argument_construction_has_a_real_immutable_empty_attachment_list()
+    {
+        var request = new AgentRunHttpRequest(RequestId, "j", "m", CompanyId);
+
+        Assert.NotNull(request.Attachments);
+        Assert.Empty(request.Attachments);
+        Assert.False(request.Attachments is Guid[]);
+        var collection = Assert.IsAssignableFrom<ICollection<Guid>>(request.Attachments);
+        Assert.Throws<NotSupportedException>(() => collection.Add(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void Attachments_are_optional_and_materialize_as_an_empty_immutable_list()
+    {
+        var ok = AgentHttpContract.TryParse(
+            Body($$"""{"requestId":"{{RequestId}}","journey":"j","message":"m"}"""),
+            24 * 1024,
+            out var request,
+            out var errorCode
+        );
+
+        Assert.True(ok);
+        Assert.Null(errorCode);
+        Assert.Empty(request!.Attachments);
+        Assert.False(request.Attachments is Guid[]);
+    }
+
+    [Fact]
+    public void Attachments_are_deduplicated_in_first_seen_order()
+    {
+        var ok = AgentHttpContract.TryParse(
+            Body(
+                $$"""{"requestId":"{{RequestId}}","journey":"j","message":"m","attachments":["11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222","11111111-1111-4111-8111-111111111111","33333333-3333-4333-8333-333333333333"]}"""
+            ),
+            24 * 1024,
+            out var request,
+            out var errorCode
+        );
+
+        Assert.True(ok);
+        Assert.Null(errorCode);
+        Assert.Equal(
+            [
+                Guid.Parse("11111111-1111-4111-8111-111111111111"),
+                Guid.Parse("22222222-2222-4222-8222-222222222222"),
+                Guid.Parse("33333333-3333-4333-8333-333333333333"),
+            ],
+            request!.Attachments);
+        Assert.False(request.Attachments is Guid[]);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("\"11111111-1111-4111-8111-111111111111\"")]
+    [InlineData("[null]")]
+    [InlineData("[42]")]
+    [InlineData("[\"not-a-uuid\"]")]
+    [InlineData("[\"00000000-0000-0000-0000-000000000000\"]")]
+    [InlineData("[\"11111111111141118111111111111111\"]")]
+    public void Invalid_attachment_shapes_and_ids_are_rejected_with_the_attachment_code(string attachments)
+    {
+        var ok = AgentHttpContract.TryParse(
+            Body(
+                $$"""{"requestId":"{{RequestId}}","journey":"j","message":"m","attachments":{{attachments}}}"""
+            ),
+            24 * 1024,
+            out var request,
+            out var errorCode
+        );
+
+        Assert.False(ok);
+        Assert.Null(request);
+        Assert.Equal("attachments_invalid", errorCode);
+    }
+
+    [Fact]
+    public void More_than_three_distinct_attachments_is_rejected_after_deduplication()
+    {
+        var ok = AgentHttpContract.TryParse(
+            Body(
+                $$"""{"requestId":"{{RequestId}}","journey":"j","message":"m","attachments":["11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333","11111111-1111-4111-8111-111111111111","44444444-4444-4444-8444-444444444444"]}"""
+            ),
+            24 * 1024,
+            out var request,
+            out var errorCode
+        );
+
+        Assert.False(ok);
+        Assert.Null(request);
+        Assert.Equal("attachments_too_many", errorCode);
+    }
+
+    [Fact]
     public void Valid_request_without_company_id_parses()
     {
         var ok = AgentHttpContract.TryParse(

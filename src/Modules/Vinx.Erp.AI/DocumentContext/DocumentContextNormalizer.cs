@@ -138,9 +138,13 @@ public sealed class DocumentContextNormalizer
         var final = new List<DocumentSegment>(segments.Count);
         foreach (var segment in segments)
         {
-            var text = segment.Text.Length > _limits.MaxCharactersPerSegment
-                ? segment.Text[.._limits.MaxCharactersPerSegment]
-                : segment.Text;
+            var text = segment.Text;
+            if (text.Length > _limits.MaxCharactersPerSegment)
+            {
+                text = text[..SafePrefixLength(text, _limits.MaxCharactersPerSegment)];
+                truncated = true;
+            }
+
             if (total + text.Length > _limits.MaxCharactersPerContext)
             {
                 var remaining = (int)(_limits.MaxCharactersPerContext - total);
@@ -150,7 +154,7 @@ public sealed class DocumentContextNormalizer
                     break;
                 }
 
-                text = text[..remaining];
+                text = text[..SafePrefixLength(text, remaining)];
                 truncated = true;
             }
 
@@ -165,6 +169,24 @@ public sealed class DocumentContextNormalizer
             final,
             total,
             truncated);
+    }
+
+    private static int SafePrefixLength(string text, int requestedLength)
+    {
+        if (requestedLength <= 0)
+        {
+            return 0;
+        }
+
+        if (requestedLength >= text.Length)
+        {
+            return text.Length;
+        }
+
+        return char.IsHighSurrogate(text[requestedLength - 1])
+            && char.IsLowSurrogate(text[requestedLength])
+                ? requestedLength - 1
+                : requestedLength;
     }
 
     private static DocumentSegment Segment(

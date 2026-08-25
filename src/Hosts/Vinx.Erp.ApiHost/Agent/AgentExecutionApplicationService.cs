@@ -74,7 +74,12 @@ public sealed class AgentExecutionApplicationService(
             }
 
             var outcome = await runner.RunAsync(
-                actor, request.Journey, request.Message, request.CompanyId, cancellationToken);
+                actor,
+                request.Journey,
+                request.Message,
+                request.CompanyId,
+                request.Attachments,
+                cancellationToken);
             var result = MapOutcome(outcome);
 
             // 5xx (provider/contexto/timeout) não é durável: sem registro e sem
@@ -337,11 +342,16 @@ public sealed class AgentExecutionApplicationService(
         ComputeHash(JsonSerializer.Serialize(new AgentRunIdempotencyPayload(
             request.Journey.Trim(),
             request.Message.Trim(),
-            request.CompanyId)));
+            request.CompanyId,
+            request.Attachments)));
 
     private static string ComputeHash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
-    private sealed record AgentRunIdempotencyPayload(string Journey, string Message, Guid? CompanyId);
+    private sealed record AgentRunIdempotencyPayload(
+        string Journey,
+        string Message,
+        Guid? CompanyId,
+        IReadOnlyList<Guid> Attachments);
     private sealed record AgentRunAuditMetadata(string Status, string? ReasonCode);
 }

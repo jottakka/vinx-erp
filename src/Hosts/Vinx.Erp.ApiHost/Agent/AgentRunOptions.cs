@@ -1,5 +1,7 @@
 namespace Vinx.Erp.ApiHost.Agent;
 
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
+
 /// <summary>
 /// Configuração aprovada da execução do agente, vinculada on-start pela
 /// composição (Task 4). Sem provider a execução falha fechada com
@@ -29,6 +31,9 @@ public sealed class AgentRunOptions
     /// <summary>Latência máxima aceita para a execução; deve ser positiva.</summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>Perfil opcional e exclusivamente server-side para OCR de anexos.</summary>
+    public AgentRunVisionOptions? Vision { get; set; }
+
     /// <summary>
     /// Valida os invariantes; lança <see cref="InvalidOperationException"/> com
     /// mensagem segura que nunca ecoa endpoint, modelo e muito menos a chave.
@@ -39,6 +44,8 @@ public sealed class AgentRunOptions
         {
             throw new InvalidOperationException("Agent timeout must be positive.");
         }
+
+        Vision?.Validate();
 
         if (string.IsNullOrWhiteSpace(Provider))
         {
@@ -71,4 +78,45 @@ public sealed class AgentRunOptions
                 "Agent model must be a non-empty approved model name when a provider is configured.");
         }
     }
+}
+
+/// <summary>Configuração server-side do perfil OpenAI-compatible usado somente por OCR.</summary>
+public sealed class AgentRunVisionOptions
+{
+    public string? Provider { get; set; }
+
+    public Uri? Endpoint { get; set; }
+
+    public string? ApiKey { get; set; }
+
+    public string? Model { get; set; }
+
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(45);
+
+    /// <summary>Única autoridade de consentimento para classificação de anexos.</summary>
+    public IReadOnlyList<string> AllowedClassifications { get; set; } = [];
+
+    internal void Validate()
+    {
+        if (!string.Equals(Provider, AgentRunOptions.OpenAiCompatibleProvider, StringComparison.Ordinal)
+            || AllowedClassifications.Count == 0
+            || AllowedClassifications.Any(string.IsNullOrWhiteSpace)
+            || new OpenAiCompatibleOptions.Validator().Validate(null, ToProviderOptions()).Failed)
+        {
+            throw new InvalidOperationException("Agent document vision configuration is invalid.");
+        }
+    }
+
+    internal OpenAiCompatibleOptions ToProviderOptions() => new()
+    {
+        Endpoint = Endpoint,
+        ApiKey = ApiKey ?? string.Empty,
+        Model = Model ?? string.Empty,
+        Timeout = Timeout,
+        AllowImageInputs = true,
+        ModuleTag = "ai/agent-document-vision",
+    };
+
+    internal IReadOnlySet<string> ToClassificationAllowlist() =>
+        new HashSet<string>(AllowedClassifications, StringComparer.Ordinal);
 }

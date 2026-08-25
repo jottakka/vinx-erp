@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Guardrails;
 using Vinx.Erp.Foundation.Identity;
 
@@ -21,7 +23,8 @@ public sealed class AgentRunner(
     IAgentModel? model,
     ILogger<AgentRunner> logger,
     Func<string, AgentTaskProfile?>? profileCatalog = null,
-    AgentOutputGate? outputGate = null)
+    AgentOutputGate? outputGate = null,
+    DocumentContextNormalizer? documentContextNormalizer = null)
 {
     private const string Operation = "run";
     private const string Module = "Vinx.Erp.AI";
@@ -31,13 +34,23 @@ public sealed class AgentRunner(
 
     private readonly Func<string, AgentTaskProfile?> lookupProfile = profileCatalog ?? LookupInCatalog;
 
+    public Task<AgentOutcome> RunAsync(
+        ActorContext actor,
+        string profileId,
+        string message,
+        Guid? requestedCompanyId,
+        CancellationToken cancellationToken) =>
+        RunAsync(actor, profileId, message, requestedCompanyId, Array.Empty<Guid>(), cancellationToken);
+
     public async Task<AgentOutcome> RunAsync(
         ActorContext actor,
         string profileId,
         string message,
         Guid? requestedCompanyId,
+        IReadOnlyList<Guid> attachmentIds,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(attachmentIds);
         var stopwatch = Stopwatch.StartNew();
 
         // 1. Validação antes de qualquer consulta ou modelo.
@@ -48,11 +61,53 @@ public sealed class AgentRunner(
             return Finish(AgentOutcomeStatus.Invalid, invalidReason, actor, stopwatch);
         }
 
+        if (attachmentIds.Count > 0 && !profile!.AllowDocumentAttachments)
+        {
+            return Finish(AgentOutcomeStatus.Invalid, AgentOutcomeReason.AttachmentsNotAllowed, actor, stopwatch);
+        }
+
         // 2. Contexto confiável resolvido ANTES do modelo; reason copiado.
         var resolution = await contextResolver.ResolveAsync(actor, profile!, requestedCompanyId, cancellationToken);
         if (resolution.Status != AgentContextResolutionStatus.Resolved)
         {
             return Finish(MapResolutionStatus(resolution.Status), resolution.ReasonCode, actor, stopwatch);
+        }
+
+        if (attachmentIds.Count > 0 && documentContextNormalizer is null)
+        {
+            return Finish(
+                AgentOutcomeStatus.NeedsClarification,
+                AgentOutcomeReason.DocumentContextUnavailable,
+                actor,
+                stopwatch);
+        }
+
+        var turnText = message;
+        if (attachmentIds.Count > 0)
+        {
+            var documentContexts = new List<DocumentContextResult>(attachmentIds.Count);
+            foreach (var attachmentId in attachmentIds)
+            {
+                var documentContext = await documentContextNormalizer!
+                    .BuildContextAsync(
+                        actor,
+                        resolution.Context!.CompanyId,
+                        attachmentId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (documentContext.Status is not DocumentContextStatus.Ready)
+                {
+                    return Finish(
+                        AgentOutcomeStatus.NeedsClarification,
+                        AgentOutcomeReason.DocumentContextUnavailable,
+                        actor,
+                        stopwatch);
+                }
+
+                documentContexts.Add(documentContext);
+            }
+
+            turnText = ComposeTurn(message, documentContexts, profile!.MaxInputCharacters);
         }
 
         // 3. Provider não atribuído ou cliente ausente: fail-closed até #135.
@@ -62,7 +117,7 @@ public sealed class AgentRunner(
         }
 
         // 4. Turn normalizado: uma única mensagem do usuário, uma chamada.
-        var messages = new List<ChatMessage> { new(ChatRole.User, message) };
+        var messages = new List<ChatMessage> { new(ChatRole.User, turnText) };
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linkedCts.CancelAfter(profile.Timeout);
 
@@ -159,6 +214,106 @@ public sealed class AgentRunner(
             CitedSources: [],
             Confidence: null,
             HasToolProposal: hasToolProposal);
+    }
+
+    private static string ComposeTurn(
+        string message,
+        IReadOnlyList<DocumentContextResult> documentContexts,
+        int maxInputCharacters)
+    {
+        var totalTextCharacters = checked(documentContexts.Sum(document =>
+            document.Segments.Sum(segment => segment.Text.Length)));
+        var fullTurn = BuildTurn(message, documentContexts, totalTextCharacters);
+        if (fullTurn.Length <= maxInputCharacters)
+        {
+            return fullTurn;
+        }
+
+        var lower = 0;
+        var upper = totalTextCharacters;
+        string? admitted = null;
+        while (lower <= upper)
+        {
+            var candidateTextCharacters = lower + ((upper - lower) / 2);
+            var candidate = BuildTurn(message, documentContexts, candidateTextCharacters);
+            if (candidate.Length <= maxInputCharacters)
+            {
+                admitted = candidate;
+                lower = candidateTextCharacters + 1;
+            }
+            else
+            {
+                upper = candidateTextCharacters - 1;
+            }
+        }
+
+        return admitted ?? throw new InvalidOperationException(
+            "The approved main input limit cannot contain the document context framing.");
+    }
+
+    private static string BuildTurn(
+        string message,
+        IReadOnlyList<DocumentContextResult> documentContexts,
+        int textCharacterBudget)
+    {
+        var remaining = textCharacterBudget;
+        var documents = documentContexts.Select(document =>
+        {
+            var aggregateTruncated = false;
+            var segments = document.Segments.Select(segment =>
+            {
+                string text;
+                if (remaining >= segment.Text.Length)
+                {
+                    text = segment.Text;
+                    remaining -= segment.Text.Length;
+                }
+                else
+                {
+                    var safeLength = SafePrefixLength(segment.Text, remaining);
+                    text = segment.Text[..safeLength];
+                    remaining = 0;
+                    aggregateTruncated = true;
+                }
+
+                return new
+                {
+                    source = segment.SourceRef,
+                    untrusted = segment.Untrusted,
+                    text,
+                };
+            }).ToArray();
+            return new
+            {
+                truncated = document.Truncated || aggregateTruncated,
+                totalCharacters = document.TotalCharacters,
+                segments,
+            };
+        }).ToArray();
+        var context = JsonSerializer.Serialize(new
+        {
+            untrusted = true,
+            documents,
+        });
+        return $"{message}\n\n--- BEGIN UNTRUSTED DOCUMENT CONTEXT ---\n{context}\n--- END UNTRUSTED DOCUMENT CONTEXT ---";
+    }
+
+    private static int SafePrefixLength(string text, int requestedLength)
+    {
+        if (requestedLength <= 0)
+        {
+            return 0;
+        }
+
+        if (requestedLength >= text.Length)
+        {
+            return text.Length;
+        }
+
+        return char.IsHighSurrogate(text[requestedLength - 1])
+            && char.IsLowSurrogate(text[requestedLength])
+                ? requestedLength - 1
+                : requestedLength;
     }
 
     private AgentOutcome Finish(

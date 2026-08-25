@@ -6,8 +6,10 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Vinx.Erp.AI;
+using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.Audit;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Persistence;
@@ -173,6 +175,33 @@ public sealed class AgentEndpointTests
     }
 
     [Fact]
+    public async Task Attachment_without_document_read_capability_converges_to_context_unavailable()
+    {
+        var model = ControlledAgentModel.Text(ModelText);
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            agentModel: model,
+            agentRunOptions: ConfiguredOptions(includeVision: true));
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.AlfaCompanyId, "resuma o anexo") with
+        {
+            Attachments = [Guid.Parse("11111111-1111-4111-8111-111111111111")],
+        };
+
+        var response = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
+
+        response.EnsureSuccessStatusCode();
+        var result = await ReadResponseAsync(response);
+        Assert.Equal("needs_clarification", result.Status);
+        Assert.Equal("document_context_unavailable", result.ReasonCode);
+        Assert.Equal(0, model.CallCount);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var readDenial = await administrator.AuditEvents.SingleAsync(audit =>
+            audit.Action == FoundationAuthorizedDocumentSource.CommandName);
+        Assert.Equal(AuditOutcome.Denied, readDenial.Outcome);
+        Assert.Equal("capability_denied", readDenial.Reason);
+    }
+
+    [Fact]
     public async Task Anonymous_request_is_unauthorized()
     {
         // Sem token o challenge é real: nenhum serviço de aplicação roda.
@@ -218,6 +247,37 @@ public sealed class AgentEndpointTests
         Assert.Contains(EmailInText, record.ResultJson, StringComparison.Ordinal);
         Assert.DoesNotContain("resuma o expediente", record.ResultJson, StringComparison.Ordinal);
         Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "agent.run").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Canonical_attachment_order_participates_in_idempotency()
+    {
+        var firstAttachment = Guid.Parse("11111111-1111-4111-8111-111111111111");
+        var secondAttachment = Guid.Parse("22222222-2222-4222-8222-222222222222");
+        var model = ControlledAgentModel.Text(ModelText);
+        await using var factory = await CreateConfiguredFactoryAsync(model);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.AlfaCompanyId, "resuma os anexos") with
+        {
+            Attachments = [firstAttachment, secondAttachment, firstAttachment],
+        };
+
+        var first = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
+        var replay = await factory.CreateClient().PostAsJsonAsync(
+            "/agent/runs",
+            request with { Attachments = [firstAttachment, secondAttachment] });
+        var conflict = await factory.CreateClient().PostAsJsonAsync(
+            "/agent/runs",
+            request with { Attachments = [secondAttachment, firstAttachment] });
+
+        first.EnsureSuccessStatusCode();
+        replay.EnsureSuccessStatusCode();
+        Assert.Equal(await first.Content.ReadAsStringAsync(), await replay.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        var conflictResult = await ReadResponseAsync(conflict);
+        Assert.Equal("conflict", conflictResult.Status);
+        Assert.Equal("idempotency_conflict", conflictResult.ReasonCode);
+        Assert.Equal(0, model.CallCount);
     }
 
     [Fact]
@@ -403,16 +463,28 @@ public sealed class AgentEndpointTests
     private static async Task<FoundationApiFactory> CreateConfiguredFactoryAsync(ControlledAgentModel model) =>
         await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
             agentModel: model,
-            agentRunOptions: new AgentRunOptions
+            agentRunOptions: ConfiguredOptions(includeVision: false));
+
+    private static AgentRunOptions ConfiguredOptions(bool includeVision) => new()
+    {
+        Provider = AgentRunOptions.OpenAiCompatibleProvider,
+        Endpoint = new Uri("https://agent-provider.example/v1"),
+        ApiKey = "test-agent-key",
+        Model = "test-agent-model",
+        Vision = includeVision
+            ? new AgentRunVisionOptions
             {
                 Provider = AgentRunOptions.OpenAiCompatibleProvider,
-                Endpoint = new Uri("https://agent-provider.example/v1"),
-                ApiKey = "test-agent-key",
-                Model = "test-agent-model"
-            });
+                Endpoint = new Uri("https://vision-provider.example/v1"),
+                ApiKey = "test-vision-key",
+                Model = "test-vision-model",
+                AllowedClassifications = ["fiscal"],
+            }
+            : null,
+    };
 
     private static AgentRunRequest NewRequest(Guid? companyId, string message) =>
-        new(Guid.NewGuid(), Journey, message, companyId);
+        new(Guid.NewGuid(), Journey, message, companyId, []);
 
     private static async Task<AgentRunResponse> ReadResponseAsync(HttpResponseMessage response) =>
         await response.Content.ReadFromJsonAsync<AgentRunResponse>()
@@ -444,13 +516,9 @@ public sealed class AgentEndpointTests
     {
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var request = Guid.NewGuid();
-        var readCapability = await administrator.Capabilities.SingleOrDefaultAsync(capability =>
-            capability.Name == AgentCapabilities.Read);
-        if (readCapability is null)
-        {
-            readCapability = new Capability(Guid.NewGuid(), AgentCapabilities.Read);
-            administrator.Capabilities.Add(readCapability);
-        }
+        var readCapability = await administrator.Capabilities.SingleAsync(capability =>
+            capability.Name == KnownCapabilities.AiRead);
+        Assert.Equal(KnownCapabilities.AiReadId, readCapability.Id);
 
         var group = new Group(Guid.NewGuid(), $"Vinx Group {request:N}", factory.ActorUserId, request);
         administrator.Add(group);
@@ -510,7 +578,12 @@ public sealed class AgentEndpointTests
 
     private sealed record AgentScenario(Guid AlfaCompanyId, Guid? BetaCompanyId, Guid? ForgedCompanyId);
 
-    private sealed record AgentRunRequest(Guid RequestId, string Journey, string Message, Guid? CompanyId);
+    private sealed record AgentRunRequest(
+        Guid RequestId,
+        string Journey,
+        string Message,
+        Guid? CompanyId,
+        IReadOnlyList<Guid>? Attachments = null);
 
     private sealed record AgentRunResponse(
         string Status,

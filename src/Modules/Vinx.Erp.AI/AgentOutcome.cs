@@ -26,6 +26,8 @@ public static class AgentOutcomeReason
     public const string Completed = "completed";
     public const string MessageEmpty = "message_empty";
     public const string ProfileUnknown = "profile_unknown";
+    public const string AttachmentsNotAllowed = "attachments_not_allowed";
+    public const string DocumentContextUnavailable = "document_context_unavailable";
     public const string CompanyRequired = "company_required";
     public const string CompanyNotAuthorized = "company_not_authorized";
     public const string CapabilityDenied = "capability_denied";

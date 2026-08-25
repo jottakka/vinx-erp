@@ -17,6 +17,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Contracts/StrictJsonFieldSet.cs" Link="Contracts/StrictJsonFieldSet.cs" />
+    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Constants/ApiConstants.cs" Link="Constants/ApiConstants.cs" />
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentHttpContracts.cs" Link="Agent/AgentHttpContracts.cs" />
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentExecutionApplicationService.cs" Link="Agent/AgentExecutionApplicationService.cs" />
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentRunOptions.cs" Link="Agent/AgentRunOptions.cs" />

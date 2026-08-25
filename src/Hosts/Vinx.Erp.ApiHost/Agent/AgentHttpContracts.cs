@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Vinx.Erp.ApiHost.Contracts;
+using Vinx.Erp.ApiHost.Constants;
 
 namespace Vinx.Erp.ApiHost.Agent;
 
@@ -28,8 +29,24 @@ public static class AgentRunStatus
 /// <summary>Referência opaca a uma fonte autorizada citada na resposta.</summary>
 public sealed record AgentRunSourceRef(string Reference);
 
-/// <summary>Corpo aceito de POST /agent/runs; o cliente envia somente jornada, mensagem, requestId e empresa quando exigida.</summary>
-public sealed record AgentRunHttpRequest(Guid RequestId, string Journey, string Message, Guid? CompanyId);
+/// <summary>Corpo aceito de POST /agent/runs; anexos já chegam canônicos e imutáveis da fronteira.</summary>
+public sealed record AgentRunHttpRequest(
+    Guid RequestId,
+    string Journey,
+    string Message,
+    Guid? CompanyId = null,
+    IReadOnlyList<Guid> Attachments = null!)
+{
+    private static readonly IReadOnlyList<Guid> NoAttachments =
+        Array.AsReadOnly(Array.Empty<Guid>());
+
+    public IReadOnlyList<Guid> Attachments { get; private init; } = Freeze(Attachments);
+
+    private static IReadOnlyList<Guid> Freeze(IReadOnlyList<Guid>? attachments) =>
+        attachments is null || attachments.Count == 0
+            ? NoAttachments
+            : Array.AsReadOnly(attachments.ToArray());
+}
 
 /// <summary>Resposta tipada de uma execução; texto somente o do modelo liberado pelo gate, sem prompt ou resposta bruta.</summary>
 public sealed record AgentRunHttpResponse(
@@ -52,8 +69,10 @@ public static class AgentHttpContract
     private const string JourneyInvalid = "journey_invalid";
     private const string MessageEmpty = "message_empty";
     private const string MessageTooLong = "message_too_long";
+    private const string AttachmentsInvalid = "attachments_invalid";
+    private const string AttachmentsTooMany = "attachments_too_many";
 
-    private static readonly HashSet<string> Fields = ["requestId", "journey", "message", "companyId"];
+    private static readonly HashSet<string> Fields = ["requestId", "journey", "message", "companyId", "attachments"];
 
     /// <summary>Interpreta o corpo com limite por bytes efetivamente lidos (inclusive transferência chunked); retorna false com código de erro estável quando viola o contrato.</summary>
     public static bool TryParse(Stream body, long maxBytes, out AgentRunHttpRequest? request, out string? errorCode)
@@ -163,7 +182,44 @@ public static class AgentHttpContract
             companyId = parsedCompanyId;
         }
 
-        request = new AgentRunHttpRequest(requestId, journey, message, companyId);
+        var attachmentIds = new List<Guid>();
+        if (values.TryGetValue("attachments", out var attachmentsElement))
+        {
+            if (attachmentsElement.ValueKind is not JsonValueKind.Array)
+            {
+                errorCode = AttachmentsInvalid;
+                return false;
+            }
+
+            var seen = new HashSet<Guid>();
+            foreach (var attachmentElement in attachmentsElement.EnumerateArray())
+            {
+                if (attachmentElement.ValueKind is not JsonValueKind.String
+                    || !Guid.TryParseExact(attachmentElement.GetString(), "D", out var attachmentId)
+                    || attachmentId == Guid.Empty)
+                {
+                    errorCode = AttachmentsInvalid;
+                    return false;
+                }
+
+                if (seen.Add(attachmentId))
+                {
+                    attachmentIds.Add(attachmentId);
+                    if (attachmentIds.Count > ApiConstants.MaxAgentAttachments)
+                    {
+                        errorCode = AttachmentsTooMany;
+                        return false;
+                    }
+                }
+            }
+        }
+
+        request = new AgentRunHttpRequest(
+            requestId,
+            journey,
+            message,
+            companyId,
+            Array.AsReadOnly(attachmentIds.ToArray()));
         errorCode = null;
         return true;
     }
