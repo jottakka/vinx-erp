@@ -412,4 +412,56 @@ describe("agent run client", () => {
       failure: { kind: "protocol", status: 400 },
     });
   });
+
+  it("copies attachment IDs into the agent request only when attachments are supplied", async () => {
+    let resolveToken: (response: Response) => void = () => {};
+    const token = new Promise<Response>((resolve) => (resolveToken = resolve));
+    const fetchSpy = vi
+      .fn()
+      .mockImplementationOnce(() => token)
+      .mockResolvedValueOnce(runResponse(typedBody()));
+    vi.stubGlobal("fetch", fetchSpy);
+    const client = createAgentRunClient();
+    const attachments = ["44444444-4444-4444-8444-444444444444"];
+
+    const pending = client.send({
+      attachments,
+      message: "Resuma o documento selecionado",
+    });
+    attachments.push("55555555-5555-4555-8555-555555555555");
+    resolveToken(tokenResponse());
+    await expect(pending).resolves.toMatchObject({ ok: true });
+
+    const body = JSON.parse(fetchSpy.mock.calls[1][1].body as string);
+    expect(body.attachments).toEqual(["44444444-4444-4444-8444-444444444444"]);
+  });
+
+  it("preserves the document-context clarification reason from the typed contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(tokenResponse())
+        .mockResolvedValueOnce(
+          runResponse(
+            typedBody({
+              reasonCode: "document_context_unavailable",
+              status: "needs_clarification",
+              text: null,
+            }),
+          ),
+        ),
+    );
+    const client = createAgentRunClient();
+
+    const result = await client.send({ message: "Resuma o anexo" });
+
+    expect(result).toMatchObject({
+      ok: true,
+      run: {
+        reasonCode: "document_context_unavailable",
+        status: "needs_clarification",
+      },
+    });
+  });
 });

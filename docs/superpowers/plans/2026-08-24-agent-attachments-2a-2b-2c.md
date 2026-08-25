@@ -191,7 +191,7 @@ remoções) e 1.718 linhas geradas da migration/designer. O total manual excede
 vinculá-las à idempotência, à autorização documental, à composição fail-closed
 e ao catálogo `ai.read` deixaria uma fronteira parcialmente segura.
 
-## 2C — #300: FE (postponed; base = 2B + #296)
+## 2C — #300: FE (realizado; base = 2B + #296)
 
 **Branch:** `codex/agent-chat-attachments`.
 
@@ -218,7 +218,31 @@ e ao catálogo `ai.read` deixaria uma fronteira parcialmente segura.
 4. **Testes:** vitest client + provider (matriz por etapa, abort, troca de
    empresa) + e2e interceptando as três rotas.
 
-**Arquivos:** ~4 novos + 4 editados + testes. ~600-800 linhas.
+**Realizado em 2026-08-25:** o client web valida PDF/JPEG/PNG e 1..25 MiB,
+calcula SHA-256 antes da intenção e completa intention → PUT → confirmation
+sem retry. A URL temporária fica somente no escopo do PUT. O provider mantém
+até três seleções compartilhadas entre dock e página, bloqueia o envio até que
+todas estejam prontas e aborta uploads em remoção, reset, unmount ou troca de
+escopo. O POST `/agent/runs` recebe somente IDs opacos confirmados na primeira
+ordem de seleção. A matriz executável está em
+`docs/verification/2026-08-25-issue-300-agent-chat-attachments-test-cases.md`.
+
+**Correção de revisão 1/5:** cada fronteira aguardada do upload revalida o
+cancelamento antes de interpretar resposta ou iniciar a próxima mutação. A
+matriz cobre cancelamento durante parsers de intenção/confirmação, PUT que
+resolve após cancelamento, limites exatos, targets permitidos e bloqueio de
+envio parcial; helpers de teste passam a concentrar cenários repetidos.
+
+**Correção de revisão 2/5:** falha de storage não expõe status do provedor;
+envio aceito limpa o aviso de teto junto da seleção; sem empresa, o picker
+visível e seu input ficam desabilitados com orientação fixa, e a jornada
+textual continua sem anexos.
+
+**Arquivos:** 11 (client, provider, UI, contrato do agent, Vitest, Playwright
+e documentação), 1.805 adições e 21 remoções manuais. O total de 1.826 linhas
+alteradas excede o alvo de 800, mas a fatia continua coesa: a fronteira de
+upload, o estado compartilhado, o contrato do run e as provas de cancelamento
+e não-vazamento são necessários para não expor uma seleção parcial.
 
 ## Verificação e processo (comum)
 

@@ -11,6 +11,10 @@ import {
 import type { AuthorizedCompanyMembership } from "../auth/session-contract";
 import { useSession } from "../auth/session-provider";
 import {
+  type AgentAttachmentUploadStage,
+  createAgentAttachmentClient,
+} from "./agent-attachments-client";
+import {
   type AgentRunFailureKind,
   type AgentRunSendResult,
   createAgentRunClient,
@@ -33,6 +37,12 @@ export function agentReplyText(result: AgentRunSendResult): string {
     case "result":
       return text ?? withReason("Resposta concluída sem conteúdo.", reasonCode);
     case "needs_clarification":
+      if (reasonCode === "document_context_unavailable") {
+        return withReason(
+          "Não foi possível usar o anexo. Remova-o ou verifique-o antes de tentar novamente.",
+          reasonCode,
+        );
+      }
       return (
         text ??
         withReason("O agente pede esclarecimento para continuar.", reasonCode)
@@ -89,14 +99,29 @@ function replySources(result: AgentRunSendResult) {
 }
 
 type AgentConversationContextValue = {
+  attachments: readonly AgentConversationAttachment[];
+  attachmentSelectionAvailable: boolean;
+  attachmentSelectionLimitReached: boolean;
   closeDock: () => void;
   companyName: string | null;
   dockOpen: boolean;
   messages: readonly AgentMessage[];
   openDock: () => void;
+  removeAttachment: (localId: string) => void;
   resetConversation: () => void;
+  selectAttachments: (files: readonly File[]) => void;
   sendMessage: (text: string) => void;
   status: AgentStatus;
+};
+
+export type AgentConversationAttachment = {
+  errorStage?: AgentAttachmentUploadStage;
+  fileId?: string;
+  fileName: string;
+  localId: string;
+  mimeType: string;
+  sizeBytes: number;
+  state: "uploading" | "ready" | "failed";
 };
 
 /**
@@ -104,12 +129,17 @@ type AgentConversationContextValue = {
  * produção): nenhum dado de demonstração é exposto e os controles não operam.
  */
 const inertValue: AgentConversationContextValue = {
+  attachments: [],
+  attachmentSelectionAvailable: false,
+  attachmentSelectionLimitReached: false,
   closeDock: () => {},
   companyName: null,
   dockOpen: false,
   messages: [],
   openDock: () => {},
+  removeAttachment: () => {},
   resetConversation: () => {},
+  selectAttachments: () => {},
   sendMessage: () => {},
   status: "idle",
 };
@@ -176,13 +206,34 @@ function ScopedAgentConversationProvider({
   openDock: () => void;
 }) {
   const companyId = company?.companyId ?? null;
+  const attachmentSelectionAvailable = Boolean(
+    companyId && company?.companyName,
+  );
 
   const [messages, setMessages] = useState<readonly AgentMessage[]>([]);
+  const [attachments, setAttachments] = useState<
+    readonly AgentConversationAttachment[]
+  >([]);
+  const [attachmentSelectionLimitReached, setAttachmentSelectionLimitReached] =
+    useState(false);
   const [status, setStatus] = useState<AgentStatus>("idle");
   const sequence = useRef(0);
+  const attachmentSequence = useRef(0);
   const epoch = useRef(0);
+  const attachmentEpoch = useRef(0);
   const inFlight = useRef<AbortController | null>(null);
+  const attachmentUploads = useRef(new Map<string, AbortController>());
+  const attachmentSnapshot = useRef<readonly AgentConversationAttachment[]>([]);
   const client = useRef(createAgentRunClient());
+  const attachmentClient = useRef(createAgentAttachmentClient());
+
+  const replaceAttachments = useCallback(
+    (next: readonly AgentConversationAttachment[]) => {
+      attachmentSnapshot.current = next;
+      setAttachments(next);
+    },
+    [],
+  );
 
   const cancelInFlight = useCallback(() => {
     epoch.current += 1;
@@ -190,20 +241,153 @@ function ScopedAgentConversationProvider({
     inFlight.current = null;
   }, []);
 
-  useLayoutEffect(() => cancelInFlight, [cancelInFlight]);
+  const abortAttachments = useCallback(
+    (clearState: boolean) => {
+      attachmentEpoch.current += 1;
+      for (const controller of attachmentUploads.current.values()) {
+        controller.abort();
+      }
+      attachmentUploads.current.clear();
+      if (clearState) {
+        replaceAttachments([]);
+        setAttachmentSelectionLimitReached(false);
+      }
+    },
+    [replaceAttachments],
+  );
+
+  useLayoutEffect(
+    () => () => {
+      cancelInFlight();
+      abortAttachments(false);
+    },
+    [abortAttachments, cancelInFlight],
+  );
 
   const resetConversation = useCallback(() => {
     cancelInFlight();
+    abortAttachments(true);
     setMessages([]);
     setStatus("idle");
-  }, [cancelInFlight]);
+  }, [abortAttachments, cancelInFlight]);
+
+  const removeAttachment = useCallback(
+    (localId: string) => {
+      attachmentUploads.current.get(localId)?.abort();
+      attachmentUploads.current.delete(localId);
+      setAttachmentSelectionLimitReached(false);
+      replaceAttachments(
+        attachmentSnapshot.current.filter(
+          (attachment) => attachment.localId !== localId,
+        ),
+      );
+    },
+    [replaceAttachments],
+  );
+
+  const selectAttachments = useCallback(
+    (files: readonly File[]) => {
+      if (!companyId || !attachmentSelectionAvailable || !files.length) {
+        return;
+      }
+      if (attachmentSnapshot.current.length + files.length > 3) {
+        setAttachmentSelectionLimitReached(true);
+        return;
+      }
+
+      setAttachmentSelectionLimitReached(false);
+      const selected = files.map((file) => {
+        attachmentSequence.current += 1;
+        return {
+          fileName: file.name,
+          localId: `agent-attachment-${attachmentSequence.current}`,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          state: "uploading" as const,
+        };
+      });
+      replaceAttachments([...attachmentSnapshot.current, ...selected]);
+
+      const selectionEpoch = attachmentEpoch.current;
+      for (const selection of selected) {
+        const file = files[selected.indexOf(selection)];
+        const controller = new AbortController();
+        attachmentUploads.current.set(selection.localId, controller);
+
+        attachmentClient.current
+          .upload({ companyId, file, signal: controller.signal })
+          .then((result) => {
+            if (
+              selectionEpoch !== attachmentEpoch.current ||
+              attachmentUploads.current.get(selection.localId) !== controller
+            ) {
+              return;
+            }
+            replaceAttachments(
+              attachmentSnapshot.current.map((attachment) => {
+                if (attachment.localId !== selection.localId) {
+                  return attachment;
+                }
+                return result.ok
+                  ? {
+                      ...attachment,
+                      fileId: result.attachment.fileId,
+                      state: "ready" as const,
+                    }
+                  : {
+                      ...attachment,
+                      errorStage: result.error.stage,
+                      state: "failed" as const,
+                    };
+              }),
+            );
+          })
+          .catch(() => {
+            if (
+              selectionEpoch === attachmentEpoch.current &&
+              attachmentUploads.current.get(selection.localId) === controller
+            ) {
+              replaceAttachments(
+                attachmentSnapshot.current.map((attachment) =>
+                  attachment.localId === selection.localId
+                    ? {
+                        ...attachment,
+                        errorStage: "validation",
+                        state: "failed" as const,
+                      }
+                    : attachment,
+                ),
+              );
+            }
+          })
+          .finally(() => {
+            if (
+              attachmentUploads.current.get(selection.localId) === controller
+            ) {
+              attachmentUploads.current.delete(selection.localId);
+            }
+          });
+      }
+    },
+    [attachmentSelectionAvailable, companyId, replaceAttachments],
+  );
 
   const sendMessage = useCallback(
     (text: string) => {
       const normalized = text.trim();
+      const selectedAttachments = attachmentSnapshot.current;
+      const attachmentIds = selectedAttachments.flatMap((attachment) =>
+        attachment.state === "ready" && attachment.fileId
+          ? [attachment.fileId]
+          : [],
+      );
 
       // Trava síncrona: um envio por vez, exatamente um requestId novo.
-      if (!normalized || inFlight.current) {
+      if (
+        !normalized ||
+        inFlight.current ||
+        attachmentIds.length !== selectedAttachments.length
+      ) {
         return;
       }
 
@@ -212,6 +396,8 @@ function ScopedAgentConversationProvider({
       const runEpoch = epoch.current;
 
       sequence.current += 1;
+      replaceAttachments([]);
+      setAttachmentSelectionLimitReached(false);
       setMessages((previous) => [
         ...previous,
         {
@@ -226,6 +412,7 @@ function ScopedAgentConversationProvider({
         .send({
           message: normalized,
           ...(companyId ? { companyId } : {}),
+          ...(attachmentIds.length ? { attachments: attachmentIds } : {}),
           signal: controller.signal,
         })
         .then((result) => {
@@ -266,17 +453,22 @@ function ScopedAgentConversationProvider({
           }
         });
     },
-    [companyId],
+    [companyId, replaceAttachments],
   );
 
   const value = useMemo(
     () => ({
+      attachments,
+      attachmentSelectionAvailable,
+      attachmentSelectionLimitReached,
       closeDock,
       companyName: company?.companyName ?? null,
       dockOpen,
       messages,
       openDock,
+      removeAttachment,
       resetConversation,
+      selectAttachments,
       sendMessage,
       status,
     }),
@@ -286,7 +478,12 @@ function ScopedAgentConversationProvider({
       dockOpen,
       messages,
       openDock,
+      attachmentSelectionLimitReached,
+      attachmentSelectionAvailable,
+      attachments,
+      removeAttachment,
       resetConversation,
+      selectAttachments,
       sendMessage,
       status,
     ],
