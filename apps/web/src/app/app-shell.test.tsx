@@ -67,8 +67,8 @@ describe("AppShell", () => {
     ).toBeVisible();
     expect(screen.getByText("Olá, Maria")).toBeVisible();
     expect(screen.getByText("Todas as empresas autorizadas")).toBeVisible();
-    expect(screen.getByRole("group", { name: "Empresa Alfa" })).toBeVisible();
-    expect(screen.getByRole("group", { name: "Empresa Beta" })).toBeVisible();
+    expect(screen.getByText("Alfa", { exact: true })).toBeVisible();
+    expect(screen.getByText("Beta", { exact: true })).toBeVisible();
     expect(screen.queryByText("Gama", { exact: true })).not.toBeInTheDocument();
     expect(screen.queryByText("prototype.view")).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
@@ -89,9 +89,7 @@ describe("AppShell", () => {
         user: { id: "maria", displayName: "Maria" },
       }),
     );
-    expect(
-      await screen.findByRole("group", { name: "Empresa Delta" }),
-    ).toBeVisible();
+    expect(await screen.findByText("Delta", { exact: true })).toBeVisible();
     expect(futureCompanyRouter.state.location.pathname).toBe("/");
   });
 
