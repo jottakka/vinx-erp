@@ -307,6 +307,46 @@ describe("PaguaiPage", () => {
         screen.getByRole("button", { name: "Nova solicitação" }),
       ).toBeVisible(),
     );
+    await openCreate(user);
+    expect(screen.getByRole("textbox", { name: "Título" })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: "Descrição" })).toHaveValue("");
+  });
+
+  it("keeps a delayed create dialog open when Escape is pressed while submitting", async () => {
+    const user = userEvent.setup();
+    let finishCreate: (value: { ok: true; value: typeof draft }) => void =
+      () => {
+        throw new Error("Create was not requested.");
+      };
+    const delayedCreate = new Promise<{ ok: true; value: typeof draft }>(
+      (resolve) => {
+        finishCreate = resolve;
+      },
+    );
+    const draftClient = {
+      create: vi.fn(() => delayedCreate),
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPage(draftClient);
+    await openCreate(user);
+    await fillForm(user);
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    expect(
+      await screen.findByRole("button", { name: "Criando…" }),
+    ).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Criando…" })).toBeVisible();
+
+    finishCreate({ ok: true, value: draft });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Nova solicitação" }),
+      ).toBeVisible(),
+    );
   });
 
   it("blocks submission without an explicit proof requirement selection", async () => {

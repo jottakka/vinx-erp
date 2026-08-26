@@ -251,6 +251,7 @@ export function PaguaiPage({
     );
     setSelected(result.value);
     setCreateError(null);
+    setCreateDialogInstance((current) => current + 1);
     setCreateOpen(false);
     setRequestId(crypto.randomUUID());
   }

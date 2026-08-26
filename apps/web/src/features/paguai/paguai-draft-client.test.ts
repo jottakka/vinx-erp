@@ -82,6 +82,15 @@ describe("Paguai draft client", () => {
     });
   });
 
+  it("accepts an early valid calendar year in the wire response", async () => {
+    const fetchImplementation: typeof fetch = async () =>
+      Response.json({ ...draft, dueDate: "0001-01-01" });
+
+    await expect(
+      createPaguaiDraftClient(fetchImplementation).detail(companyId, draft.id),
+    ).resolves.toMatchObject({ ok: true, value: { dueDate: "0001-01-01" } });
+  });
+
   it("rejects an unexpected response rather than exposing it to the page", async () => {
     const fetchImplementation: typeof fetch = async () =>
       Response.json({ ...draft, unknown: "not allowed" });

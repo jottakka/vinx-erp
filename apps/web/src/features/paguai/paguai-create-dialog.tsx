@@ -18,7 +18,7 @@ import {
   type AttachmentFieldValue,
   type AttachmentUploader,
 } from "../../shared/ui/attachment-field";
-import { amountFromReais } from "./paguai-format";
+import { amountFromReais, isValidDateOnly } from "./paguai-format";
 
 export type PaguaiCreateValues = z.infer<typeof paguaiCreateSchema>;
 
@@ -110,7 +110,14 @@ export function PaguaiCreateDialog({
   }
 
   return (
-    <Dialog fullWidth maxWidth="sm" onClose={close} open={open}>
+    <Dialog
+      fullWidth
+      maxWidth="sm"
+      onClose={(_event, _reason) => {
+        if (!submitting) close();
+      }}
+      open={open}
+    >
       <DialogTitle>Novo rascunho</DialogTitle>
       <DialogContent>
         <Stack
@@ -207,7 +214,9 @@ export function PaguaiCreateDialog({
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={close}>Cancelar</Button>
+        <Button disabled={submitting} onClick={close}>
+          Cancelar
+        </Button>
         <Button
           disabled={isUploading || submitting}
           form="paguai-create-form"
@@ -222,16 +231,5 @@ export function PaguaiCreateDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  );
-}
-
-function isValidDateOnly(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const [year, month, day] = value.split("-").map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
   );
 }
