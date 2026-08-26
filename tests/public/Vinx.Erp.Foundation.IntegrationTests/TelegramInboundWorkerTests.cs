@@ -1,12 +1,17 @@
 extern alias workerhost;
 
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications;
+using Wolverine;
+using Wolverine.Persistence.Durability;
 using Xunit;
 using WorkerHostTypes = workerhost::Vinx.Erp.WorkerHost;
 
@@ -160,6 +165,50 @@ public sealed class TelegramInboundWorkerTests
         Assert.Equal("completed", row.Status);
         Assert.NotNull(row.CompletedAt);
         Assert.Equal(seed.CompanyId, row.ResolvedCompanyId);
+    }
+
+    [Fact]
+    public async Task Registered_dead_letter_interceptor_redacts_a_telegram_envelope_without_changing_its_stable_exception()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        );
+        using var client = worker.CreateClient();
+        var originalId = Guid.NewGuid();
+        var envelope = new Envelope(new InboundTelegramTextReceived(originalId))
+        {
+            Data = Encoding.UTF8.GetBytes($"{{\"inboundMessageId\":\"{originalId:D}\",\"payload\":\"secret\"}}"),
+        };
+        envelope.Headers["diagnostic"] = "secret-header";
+        var originalException = new WorkerHostTypes.InboundTelegramDeadLetterException(
+            WorkerHostTypes.InboundTelegramDeadLetterException.InvalidExceptionType,
+            "Inbound Telegram receipt rejected the envelope."
+        );
+        var interceptor = worker
+            .Services.GetRequiredService<IEnumerable<IDeadLetterInterceptor>>()
+            .Single();
+
+        var persistedException = await interceptor.BeforeStoreAsync(
+            envelope,
+            originalException,
+            CancellationToken.None
+        );
+
+        var telegramException = Assert.IsType<WorkerHostTypes.InboundTelegramDeadLetterException>(
+            persistedException
+        );
+        Assert.Equal(
+            WorkerHostTypes.InboundTelegramDeadLetterException.InvalidExceptionType,
+            telegramException.ExceptionType
+        );
+        Assert.Equal("Inbound Telegram receipt rejected the envelope.", telegramException.Message);
+        Assert.Empty(envelope.Headers);
+        var data = Encoding.UTF8.GetString(envelope.Data!);
+        Assert.DoesNotContain(originalId.ToString("D"), data, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secret", data, StringComparison.OrdinalIgnoreCase);
+        using var payload = JsonDocument.Parse(data);
+        Assert.Equal(Guid.Empty, payload.RootElement.GetProperty("inboundMessageId").GetGuid());
     }
 
     private static async Task<string> AdmitAsync(

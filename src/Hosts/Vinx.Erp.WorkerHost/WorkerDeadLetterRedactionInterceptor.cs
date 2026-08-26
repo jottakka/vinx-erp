@@ -20,6 +20,11 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
     )
     {
         RedactEnvelope(envelope);
+        if (exception is InboundTelegramDeadLetterException)
+        {
+            return ValueTask.FromResult<Exception?>(exception);
+        }
+
         return ValueTask.FromResult<Exception?>(
             new WorkerOwnerInvitationDeadLetterException(
                 WorkerOwnerInvitationDeadLetterException.UnexpectedExceptionType,
@@ -68,6 +73,15 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
                 envelope.Message = redactedDocument;
                 envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
                     redactedDocument,
+                    SerializerOptions
+                );
+                envelope.Headers.Clear();
+                break;
+            case InboundTelegramTextReceived:
+                var redactedTelegram = new InboundTelegramTextReceived(Guid.Empty);
+                envelope.Message = redactedTelegram;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
+                    redactedTelegram,
                     SerializerOptions
                 );
                 envelope.Headers.Clear();
