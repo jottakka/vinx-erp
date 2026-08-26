@@ -232,6 +232,17 @@ vazia de classificações. Se ausente, o normalizer não é registrado. Se parci
 ou inválido, a partida falha com mensagem fixa. A classificação declarada no
 upload nunca amplia a allowlist.
 
+O workspace web também projeta o acesso de leitura do bootstrap: a empresa
+ativa precisa listar `ai.read` com escopo `Company` para habilitar mensagem e
+anexos. Sem empresa ou sem essa capability, a interface mostra uma explicação
+acionável, desativa os controles e não inicia antiforgery, upload ou
+`POST /agent/runs`; o gatilho continua disponível para tornar o motivo
+descobrível. Essa verificação é somente preflight de UX: o endpoint revalida
+membership e capability server-side a cada envio, e uma negação tardia vira
+texto amigável sem expor reason codes. A capability não é concedida por
+migration nem automaticamente em produção; o fixture E2E pode registrá-la
+explicitamente para os cenários autorizados.
+
 ## Ownership
 
 O módulo é responsável somente pela conversão de protocolo de providers

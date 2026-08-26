@@ -8,13 +8,19 @@ export const testCredentials = {
 const snapshot = {
   companies: [
     {
-      capabilities: [{ name: "prototype.view", scopes: ["Company"] }],
+      capabilities: [
+        { name: "prototype.view", scopes: ["Company"] },
+        { name: "ai.read", scopes: ["Company"] },
+      ],
       companyId: "33333333-3333-4333-8333-333333333333",
       companyName: "Alfa",
       membershipId: "22222222-2222-4222-8222-222222222222",
     },
     {
-      capabilities: [{ name: "prototype.view", scopes: ["Company"] }],
+      capabilities: [
+        { name: "prototype.view", scopes: ["Company"] },
+        { name: "ai.read", scopes: ["Company"] },
+      ],
       companyId: "55555555-5555-4555-8555-555555555555",
       companyName: "Beta",
       membershipId: "44444444-4444-4444-8444-444444444444",
@@ -28,14 +34,36 @@ const snapshot = {
   },
 } as const;
 
-export async function installBffSession(page: Page) {
+type BffSessionOptions = {
+  agentReadCapability?: boolean;
+};
+
+function sessionSnapshot({ agentReadCapability = true }: BffSessionOptions) {
+  if (agentReadCapability) return snapshot;
+
+  return {
+    ...snapshot,
+    companies: snapshot.companies.map((company) => ({
+      ...company,
+      capabilities: company.capabilities.filter(
+        (capability) => capability.name !== "ai.read",
+      ),
+    })),
+  };
+}
+
+export async function installBffSession(
+  page: Page,
+  options: BffSessionOptions = {},
+) {
   let authenticated = false;
+  const currentSnapshot = sessionSnapshot(options);
 
   await page.route("**/foundation/bootstrap", async (route) => {
     await route.fulfill(
       authenticated
         ? {
-            body: JSON.stringify(snapshot),
+            body: JSON.stringify(currentSnapshot),
             contentType: "application/json",
             status: 200,
           }
