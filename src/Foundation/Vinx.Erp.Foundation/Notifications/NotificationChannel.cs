@@ -9,4 +9,5 @@ public static class NotificationChannel
     public const string InApp = "in_app";
     public const string WhatsApp = "whatsapp";
     public const string Email = "email";
+    public const string Telegram = "telegram";
 }

@@ -93,6 +93,118 @@ sem tabela de contato própria; o opt-in é por destinatário em
 `notification_preferences` (canal `email`), como o WhatsApp. O template exige
 `email_subject` e `email_body_html` aprovados (CHECK fechado por chave).
 
+## Provider Telegram — contrato compartilhado (#307)
+
+A Foundation aceita o canal opt-in `telegram` sem alterar a semântica do
+WhatsApp ou do in-app obrigatório. O template aprovado é texto plano de 1 a
+4096 pontos de código Unicode em `notification_templates.telegram_text`; não
+pode ficar vazio nem começar ou terminar com U+0020, tabulação, quebra de
+linha, tabulação vertical, form feed ou retorno de carro. O limite de 4096 do
+Telegram conta unidades de código UTF-16, enquanto `char_length` conta pontos
+de código; por isso, templates aprovados com muitos caracteres astrais falham
+de forma fechada na entrega. O contato privado
+usa `notification_recipient_contacts.address` com chat ID decimal positivo e
+`phone_number` permanece exclusivo do WhatsApp. A função
+`notifications.enqueue_notification_intent` revalida o opt-in e o template no
+momento do enfileiramento. Quando o opt-in existe, Telegram e in-app são
+criados na mesma transação e cada entrega nova publica somente
+`NotificationDeliveryRequested(deliveryId)` no outbox; o texto e o endereço
+nunca entram no envelope, metadado, log ou métrica.
+
+Para retirar a aprovação de um template Telegram, primeiro limpe
+`telegram_text`. Caso contrário, o `CHECK` bloqueia a alteração com SQLSTATE
+`23514`.
+
+Alterar o endereço por `notifications.set_recipient_contact` limpa
+`is_validated`; repetir o mesmo endereço não altera a linha nem gera auditoria
+extra. A validação do chat é externa e controlada por processo administrativo
+até que uma vinculação de uso único seja aprovada.
+
+## Provider Telegram — outbound Bot API (#308)
+
+`Providers/Telegram` entrega o canal `telegram` apenas pelo WorkerHost. O
+provider abre uma transação curta para
+`notifications.get_telegram_notification_delivery_target(deliveryId, attemptId)`;
+a função `SECURITY DEFINER` expõe `address` e `telegram_text` somente para a
+tentativa `provider_in_flight` exata, com contato validado e template aprovado.
+A transação encerra antes do `HttpClient` nomeado `telegram-bot` chamar
+`sendMessage`.
+
+O mapper aceita somente chat ID privado decimal positivo canônico e texto plano
+literal de 1 a 4096 caracteres, serializando apenas `chat_id` e `text`. O
+token aparece apenas no caminho da requisição no instante do envio; o client
+tem timeout de 10 segundos, cookies/redirects desativados e sem logging HTTP
+padronizado. `ok=true` com `result.message_id` positivo confirma o provider;
+corpo 2xx acima do limite de 8192 bytes — com ou sem anúncio de comprimento — é
+ambíguo sem ser lido até o fim. `4xx` ordinário, exceto `408`/`429`, ou
+`ok=false` é rejeição; `408`, timeout, transporte incerto e 2xx malformado
+são ambíguos terminais; `429`/`5xx` são
+transitivos e usam somente o retry finito do worker. Não há retry no adapter,
+webhook, inbound ou resposta automática nesta fatia. Runbook:
+`docs/runbooks/telegram-outbound.md`.
+
+## Telegram inbound — admissão SQL
+
+A Foundation mantém `notifications.inbound_telegram_messages` como evidência
+durável de texto inbound: `update_id`, `chat_id`, `message_id`, corpo, estado
+de resolução, identidade eventualmente resolvida e estado `pending`. A tabela
+usa RLS forçado e não concede leitura ou escrita direta a `vinx_runtime`.
+
+`notifications.resolve_inbound_telegram_actor(chat_id)` é `SECURITY DEFINER`,
+com owner e `search_path` fixos, e considera somente contato `telegram` de chat
+privado validado, membership ativa e empresa não excluída. O resultado é
+fechado: `admitted` apenas para uma identidade exata; ausência de contato,
+contato não validado, identidade inativa ou mais de uma identidade retornam,
+respectivamente, `unbound`, `unverified`, `inactive` ou `ambiguous`, sem IDs
+de usuário, empresa ou membership.
+
+`notifications.admit_inbound_telegram_text(...)` recebe somente os cinco dados
+de transporte, resolve internamente o ator por
+`notifications.resolve_inbound_telegram_actor(chat_id)`, valida defensivamente
+a tupla derivada e deduplica por `(chat_id, message_id)`. O retorno contém
+`status` e `resolution_state`: a mesma combinação de `update_id` e corpo
+retorna `replay`; uma reutilização incompatível retorna `conflict`. Nenhum
+replay atualiza a primeira decisão persistida, inclusive se o contato for
+validado depois.
+
+## Telegram inbound — webhook e outbox (#309)
+
+O ApiHost expõe `POST /foundation/notifications/telegram/webhook` fora dos
+grupos autenticados porque o Telegram autentica a origem por um único header
+`X-Telegram-Bot-Api-Secret-Token`. O segredo é opcional para boot: ausência
+retorna `503`; valor presente fora da gramática do Telegram falha no startup.
+Antes de ler JSON, a rota recusa segredo ausente, errado ou múltiplo com `401`.
+Somente texto de conversa `private`, humano, com `from.id == chat.id`, IDs
+positivos e até 4096 pontos de código chega à admissão; formas incompatíveis
+recebem `200` sem efeito para interromper retry inútil.
+
+A função de admissão resolve a identidade dentro da fronteira SQL e devolve
+estado e resolução ao ingress; apenas para `created + admitted`, o ingress
+publica `InboundTelegramTextReceived(InboundMessageId)` no outbox durável para
+`telegram-inbound`, na mesma transação da evidência. O envelope e seus
+metadados contêm somente o GUID opaco: nunca texto, chat ID, update ID ou
+message ID. Replay é 2xx/no-op; erro antes do commit preserva ausência de linha
+e envelope.
+
+O WorkerHost público escuta `telegram-inbound` com inbox durável e
+`AutoCreate.None`. O handler tipado usa apenas o GUID e a função restrita a
+`vinx_worker`: uma linha `pending + admitted` muda uma vez para `completed`;
+replay é no-op e resolução fechada permanece `pending` como evidência. As duas
+tabelas da fila, incluindo `_scheduled`, recebem somente o DML necessário do
+worker, sem `CREATE` e sem devolver ao worker acesso ao storage do ApiHost.
+
+Nesse contrato, `completed` é **apenas recibo técnico da fila**. Não representa
+confirmação humana, leitura, resposta, efeito de negócio ou envio ao Telegram.
+Também não representa empresa escolhida pela pessoa usuária; seleção de empresa
+e confirmação permanecem decisões explícitas do servidor.
+O worker não lê o texto e não chama HTTP, Bot API ou IA. A confirmação continua
+sendo uma decisão explícita do servidor em fluxo próprio e nunca é inferida do
+recibo. Envelope inválido, retry Npgsql ou cancelamento esgotado após
+1 s/5 s/30 s e erro inesperado entram na DLQ com tipos estáveis, payload
+`Guid.Empty`, headers removidos e sem UUID, conteúdo, IDs do provedor ou
+detalhe original da exceção; cancelamento da cadeia nunca usa requeue
+indefinido durante o desligamento.
+
 ## Inbound admissão e identidade (#272 PR1)
 
 O webhook (mesmo endpoint do W3) lê `messages[]` dos tipos `image`, `document`

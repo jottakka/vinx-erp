@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
+using Vinx.Erp.Notifications.Providers.Telegram;
 using WorkerProgram = workerhost::Program;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -46,9 +47,31 @@ internal sealed class FileLoggerProvider(string path) : ILoggerProvider
 }
 
 /// <summary>
-/// WorkerHost de teste com provider de WhatsApp substituível; a ausência do
-/// substituto reproduz a configuração de produção desta fatia (somente
-/// in-app registrado).
+/// Bloqueia localmente qualquer envio inesperado pelo client Telegram padrão
+/// das factories de teste, sem deixar o handler alcançar a rede.
+/// </summary>
+internal sealed class FailFastTelegramBotHandler : DelegatingHandler
+{
+    private int _calls;
+
+    public FailFastTelegramBotHandler()
+        : base(new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }) { }
+
+    public int Calls => Volatile.Read(ref _calls);
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken
+    )
+    {
+        Interlocked.Increment(ref _calls);
+        throw new InvalidOperationException("Telegram Bot API network access is disabled in tests.");
+    }
+}
+
+/// <summary>
+/// WorkerHost de teste com providers externos substituíveis e defaults
+/// determinísticos que impedem configuração ambiente ou tráfego acidental.
 /// </summary>
 internal sealed class NotificationWorkerHostFactory(
     string connectionString,
@@ -60,7 +83,10 @@ internal sealed class NotificationWorkerHostFactory(
     HttpMessageHandler? inboundVisionAiHandler = null,
     Vinx.Erp.Foundation.Files.FileStorage? testFileStorage = null,
     Vinx.Erp.Foundation.Files.IMalwareScanner? testMalwareScanner = null,
-    Vinx.Erp.Notifications.Providers.Email.EmailProviderOptions? smtpOptions = null
+    Vinx.Erp.Notifications.Providers.Email.EmailProviderOptions? smtpOptions = null,
+    HttpMessageHandler? telegramBotHandler = null,
+    IReadOnlyDictionary<string, string>? telegramSettings = null,
+    bool useCanonicalTelegramHttpRegistration = false
 )
     : WebApplicationFactory<WorkerProgram>
 {
@@ -71,6 +97,11 @@ internal sealed class NotificationWorkerHostFactory(
         builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
         builder.UseSetting("SUPABASE_AUTH_SERVICE_ROLE_KEY", "test-service-role-key");
         builder.UseSetting("SUPABASE_INVITE_REDIRECT_URL", "https://app.example.test/convite");
+        // Sempre sombreia o ambiente do processo antes de qualquer fake ou
+        // override explícito: uma factory padrão não pode herdar credenciais.
+        builder.UseSetting("TELEGRAM_BOT_TOKEN", "");
+        builder.UseSetting("TELEGRAM_API_BASE_URL", "https://api.telegram.test");
+        builder.UseSetting("TELEGRAM_WEBHOOK_SECRET_TOKEN", "");
         // Segredos de teste sem valor real; o client do Graph é substituído
         // por handler falso nos testes de envio.
         builder.UseSetting("META_WHATSAPP_PHONE_NUMBER_ID", "111111111111111");
@@ -138,6 +169,64 @@ internal sealed class NotificationWorkerHostFactory(
                 >();
                 services.AddSingleton(smtpOptions);
             });
+        }
+
+        if (telegramBotHandler is not null)
+        {
+            // Perfil de envio somente para o Bot API falso. Os placeholders
+            // não representam uma credencial e o handler intercepta antes de
+            // qualquer tráfego externo.
+            builder.UseSetting("TELEGRAM_BOT_TOKEN", "123456:telegram-test-placeholder");
+            builder.UseSetting("TELEGRAM_API_BASE_URL", "https://api.telegram.test");
+            builder.ConfigureTestServices(services =>
+                services
+                    .AddHttpClient(TelegramClient.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() => telegramBotHandler)
+            );
+        }
+        else if (!useCanonicalTelegramHttpRegistration)
+        {
+            builder.ConfigureTestServices(services =>
+                services
+                    .AddHttpClient(TelegramClient.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() => new FailFastTelegramBotHandler())
+            );
+        }
+
+        if (telegramSettings is not null)
+        {
+            foreach (var (key, value) in telegramSettings)
+            {
+                builder.UseSetting(key, value);
+            }
+        }
+
+        if (
+            telegramBotHandler is null
+            && (telegramSettings is null || !telegramSettings.ContainsKey("TELEGRAM_API_BASE_URL"))
+        )
+        {
+            builder.ConfigureTestServices(services =>
+                services.PostConfigure<TelegramOptions>(options =>
+                {
+                    // O host trata token ausente com sua base pública como
+                    // configuração ausente. A URL .test continua no
+                    // configuration root para sombrear o ambiente, mas não
+                    // transforma esse default da factory em configuração
+                    // parcial para a validação do WorkerHost.
+                    if (
+                        string.IsNullOrWhiteSpace(options.BotToken)
+                        && string.Equals(
+                            options.ApiBaseUrl,
+                            "https://api.telegram.test",
+                            StringComparison.Ordinal
+                        )
+                    )
+                    {
+                        options.ApiBaseUrl = "https://api.telegram.org";
+                    }
+                })
+            );
         }
 
         if (configureInboundAi)

@@ -255,8 +255,9 @@ na mesma transação. A mudança de preferência é self-service por
 `notifications.set_channel_preference` (somente WhatsApp), com auditoria
 somente na transição efetiva.
 
-Nenhuma coluna ou envelope guarda telefone, e-mail, corpo de mensagem, payload
-de negócio ou segredo; o deep-link é um selector relativo opcional. Não há
+Nenhum envelope guarda telefone, e-mail, corpo de mensagem, payload de negócio
+ou segredo; os contatos persistem somente os endereços necessários ao provider
+e o deep-link é um selector relativo opcional. Não há
 produtor de evento de negócio nesta fatia: Paguai permanece rascunho e nenhum
 evento é fabricado. O worker de entrega (#48) e o adapter Meta (#28) consomem
 a fila `notification-delivery` em fatias posteriores; o WorkerHost não é
@@ -286,6 +287,27 @@ colunas `meta_template_name/meta_language` em `notification_templates`
 tentativa em curso, `vinx_worker`) e `record_provider_event`
 (`vinx_runtime`, usada pelo webhook do ApiHost após verificação de
 assinatura).
+
+A fatia #307 acrescenta o canal opt-in `telegram` ao contrato compartilhado.
+Templates Telegram guardam somente texto aprovado de 1 a 4096 pontos de
+código Unicode, sem vazio ou bordas U+0020, tabulação, quebra de linha,
+tabulação vertical, form feed ou retorno de carro; contatos privados usam
+`address` com o chat ID decimal positivo, enquanto WhatsApp preserva o telefone
+E.164 em `phone_number`. A intenção Telegram
+revalida o opt-in no banco e participa do fan-out transacional com o in-app;
+cada entrega nova publica o mesmo envelope Wolverine opaco, sem texto,
+telefone ou endereço. A validação do chat é externa e administrada até que uma
+vinculação de uso único seja aprovada; alterar o endereço limpa
+`is_validated`. Nenhuma chamada ao Telegram pertence a esta fatia.
+
+A admissão inbound Telegram preserva em `notifications.inbound_telegram_messages`
+o `update_id`, o par privado `(chat_id, message_id)`, o texto e a decisão
+fechada da resolução. Somente um contato Telegram validado com exatamente uma
+membership ativa de empresa não removida resulta em `admitted`; ausência,
+validação pendente, inatividade ou ambiguidade ficam como evidência durável sem
+IDs de identidade. Runtime executa apenas as funções de resolução e admissão;
+replay exige o mesmo `update_id` e texto, e não altera a decisão inicial. Esta
+fatia não publica evento, não entrega ao worker e não responde ao chat.
 
 ## Diretório local de funcionários
 

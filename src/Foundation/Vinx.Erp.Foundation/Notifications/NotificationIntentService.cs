@@ -18,7 +18,8 @@ public sealed record NotificationIntentCommand(
     string InAppTemplateKey,
     string? WhatsAppTemplateKey = null,
     string? EmailTemplateKey = null,
-    string? DeepLinkSelector = null
+    string? DeepLinkSelector = null,
+    string? TelegramTemplateKey = null
 );
 
 public enum NotificationIntentEnqueueState
@@ -41,7 +42,8 @@ public sealed record NotificationEnqueueResult(
     NotificationIntentEnqueueState State,
     NotificationIntentOutcome? WhatsApp = null,
     NotificationIntentOutcome? Email = null,
-    NotificationIntentOutcome? InApp = null
+    NotificationIntentOutcome? InApp = null,
+    NotificationIntentOutcome? Telegram = null
 );
 
 public enum NotificationPreferenceState
@@ -56,8 +58,9 @@ public sealed record NotificationPreferenceResult(NotificationPreferenceState St
 
 /// <summary>
 /// Cria as intenções de notificação e o evento Wolverine na mesma transação do
-/// produtor; o alerta in-app é obrigatório e o opt-in de WhatsApp/e-mail é
-/// revalidado dentro da função de enfileiramento no momento da chamada.
+/// produtor; o alerta in-app é obrigatório e o opt-in de WhatsApp/e-mail/Telegram
+/// é revalidado dentro da função de enfileiramento no momento da chamada para
+/// cada canal externo habilitado.
 /// </summary>
 public sealed class NotificationIntentService(
     FoundationDbContext database,
@@ -82,6 +85,7 @@ public sealed class NotificationIntentService(
         var commitAttempted = false;
         NotificationIntentOutcome? whatsApp = null;
         NotificationIntentOutcome? email = null;
+        NotificationIntentOutcome? telegram = null;
         NotificationIntentOutcome? inApp = null;
         var createdDeliveries = new List<Guid>();
         try
@@ -109,6 +113,18 @@ public sealed class NotificationIntentService(
                     normalized,
                     NotificationChannel.Email,
                     normalized.EmailTemplateKey,
+                    createdDeliveries,
+                    cancellationToken
+                );
+            }
+
+            if (normalized.TelegramTemplateKey is not null)
+            {
+                telegram = await EnqueueChannelAsync(
+                    transaction,
+                    normalized,
+                    NotificationChannel.Telegram,
+                    normalized.TelegramTemplateKey,
                     createdDeliveries,
                     cancellationToken
                 );
@@ -184,7 +200,8 @@ public sealed class NotificationIntentService(
             NotificationIntentEnqueueState.Enqueued,
             whatsApp,
             email,
-            inApp
+            inApp,
+            telegram
         );
     }
 
@@ -198,7 +215,12 @@ public sealed class NotificationIntentService(
     {
         if (
             companyId == Guid.Empty
-            || channel is not (NotificationChannel.WhatsApp or NotificationChannel.Email)
+            || channel
+                is not (
+                    NotificationChannel.WhatsApp
+                    or NotificationChannel.Email
+                    or NotificationChannel.Telegram
+                )
         )
         {
             return new NotificationPreferenceResult(NotificationPreferenceState.Invalid);
@@ -352,6 +374,7 @@ public sealed class NotificationIntentService(
         var whatsAppTemplateKey = command.WhatsAppTemplateKey?.Trim();
         var emailTemplateKey = command.EmailTemplateKey?.Trim();
         var deepLinkSelector = command.DeepLinkSelector?.Trim();
+        var telegramTemplateKey = command.TelegramTemplateKey?.Trim();
         if (
             string.IsNullOrWhiteSpace(eventKey)
             || eventKey.Length > 200
@@ -361,6 +384,8 @@ public sealed class NotificationIntentService(
             || whatsAppTemplateKey?.Length > 100
             || emailTemplateKey is { Length: 0 }
             || emailTemplateKey?.Length > 100
+            || telegramTemplateKey is { Length: 0 }
+            || telegramTemplateKey?.Length > 100
             || (
                 deepLinkSelector is not null
                 && (deepLinkSelector.Length > 200 || !deepLinkSelector.StartsWith('/'))
@@ -377,7 +402,8 @@ public sealed class NotificationIntentService(
             inAppTemplateKey,
             whatsAppTemplateKey is { Length: > 0 } ? whatsAppTemplateKey : null,
             emailTemplateKey is { Length: > 0 } ? emailTemplateKey : null,
-            deepLinkSelector is { Length: > 0 } ? deepLinkSelector : null
+            deepLinkSelector is { Length: > 0 } ? deepLinkSelector : null,
+            telegramTemplateKey is { Length: > 0 } ? telegramTemplateKey : null
         );
         return true;
     }
@@ -389,6 +415,7 @@ public sealed class NotificationIntentService(
         string InAppTemplateKey,
         string? WhatsAppTemplateKey,
         string? EmailTemplateKey,
-        string? DeepLinkSelector
+        string? DeepLinkSelector,
+        string? TelegramTemplateKey
     );
 }
