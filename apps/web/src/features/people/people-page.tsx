@@ -1,4 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import PersonAddAltOutlinedIcon from "@mui/icons-material/PersonAddAltOutlined";
+import PersonOutlinedIcon from "@mui/icons-material/PersonOutlined";
 import {
   Alert,
   Button,
@@ -15,6 +17,7 @@ import type { MutableRefObject, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { CompanyProvider } from "../../shared/ui/company-context";
 import { PageHeader } from "../../shared/ui/page-header";
 import { hasCompanyCapability } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
@@ -23,7 +26,9 @@ import {
   type EmployeeDirectoryCreateCommand,
   type EmployeeDirectoryFailure,
   type EmployeeDirectoryGateway,
+  type EmployeeDirectoryItem,
 } from "./employee-directory-client";
+import { EmployeeProfileDialog } from "./employee-profile-dialog";
 
 const employeeCapability = "foundation.employees.create";
 const employeeFormSchema = z.object({
@@ -66,6 +71,8 @@ export function PeoplePage({
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
   const [selectedCompanyUserId, setSelectedCompanyUserId] = useState("");
   const [viewOwnerUserId, setViewOwnerUserId] = useState("");
+  const [profileEmployee, setProfileEmployee] =
+    useState<EmployeeDirectoryItem | null>(null);
   const [attempt, setAttempt] = useState<DirectoryOperation | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pendingRefresh, setPendingRefresh] =
@@ -463,111 +470,131 @@ export function PeoplePage({
   }
 
   const directoryFailure = directory.data && !directory.data.ok;
+  const profileCompanyName = selectedCompany?.companyName ?? "Empresa";
 
   return (
-    <Stack spacing={3}>
-      <PageHeader
-        description="Selecione uma empresa para consultar e reservar funcionários localmente."
-        eyebrow="Pessoas"
-        title="Pessoas"
-      />
-      <Card component="section" variant="outlined">
-        <CardContent>
-          <Stack
-            component="form"
-            noValidate
-            onSubmit={form.handleSubmit(reserve)}
-            spacing={2}
-          >
-            <TextField
-              label="Empresa"
-              onChange={(event) => selectCompany(event.target.value)}
-              select
-              value={selectedCompany?.companyId ?? ""}
-            >
-              <MenuItem value="">Selecione uma empresa</MenuItem>
-              {eligibleCompanies.map((company) => (
-                <MenuItem key={company.companyId} value={company.companyId}>
-                  {company.companyName}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              {...form.register("displayName", { onChange: updateForm })}
-              error={Boolean(form.formState.errors.displayName)}
-              helperText={form.formState.errors.displayName?.message}
-              label="Nome"
-            />
-            <TextField
-              {...form.register("email", { onChange: updateForm })}
-              error={Boolean(form.formState.errors.email)}
-              helperText={form.formState.errors.email?.message}
-              label="E-mail"
-              type="email"
-            />
-            <Button
-              disabled={
-                !selectedCompany ||
-                Boolean(attempt) ||
-                Boolean(pendingRefresh) ||
-                mutation.isPending
-              }
-              type="submit"
-              variant="contained"
-            >
-              Reservar funcionário
-            </Button>
-            {attempt && !mutation.isPending ? (
-              <Button onClick={retry} variant="outlined">
-                Tentar novamente
-              </Button>
-            ) : null}
-            {feedback === "success" ? (
-              <Alert severity="success">Funcionário reservado.</Alert>
-            ) : null}
-            {feedback === "error" ? (
-              <Alert severity="error">
-                Não foi possível concluir esta reserva.
-              </Alert>
-            ) : null}
-          </Stack>
-        </CardContent>
-      </Card>
-      {selectedCompany ? (
+    <CompanyProvider company={selectedCompany ?? null}>
+      <Stack spacing={3}>
+        <PageHeader
+          description="Selecione uma empresa para consultar funcionários e, se tiver permissão, reservar um novo localmente."
+          eyebrow="Pessoas"
+          title="Pessoas"
+        />
         <Card component="section" variant="outlined">
           <CardContent>
-            <Stack spacing={1}>
-              <Typography component="h2" variant="h6">
-                Funcionários
+            <Stack
+              component="form"
+              noValidate
+              onSubmit={form.handleSubmit(reserve)}
+              spacing={2}
+            >
+              <TextField
+                label="Empresa"
+                onChange={(event) => selectCompany(event.target.value)}
+                select
+                value={selectedCompany?.companyId ?? ""}
+              >
+                <MenuItem value="">Selecione uma empresa</MenuItem>
+                {eligibleCompanies.map((company) => (
+                  <MenuItem key={company.companyId} value={company.companyId}>
+                    {company.companyName}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <TextField
+                {...form.register("displayName", { onChange: updateForm })}
+                error={Boolean(form.formState.errors.displayName)}
+                helperText={form.formState.errors.displayName?.message}
+                label="Nome"
+              />
+              <TextField
+                {...form.register("email", { onChange: updateForm })}
+                error={Boolean(form.formState.errors.email)}
+                helperText={form.formState.errors.email?.message}
+                label="E-mail"
+                type="email"
+              />
+              <Button
+                disabled={
+                  !selectedCompany ||
+                  Boolean(attempt) ||
+                  Boolean(pendingRefresh) ||
+                  mutation.isPending
+                }
+                startIcon={<PersonAddAltOutlinedIcon />}
+                type="submit"
+                variant="contained"
+              >
+                Reservar funcionário
+              </Button>
+              <Typography color="text.secondary" variant="caption">
+                Reservar cria um registro local de funcionário nesta empresa;
+                não envia convite nem acesso.
               </Typography>
-              {directory.isPending ? (
-                <CircularProgress
-                  aria-label="Carregando funcionários"
-                  size={24}
-                />
+              {attempt && !mutation.isPending ? (
+                <Button onClick={retry} variant="outlined">
+                  Tentar novamente
+                </Button>
               ) : null}
-              {directoryFailure || directory.isError ? (
+              {feedback === "success" ? (
+                <Alert severity="success">Funcionário reservado.</Alert>
+              ) : null}
+              {feedback === "error" ? (
                 <Alert severity="error">
-                  Não foi possível carregar as pessoas.
+                  Não foi possível concluir esta reserva.
                 </Alert>
               ) : null}
-              {directory.data?.ok && directory.data.items.length === 0 ? (
-                <Typography color="text.secondary">
-                  Nenhum funcionário reservado.
-                </Typography>
-              ) : null}
-              {directory.data?.ok
-                ? directory.data.items.map((employee) => (
-                    <Typography key={employee.employeeId}>
-                      {employee.displayName}
-                    </Typography>
-                  ))
-                : null}
             </Stack>
           </CardContent>
         </Card>
-      ) : null}
-    </Stack>
+        {selectedCompany ? (
+          <Card component="section" variant="outlined">
+            <CardContent>
+              <Stack spacing={1}>
+                <Typography component="h2" variant="h6">
+                  Funcionários
+                </Typography>
+                {directory.isPending ? (
+                  <CircularProgress
+                    aria-label="Carregando funcionários"
+                    size={24}
+                  />
+                ) : null}
+                {directoryFailure || directory.isError ? (
+                  <Alert severity="error">
+                    Não foi possível carregar as pessoas.
+                  </Alert>
+                ) : null}
+                {directory.data?.ok && directory.data.items.length === 0 ? (
+                  <Typography color="text.secondary">
+                    Nenhum funcionário reservado.
+                  </Typography>
+                ) : null}
+                {directory.data?.ok
+                  ? directory.data.items.map((employee) => (
+                      <Button
+                        key={employee.employeeId}
+                        onClick={() => setProfileEmployee(employee)}
+                        startIcon={<PersonOutlinedIcon />}
+                        sx={{ justifyContent: "flex-start", width: "100%" }}
+                        variant="outlined"
+                      >
+                        {employee.displayName}
+                      </Button>
+                    ))
+                  : null}
+              </Stack>
+            </CardContent>
+          </Card>
+        ) : null}
+        <EmployeeProfileDialog
+          companyName={profileCompanyName}
+          employee={profileEmployee}
+          onClose={() => setProfileEmployee(null)}
+          open={Boolean(profileEmployee)}
+        />
+      </Stack>
+    </CompanyProvider>
   );
 }
 

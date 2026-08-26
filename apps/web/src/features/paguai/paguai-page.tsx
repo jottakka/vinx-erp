@@ -1,40 +1,35 @@
+import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
+import AttachFileOutlinedIcon from "@mui/icons-material/AttachFileOutlined";
+import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import {
   Alert,
   Box,
   Button,
   Card,
-  CardActionArea,
   CardContent,
-  MenuItem,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
-import {
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CompanyProvider } from "../../shared/ui/company-context";
+import { CompanySelect } from "../../shared/ui/company-select";
+import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
-import { hasCompanyCapability } from "../auth/company-capabilities";
+import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
-import {
-  amountToCents,
-  canonicalAmount,
-  maximumAmountCents,
-} from "./paguai-amount";
+import { PaguaiCreateDialog } from "./paguai-create-dialog";
 import {
   createPaguaiDraftClient,
   type PaguaiDraft,
   type PaguaiDraftError,
 } from "./paguai-draft-client";
+import { formatAmount, formatDueDate } from "./paguai-format";
+import { createPaguaiProofUploader } from "./paguai-proof-uploader";
 
 const client = createPaguaiDraftClient();
-const capabilityNames = ["paguai.draft.read", "paguai.draft.create"] as const;
+const readCapability = "paguai.draft.read";
+const createCapability = "paguai.draft.create";
+
 type PaguaiDraftClient = ReturnType<typeof createPaguaiDraftClient>;
 
 function message(error: PaguaiDraftError) {
@@ -54,38 +49,6 @@ function message(error: PaguaiDraftError) {
   )[error];
 }
 
-function amountFromReais(value: string): string | null {
-  const trimmed = value.trim();
-  let normalized: string;
-  if (/^\d+(?:,\d{1,2})$/.test(trimmed)) {
-    normalized = trimmed.replace(",", ".");
-  } else if (/^\d{1,3}(?:\.\d{3})+,\d{1,2}$/.test(trimmed)) {
-    normalized = trimmed.replace(/\./g, "").replace(",", ".");
-  } else if (/^\d+(?:\.\d{1,2})$/.test(trimmed)) {
-    normalized = trimmed;
-  } else if (/^\d{1,3}(?:\.\d{3})+$/.test(trimmed)) {
-    normalized = trimmed.replace(/\./g, "");
-  } else if (/^\d+$/.test(trimmed)) {
-    normalized = `${trimmed}.00`;
-  } else {
-    return null;
-  }
-  const cents = amountToCents(normalized);
-  if (cents === null || cents <= 0n || cents > maximumAmountCents) return null;
-  return canonicalAmount(normalized);
-}
-
-function formatAmount(amount: string) {
-  const [whole, fraction = ""] = amount.split(".");
-  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return `R$ ${grouped},${fraction.padEnd(2, "0")}`;
-}
-
-function formatDueDate(dueDate: string) {
-  const [year, month, day] = dueDate.split("-");
-  return `${day}/${month}/${year}`;
-}
-
 export function PaguaiPage({
   draftClient = client,
 }: {
@@ -95,26 +58,28 @@ export function PaguaiPage({
   const companies = useMemo(
     () =>
       (bootstrap?.companies ?? []).filter((company) =>
-        capabilityNames.some((name) => hasCompanyCapability(company, name)),
+        company.capabilities.some(
+          (capability) =>
+            capability.name === readCapability &&
+            capability.scopes.includes("Company"),
+        ),
       ),
     [bootstrap],
   );
   const [companyId, setCompanyId] = useState("");
   const [drafts, setDrafts] = useState<readonly PaguaiDraft[]>([]);
   const [selected, setSelected] = useState<PaguaiDraft | null>(null);
+  const [viewOpen, setViewOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [proofFileId, setProofFileId] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "submitting">(
     "idle",
   );
   const [error, setError] = useState<PaguaiDraftError | null>(null);
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
-  const titleId = useId();
-  const descriptionId = useId();
-  const amountId = useId();
-  const dueDateId = useId();
-  const beneficiaryId = useId();
-  const proofRequirementId = useId();
-  const resultRef = useRef<HTMLDivElement>(null);
   const companyIdRef = useRef(companyId);
+
+  const proofUploader = useMemo(() => createPaguaiProofUploader(), []);
 
   useEffect(() => {
     companyIdRef.current = companyId;
@@ -136,14 +101,9 @@ export function PaguaiPage({
   useEffect(() => {
     if (!companyId && companies[0]) selectCompany(companies[0].companyId);
   }, [companies, companyId, selectCompany]);
+
   useEffect(() => {
-    if (
-      !companyId ||
-      !hasCompanyCapability(
-        companies.find((company) => company.companyId === companyId),
-        "paguai.draft.read",
-      )
-    ) {
+    if (!companyId) {
       setDrafts([]);
       setSelected(null);
       setError(null);
@@ -151,13 +111,12 @@ export function PaguaiPage({
       return;
     }
     let current = true;
-    const requestedCompanyId = companyId;
     setDrafts([]);
     setStatus("loading");
     setError(null);
     setSelected(null);
     void draftClient.list(companyId).then((result) => {
-      if (!current || companyIdRef.current !== requestedCompanyId) return;
+      if (!current || companyIdRef.current !== companyId) return;
       setStatus("idle");
       if (result.ok) setDrafts(result.value);
       else {
@@ -168,42 +127,68 @@ export function PaguaiPage({
     return () => {
       current = false;
     };
-  }, [companyId, companies, draftClient]);
+  }, [companyId, draftClient]);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const selectedCompany = companies.find(
+    (company) => company.companyId === companyId,
+  );
+  const permissions = useMemo(
+    () =>
+      resolveCompanyEntityPermissions(selectedCompany, {
+        create: createCapability,
+      }),
+    [selectedCompany],
+  );
+
+  const uploaderAdapter = useMemo(
+    () => (file: File, signal: AbortSignal) =>
+      proofUploader.upload({ companyId, file, signal }).then((result) =>
+        result.ok
+          ? {
+              ok: true as const,
+              fileId: result.proof.fileId,
+              fileName: result.proof.fileName,
+              mimeType: result.proof.mimeType,
+              sizeBytes: result.proof.sizeBytes,
+            }
+          : {
+              ok: false as const,
+              error: {
+                kind: result.error.kind,
+                message: "Falha ao anexar.",
+              },
+            },
+      ),
+    [companyId, proofUploader],
+  );
+
+  async function submit(values: {
+    amount: string;
+    beneficiaryDisplayName: string;
+    description: string;
+    dueDate: string;
+    proofFileId: string | null;
+    proofRequirement: "optional" | "required";
+    title: string;
+  }) {
     if (!companyId || status === "submitting") return;
-    const form = event.currentTarget;
-    const submittedCompanyId = companyId;
-    const data = new FormData(form);
-    const amount = amountFromReais(String(data.get("amountReais") ?? ""));
-    const proofRequirement = String(data.get("proofRequirement") ?? "");
-    if (
-      amount === null ||
-      (proofRequirement !== "optional" && proofRequirement !== "required")
-    ) {
-      setError(400);
-      resultRef.current?.focus();
-      return;
-    }
     setStatus("submitting");
     setError(null);
     const result = await draftClient.create({
-      companyId: submittedCompanyId,
+      companyId,
       requestId,
-      title: String(data.get("title") ?? ""),
-      description: String(data.get("description") ?? ""),
-      amount,
+      title: values.title,
+      description: values.description,
+      amount: values.amount,
       currency: "BRL",
-      dueDate: String(data.get("dueDate") ?? ""),
-      beneficiaryDisplayName: String(data.get("beneficiaryDisplayName") ?? ""),
-      proofRequirement: proofRequirement as "optional" | "required",
+      dueDate: values.dueDate,
+      beneficiaryDisplayName: values.beneficiaryDisplayName,
+      proofRequirement: values.proofRequirement,
     });
-    if (companyIdRef.current !== submittedCompanyId) return;
+    if (companyIdRef.current !== companyId) return;
     setStatus("idle");
     if (!result.ok) {
       setError(result.error);
-      resultRef.current?.focus();
       return;
     }
     setDrafts((current) => [
@@ -211,196 +196,176 @@ export function PaguaiPage({
       ...current.filter((draft) => draft.id !== result.value.id),
     ]);
     setSelected(result.value);
-    form.reset();
+    setProofFileId(values.proofFileId);
+    setCreateOpen(false);
     setRequestId(crypto.randomUUID());
-    resultRef.current?.focus();
   }
 
-  const canCreate =
-    !!companyId &&
-    hasCompanyCapability(
-      companies.find((company) => company.companyId === companyId),
-      "paguai.draft.create",
-    );
+  function openView(draft: PaguaiDraft) {
+    void draftClient.detail(companyId, draft.id).then((result) => {
+      if (companyIdRef.current !== companyId) return;
+      if (result.ok) {
+        setSelected(result.value);
+        setProofFileId(null);
+        setViewOpen(true);
+      } else {
+        setError(result.error);
+      }
+    });
+  }
+
   return (
-    <Stack spacing={3}>
-      <PageHeader
-        title="Paguai"
-        description="Rascunhos de solicitações financeiras. O MVP não cria cobrança ou pagamento."
-      />
-      {!companies.length ? (
-        <Alert severity="info">Nenhuma empresa tem acesso ao Paguai.</Alert>
-      ) : (
-        <>
-          <TextField
-            select
-            label="Empresa"
-            disabled={status === "submitting"}
-            onChange={(event) => selectCompany(event.target.value)}
-            value={companyId}
-          >
-            {companies.map((company) => (
-              <MenuItem key={company.membershipId} value={company.companyId}>
-                {company.companyName}
-              </MenuItem>
-            ))}
-          </TextField>
-          {canCreate ? (
-            <Card component="section" variant="outlined">
-              <CardContent>
-                <Box component="form" onSubmit={submit}>
-                  <Stack spacing={2}>
-                    <Typography component="h2" variant="h6">
-                      Novo rascunho
-                    </Typography>
-                    <TextField
-                      id={titleId}
-                      slotProps={{ htmlInput: { maxLength: 200 } }}
-                      label="Título"
-                      name="title"
-                      required
-                    />
-                    <TextField
-                      id={amountId}
-                      inputMode="decimal"
-                      label="Valor (R$)"
-                      name="amountReais"
-                      placeholder="1.250,00"
-                      required
-                    />
-                    <TextField
-                      id={dueDateId}
-                      label="Vencimento"
-                      name="dueDate"
-                      slotProps={{
-                        htmlInput: { min: "0001-01-01", type: "date" },
-                      }}
-                      required
-                    />
-                    <TextField
-                      id={beneficiaryId}
-                      label="Beneficiário (informativo)"
-                      name="beneficiaryDisplayName"
-                      slotProps={{ htmlInput: { maxLength: 200 } }}
-                      required
-                    />
-                    <TextField
-                      id={proofRequirementId}
-                      label="Comprovante"
-                      name="proofRequirement"
-                      select
-                      defaultValue=""
-                      required
-                    >
-                      <MenuItem value="" disabled>
-                        Selecione
-                      </MenuItem>
-                      <MenuItem value="required">Obrigatório</MenuItem>
-                      <MenuItem value="optional">Opcional</MenuItem>
-                    </TextField>
-                    <TextField
-                      id={descriptionId}
-                      slotProps={{ htmlInput: { maxLength: 4000 } }}
-                      label="Descrição"
-                      minRows={3}
-                      multiline
-                      name="description"
-                      required
-                    />
-                    <Button
-                      disabled={status === "submitting"}
-                      type="submit"
-                      variant="contained"
-                    >
-                      {status === "submitting" ? "Criando…" : "Criar rascunho"}
-                    </Button>
-                  </Stack>
-                </Box>
-              </CardContent>
-            </Card>
-          ) : (
-            <Alert severity="info">
-              Você pode consultar rascunhos nesta empresa, mas não criar novos.
-            </Alert>
-          )}
-          <Box aria-live="polite" ref={resultRef} tabIndex={-1}>
-            {error ? <Alert severity="error">{message(error)}</Alert> : null}
-          </Box>
-          {selected ? (
-            <Card component="section" variant="outlined">
-              <CardContent>
-                <Stack spacing={1}>
-                  <Typography component="h2" variant="h6">
-                    {selected.title}
-                  </Typography>
-                  <Typography>{selected.description}</Typography>
-                  <Typography color="text.secondary">
-                    Estado: {selected.state} · versão {selected.version}
-                  </Typography>
-                  <Typography>{formatAmount(selected.amount)}</Typography>
-                  <Typography>
-                    Vencimento: {formatDueDate(selected.dueDate)}
-                  </Typography>
-                  <Typography>
-                    Beneficiário: {selected.beneficiaryDisplayName}{" "}
-                    (informativo)
-                  </Typography>
-                  <Typography>
-                    Comprovante:{" "}
-                    {selected.proofRequirement === "required"
-                      ? "obrigatório"
-                      : "opcional"}
-                  </Typography>
-                  <Typography color="text.secondary">
-                    Criado em {new Date(selected.createdAt).toLocaleString()}
-                  </Typography>
-                </Stack>
-              </CardContent>
-            </Card>
-          ) : null}
-          <Stack component="section" spacing={1}>
-            <Typography component="h2" variant="h6">
-              Solicitações
-            </Typography>
-            {status === "loading" ? (
-              <Typography>Carregando…</Typography>
-            ) : !drafts.length ? (
-              <Alert severity="info">Nenhum rascunho nesta empresa.</Alert>
-            ) : (
-              drafts.map((draft) => (
-                <Card key={draft.id} variant="outlined">
-                  <CardActionArea
-                    onClick={() => {
-                      const requestedCompanyId = companyId;
-                      void draftClient
-                        .detail(requestedCompanyId, draft.id)
-                        .then((result) => {
-                          if (companyIdRef.current !== requestedCompanyId)
-                            return;
-                          if (result.ok) setSelected(result.value);
-                          else setError(result.error);
-                        });
-                    }}
-                  >
+    <CompanyProvider company={selectedCompany ?? null}>
+      <Stack spacing={3}>
+        <PageHeader
+          actions={
+            permissions.canCreate ? (
+              <Button
+                onClick={() => setCreateOpen(true)}
+                startIcon={<AddOutlinedIcon />}
+                variant="contained"
+              >
+                Nova solicitação
+              </Button>
+            ) : null
+          }
+          description="Rascunhos de solicitações financeiras por empresa. O MVP não cria cobrança ou pagamento."
+          title="Paguai"
+        />
+        {!companies.length ? (
+          <Alert severity="info">Nenhuma empresa tem acesso ao Paguai.</Alert>
+        ) : (
+          <>
+            <CompanySelect
+              companies={companies}
+              disabled={status === "submitting"}
+              label="Empresa"
+              onChange={selectCompany}
+              value={companyId}
+            />
+            {!permissions.canCreate ? (
+              <Alert severity="info">
+                Você pode consultar solicitações nesta empresa, mas não criar
+                novas.
+              </Alert>
+            ) : null}
+            <Box aria-live="polite">
+              {error ? <Alert severity="error">{message(error)}</Alert> : null}
+            </Box>
+            <Stack component="section" spacing={1}>
+              <Typography component="h2" variant="h6">
+                Solicitações
+              </Typography>
+              {status === "loading" ? (
+                <Typography>Carregando…</Typography>
+              ) : !drafts.length ? (
+                <Alert severity="info">
+                  Nenhuma solicitação nesta empresa.
+                </Alert>
+              ) : (
+                drafts.map((draft) => (
+                  <Card key={draft.id} variant="outlined">
                     <CardContent>
-                      <Typography component="h3" variant="subtitle1">
-                        {draft.title}
-                      </Typography>
-                      <Typography color="text.secondary">
-                        {draft.state} · versão {draft.version}
-                      </Typography>
-                      <Typography>{formatAmount(draft.amount)}</Typography>
-                      <Typography color="text.secondary">
-                        Vencimento: {formatDueDate(draft.dueDate)}
-                      </Typography>
+                      <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={1}
+                        sx={{ alignItems: { sm: "center" } }}
+                      >
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography component="h3" variant="subtitle1">
+                            {draft.title}
+                          </Typography>
+                          <Typography color="text.secondary">
+                            {draft.state} · versão {draft.version}
+                          </Typography>
+                          <Typography>{formatAmount(draft.amount)}</Typography>
+                        </Box>
+                        <Button
+                          onClick={() => openView(draft)}
+                          startIcon={<VisibilityOutlinedIcon />}
+                          variant="outlined"
+                        >
+                          Visualizar
+                        </Button>
+                      </Stack>
                     </CardContent>
-                  </CardActionArea>
-                </Card>
-              ))
-            )}
+                  </Card>
+                ))
+              )}
+            </Stack>
+          </>
+        )}
+      </Stack>
+
+      <PaguaiCreateDialog
+        onClose={() => setCreateOpen(false)}
+        onSubmit={(values) => void submit(values)}
+        open={createOpen}
+        uploader={uploaderAdapter}
+      />
+
+      <DraftViewDialog
+        companyName={selectedCompany?.companyName ?? "Sem empresa"}
+        draft={selected}
+        onClose={() => setViewOpen(false)}
+        open={viewOpen}
+        proofFileId={proofFileId}
+      />
+    </CompanyProvider>
+  );
+}
+
+function DraftViewDialog({
+  companyName,
+  draft,
+  onClose,
+  open,
+  proofFileId,
+}: {
+  companyName: string;
+  draft: PaguaiDraft | null;
+  onClose: () => void;
+  open: boolean;
+  proofFileId: string | null;
+}) {
+  return (
+    <EntityDialog
+      description={`Solicitação de ${companyName}. Apenas leitura.`}
+      onClose={onClose}
+      open={open}
+      title="Visualizar solicitação"
+    >
+      {draft ? (
+        <Stack spacing={1.5}>
+          <Typography component="p" variant="subtitle1">
+            {draft.title}
+          </Typography>
+          <Typography>{draft.description}</Typography>
+          <Typography color="text.secondary">
+            Estado: {draft.state} · versão {draft.version}
+          </Typography>
+          <Typography>{formatAmount(draft.amount)}</Typography>
+          <Typography>Vencimento: {formatDueDate(draft.dueDate)}</Typography>
+          <Typography>
+            Beneficiário: {draft.beneficiaryDisplayName} (informativo)
+          </Typography>
+          <Typography>
+            Comprovante:{" "}
+            {draft.proofRequirement === "required" ? "obrigatório" : "opcional"}
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <AttachFileOutlinedIcon color="action" fontSize="small" />
+            <Typography>
+              {proofFileId
+                ? "Comprovante anexado nesta sessão."
+                : "Nenhum comprovante anexado."}
+            </Typography>
           </Stack>
-        </>
-      )}
-    </Stack>
+          <Typography color="text.secondary" variant="caption">
+            Criado em {new Date(draft.createdAt).toLocaleString()}
+          </Typography>
+        </Stack>
+      ) : null}
+    </EntityDialog>
   );
 }

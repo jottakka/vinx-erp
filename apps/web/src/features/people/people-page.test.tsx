@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -880,4 +881,27 @@ describe("PeoplePage", () => {
       expect(gateway.create).not.toHaveBeenCalled();
     },
   );
+
+  it("opens the read-only employee profile dialog from the directory link", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway();
+    renderPage({ gateway });
+
+    await selectCompany(user);
+    const employee = await screen.findByRole("button", { name: "Ana" });
+    await user.click(employee);
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeVisible();
+    expect(within(dialog).getByText("Ana")).toBeVisible();
+    expect(
+      within(dialog).getByText("33333333-3333-4333-8333-333333333333"),
+    ).toBeVisible();
+    expect(
+      within(dialog).getByText("44444444-4444-4444-8444-444444444444"),
+    ).toBeVisible();
+    expect(
+      within(dialog).getByText(/O e-mail não é retornado pelo diretório/),
+    ).toBeVisible();
+  });
 });

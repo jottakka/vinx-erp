@@ -565,10 +565,9 @@ describe("agent workspace", () => {
     expect(
       dock.getByText("Selecione uma empresa para anexar documentos ao agente."),
     ).toBeVisible();
-    expect(dock.getByRole("button", { name: "Anexar" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(
+      dock.getByRole("button", { name: "Anexar arquivo" }),
+    ).toHaveAttribute("aria-disabled", "true");
     expect(picker).toBeDisabled();
     await user.upload(picker, attachmentFile("sem-empresa.pdf"));
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -1086,5 +1085,32 @@ describe("agent workspace", () => {
     ).toBeVisible();
     expect(screen.queryByText("escopo-antigo.pdf")).toBeNull();
     resolveToken(antiforgeryTokenResponse());
+  });
+
+  it("sends on Enter (without Shift) and keeps Shift+Enter for a newline", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(antiforgeryTokenResponse())
+      .mockResolvedValueOnce(
+        agentRunResponse({
+          correlationId,
+          reasonCode: "ok",
+          sources: null,
+          status: "result",
+          text: "Envio por Enter",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
+
+    const dock = await openDockAndType(user, "ola");
+    await user.keyboard("{Enter}");
+
+    expect(await dock.findByText("Envio por Enter")).toBeVisible();
+    const calls = runCalls(fetchSpy);
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(calls[0][1].body as string);
+    expect(body.message).toBe("ola");
   });
 });

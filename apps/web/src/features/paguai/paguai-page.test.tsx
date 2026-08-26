@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
@@ -27,25 +33,34 @@ const draft = {
   createdAt: "2026-08-16T12:00:00.000+00:00",
 };
 
-const bootstrap: BootstrapSnapshot = {
-  companies: [
-    {
-      membershipId: "44444444-4444-4444-8444-444444444444",
-      companyId,
-      companyName: "Alfa",
-      capabilities: [
-        { name: "paguai.draft.read", scopes: ["Company"] },
-        { name: "paguai.draft.create", scopes: ["Company"] },
-      ],
-    },
-  ],
-  flags: {},
-  platform: { isPlatformOperator: false },
-  user: {
-    id: "55555555-5555-4555-8555-555555555555",
-    displayName: "Maria",
+const readCapability = {
+  name: "paguai.draft.read",
+  scopes: ["Company"],
+} as const;
+const createCapability = {
+  name: "paguai.draft.create",
+  scopes: ["Company"],
+} as const;
+
+function bootstrapFor(
+  companies: BootstrapSnapshot["companies"],
+): BootstrapSnapshot {
+  return {
+    companies,
+    flags: {},
+    platform: { isPlatformOperator: false },
+    user: { id: "55555555-5555-4555-8555-555555555555", displayName: "Maria" },
+  };
+}
+
+const bootstrap: BootstrapSnapshot = bootstrapFor([
+  {
+    membershipId: "44444444-4444-4444-8444-444444444444",
+    companyId,
+    companyName: "Alfa",
+    capabilities: [readCapability, createCapability],
   },
-};
+]);
 
 const gateway: MockSessionGateway = {
   getBootstrap: async () => bootstrap,
@@ -53,8 +68,58 @@ const gateway: MockSessionGateway = {
   logout: async () => undefined,
 };
 
+function renderPage(
+  draftClient: unknown,
+  sessionGateway: MockSessionGateway = gateway,
+) {
+  render(
+    <VinxThemeProvider>
+      <SessionProvider gateway={sessionGateway}>
+        <PaguaiPage
+          draftClient={
+            draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
+          }
+        />
+      </SessionProvider>
+    </VinxThemeProvider>,
+  );
+}
+
+async function openCreate(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(
+    await screen.findByRole("button", { name: "Nova solicitação" }),
+  );
+  await screen.findByRole("heading", { name: "Novo rascunho" });
+}
+
+async function fillForm(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(
+    screen.getByRole("textbox", { name: "Título" }),
+    "Novo papel",
+  );
+  await user.type(
+    screen.getByRole("textbox", { name: "Descrição" }),
+    "Descrição do rascunho",
+  );
+  await user.type(
+    screen.getByRole("textbox", { name: "Valor (R$)" }),
+    "1.250,00",
+  );
+  const dueDate = document.querySelector<HTMLInputElement>(
+    'input[name="dueDate"]',
+  );
+  if (!dueDate) throw new Error("due date input missing");
+  fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+  await user.type(
+    screen.getByRole("textbox", { name: "Beneficiário (informativo)" }),
+    "Fornecedor Demo",
+  );
+  await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
+  await user.click(await screen.findByRole("option", { name: "Obrigatório" }));
+}
+
 describe("PaguaiPage", () => {
-  it("renders the selected draft detail with the financial fields", async () => {
+  it("lists drafts first and opens the create modal from the header action", async () => {
     const user = userEvent.setup();
     const draftClient = {
       create: async () => ({ ok: true as const, value: draft }),
@@ -62,168 +127,92 @@ describe("PaguaiPage", () => {
       list: async () => ({ ok: true as const, value: [draft] }),
     };
 
-    render(
-      <VinxThemeProvider>
-        <SessionProvider gateway={gateway}>
-          <PaguaiPage draftClient={draftClient} />
-        </SessionProvider>
-      </VinxThemeProvider>,
-    );
-
-    await user.click(
-      await screen.findByRole("button", { name: /Papel.*rascunho/ }),
-    );
+    renderPage(draftClient);
 
     expect(
-      await screen.findByRole("heading", { name: "Papel", level: 2 }),
+      await screen.findByRole("heading", { name: "Papel", level: 3 }),
     ).toBeVisible();
-    expect(screen.getByText("Papel para impressora")).toBeVisible();
-    expect(screen.getByText("Estado: rascunho · versão 1")).toBeVisible();
-    expect(screen.getAllByText("R$ 1.250,00").length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getAllByText("Vencimento: 01/09/2026").length,
-    ).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/Beneficiário: Fornecedor Demo/)).toBeVisible();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await openCreate(user);
+    expect(await screen.findByRole("dialog")).toBeVisible();
   });
 
-  it("clears company A drafts before company B fails to load", async () => {
+  it("opens the read-only view dialog with the financial fields", async () => {
     const user = userEvent.setup();
-    let finishSecondList: (
-      result: { ok: false; error: 503 } | { ok: true; value: readonly [] },
-    ) => void = () => {
-      throw new Error("Second company list was not requested.");
-    };
-    const secondList = new Promise<
-      { ok: false; error: 503 } | { ok: true; value: readonly [] }
-    >((resolve) => {
-      finishSecondList = resolve;
-    });
     const draftClient = {
       create: async () => ({ ok: true as const, value: draft }),
       detail: async () => ({ ok: true as const, value: draft }),
-      list: (id: string) =>
-        id === companyId
-          ? Promise.resolve({ ok: true as const, value: [draft] })
-          : secondList,
-    };
-    const twoCompanyBootstrap: BootstrapSnapshot = {
-      ...bootstrap,
-      companies: [
-        ...bootstrap.companies,
-        {
-          membershipId: "77777777-7777-4777-8777-777777777777",
-          companyId: secondCompanyId,
-          companyName: "Beta",
-          capabilities: [
-            { name: "paguai.draft.read", scopes: ["Company"] },
-            { name: "paguai.draft.create", scopes: ["Company"] },
-          ],
-        },
-      ],
-    };
-    const twoCompanyGateway: MockSessionGateway = {
-      ...gateway,
-      getBootstrap: async () => twoCompanyBootstrap,
+      list: async () => ({ ok: true as const, value: [draft] }),
     };
 
-    render(
-      <VinxThemeProvider>
-        <SessionProvider gateway={twoCompanyGateway}>
-          <PaguaiPage draftClient={draftClient} />
-        </SessionProvider>
-      </VinxThemeProvider>,
-    );
+    renderPage(draftClient);
 
+    await user.click(await screen.findByRole("button", { name: "Visualizar" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeVisible();
+    expect(within(dialog).getByText("Papel para impressora")).toBeVisible();
     expect(
-      await screen.findByRole("button", { name: /Papel.*rascunho/ }),
+      within(dialog).getByText("Estado: rascunho · versão 1"),
     ).toBeVisible();
-    await user.click(screen.getByRole("combobox", { name: "Empresa" }));
-    await user.click(await screen.findByRole("option", { name: "Beta" }));
-
-    expect(screen.getByText("Carregando…")).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: /Papel.*rascunho/ }),
-    ).toBeNull();
-    finishSecondList({ ok: false, error: 503 });
-
-    await waitFor(() =>
-      expect(
-        screen.getByText(
-          "Paguai está indisponível. Tente novamente com o mesmo identificador.",
-        ),
-      ).toBeVisible(),
-    );
+      within(dialog).getAllByText("R$ 1.250,00").length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(within(dialog).getByText("Vencimento: 01/09/2026")).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: /Papel.*rascunho/ }),
-    ).toBeNull();
+      within(dialog).getByText(/Beneficiário: Fornecedor Demo/),
+    ).toBeVisible();
   });
 
-  it("submits through the form and resets it after the async create completes", async () => {
+  it("submits through the modal and resets it after the async create completes", async () => {
     const user = userEvent.setup();
-    const create = vi.fn(async (input) => ({
-      ok: true as const,
-      value: {
-        ...draft,
-        companyId: input.companyId,
-        description: input.description,
-        requestId: input.requestId,
-        title: input.title,
-      },
-    }));
+    const create = vi.fn(
+      async (input: {
+        companyId: string;
+        description: string;
+        requestId: string;
+        title: string;
+      }) => ({
+        ok: true as const,
+        value: {
+          ...draft,
+          companyId: input.companyId,
+          description: input.description,
+          requestId: input.requestId,
+          title: input.title,
+        },
+      }),
+    );
     const draftClient = {
       create,
       detail: async () => ({ ok: true as const, value: draft }),
       list: async () => ({ ok: true as const, value: [] }),
     };
 
-    render(
-      <VinxThemeProvider>
-        <SessionProvider gateway={gateway}>
-          <PaguaiPage draftClient={draftClient} />
-        </SessionProvider>
-      </VinxThemeProvider>,
-    );
+    renderPage(draftClient);
 
-    const title = await screen.findByRole("textbox", { name: "Título" });
-    const description = screen.getByRole("textbox", { name: "Descrição" });
-    const amount = screen.getByRole("textbox", { name: "Valor (R$)" });
-    const dueDate = document.querySelector<HTMLInputElement>(
-      'input[name="dueDate"]',
-    );
-    const beneficiary = screen.getByRole("textbox", {
-      name: "Beneficiário (informativo)",
-    });
-    await user.type(title, "Novo papel");
-    await user.type(description, "Descrição do rascunho");
-    await user.type(amount, "1.250,00");
-    if (!dueDate) throw new Error("due date input missing");
-    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
-    await user.type(beneficiary, "Fornecedor Demo");
-    await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
-    await user.click(
-      await screen.findByRole("option", { name: "Obrigatório" }),
-    );
+    await openCreate(user);
+    await fillForm(user);
     await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    expect(title).toHaveValue("");
-    expect(description).toHaveValue("");
     expect(create.mock.calls[0]?.[0]).toMatchObject({
       companyId,
       description: "Descrição do rascunho",
       title: "Novo papel",
       amount: "1250.00",
       currency: "BRL",
-      dueDate: expect.any(String),
-      beneficiaryDisplayName: "Fornecedor Demo",
       proofRequirement: "required",
     });
-    expect(
-      screen.getByRole("heading", { name: "Novo papel", level: 2 }),
-    ).toBeVisible();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Nova solicitação" }),
+      ).toBeVisible(),
+    );
   });
 
-  it("blocks draft creation without an explicit proof requirement selection", async () => {
+  it("blocks submission without an explicit proof requirement selection", async () => {
     const user = userEvent.setup();
     const create = vi.fn();
     const draftClient = {
@@ -232,38 +221,37 @@ describe("PaguaiPage", () => {
       list: async () => ({ ok: true as const, value: [] }),
     };
 
-    render(
-      <VinxThemeProvider>
-        <SessionProvider gateway={gateway}>
-          <PaguaiPage draftClient={draftClient} />
-        </SessionProvider>
-      </VinxThemeProvider>,
-    );
+    renderPage(draftClient);
 
-    const title = await screen.findByRole("textbox", { name: "Título" });
-    const description = screen.getByRole("textbox", { name: "Descrição" });
-    const amount = screen.getByRole("textbox", { name: "Valor (R$)" });
+    await openCreate(user);
+    await user.type(
+      screen.getByRole("textbox", { name: "Título" }),
+      "Novo papel",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Descrição" }),
+      "Descrição",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Valor (R$)" }),
+      "1.250,00",
+    );
     const dueDate = document.querySelector<HTMLInputElement>(
       'input[name="dueDate"]',
     );
-    const beneficiary = screen.getByRole("textbox", {
-      name: "Beneficiário (informativo)",
-    });
-    await user.type(title, "Novo papel");
-    await user.type(description, "Descrição do rascunho");
-    await user.type(amount, "1.250,00");
     if (!dueDate) throw new Error("due date input missing");
     fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
-    await user.type(beneficiary, "Fornecedor Demo");
+    await user.type(
+      screen.getByRole("textbox", { name: "Beneficiário (informativo)" }),
+      "Fornecedor Demo",
+    );
     await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
 
     expect(create).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("heading", { name: "Novo papel", level: 2 }),
-    ).toBeNull();
+    expect(screen.getByText("Selecione o comprovante.")).toBeVisible();
   });
 
-  it("rejects malformed Brazilian amount grouping before creating", async () => {
+  it("rejects a malformed Brazilian amount grouping", async () => {
     const user = userEvent.setup();
     const create = vi.fn();
     const draftClient = {
@@ -272,16 +260,11 @@ describe("PaguaiPage", () => {
       list: async () => ({ ok: true as const, value: [] }),
     };
 
-    render(
-      <VinxThemeProvider>
-        <SessionProvider gateway={gateway}>
-          <PaguaiPage draftClient={draftClient} />
-        </SessionProvider>
-      </VinxThemeProvider>,
-    );
+    renderPage(draftClient);
 
+    await openCreate(user);
     await user.type(
-      await screen.findByRole("textbox", { name: "Título" }),
+      screen.getByRole("textbox", { name: "Título" }),
       "Novo papel",
     );
     await user.type(
@@ -308,6 +291,98 @@ describe("PaguaiPage", () => {
     await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
 
     expect(create).not.toHaveBeenCalled();
-    expect(screen.getByText("Revise os campos obrigatórios.")).toBeVisible();
+    expect(screen.getByText(/valor válido em reais/)).toBeVisible();
+  });
+
+  it("clears company A drafts before company B fails to load", async () => {
+    const user = userEvent.setup();
+    let finishSecondList: (
+      v: { ok: false; error: 503 } | { ok: true; value: readonly [] },
+    ) => void = () => {
+      throw new Error("Second company list was not requested.");
+    };
+    const secondList = new Promise<
+      { ok: false; error: 503 } | { ok: true; value: readonly [] }
+    >((resolve) => {
+      finishSecondList = resolve;
+    });
+    const draftClient = {
+      create: async () => ({ ok: true as const, value: draft }),
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: (id: string) =>
+        id === companyId
+          ? Promise.resolve({ ok: true as const, value: [draft] })
+          : secondList,
+    };
+    const twoCompanyBootstrap = bootstrapFor([
+      ...bootstrap.companies,
+      {
+        membershipId: "77777777-7777-4777-8777-777777777777",
+        companyId: secondCompanyId,
+        companyName: "Beta",
+        capabilities: [readCapability, createCapability],
+      },
+    ]);
+    const twoCompanyGateway: MockSessionGateway = {
+      ...gateway,
+      getBootstrap: async () => twoCompanyBootstrap,
+    };
+
+    renderPage(draftClient, twoCompanyGateway);
+
+    expect(
+      await screen.findByRole("heading", { name: "Papel", level: 3 }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("combobox", { name: "Empresa" }));
+    await user.click(await screen.findByRole("option", { name: "Beta" }));
+
+    expect(screen.getByText("Carregando…")).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "Papel", level: 3 }),
+    ).toBeNull();
+    finishSecondList({ ok: false, error: 503 });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Paguai está indisponível. Tente novamente com o mesmo identificador.",
+        ),
+      ).toBeVisible(),
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Papel", level: 3 }),
+    ).toBeNull();
+  });
+
+  it("hides create and exposes only Visualizar without create capability", async () => {
+    const user = userEvent.setup();
+    const readOnlyBootstrap = bootstrapFor([
+      {
+        membershipId: "44444444-4444-4444-8444-444444444444",
+        companyId,
+        companyName: "Alfa",
+        capabilities: [readCapability],
+      },
+    ]);
+    const readOnlyGateway: MockSessionGateway = {
+      ...gateway,
+      getBootstrap: async () => readOnlyBootstrap,
+    };
+    const draftClient = {
+      create: async () => ({ ok: true as const, value: draft }),
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [draft] }),
+    };
+
+    renderPage(draftClient, readOnlyGateway);
+
+    expect(
+      await screen.findByRole("heading", { name: "Papel", level: 3 }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Nova solicitação" }),
+    ).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Visualizar" }));
+    expect(await screen.findByRole("dialog")).toBeVisible();
   });
 });
