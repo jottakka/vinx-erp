@@ -452,14 +452,16 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 builder.UseSetting("AgentRun:Endpoint", agentRunOptions.Endpoint.ToString());
             }
 
-            if (agentRunOptions.ApiKey is not null)
-            {
-                builder.UseSetting("AgentRun:ApiKey", agentRunOptions.ApiKey);
-            }
-
             if (agentRunOptions.Model is not null)
             {
                 builder.UseSetting("AgentRun:Model", agentRunOptions.Model);
+            }
+
+            for (var index = 0; index < agentRunOptions.ApprovedHosts.Count; index++)
+            {
+                builder.UseSetting(
+                    $"AgentRun:ApprovedHosts:{index}",
+                    agentRunOptions.ApprovedHosts[index]);
             }
 
             if (agentRunOptions.Timeout != default)
@@ -479,14 +481,16 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                     builder.UseSetting("AgentRun:Vision:Endpoint", vision.Endpoint.ToString());
                 }
 
-                if (vision.ApiKey is not null)
-                {
-                    builder.UseSetting("AgentRun:Vision:ApiKey", vision.ApiKey);
-                }
-
                 if (vision.Model is not null)
                 {
                     builder.UseSetting("AgentRun:Vision:Model", vision.Model);
+                }
+
+                for (var index = 0; index < vision.ApprovedHosts.Count; index++)
+                {
+                    builder.UseSetting(
+                        $"AgentRun:Vision:ApprovedHosts:{index}",
+                        vision.ApprovedHosts[index]);
                 }
 
                 if (vision.Timeout != default)

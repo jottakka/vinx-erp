@@ -226,8 +226,8 @@ public sealed class RealE2eFixtureHostTests
         {
             Provider = AgentRunOptions.OpenAiCompatibleProvider,
             Endpoint = new Uri("https://agent-provider.example/v1"),
-            ApiKey = "test-agent-key",
             Model = "test-agent-model",
+            ApprovedHosts = ["agent-provider.example"],
         };
         var mariaApiPort = 0;
         var claraApiPort = 0;

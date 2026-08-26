@@ -469,15 +469,15 @@ public sealed class AgentEndpointTests
     {
         Provider = AgentRunOptions.OpenAiCompatibleProvider,
         Endpoint = new Uri("https://agent-provider.example/v1"),
-        ApiKey = "test-agent-key",
         Model = "test-agent-model",
+        ApprovedHosts = ["agent-provider.example"],
         Vision = includeVision
             ? new AgentRunVisionOptions
             {
                 Provider = AgentRunOptions.OpenAiCompatibleProvider,
                 Endpoint = new Uri("https://vision-provider.example/v1"),
-                ApiKey = "test-vision-key",
                 Model = "test-vision-model",
+                ApprovedHosts = ["vision-provider.example"],
                 AllowedClassifications = ["fiscal"],
             }
             : null,
