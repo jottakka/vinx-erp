@@ -10,13 +10,14 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { type ChangeEvent, useId, useState } from "react";
+import { type ChangeEvent, useId, useRef, useState } from "react";
 
 export type AttachmentFieldState = "idle" | "uploading" | "ready" | "failed";
 
 export type AttachmentFieldValue = {
   fileId: string | null;
   fileName: string;
+  localKey: string;
   mimeType: string;
   sizeBytes: number;
   state: AttachmentFieldState;
@@ -65,6 +66,12 @@ export function AttachmentField({
 }: AttachmentFieldProps) {
   const inputId = useId();
   const [uploading, setUploading] = useState(false);
+  const localKeySequence = useRef(0);
+
+  function nextLocalKey() {
+    localKeySequence.current += 1;
+    return `attachment-field-${localKeySequence.current}`;
+  }
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
@@ -80,6 +87,7 @@ export function AttachmentField({
       file,
       fileId: null,
       fileName: file.name,
+      localKey: nextLocalKey(),
       mimeType: file.type,
       sizeBytes: file.size,
       state: "uploading" as const,
@@ -89,6 +97,7 @@ export function AttachmentField({
       ...pending.map((item) => ({
         fileId: item.fileId,
         fileName: item.fileName,
+        localKey: item.localKey,
         mimeType: item.mimeType,
         sizeBytes: item.sizeBytes,
         state: item.state as AttachmentFieldState,
@@ -110,6 +119,7 @@ export function AttachmentField({
           ? {
               fileId: result.fileId,
               fileName: result.fileName,
+              localKey: entry.localKey,
               mimeType: result.mimeType,
               sizeBytes: result.sizeBytes,
               state: "ready" as const,
@@ -117,6 +127,7 @@ export function AttachmentField({
           : {
               fileId: null,
               fileName: entry.fileName,
+              localKey: entry.localKey,
               mimeType: entry.mimeType,
               sizeBytes: entry.sizeBytes,
               state: "failed" as const,
@@ -127,7 +138,7 @@ export function AttachmentField({
   }
 
   function remove(entry: AttachmentFieldValue) {
-    onChange?.(value.filter((item) => item.fileName !== entry.fileName));
+    onChange?.(value.filter((item) => item.localKey !== entry.localKey));
   }
 
   return (
@@ -161,7 +172,7 @@ export function AttachmentField({
             {value.map((entry) => (
               <Stack
                 direction="row"
-                key={`${entry.fileName}-${entry.sizeBytes}`}
+                key={entry.localKey}
                 spacing={1}
                 sx={{ alignItems: "center" }}
               >

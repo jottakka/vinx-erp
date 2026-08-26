@@ -251,6 +251,31 @@ describe("PaguaiPage", () => {
     expect(screen.getByText("Selecione o comprovante.")).toBeVisible();
   });
 
+  it("warns when proof is required but no file is attached", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn();
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPage(draftClient);
+
+    await openCreate(user);
+    await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Obrigatório" }),
+    );
+
+    expect(
+      screen.getByText(
+        "O comprovante é obrigatório neste rascunho. Anexe um arquivo antes de criar.",
+      ),
+    ).toBeVisible();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("rejects a malformed Brazilian amount grouping", async () => {
     const user = userEvent.setup();
     const create = vi.fn();

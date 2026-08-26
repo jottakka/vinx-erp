@@ -232,15 +232,18 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
               key={column.id}
               onDragOver={(event) => {
                 event.preventDefault();
+                event.stopPropagation();
                 setDropTarget(column.id);
               }}
-              onDragLeave={() =>
+              onDragLeave={(event) => {
+                event.stopPropagation();
                 setDropTarget((current) =>
                   current === column.id ? null : current,
-                )
-              }
+                );
+              }}
               onDrop={(event) => {
                 event.preventDefault();
+                event.stopPropagation();
                 handleDrop(column.id);
               }}
               sx={{

@@ -71,6 +71,7 @@ export function PaguaiPage({
   const [selected, setSelected] = useState<PaguaiDraft | null>(null);
   const [viewOpen, setViewOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [proofFileId, setProofFileId] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "submitting">(
     "idle",
@@ -189,6 +190,7 @@ export function PaguaiPage({
     setStatus("idle");
     if (!result.ok) {
       setError(result.error);
+      setCreateError(message(result.error));
       return;
     }
     setDrafts((current) => [
@@ -197,6 +199,7 @@ export function PaguaiPage({
     ]);
     setSelected(result.value);
     setProofFileId(values.proofFileId);
+    setCreateError(null);
     setCreateOpen(false);
     setRequestId(crypto.randomUUID());
   }
@@ -298,7 +301,11 @@ export function PaguaiPage({
       </Stack>
 
       <PaguaiCreateDialog
-        onClose={() => setCreateOpen(false)}
+        errorMessage={createError}
+        onClose={() => {
+          setCreateError(null);
+          setCreateOpen(false);
+        }}
         onSubmit={(values) => void submit(values)}
         open={createOpen}
         uploader={uploaderAdapter}

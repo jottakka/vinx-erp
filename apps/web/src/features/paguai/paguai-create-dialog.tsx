@@ -1,5 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
+  Alert,
+  Box,
   Button,
   Dialog,
   DialogActions,
@@ -51,9 +53,11 @@ type PaguaiCreateDialogProps = {
   }) => void;
   open: boolean;
   uploader?: AttachmentUploader;
+  errorMessage?: string | null;
 };
 
 export function PaguaiCreateDialog({
+  errorMessage,
   onClose,
   onSubmit,
   open,
@@ -74,6 +78,11 @@ export function PaguaiCreateDialog({
     readonly AttachmentFieldValue[]
   >([]);
   const [amountError, setAmountError] = useState<string | null>(null);
+  const isUploading = attachments.some((item) => item.state === "uploading");
+  const hasReadyProof = attachments.some((item) => item.state === "ready");
+  const proofRequirement = form.watch("proofRequirement");
+  const missingRequiredProof =
+    proofRequirement === "required" && !hasReadyProof;
 
   function close() {
     form.reset();
@@ -190,14 +199,32 @@ export function PaguaiCreateDialog({
             slotProps={{ htmlInput: { maxLength: 4000 } }}
             {...form.register("description")}
           />
+          {errorMessage ? (
+            <Alert role="alert" severity="error">
+              {errorMessage}
+            </Alert>
+          ) : null}
         </Stack>
       </DialogContent>
       <DialogActions>
         <Button onClick={close}>Cancelar</Button>
-        <Button form="paguai-create-form" type="submit" variant="contained">
-          Criar rascunho
+        <Button
+          disabled={isUploading}
+          form="paguai-create-form"
+          type="submit"
+          variant="contained"
+        >
+          {isUploading ? "Anexando…" : "Criar rascunho"}
         </Button>
       </DialogActions>
+      {missingRequiredProof ? (
+        <Box sx={{ px: 3, pb: 2 }}>
+          <Alert severity="warning">
+            O comprovante é obrigatório neste rascunho. Anexe um arquivo antes
+            de criar.
+          </Alert>
+        </Box>
+      ) : null}
     </Dialog>
   );
 }

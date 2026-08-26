@@ -114,8 +114,13 @@ export function AgentConversation() {
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    // Enter envia; Shift+Enter insere uma nova linha.
-    if (event.key === "Enter" && !event.shiftKey) {
+    // Enter envia; Shift+Enter insere uma nova linha. Não envia durante a
+    // composição de IME (ex.: CJK) para não disparar um envio prematuro.
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
       event.preventDefault();
       submitFromInput();
     }
