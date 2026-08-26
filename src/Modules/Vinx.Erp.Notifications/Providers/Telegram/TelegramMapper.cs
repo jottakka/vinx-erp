@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Vinx.Erp.Notifications.Providers.Telegram;
 
 /// <summary>
@@ -7,6 +9,7 @@ namespace Vinx.Erp.Notifications.Providers.Telegram;
 public static class TelegramMapper
 {
     private const string MaximumPrivateChatId = "4503599627370495";
+    private static readonly char[] SqlBtrimCharacters = [' ', '\t', '\n', '\v', '\f', '\r'];
 
     /// <summary>
     /// Valida o identificador privado canônico e o texto aprovado antes de
@@ -19,11 +22,7 @@ public static class TelegramMapper
             throw new ArgumentException("Telegram chat ID is invalid.", nameof(chatId));
         }
 
-        if (
-            string.IsNullOrWhiteSpace(text)
-            || text.Length > 4096
-            || !string.Equals(text, text.Trim(), StringComparison.Ordinal)
-        )
+        if (!HasValidPlainText(text))
         {
             throw new ArgumentException("Telegram message text is invalid.", nameof(text));
         }
@@ -39,4 +38,21 @@ public static class TelegramMapper
             chatId.Length < MaximumPrivateChatId.Length
             || string.CompareOrdinal(chatId, MaximumPrivateChatId) <= 0
         );
+
+    /// <summary>
+    /// Espelha o CHECK SQL: somente U+0020, tab, LF, VT, FF e CR são
+    /// removidos das bordas, e o limite conta pontos de código Unicode.
+    /// </summary>
+    private static bool HasValidPlainText(string? text)
+    {
+        if (text is null)
+        {
+            return false;
+        }
+
+        var trimmed = text.Trim(SqlBtrimCharacters);
+        return trimmed.Length > 0
+            && trimmed.Length == text.Length
+            && text.EnumerateRunes().Count() is >= 1 and <= 4096;
+    }
 }

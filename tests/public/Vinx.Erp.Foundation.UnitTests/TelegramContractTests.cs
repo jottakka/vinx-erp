@@ -261,12 +261,71 @@ public sealed class TelegramContractTests
         Assert.Throws<ArgumentException>(() => TelegramMapper.Map(chatId, text));
     }
 
+    [Theory]
+    [InlineData("\t")]
+    [InlineData("\n")]
+    [InlineData("\tApproved Telegram text")]
+    [InlineData("Approved Telegram text\t")]
+    [InlineData("\nApproved Telegram text")]
+    [InlineData("Approved Telegram text\n")]
+    [InlineData("\vApproved Telegram text")]
+    [InlineData("Approved Telegram text\v")]
+    [InlineData("\fApproved Telegram text")]
+    [InlineData("Approved Telegram text\f")]
+    [InlineData("\rApproved Telegram text")]
+    [InlineData("Approved Telegram text\r")]
+    public void Mapper_rejects_the_exact_SQL_btrim_text_violations(string text)
+    {
+        Assert.Throws<ArgumentException>(() => TelegramMapper.Map("123456789", text));
+    }
+
+    [Fact]
+    public void Mapper_preserves_non_btrim_whitespace_as_literal_text()
+    {
+        const string text = "\u00A0Approved Telegram text\u00A0";
+
+        var message = TelegramMapper.Map("123456789", text);
+
+        Assert.Equal(text, message.Text);
+    }
+
+    [Fact]
+    public void Mapper_accepts_one_supplementary_plane_code_point()
+    {
+        const string text = "\U0001F600";
+
+        var message = TelegramMapper.Map("123456789", text);
+
+        Assert.Equal(text, message.Text);
+        Assert.Equal(2, message.Text.Length);
+        Assert.Single(message.Text.EnumerateRunes());
+    }
+
+    [Fact]
+    public void Mapper_accepts_4096_supplementary_plane_code_points()
+    {
+        var text = string.Concat(Enumerable.Repeat("\U0001F600", 4096));
+
+        var message = TelegramMapper.Map("123456789", text);
+
+        Assert.Equal(8192, message.Text.Length);
+        Assert.Equal(4096, message.Text.EnumerateRunes().Count());
+    }
+
     [Fact]
     public void Mapper_rejects_text_over_the_Telegram_plain_text_limit()
     {
         Assert.Throws<ArgumentException>(() =>
             TelegramMapper.Map("123456789", new string('t', 4097))
         );
+    }
+
+    [Fact]
+    public void Mapper_rejects_4097_supplementary_plane_code_points()
+    {
+        var text = string.Concat(Enumerable.Repeat("\U0001F600", 4097));
+
+        Assert.Throws<ArgumentException>(() => TelegramMapper.Map("123456789", text));
     }
 
     [Fact]
