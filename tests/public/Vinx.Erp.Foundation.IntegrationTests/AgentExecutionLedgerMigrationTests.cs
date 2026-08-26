@@ -47,6 +47,18 @@ public sealed class AgentExecutionLedgerMigrationTests
                       AND conname = 'ck_agent_execution_ledger_terminal_data'),
                 EXISTS (
                     SELECT 1
+                    FROM pg_constraint
+                    WHERE conrelid = 'foundation.agent_execution_ledger'::regclass
+                      AND conname = 'ck_agent_execution_ledger_channel_inbound_message'),
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'foundation'
+                      AND table_name = 'agent_execution_ledger'
+                      AND column_name = 'row_version'
+                      AND column_default = '1'),
+                EXISTS (
+                    SELECT 1
                     FROM pg_class
                     WHERE oid = 'foundation.agent_execution_ledger'::regclass
                       AND relrowsecurity
@@ -65,6 +77,7 @@ public sealed class AgentExecutionLedgerMigrationTests
                 has_column_privilege('vinx_runtime', 'foundation.agent_execution_ledger', 'safe_result_json', 'UPDATE'),
                 has_column_privilege('vinx_runtime', 'foundation.agent_execution_ledger', 'reason_code', 'UPDATE'),
                 has_column_privilege('vinx_runtime', 'foundation.agent_execution_ledger', 'updated_at', 'UPDATE'),
+                has_column_privilege('vinx_runtime', 'foundation.agent_execution_ledger', 'row_version', 'UPDATE'),
                 NOT has_column_privilege('vinx_runtime', 'foundation.agent_execution_ledger', 'company_id', 'UPDATE'),
                 NOT has_column_privilege('vinx_runtime', 'foundation.agent_execution_ledger', 'actor_user_id', 'UPDATE'),
                 NOT has_column_privilege('vinx_runtime', 'foundation.agent_execution_ledger', 'channel', 'UPDATE'),
@@ -80,14 +93,14 @@ public sealed class AgentExecutionLedgerMigrationTests
         await using var reader = await command.ExecuteReaderAsync();
 
         Assert.True(await reader.ReadAsync());
-        for (var ordinal = 0; ordinal < 10; ordinal++)
+        for (var ordinal = 0; ordinal < 12; ordinal++)
         {
             Assert.True(reader.GetBoolean(ordinal));
         }
 
-        Assert.False(reader.GetBoolean(10));
-        Assert.False(reader.GetBoolean(11));
-        for (var ordinal = 12; ordinal < 21; ordinal++)
+        Assert.False(reader.GetBoolean(12));
+        Assert.False(reader.GetBoolean(13));
+        for (var ordinal = 14; ordinal < 24; ordinal++)
         {
             Assert.True(reader.GetBoolean(ordinal));
         }

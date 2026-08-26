@@ -14,7 +14,7 @@ public enum AgentExecutionLedgerState
 /// Registro durável e monotônico de uma execução do agente. Ele guarda somente
 /// correlação opaca, estado e resultado seguro; nunca prompt, conteúdo ou endereço.
 /// </summary>
-public sealed class AgentExecutionLedger : ICompanyScoped
+public sealed class AgentExecutionLedger : ICompanyScoped, IConcurrencyVersioned
 {
     private AgentExecutionLedger()
     {
@@ -33,6 +33,7 @@ public sealed class AgentExecutionLedger : ICompanyScoped
         ValidateIdentifiers(id, companyId, actorUserId, requestId);
         ArgumentException.ThrowIfNullOrWhiteSpace(channel);
         ArgumentException.ThrowIfNullOrWhiteSpace(journey);
+        ValidateChannel(channel, inboundMessageId);
         if (!IsSha256(payloadHash))
         {
             throw new ArgumentException("The payload hash must be a lowercase SHA-256 hexadecimal value.", nameof(payloadHash));
@@ -47,6 +48,7 @@ public sealed class AgentExecutionLedger : ICompanyScoped
         Journey = journey;
         PayloadHash = payloadHash;
         State = AgentExecutionLedgerState.Claimed;
+        RowVersion = 1;
         CreatedAt = DateTimeOffset.UtcNow;
         UpdatedAt = CreatedAt;
     }
@@ -64,6 +66,7 @@ public sealed class AgentExecutionLedger : ICompanyScoped
     public string? ReasonCode { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
+    public long RowVersion { get; private set; }
 
     public Company Company { get; private set; } = null!;
 
@@ -89,7 +92,11 @@ public sealed class AgentExecutionLedger : ICompanyScoped
         Transition(AgentExecutionLedgerState.Claimed, AgentExecutionLedgerState.VisionInFlight, actorUserId, requestId);
 
     public void MarkModelInFlight(Guid actorUserId, Guid requestId) =>
-        Transition(AgentExecutionLedgerState.VisionInFlight, AgentExecutionLedgerState.ModelInFlight, actorUserId, requestId);
+        Transition(
+            [AgentExecutionLedgerState.Claimed, AgentExecutionLedgerState.VisionInFlight],
+            AgentExecutionLedgerState.ModelInFlight,
+            actorUserId,
+            requestId);
 
     public void Complete(string safeResultJson, Guid actorUserId, Guid requestId)
     {
@@ -99,19 +106,30 @@ public sealed class AgentExecutionLedger : ICompanyScoped
     }
 
     public void FailClosed(string reasonCode, Guid actorUserId, Guid requestId) =>
-        TransitionToTerminal(AgentExecutionLedgerState.FailedClosed, reasonCode, actorUserId, requestId);
+        TransitionToTerminal(
+            [AgentExecutionLedgerState.Claimed],
+            AgentExecutionLedgerState.FailedClosed,
+            reasonCode,
+            actorUserId,
+            requestId);
 
     public void MarkAmbiguous(string reasonCode, Guid actorUserId, Guid requestId) =>
-        TransitionToTerminal(AgentExecutionLedgerState.Ambiguous, reasonCode, actorUserId, requestId);
+        TransitionToTerminal(
+            [AgentExecutionLedgerState.VisionInFlight, AgentExecutionLedgerState.ModelInFlight],
+            AgentExecutionLedgerState.Ambiguous,
+            reasonCode,
+            actorUserId,
+            requestId);
 
     private void TransitionToTerminal(
+        AgentExecutionLedgerState[] expected,
         AgentExecutionLedgerState target,
         string reasonCode,
         Guid actorUserId,
         Guid requestId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reasonCode);
-        Transition(AgentExecutionLedgerState.ModelInFlight, target, actorUserId, requestId);
+        Transition(expected, target, actorUserId, requestId);
         ReasonCode = reasonCode;
     }
 
@@ -120,9 +138,16 @@ public sealed class AgentExecutionLedger : ICompanyScoped
         AgentExecutionLedgerState target,
         Guid actorUserId,
         Guid requestId)
+        => Transition([expected], target, actorUserId, requestId);
+
+    private void Transition(
+        AgentExecutionLedgerState[] expected,
+        AgentExecutionLedgerState target,
+        Guid actorUserId,
+        Guid requestId)
     {
         VerifyActorAndRequest(actorUserId, requestId);
-        if (State != expected)
+        if (!expected.Contains(State))
         {
             throw new InvalidOperationException($"The agent execution cannot move from {State} to {target}.");
         }
@@ -144,6 +169,20 @@ public sealed class AgentExecutionLedger : ICompanyScoped
         if (id == Guid.Empty || companyId == Guid.Empty || actorUserId == Guid.Empty || requestId == Guid.Empty)
         {
             throw new ArgumentException("Agent execution ledger identifiers must not be empty.", nameof(id));
+        }
+    }
+
+    private static void ValidateChannel(string channel, Guid? inboundMessageId)
+    {
+        var validShape = channel switch
+        {
+            "web" => inboundMessageId is null,
+            "whatsapp" or "telegram" => inboundMessageId is not null,
+            _ => false
+        };
+        if (!validShape)
+        {
+            throw new ArgumentException("The channel and inbound message identifier are not a supported execution source.", nameof(channel));
         }
     }
 

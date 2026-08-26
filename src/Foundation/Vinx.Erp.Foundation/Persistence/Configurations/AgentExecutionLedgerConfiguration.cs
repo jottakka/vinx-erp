@@ -24,6 +24,10 @@ public sealed class AgentExecutionLedgerConfiguration : IEntityTypeConfiguration
                 "(state = 'completed' AND safe_result_json IS NOT NULL AND reason_code IS NULL) OR " +
                 "(state IN ('failed_closed', 'ambiguous') AND safe_result_json IS NULL AND reason_code IS NOT NULL) OR " +
                 "(state IN ('claimed', 'vision_in_flight', 'model_in_flight') AND safe_result_json IS NULL AND reason_code IS NULL)");
+            table.HasCheckConstraint(
+                "ck_agent_execution_ledger_channel_inbound_message",
+                "(channel = 'web' AND inbound_message_id IS NULL) OR " +
+                "(channel IN ('whatsapp', 'telegram') AND inbound_message_id IS NOT NULL)");
         });
         builder.HasKey(entity => entity.Id);
         builder.HasAlternateKey(entity => new { entity.CompanyId, entity.Id });
@@ -39,6 +43,7 @@ public sealed class AgentExecutionLedgerConfiguration : IEntityTypeConfiguration
             .IsRequired();
         builder.Property(entity => entity.SafeResultJson).HasColumnType("jsonb");
         builder.Property(entity => entity.ReasonCode).HasMaxLength(100);
+        builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasDefaultValue(1L);
         builder.HasIndex(entity => new { entity.CompanyId, entity.ActorUserId, entity.Channel, entity.RequestId })
             .IsUnique()
             .HasDatabaseName(CommandKeyIndexDatabaseName);

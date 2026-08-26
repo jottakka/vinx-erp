@@ -20,24 +20,86 @@ public sealed class AgentExecutionLedgerTests
     }
 
     [Fact]
-    public void Lifecycle_requires_the_exact_monotonic_state_order()
+    public void Claimed_execution_can_move_directly_to_model_for_text_only_work()
     {
         var actorId = Guid.NewGuid();
         var requestId = Guid.NewGuid();
         var ledger = CreateLedger(actorId, requestId);
 
         Assert.Equal(AgentExecutionLedgerState.Claimed, ledger.State);
-        Assert.Throws<InvalidOperationException>(() => ledger.MarkModelInFlight(actorId, requestId));
-        Assert.Throws<InvalidOperationException>(() => ledger.Complete("{}", actorId, requestId));
-        Assert.Throws<InvalidOperationException>(() => ledger.FailClosed("provider_unavailable", actorId, requestId));
-        Assert.Throws<InvalidOperationException>(() => ledger.MarkAmbiguous("provider_timeout", actorId, requestId));
+        ledger.MarkModelInFlight(actorId, requestId);
+
+        Assert.Equal(AgentExecutionLedgerState.ModelInFlight, ledger.State);
+    }
+
+    [Fact]
+    public void Lifecycle_allows_vision_then_model_but_locks_terminal_states()
+    {
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var ledger = CreateLedger(actorId, requestId);
 
         ledger.MarkVisionInFlight(actorId, requestId);
         ledger.MarkModelInFlight(actorId, requestId);
-        ledger.FailClosed("provider_unavailable", actorId, requestId);
+        ledger.Complete("{}", actorId, requestId);
 
-        Assert.Equal(AgentExecutionLedgerState.FailedClosed, ledger.State);
+        Assert.Equal(AgentExecutionLedgerState.Completed, ledger.State);
         Assert.Throws<InvalidOperationException>(() => ledger.MarkModelInFlight(actorId, requestId));
+        Assert.Throws<InvalidOperationException>(() => ledger.MarkAmbiguous("provider_timeout", actorId, requestId));
+    }
+
+    [Fact]
+    public void Fail_closed_is_allowed_only_before_provider_dispatch()
+    {
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var claimed = CreateLedger(actorId, requestId);
+        var modelInFlight = CreateLedger(actorId, requestId);
+
+        claimed.FailClosed("policy_denied", actorId, requestId);
+        modelInFlight.MarkModelInFlight(actorId, requestId);
+
+        Assert.Equal(AgentExecutionLedgerState.FailedClosed, claimed.State);
+        Assert.Throws<InvalidOperationException>(() => modelInFlight.FailClosed("provider_unavailable", actorId, requestId));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Ambiguous_is_allowed_after_vision_or_model_dispatch(bool throughVision)
+    {
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var ledger = CreateLedger(actorId, requestId);
+
+        if (throughVision)
+        {
+            ledger.MarkVisionInFlight(actorId, requestId);
+        }
+        else
+        {
+            ledger.MarkModelInFlight(actorId, requestId);
+        }
+
+        ledger.MarkAmbiguous("provider_timeout", actorId, requestId);
+
+        Assert.Equal(AgentExecutionLedgerState.Ambiguous, ledger.State);
+        Assert.Equal("provider_timeout", ledger.ReasonCode);
+    }
+
+    [Fact]
+    public void Complete_is_allowed_only_from_model_in_flight()
+    {
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var ledger = CreateLedger(actorId, requestId);
+
+        Assert.Throws<InvalidOperationException>(() => ledger.Complete("{}", actorId, requestId));
+        Assert.Throws<InvalidOperationException>(() => ledger.MarkAmbiguous("provider_timeout", actorId, requestId));
+        ledger.MarkModelInFlight(actorId, requestId);
+        ledger.Complete("{}", actorId, requestId);
+
+        Assert.Equal(AgentExecutionLedgerState.Completed, ledger.State);
     }
 
     [Fact]
@@ -86,6 +148,56 @@ public sealed class AgentExecutionLedgerTests
 
         Assert.Throws<InvalidOperationException>(() => ledger.MarkVisionInFlight(Guid.NewGuid(), requestId));
         Assert.Throws<InvalidOperationException>(() => ledger.MarkVisionInFlight(actorId, Guid.NewGuid()));
+    }
+
+    [Theory]
+    [InlineData("web", true)]
+    [InlineData("whatsapp", false)]
+    [InlineData("telegram", false)]
+    [InlineData("email", true)]
+    public void Create_rejects_channels_without_the_required_inbound_message_shape(
+        string channel,
+        bool inboundMessageIsPresent)
+    {
+        Assert.Throws<ArgumentException>(() => AgentExecutionLedger.Create(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            channel,
+            inboundMessageIsPresent ? Guid.NewGuid() : null,
+            Guid.NewGuid(),
+            "read_only_summarize_v1",
+            new string('a', 64)));
+    }
+
+    [Theory]
+    [InlineData("web", false)]
+    [InlineData("whatsapp", true)]
+    [InlineData("telegram", true)]
+    public void Create_accepts_each_supported_channel_with_its_required_inbound_message_shape(
+        string channel,
+        bool inboundMessageIsPresent)
+    {
+        var ledger = AgentExecutionLedger.Create(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            channel,
+            inboundMessageIsPresent ? Guid.NewGuid() : null,
+            Guid.NewGuid(),
+            "read_only_summarize_v1",
+            new string('a', 64));
+
+        Assert.Equal(channel, ledger.Channel);
+    }
+
+    [Fact]
+    public void Ledger_starts_with_a_concurrency_row_version()
+    {
+        var ledger = CreateLedger(Guid.NewGuid(), Guid.NewGuid());
+
+        Assert.IsAssignableFrom<IConcurrencyVersioned>(ledger);
+        Assert.Equal(1L, ledger.RowVersion);
     }
 
     private static AgentExecutionLedger CreateLedger(Guid actorId, Guid requestId) => AgentExecutionLedger.Create(
