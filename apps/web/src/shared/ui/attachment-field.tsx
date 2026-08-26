@@ -67,6 +67,7 @@ export function AttachmentField({
   value,
 }: AttachmentFieldProps) {
   const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const localKeySequence = useRef(0);
 
@@ -152,23 +153,25 @@ export function AttachmentField({
             {label}
           </Typography>
           <Button
-            component="label"
+            aria-label={`Anexar arquivo: ${label}`}
             disabled={disabled || uploading}
+            onClick={() => inputRef.current?.click()}
             size="small"
             startIcon={<AttachFileOutlinedIcon />}
           >
             Anexar
-            <input
-              accept={accept}
-              aria-label={`${label}: anexar arquivo`}
-              disabled={disabled || uploading}
-              id={inputId}
-              multiple={multiple}
-              onChange={selectFiles}
-              style={{ display: "none" }}
-              type="file"
-            />
           </Button>
+          <input
+            accept={accept}
+            aria-label={`${label}: anexar arquivo`}
+            disabled={disabled || uploading}
+            id={inputId}
+            multiple={multiple}
+            onChange={selectFiles}
+            ref={inputRef}
+            style={{ display: "none" }}
+            type="file"
+          />
         </Stack>
         {value.length ? (
           <Stack spacing={0.5}>

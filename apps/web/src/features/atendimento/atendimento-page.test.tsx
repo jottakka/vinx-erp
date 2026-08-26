@@ -152,14 +152,14 @@ describe("AtendimentoPage", () => {
     expect(screen.getAllByText("Beta").length).toBeGreaterThan(0);
     expect(
       screen.getAllByRole("group", { name: "Empresa Alfa" }).length,
-    ).toBeGreaterThan(1);
+    ).toBeGreaterThan(0);
     for (const label of ["Novos", "Em andamento", "Concluídos", "Cancelados"]) {
       expect(screen.getByRole("heading", { name: label })).toBeVisible();
     }
     expect(document.querySelectorAll("[data-state-tone]")).toHaveLength(4);
   });
 
-  it("filters the board to one authorized company without changing the creation company selector", async () => {
+  it("filters the board without exposing the create-company choice on the page", async () => {
     const user = userEvent.setup();
     vi.spyOn(atendimentoClient, "list").mockImplementation(async (companyId) =>
       companyId === alfaCompanyId ? [alfaCard] : [betaCard],
@@ -177,8 +177,8 @@ describe("AtendimentoPage", () => {
     expect(await screen.findByText(betaCard.title)).toBeVisible();
     expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
     expect(
-      screen.getByRole("combobox", { name: "Empresa do novo atendimento" }),
-    ).toBeVisible();
+      screen.queryByRole("combobox", { name: "Empresa do atendimento" }),
+    ).not.toBeInTheDocument();
   });
 
   it("waits for all authorized company reads before replacing the board", async () => {
@@ -194,7 +194,7 @@ describe("AtendimentoPage", () => {
     );
     expect(
       screen.getByRole("button", { name: "Novo atendimento" }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
     expect(screen.queryByText(betaCard.title)).not.toBeInTheDocument();
     betaCards.resolve([betaCard]);
@@ -217,9 +217,12 @@ describe("AtendimentoPage", () => {
 
     renderPage();
 
-    await user.click(
-      await screen.findByRole("button", { name: "Novo atendimento" }),
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Novo atendimento" }),
+      ).toBeEnabled(),
     );
+    await user.click(screen.getByRole("button", { name: "Novo atendimento" }));
     await user.type(screen.getByLabelText("Título"), "Novo cartão");
     await user.type(screen.getByLabelText("Descrição"), "Descrição do cartão");
     await user.click(screen.getByRole("button", { name: "Criar cartão" }));
@@ -269,9 +272,12 @@ describe("AtendimentoPage", () => {
 
     renderPage(snapshot(), uploader);
 
-    await user.click(
-      await screen.findByRole("button", { name: "Novo atendimento" }),
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Novo atendimento" }),
+      ).toBeEnabled(),
     );
+    await user.click(screen.getByRole("button", { name: "Novo atendimento" }));
     await user.type(screen.getByLabelText("Título"), "Falha preservada");
     await user.type(screen.getByLabelText("Descrição"), "Tente novamente");
     await user.click(
@@ -329,9 +335,12 @@ describe("AtendimentoPage", () => {
     };
 
     renderPage(snapshot(), uploader);
-    await user.click(
-      await screen.findByRole("button", { name: "Novo atendimento" }),
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Novo atendimento" }),
+      ).toBeEnabled(),
     );
+    await user.click(screen.getByRole("button", { name: "Novo atendimento" }));
     await user.type(screen.getByLabelText("Título"), "Pedido idempotente");
     await user.type(screen.getByLabelText("Descrição"), "Descrição");
     await user.upload(
@@ -357,9 +366,12 @@ describe("AtendimentoPage", () => {
 
     renderPage();
 
-    await user.click(
-      await screen.findByRole("button", { name: "Novo atendimento" }),
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Novo atendimento" }),
+      ).toBeEnabled(),
     );
+    await user.click(screen.getByRole("button", { name: "Novo atendimento" }));
     await user.upload(
       screen.getByTestId("atendimento-attachment-picker"),
       new File(["documento"], "evidencia.pdf", { type: "application/pdf" }),
@@ -368,19 +380,24 @@ describe("AtendimentoPage", () => {
     expect(screen.getByRole("button", { name: "evidencia.pdf" })).toBeVisible();
   });
 
-  it("offers only Visualizar and no create button without create permission", async () => {
+  it("keeps Novo atendimento disabled with an explanation when no company grants create", async () => {
     const user = userEvent.setup();
     vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
 
     renderPage(snapshot([readCapability, moveCapability, assignCapability]));
 
     expect(await screen.findByText(alfaCard.title)).toBeVisible();
-    expect(
-      screen.queryByRole("button", { name: "Novo atendimento" }),
-    ).toBeNull();
+    const createButton = screen.getByRole("button", {
+      name: "Novo atendimento",
+    });
+    expect(createButton).toBeDisabled();
+    await user.hover(createButton.parentElement as HTMLElement);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Sua sessão não pode criar atendimentos.",
+    );
     expect(
       screen.queryByRole("combobox", {
-        name: "Empresa do novo atendimento",
+        name: "Empresa do atendimento",
       }),
     ).not.toBeInTheDocument();
 
@@ -390,7 +407,7 @@ describe("AtendimentoPage", () => {
     expect(within(dialog).getByText(alfaCard.description)).toBeVisible();
   });
 
-  it("uses only create-capable companies for new atendimento controls", async () => {
+  it("enables creation for an exact create-capable company even when it cannot read the queue", async () => {
     vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
     const readOnlyAlfa = {
       capabilities: [readCapability],
@@ -399,7 +416,7 @@ describe("AtendimentoPage", () => {
       membershipId: "55555555-5555-4555-8555-555555555555",
     };
     const createCapableBeta = {
-      capabilities: [readCapability, createCapability],
+      capabilities: [createCapability],
       companyId: betaCompanyId,
       companyName: "Beta",
       membershipId: "66666666-6666-4666-8666-666666666666",
@@ -412,15 +429,25 @@ describe("AtendimentoPage", () => {
       user: { displayName: "Ana", id: "77777777-7777-4777-8777-777777777777" },
     });
 
-    expect(
-      await screen.findByRole("button", { name: "Novo atendimento" }),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("combobox", { name: "Empresa do novo atendimento" }),
-    ).toHaveTextContent("Beta");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Novo atendimento" }),
+      ).toBeEnabled(),
+    );
+    const createButton = screen.getByRole("button", {
+      name: "Novo atendimento",
+    });
+    expect(atendimentoClient.list).toHaveBeenCalledTimes(1);
+    expect(atendimentoClient.list).toHaveBeenCalledWith(alfaCompanyId);
     expect(
       screen.getByRole("combobox", { name: "Filtrar empresas" }),
     ).toHaveTextContent("Todas as empresas autorizadas");
+    await userEvent.setup().click(createButton);
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("combobox", { name: "Empresa do atendimento" }),
+    ).toHaveTextContent("Beta");
+    expect(within(dialog).queryByText("Alfa")).toBeNull();
   });
 
   it("moves a card to another column by calling the move client", async () => {

@@ -14,6 +14,8 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { CompanySelect } from "../../shared/ui/company-select";
+import type { AuthorizedCompanyMembership } from "../auth/session-contract";
 import { createAtendimentoAttachmentUploader } from "./atendimento-attachment-uploader";
 import type { AtendimentoAssignmentOption } from "./atendimento-client";
 
@@ -40,8 +42,13 @@ export type AtendimentoCreateSubmitResult =
   | { ok: false; message: string };
 type Props = {
   assignmentOptions: readonly AtendimentoAssignmentOption[];
+  companies?: readonly Pick<
+    AuthorizedCompanyMembership,
+    "companyId" | "companyName"
+  >[];
   companyId: string;
   onClose: () => void;
+  onCompanyChange?: (companyId: string) => void;
   onSubmit: (values: Values) => Promise<AtendimentoCreateSubmitResult>;
   open: boolean;
   uploader?: AtendimentoAttachmentUploader;
@@ -88,8 +95,10 @@ function sameCreatePayload(left: CreatePayload, right: CreatePayload) {
 /** Reúne um anexo confirmado e participantes nomeados para uma empresa explícita. */
 export function AtendimentoCreateDialog({
   assignmentOptions,
+  companies,
   companyId,
   onClose,
+  onCompanyChange,
   onSubmit,
   open,
   uploader: providedUploader,
@@ -99,6 +108,7 @@ export function AtendimentoCreateDialog({
     resolver: zodResolver(schema),
   });
   const uploadRef = useRef<AbortController | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const epochRef = useRef(0);
   const createAttemptRef = useRef<CreateAttempt | null>(null);
   const [attachment, setAttachment] = useState<File | null>(null);
@@ -120,6 +130,7 @@ export function AtendimentoCreateDialog({
     setAttachment(null);
     setError(null);
     setParticipantMembershipIds([]);
+    if (attachmentInputRef.current) attachmentInputRef.current.value = "";
     form.reset({ description: "", title: "" });
   }
   function close() {
@@ -204,15 +215,15 @@ export function AtendimentoCreateDialog({
     onClose();
   }
   return (
-    <Dialog open={open} onClose={close}>
+    <Dialog fullWidth maxWidth="md" open={open} onClose={close}>
       <DialogTitle>Novo atendimento</DialogTitle>
-      <DialogContent>
+      <DialogContent sx={{ pb: { xs: 1, sm: 2 } }}>
         <Stack
           component="form"
           id="atendimento-create-form"
           onSubmit={form.handleSubmit(submit)}
           spacing={2}
-          sx={{ pt: 1 }}
+          sx={{ pt: 1, width: "100%" }}
         >
           {error ? <Alert severity="error">{error}</Alert> : null}
           {phase !== "idle" ? (
@@ -222,18 +233,33 @@ export function AtendimentoCreateDialog({
                 : "Criando atendimento…"}
             </Typography>
           ) : null}
-          <TextField
-            label="Título"
-            disabled={phase !== "idle"}
-            error={Boolean(form.formState.errors.title)}
-            helperText={form.formState.errors.title?.message}
-            slotProps={{ htmlInput: { maxLength: 200 } }}
-            {...titleField}
-            onChange={(event) => {
-              invalidateAttempt();
-              titleField.onChange(event);
-            }}
-          />
+          <Stack direction={{ md: "row", xs: "column" }} spacing={2}>
+            <TextField
+              fullWidth
+              label="Título"
+              disabled={phase !== "idle"}
+              error={Boolean(form.formState.errors.title)}
+              helperText={form.formState.errors.title?.message}
+              slotProps={{ htmlInput: { maxLength: 200 } }}
+              {...titleField}
+              onChange={(event) => {
+                invalidateAttempt();
+                titleField.onChange(event);
+              }}
+            />
+            <CompanySelect
+              companies={
+                companies ?? [{ companyId, companyName: "Empresa selecionada" }]
+              }
+              disabled={phase !== "idle" || !onCompanyChange}
+              label="Empresa do atendimento"
+              onChange={(nextCompanyId) => {
+                if (nextCompanyId !== companyId)
+                  onCompanyChange?.(nextCompanyId);
+              }}
+              value={companyId}
+            />
+          </Stack>
           <TextField
             label="Pessoas envolvidas"
             disabled={phase !== "idle"}
@@ -254,22 +280,25 @@ export function AtendimentoCreateDialog({
             ))}
           </TextField>
           <Button
-            component="label"
             disabled={phase !== "idle"}
+            onClick={() => attachmentInputRef.current?.click()}
             variant="outlined"
           >
             {attachment ? attachment.name : "Anexar arquivo (opcional)"}
-            <input
-              accept="application/pdf,image/jpeg,image/png"
-              data-testid="atendimento-attachment-picker"
-              hidden
-              onChange={(event) => {
-                invalidateAttempt();
-                setAttachment(event.target.files?.[0] ?? null);
-              }}
-              type="file"
-            />
           </Button>
+          <input
+            accept="application/pdf,image/jpeg,image/png"
+            aria-label="Selecionar anexo do atendimento"
+            data-testid="atendimento-attachment-picker"
+            hidden
+            onChange={(event) => {
+              invalidateAttempt();
+              setAttachment(event.target.files?.[0] ?? null);
+              event.target.value = "";
+            }}
+            ref={attachmentInputRef}
+            type="file"
+          />
           <TextField
             label="Descrição"
             disabled={phase !== "idle"}
@@ -286,7 +315,14 @@ export function AtendimentoCreateDialog({
           />
         </Stack>
       </DialogContent>
-      <DialogActions>
+      <DialogActions
+        sx={{
+          "& > .MuiButton-root": { width: { sm: "auto", xs: "100%" } },
+          flexDirection: { sm: "row", xs: "column-reverse" },
+          gap: { sm: 0, xs: 1 },
+          px: { sm: 3, xs: 2 },
+        }}
+      >
         <Button disabled={phase !== "idle"} onClick={close}>
           Cancelar
         </Button>

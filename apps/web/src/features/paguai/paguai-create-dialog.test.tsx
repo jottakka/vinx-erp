@@ -1,10 +1,53 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
 import { PaguaiCreateDialog } from "./paguai-create-dialog";
 
 describe("PaguaiCreateDialog", () => {
+  it("opens the shared file picker from its visible attachment button and uploads the selected file", async () => {
+    const user = userEvent.setup();
+    const uploader = vi.fn(async (file: File) => ({
+      fileId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      fileName: file.name,
+      mimeType: file.type,
+      ok: true as const,
+      sizeBytes: file.size,
+    }));
+    render(
+      <VinxThemeProvider>
+        <PaguaiCreateDialog
+          company={{
+            companyId: "11111111-1111-4111-8111-111111111111",
+            companyName: "Alfa",
+          }}
+          onClose={() => undefined}
+          onSubmit={() => undefined}
+          open
+          uploader={uploader}
+        />
+      </VinxThemeProvider>,
+    );
+
+    const picker = screen.getByLabelText(
+      "Fatura ou documento da solicitação: anexar arquivo",
+    );
+    const pickerClick = vi.spyOn(picker, "click");
+    await user.click(
+      screen.getByRole("button", {
+        name: "Anexar arquivo: Fatura ou documento da solicitação",
+      }),
+    );
+    expect(pickerClick).toHaveBeenCalledTimes(1);
+
+    await user.upload(
+      picker,
+      new File(["fatura"], "fatura.pdf", { type: "application/pdf" }),
+    );
+    await waitFor(() => expect(uploader).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("Anexado")).toBeVisible();
+  });
+
   it("shows a Portuguese title limit instead of the default Zod message", async () => {
     render(
       <VinxThemeProvider>

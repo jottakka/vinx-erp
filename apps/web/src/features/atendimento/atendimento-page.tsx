@@ -19,13 +19,13 @@ import {
   MenuItem,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AuthorizedCompanyFilter } from "../../shared/ui/authorized-company-filter";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanyIdentity } from "../../shared/ui/company-identity";
-import { CompanySelect } from "../../shared/ui/company-select";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
 import {
@@ -82,16 +82,20 @@ export function AtendimentoPage({
   title?: string;
 }) {
   const { bootstrap } = useSession();
+  const sessionCompanies = useMemo(
+    () => bootstrap?.companies ?? [],
+    [bootstrap],
+  );
   const companies = useMemo(
     () =>
-      (bootstrap?.companies ?? []).filter((company) =>
+      sessionCompanies.filter((company) =>
         company.capabilities.some(
           (capability) =>
             capability.name === readCapability &&
             capability.scopes.includes("Company"),
         ),
       ),
-    [bootstrap],
+    [sessionCompanies],
   );
   const [companyId, setCompanyId] = useState("");
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<
@@ -128,10 +132,10 @@ export function AtendimentoPage({
 
   const createCompanies = useMemo(
     () =>
-      companies.filter((company) =>
+      sessionCompanies.filter((company) =>
         hasCompanyCapability(company, createCapability),
       ),
-    [companies],
+    [sessionCompanies],
   );
   const selectedCompany = useMemo(
     () => createCompanies.find((company) => company.companyId === companyId),
@@ -182,14 +186,18 @@ export function AtendimentoPage({
     ).then((results) => {
       if (!active) return;
       if (results.every((result) => result.cards !== null)) {
-        setCards(
-          results.flatMap(
-            (result) =>
-              result.cards?.filter(
-                (card) => card.companyId === result.companyId,
-              ) ?? [],
-          ),
+        const loadedCards = results.flatMap(
+          (result) =>
+            result.cards?.filter(
+              (card) => card.companyId === result.companyId,
+            ) ?? [],
         );
+        setCards((current) => [
+          ...loadedCards,
+          ...current.filter(
+            (card) => !loadedCards.some((loaded) => loaded.id === card.id),
+          ),
+        ]);
       } else setError("Não foi possível carregar a fila. Tente novamente.");
       setLoading(false);
     });
@@ -201,14 +209,15 @@ export function AtendimentoPage({
   useEffect(() => {
     const controller = new AbortController();
     setCreateOptions([]);
-    if (!companyId || !permissions.canCreate) return () => controller.abort();
+    if (!createOpen || !companyId || !permissions.canCreate)
+      return () => controller.abort();
     void atendimentoClient
       .assignmentOptions(companyId, controller.signal)
       .then((options) => {
         if (!controller.signal.aborted && options) setCreateOptions(options);
       });
     return () => controller.abort();
-  }, [companyId, permissions.canCreate]);
+  }, [companyId, createOpen, permissions.canCreate]);
 
   async function createCard(values: {
     requestId: string;
@@ -217,7 +226,7 @@ export function AtendimentoPage({
     attachmentFileId?: string;
     participantMembershipIds: readonly string[];
   }): Promise<{ ok: true } | { ok: false; message: string }> {
-    if (!selectedCompany || !permissions.canCreate || loading)
+    if (!selectedCompany || !permissions.canCreate)
       return {
         message: "Não foi possível criar o atendimento. Tente novamente.",
         ok: false,
@@ -350,16 +359,27 @@ export function AtendimentoPage({
       <Stack spacing={3}>
         <PageHeader
           actions={
-            permissions.canCreate ? (
+            createCompanies.length ? (
               <Button
-                disabled={loading}
                 onClick={() => setCreateOpen(true)}
                 startIcon={<AddOutlinedIcon />}
                 variant="contained"
               >
                 Novo atendimento
               </Button>
-            ) : null
+            ) : (
+              <Tooltip title="Sua sessão não pode criar atendimentos.">
+                <span>
+                  <Button
+                    disabled
+                    startIcon={<AddOutlinedIcon />}
+                    variant="contained"
+                  >
+                    Novo atendimento
+                  </Button>
+                </span>
+              </Tooltip>
+            )
           }
           description="Acompanhe e organize os atendimentos das empresas que você pode acessar."
           title={title}
@@ -376,18 +396,6 @@ export function AtendimentoPage({
           onChange={setSelectedCompanyIds}
           selectedCompanyIds={selectedCompanyIds}
         />
-        {createCompanies.length ? (
-          <CompanySelect
-            companies={createCompanies}
-            onChange={(nextCompanyId) => {
-              setAssigneeMembershipId("");
-              setCreateOptions([]);
-              setCompanyId(nextCompanyId);
-            }}
-            label="Empresa do novo atendimento"
-            value={companyId}
-          />
-        ) : null}
         {!companies.length ? (
           <Alert severity="info">
             Sua sessão não possui empresa com acesso à fila de {title}.
@@ -511,7 +519,7 @@ export function AtendimentoPage({
                               <CompanyIdentity
                                 companyId={card.companyId}
                                 companyName={
-                                  companies.find(
+                                  sessionCompanies.find(
                                     (company) =>
                                       company.companyId === card.companyId,
                                   )?.companyName ?? "Empresa autorizada"
@@ -611,9 +619,15 @@ export function AtendimentoPage({
 
       <AtendimentoCreateDialog
         assignmentOptions={createOptions}
+        companies={createCompanies}
         uploader={attachmentUploader}
         companyId={companyId}
         onClose={() => setCreateOpen(false)}
+        onCompanyChange={(nextCompanyId) => {
+          setAssigneeMembershipId("");
+          setCreateOptions([]);
+          setCompanyId(nextCompanyId);
+        }}
         onSubmit={(values) => {
           return createCard(values);
         }}
@@ -673,7 +687,7 @@ export function AtendimentoPage({
       <ViewCardDialog
         card={viewingCard}
         companyName={
-          companies.find(
+          sessionCompanies.find(
             (company) => company.companyId === viewingCard?.companyId,
           )?.companyName ?? "Empresa autorizada"
         }

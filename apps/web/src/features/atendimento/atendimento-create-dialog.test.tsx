@@ -1,5 +1,12 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
 import { AtendimentoCreateDialog } from "./atendimento-create-dialog";
@@ -15,6 +22,132 @@ function deferred<T>() {
 }
 
 describe("AtendimentoCreateDialog", () => {
+  it("opens its file picker from a focusable attachment button", async () => {
+    const user = userEvent.setup();
+    render(
+      <VinxThemeProvider>
+        <AtendimentoCreateDialog
+          assignmentOptions={[]}
+          companyId="11111111-1111-4111-8111-111111111111"
+          onClose={() => undefined}
+          onSubmit={async () => ({ ok: true })}
+          open
+        />
+      </VinxThemeProvider>,
+    );
+
+    const picker = screen.getByTestId("atendimento-attachment-picker");
+    const pickerClick = vi.spyOn(picker, "click");
+    await user.click(
+      screen.getByRole("button", { name: "Anexar arquivo (opcional)" }),
+    );
+    expect(pickerClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets company-scoped people and the failed attempt when the dialog company changes", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue({
+      message: "Não foi possível concluir a ação. Tente novamente.",
+      ok: false,
+    });
+    const companies = [
+      {
+        companyId: "11111111-1111-4111-8111-111111111111",
+        companyName: "Alfa",
+      },
+      {
+        companyId: "22222222-2222-4222-8222-222222222222",
+        companyName: "Beta",
+      },
+    ];
+
+    function SwitchingDialog() {
+      const [companyId, setCompanyId] = useState(companies[0].companyId);
+      const assignmentOptions =
+        companyId === companies[0].companyId
+          ? [
+              {
+                displayName: "Maria Silva",
+                membershipId: "33333333-3333-4333-8333-333333333333",
+              },
+            ]
+          : [
+              {
+                displayName: "Pedro Souza",
+                membershipId: "44444444-4444-8444-8444-444444444444",
+              },
+            ];
+      return (
+        <AtendimentoCreateDialog
+          assignmentOptions={assignmentOptions}
+          companies={companies}
+          companyId={companyId}
+          onClose={() => undefined}
+          onCompanyChange={setCompanyId}
+          onSubmit={onSubmit}
+          open
+        />
+      );
+    }
+
+    render(
+      <VinxThemeProvider>
+        <SwitchingDialog />
+      </VinxThemeProvider>,
+    );
+    await user.type(screen.getByLabelText("Título"), "Atendimento Alfa");
+    await user.type(screen.getByLabelText("Descrição"), "Descrição Alfa");
+    await user.click(screen.getByRole("button", { name: "Criar cartão" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const alfaRequestId = onSubmit.mock.calls[0]?.[0]?.requestId;
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Empresa do atendimento" }),
+    );
+    await user.click(await screen.findByRole("option", { name: /Beta/ }));
+
+    expect(screen.getByLabelText("Título")).toHaveValue("");
+    expect(screen.getByLabelText("Descrição")).toHaveValue("");
+    await user.click(
+      screen.getByRole("combobox", { name: "Pessoas envolvidas" }),
+    );
+    expect(
+      await screen.findByRole("option", { name: "Pedro Souza" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Maria Silva" })).toBeNull();
+    await user.keyboard("{Escape}");
+
+    await user.type(screen.getByLabelText("Título"), "Atendimento Beta");
+    await user.type(screen.getByLabelText("Descrição"), "Descrição Beta");
+    await user.click(screen.getByRole("button", { name: "Criar cartão" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit.mock.calls[1]?.[0]?.requestId).not.toBe(alfaRequestId);
+  });
+
+  it("uses the medium full-width dialog with responsive form and action regions", () => {
+    render(
+      <VinxThemeProvider>
+        <AtendimentoCreateDialog
+          assignmentOptions={[]}
+          companyId="11111111-1111-4111-8111-111111111111"
+          onClose={() => undefined}
+          onSubmit={async () => ({ ok: true })}
+          open
+        />
+      </VinxThemeProvider>,
+    );
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveClass("MuiDialog-paperFullWidth");
+    expect(dialog).toHaveClass("MuiDialog-paperWidthMd");
+    expect(
+      within(dialog).getByRole("button", { name: "Cancelar" }),
+    ).toBeVisible();
+    expect(
+      within(dialog).getByRole("button", { name: "Criar cartão" }),
+    ).toBeVisible();
+  });
+
   it("shows a Portuguese title limit instead of the default Zod message", async () => {
     render(
       <VinxThemeProvider>
