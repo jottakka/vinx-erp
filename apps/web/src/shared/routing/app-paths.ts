@@ -24,7 +24,6 @@ export const appRouteCatalog = [
     navigation: true,
     path: "/atendimento",
   },
-  { group: "modules", label: "Kanban", navigation: true, path: "/kanban" },
   { group: "modules", label: "Pessoas", navigation: true, path: "/pessoas" },
   {
     group: "support",

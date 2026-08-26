@@ -10,6 +10,11 @@ import {
   CardActions,
   CardContent,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  MenuItem,
   Stack,
   TextField,
   Typography,
@@ -22,6 +27,7 @@ import { PageHeader } from "../../shared/ui/page-header";
 import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
+  type AtendimentoAssignmentOption,
   type AtendimentoCard,
   type AtendimentoColumn,
   atendimentoClient,
@@ -29,9 +35,10 @@ import {
 import { AtendimentoCreateDialog } from "./atendimento-create-dialog";
 
 const columns: readonly { id: AtendimentoColumn; label: string }[] = [
-  { id: "novo", label: "Novo" },
+  { id: "novo", label: "Novos" },
   { id: "em_andamento", label: "Em andamento" },
-  { id: "concluido", label: "Concluído" },
+  { id: "concluido", label: "Concluídos" },
+  { id: "cancelado", label: "Cancelados" },
 ];
 
 const readCapability = "service_desk.ticket.read_queue";
@@ -66,7 +73,17 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [viewingCard, setViewingCard] = useState<AtendimentoCard | null>(null);
+  const [assigningCard, setAssigningCard] = useState<AtendimentoCard | null>(
+    null,
+  );
+  const [assignmentOptions, setAssignmentOptions] = useState<
+    readonly AtendimentoAssignmentOption[]
+  >([]);
   const [assigneeMembershipId, setAssigneeMembershipId] = useState("");
+  const [cancellingCard, setCancellingCard] = useState<AtendimentoCard | null>(
+    null,
+  );
+  const [cancellationReason, setCancellationReason] = useState("");
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<AtendimentoColumn | null>(null);
 
@@ -84,16 +101,6 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     [selectedCompany],
   );
 
-  const canAssign = useMemo(
-    () =>
-      selectedCompany?.capabilities.some(
-        (capability) =>
-          capability.name === assignCapability &&
-          capability.scopes.includes("Company"),
-      ) ?? false,
-    [selectedCompany],
-  );
-
   useEffect(() => {
     if (!companies.some((company) => company.companyId === companyId)) {
       setCompanyId(companies[0]?.companyId ?? "");
@@ -101,38 +108,66 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   }, [companies, companyId]);
 
   useEffect(() => {
-    if (!companyId) return;
+    if (!companies.length) {
+      setCards([]);
+      return;
+    }
     let active = true;
     setCards([]);
     setLoading(true);
     setError(null);
     setViewingCard(null);
-    void atendimentoClient.list(companyId).then((result) => {
+    void Promise.all(
+      companies.map(async (company) => ({
+        companyId: company.companyId,
+        cards: await atendimentoClient.list(company.companyId),
+      })),
+    ).then((results) => {
       if (!active) return;
-      if (result)
-        setCards(result.filter((card) => card.companyId === companyId));
-      else setError("Não foi possível carregar a fila. Tente novamente.");
+      if (results.every((result) => result.cards !== null)) {
+        setCards(
+          results.flatMap(
+            (result) =>
+              result.cards?.filter(
+                (card) => card.companyId === result.companyId,
+              ) ?? [],
+          ),
+        );
+      } else setError("Não foi possível carregar a fila. Tente novamente.");
       setLoading(false);
     });
     return () => {
       active = false;
     };
-  }, [companyId]);
+  }, [companies]);
 
-  async function createCard(values: { title: string; description: string }) {
+  async function createCard(values: {
+    title: string;
+    description: string;
+    attachmentFileId?: string;
+  }) {
     if (!companyId) return;
-    const result = await atendimentoClient.create(
-      companyId,
-      values.title,
-      values.description,
-    );
+    const result = values.attachmentFileId
+      ? await atendimentoClient.create(
+          companyId,
+          values.title,
+          values.description,
+          {
+            attachmentFileId: values.attachmentFileId,
+          },
+        )
+      : await atendimentoClient.create(
+          companyId,
+          values.title,
+          values.description,
+        );
     if (!result.ok) return setError(messageFor(result.code));
     setCards((current) => [...current, result.card]);
   }
 
   async function move(card: AtendimentoCard, column: AtendimentoColumn) {
-    if (card.column === column) return;
-    const result = await atendimentoClient.move(companyId, card, column);
+    if (card.column === column || card.column === "cancelado") return;
+    const result = await atendimentoClient.move(card.companyId, card, column);
     if (!result.ok) return recover(result.code, result.current);
     setCards((current) =>
       current.map((item) => (item.id === card.id ? result.card : item)),
@@ -142,7 +177,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   async function assign(card: AtendimentoCard) {
     if (!assigneeMembershipId.trim()) return;
     const result = await atendimentoClient.assign(
-      companyId,
+      card.companyId,
       card,
       assigneeMembershipId.trim(),
     );
@@ -150,6 +185,29 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     setCards((current) =>
       current.map((item) => (item.id === card.id ? result.card : item)),
     );
+    setAssigningCard(null);
+    setAssigneeMembershipId("");
+  }
+
+  async function openAssignment(card: AtendimentoCard) {
+    setAssigneeMembershipId("");
+    setAssignmentOptions([]);
+    setAssigningCard(card);
+    const options = await atendimentoClient.assignmentOptions(card.companyId);
+    if (options) setAssignmentOptions(options);
+    else setError("Não foi possível carregar as pessoas autorizadas.");
+  }
+
+  async function cancel(card: AtendimentoCard) {
+    const reason = cancellationReason.trim();
+    if (!reason) return;
+    const result = await atendimentoClient.cancel(card.companyId, card, reason);
+    if (!result.ok) return recover(result.code, result.current);
+    setCards((current) =>
+      current.map((item) => (item.id === card.id ? result.card : item)),
+    );
+    setCancellingCard(null);
+    setCancellationReason("");
   }
 
   function recover(code: string, current?: AtendimentoCard) {
@@ -166,6 +224,25 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     if (card && card.column !== column) void move(card, column);
     setDraggedCardId(null);
     setDropTarget(null);
+  }
+
+  function canEditCard(card: AtendimentoCard) {
+    return resolveCompanyEntityPermissions(
+      companies.find((company) => company.companyId === card.companyId),
+      { edit: moveCapability },
+    ).canEdit;
+  }
+
+  function canAssignCard(card: AtendimentoCard) {
+    return (
+      companies
+        .find((company) => company.companyId === card.companyId)
+        ?.capabilities.some(
+          (capability) =>
+            capability.name === assignCapability &&
+            capability.scopes.includes("Company"),
+        ) ?? false
+    );
   }
 
   const selectedCompanyName = selectedCompany?.companyName ?? "Sem empresa";
@@ -185,7 +262,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
               </Button>
             ) : null
           }
-          description="Fila operacional por empresa, com cartões e histórico de movimentos. Arraste os cartões entre as colunas para movê-los."
+          description="Fila operacional das empresas autorizadas. Os cartões preservam a empresa de origem e só comandos explícitos alteram o estado."
           title={title}
         />
         {error ? (
@@ -195,25 +272,17 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
         ) : null}
         <CompanySelect
           companies={companies}
-          label="Empresa"
           onChange={(nextCompanyId) => {
             setAssigneeMembershipId("");
             setCompanyId(nextCompanyId);
           }}
+          label="Empresa para novo cartão"
           value={companyId}
         />
         {!selectedCompany ? (
           <Alert severity="info">
             Sua sessão não possui empresa com acesso à fila de {title}.
           </Alert>
-        ) : null}
-        {canAssign ? (
-          <TextField
-            helperText="Informe o identificador de membership ativo da empresa para atribuir um cartão."
-            label="Membership do responsável"
-            onChange={(event) => setAssigneeMembershipId(event.target.value)}
-            value={assigneeMembershipId}
-          />
         ) : null}
         {loading ? (
           <Typography aria-live="polite" role="status">
@@ -224,7 +293,11 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
           sx={{
             display: "grid",
             gap: 2,
-            gridTemplateColumns: { md: "repeat(3, 1fr)", xs: "1fr" },
+            gridTemplateColumns: {
+              lg: "repeat(4, 1fr)",
+              md: "repeat(2, 1fr)",
+              xs: "1fr",
+            },
           }}
         >
           {columns.map((column) => (
@@ -289,13 +362,21 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                   .map((card) => (
                     <Card
                       key={card.id}
-                      draggable={permissions.canEdit}
+                      draggable={
+                        canEditCard(card) && card.column !== "cancelado"
+                      }
                       onDragEnd={() => setDraggedCardId(null)}
                       onDragStart={() => setDraggedCardId(card.id)}
                       sx={{
-                        cursor: permissions.canEdit ? "grab" : "default",
+                        cursor:
+                          canEditCard(card) && card.column !== "cancelado"
+                            ? "grab"
+                            : "default",
                         "&:active": {
-                          cursor: permissions.canEdit ? "grabbing" : "default",
+                          cursor:
+                            canEditCard(card) && card.column !== "cancelado"
+                              ? "grabbing"
+                              : "default",
                         },
                       }}
                       variant="outlined"
@@ -313,8 +394,19 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                             <Typography color="text.secondary">
                               {card.description}
                             </Typography>
+                            <Chip
+                              label={
+                                companies.find(
+                                  (company) =>
+                                    company.companyId === card.companyId,
+                                )?.companyName ?? "Empresa autorizada"
+                              }
+                              size="small"
+                              sx={{ mt: 1 }}
+                              variant="outlined"
+                            />
                           </Box>
-                          {permissions.canEdit ? (
+                          {canEditCard(card) && card.column !== "cancelado" ? (
                             <DragIndicatorOutlinedIcon
                               aria-hidden
                               color="action"
@@ -350,7 +442,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                         >
                           Visualizar
                         </Button>
-                        {permissions.canEdit
+                        {canEditCard(card) && card.column !== "cancelado"
                           ? columns
                               .filter(
                                 (destination) => destination.id !== card.column,
@@ -367,14 +459,22 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                                 </Button>
                               ))
                           : null}
-                        {canAssign ? (
+                        {canAssignCard(card) && card.column !== "cancelado" ? (
                           <Button
-                            disabled={!assigneeMembershipId.trim()}
-                            onClick={() => void assign(card)}
+                            onClick={() => void openAssignment(card)}
                             size="small"
                             startIcon={<PersonAddAltOutlinedIcon />}
                           >
                             Atribuir
+                          </Button>
+                        ) : null}
+                        {canEditCard(card) && card.column !== "cancelado" ? (
+                          <Button
+                            color="error"
+                            onClick={() => setCancellingCard(card)}
+                            size="small"
+                          >
+                            Cancelar cartão
                           </Button>
                         ) : null}
                       </CardActions>
@@ -393,6 +493,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
       </Stack>
 
       <AtendimentoCreateDialog
+        companyId={companyId}
         onClose={() => setCreateOpen(false)}
         onSubmit={(values) => {
           setCreateOpen(false);
@@ -406,6 +507,68 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
         companyName={selectedCompanyName}
         onClose={() => setViewingCard(null)}
       />
+
+      <Dialog
+        onClose={() => setAssigningCard(null)}
+        open={Boolean(assigningCard)}
+      >
+        <DialogTitle>Atribuir responsável</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            label="Responsável"
+            onChange={(event) => setAssigneeMembershipId(event.target.value)}
+            select
+            sx={{ mt: 1, minWidth: 280 }}
+            value={assigneeMembershipId}
+          >
+            {assignmentOptions.map((option) => (
+              <MenuItem key={option.membershipId} value={option.membershipId}>
+                {option.displayName}
+              </MenuItem>
+            ))}
+          </TextField>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAssigningCard(null)}>Cancelar</Button>
+          <Button
+            disabled={!assigningCard || !assigneeMembershipId}
+            onClick={() => assigningCard && void assign(assigningCard)}
+            variant="contained"
+          >
+            Confirmar atribuição
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        onClose={() => setCancellingCard(null)}
+        open={Boolean(cancellingCard)}
+      >
+        <DialogTitle>Cancelar cartão</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            label="Motivo do cancelamento"
+            multiline
+            onChange={(event) => setCancellationReason(event.target.value)}
+            sx={{ mt: 1, minWidth: 320 }}
+            value={cancellationReason}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCancellingCard(null)}>Voltar</Button>
+          <Button
+            color="error"
+            disabled={!cancellingCard || !cancellationReason.trim()}
+            onClick={() => cancellingCard && void cancel(cancellingCard)}
+            variant="contained"
+          >
+            Confirmar cancelamento
+          </Button>
+        </DialogActions>
+      </Dialog>
     </CompanyProvider>
   );
 }

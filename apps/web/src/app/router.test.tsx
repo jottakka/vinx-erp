@@ -75,7 +75,6 @@ describe("application routes", () => {
   it.each([
     ["/paguai", "Paguai"],
     ["/atendimento", "Atendimento"],
-    ["/kanban", "Kanban"],
     ["/pessoas", "Pessoas"],
   ])("protects and renders %s", async (path, heading) => {
     const router = renderRoute(path, await signedInGateway());

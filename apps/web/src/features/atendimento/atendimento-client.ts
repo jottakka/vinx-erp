@@ -1,4 +1,8 @@
-export type AtendimentoColumn = "novo" | "em_andamento" | "concluido";
+export type AtendimentoColumn =
+  | "novo"
+  | "em_andamento"
+  | "concluido"
+  | "cancelado";
 
 export type AtendimentoCard = {
   id: string;
@@ -8,6 +12,18 @@ export type AtendimentoCard = {
   column: AtendimentoColumn;
   version: number;
   assigneeMembershipId: string | null;
+  attachmentFileId: string | null;
+  participantMembershipIds: readonly string[];
+};
+
+export type AtendimentoAssignmentOption = {
+  membershipId: string;
+  displayName: string;
+};
+
+export type AtendimentoCreateOptions = {
+  attachmentFileId?: string | null;
+  participantMembershipIds?: readonly string[];
 };
 
 type CommandResult =
@@ -87,10 +103,34 @@ export const atendimentoClient = {
       return null;
     }
   },
-  create(companyId: string, title: string, description: string) {
+  async assignmentOptions(
+    companyId: string,
+  ): Promise<AtendimentoAssignmentOption[] | null> {
+    try {
+      const response = await request(
+        `/atendimento/assignment-options?companyId=${encodeURIComponent(companyId)}`,
+      );
+      return response.ok
+        ? ((await response.json()) as AtendimentoAssignmentOption[])
+        : null;
+    } catch {
+      return null;
+    }
+  },
+  create(
+    companyId: string,
+    title: string,
+    description: string,
+    {
+      attachmentFileId = null,
+      participantMembershipIds = [],
+    }: AtendimentoCreateOptions = {},
+  ) {
     return command(basePath, {
+      attachmentFileId,
       companyId,
       description,
+      participantMembershipIds: [...participantMembershipIds],
       requestId: crypto.randomUUID(),
       title,
     });
@@ -112,6 +152,14 @@ export const atendimentoClient = {
       column,
       companyId,
       expectedVersion: card.version,
+      requestId: crypto.randomUUID(),
+    });
+  },
+  cancel(companyId: string, card: AtendimentoCard, reason: string) {
+    return command(`${basePath}/${card.id}/cancel`, {
+      companyId,
+      expectedVersion: card.version,
+      reason: reason.trim(),
       requestId: crypto.randomUUID(),
     });
   },

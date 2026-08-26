@@ -19,7 +19,7 @@ describe("app route manifest", () => {
     expect(byPath.get("/pessoas")?.element.type).toBe(PeoplePage);
     expect(byPath.get("/paguai")?.element.type).toBe(PaguaiPage);
     expect(byPath.get("/atendimento")?.element.type).toBe(AtendimentoPage);
-    expect(byPath.get("/kanban")?.element.type).toBe(AtendimentoPage);
+    expect(byPath.has("/kanban")).toBe(false);
   });
 
   it("wires the platform administration route without navigation exposure", () => {
