@@ -418,12 +418,12 @@ processos, worktrees e recursos VINX.
 
 ## Estimativa e PR
 
-Estimativa corrigida após revisão Sol, recalculada antes da implementação:
+Estimativa final após o mapa concreto do plano:
 
-- 55–75 arquivos contados fora de testes;
-- 6.500–9.000 linhas manuais, incluindo testes e SQL escrito à mão em
+- 70–80 arquivos contados fora de testes;
+- 8.000–11.000 linhas manuais, incluindo testes e SQL escrito à mão em
   migrations;
-- 5–8 arquivos genuinamente gerados de migration/snapshot/lockfile,
+- 7–10 arquivos genuinamente gerados de migration/snapshot/lockfile,
   reportados à parte;
 - uma única PR vertical, inicialmente empilhada sobre a PR #332 e retargetada
   para `main` após o merge da dependência.
