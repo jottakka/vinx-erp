@@ -185,7 +185,7 @@ public sealed class WorkerHostIngressTests
             builder.UseSetting("SUPABASE_INVITE_REDIRECT_URL", "https://app.example.test/convite");
             builder.ConfigureTestServices(services =>
                 services
-                    .AddHttpClient(SupabaseAdminOwnerInvitationClient.HttpClientName)
+                    .AddHttpClient(SupabaseAdminInvitationClient.HttpClientName)
                     .ConfigurePrimaryHttpMessageHandler(() => _inviteHandler)
             );
         }

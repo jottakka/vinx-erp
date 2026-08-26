@@ -251,7 +251,7 @@ builder
     );
 builder
     .Services.AddHttpClient(
-        SupabaseAdminOwnerInvitationClient.HttpClientName,
+        SupabaseAdminInvitationClient.HttpClientName,
         client => client.Timeout = TimeSpan.FromSeconds(10)
     )
     .ConfigurePrimaryHttpMessageHandler(() =>
