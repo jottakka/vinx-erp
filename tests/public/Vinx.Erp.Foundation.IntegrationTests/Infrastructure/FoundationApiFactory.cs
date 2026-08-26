@@ -43,6 +43,7 @@ public sealed record E2eFixtureFactoryContext(
 public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyncDisposable
 {
     public const string TestAuthenticationScheme = "FoundationTest";
+    public const string TelegramWebhookSecret = "telegram-integration-test-secret";
 
     private readonly IFoundationFixtureLifecycle _fixture;
     private readonly TestPrincipalClaims _principalClaims;
@@ -61,6 +62,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly bool _useJwtBearer;
     private readonly bool _provisionWolverineStorage;
     private readonly bool _disableWolverineForE2e;
+    private readonly string _telegramWebhookSecret;
 
     private FoundationApiFactory(
         Guid actorUserId,
@@ -80,7 +82,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Func<ValueTask>? disposeJwtAsync = null,
         bool provisionWolverineStorage = true,
         DbCommandInterceptor? testCommandInterceptor = null,
-        bool disableWolverineForE2e = false)
+        bool disableWolverineForE2e = false,
+        string telegramWebhookSecret = TelegramWebhookSecret)
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
@@ -101,6 +104,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _useJwtBearer = jwtAuthority is not null;
         _provisionWolverineStorage = provisionWolverineStorage;
         _disableWolverineForE2e = disableWolverineForE2e;
+        _telegramWebhookSecret = telegramWebhookSecret;
     }
 
     public Guid ActorUserId { get; }
@@ -196,7 +200,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         IAgentModel? agentModel = null,
         AgentRunOptions? agentRunOptions = null,
         bool provisionWolverineStorage = true,
-        DbCommandInterceptor? commandInterceptor = null)
+        DbCommandInterceptor? commandInterceptor = null,
+        string telegramWebhookSecret = TelegramWebhookSecret)
     {
         var resolvedActorUserId = actorUserId ?? Guid.NewGuid();
         var resolvedCorrelationId = correlationId ?? Guid.NewGuid();
@@ -215,8 +220,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             testAgentModel: agentModel,
             testAgentRunOptions: agentRunOptions,
             provisionWolverineStorage: provisionWolverineStorage,
-            testCommandInterceptor: commandInterceptor);
+            testCommandInterceptor: commandInterceptor,
+            telegramWebhookSecret: telegramWebhookSecret);
         return await PrepareAsync(factory);
+    }
+
+    public static async Task<FoundationApiFactory> CreateWithEmptyTelegramWebhookSecretAsync()
+    {
+        return await CreateAsync(telegramWebhookSecret: string.Empty);
     }
 
     public static async Task<FoundationApiFactory> CreateWithAuthenticatedIdentityAsync(
@@ -434,6 +445,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         builder.UseSetting("META_WHATSAPP_WEB_APP_BASE_URL", "https://app.example.test");
         builder.UseSetting("META_WHATSAPP_APP_SECRET", "test-meta-app-secret");
         builder.UseSetting("META_WHATSAPP_WEBHOOK_VERIFY_TOKEN", "test-meta-verify-token");
+        builder.UseSetting("TELEGRAM_WEBHOOK_SECRET_TOKEN", _telegramWebhookSecret);
         builder.ConfigureTestServices(services =>
         {
             if (_disableWolverineForE2e)
