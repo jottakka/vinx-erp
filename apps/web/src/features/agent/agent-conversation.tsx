@@ -231,14 +231,18 @@ export function AgentConversation() {
           <IconButton
             aria-label="Anexar arquivo"
             component="label"
-            disabled={thinking || !access.available || !attachmentSelectionAvailable}
+            disabled={
+              thinking || !access.available || !attachmentSelectionAvailable
+            }
             title="Anexar arquivo"
           >
             <AttachFileOutlinedIcon />
             <input
               accept="application/pdf,image/jpeg,image/png"
               aria-label="Anexar documentos ao agente"
-              disabled={thinking || !access.available || !attachmentSelectionAvailable}
+              disabled={
+                thinking || !access.available || !attachmentSelectionAvailable
+              }
               multiple
               onChange={selectFiles}
               style={{ display: "none" }}

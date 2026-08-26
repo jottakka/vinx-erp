@@ -588,17 +588,16 @@ describe("agent workspace", () => {
       "Selecione uma empresa para usar o assistente.",
     );
     expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
-    expect(dock.getByRole("button", { name: "Anexar" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(
+      dock.getByRole("button", { name: "Anexar arquivo" }),
+    ).toHaveAttribute("aria-disabled", "true");
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const picker = dock.getByLabelText("Anexar documentos ao agente");
     const composer = dock.getByLabelText("Mensagem para o agente");
     const blockedMessage = "tentativa sem empresa";
 
     await user.type(composer, blockedMessage);
-    await user.click(dock.getByRole("button", { name: "Anexar" }));
+    await user.click(dock.getByRole("button", { name: "Anexar arquivo" }));
     await user.upload(picker, attachmentFile("sem-empresa.pdf"));
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
@@ -655,17 +654,16 @@ describe("agent workspace", () => {
       "O assistente não está disponível para o seu perfil nesta empresa.",
     );
     expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
-    expect(dock.getByRole("button", { name: "Anexar" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(
+      dock.getByRole("button", { name: "Anexar arquivo" }),
+    ).toHaveAttribute("aria-disabled", "true");
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const picker = dock.getByLabelText("Anexar documentos ao agente");
     const composer = dock.getByLabelText("Mensagem para o agente");
     const blockedMessage = "tentativa sem capability";
 
     await user.type(composer, blockedMessage);
-    await user.click(dock.getByRole("button", { name: "Anexar" }));
+    await user.click(dock.getByRole("button", { name: "Anexar arquivo" }));
     await user.upload(picker, attachmentFile("sem-capability.pdf"));
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
