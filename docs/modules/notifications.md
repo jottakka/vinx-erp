@@ -119,6 +119,29 @@ transitivos e usam somente o retry finito do worker. Não há retry no adapter,
 webhook, inbound ou resposta automática nesta fatia. Runbook:
 `docs/runbooks/telegram-outbound.md`.
 
+## Telegram inbound — admissão SQL
+
+A Foundation mantém `notifications.inbound_telegram_messages` como evidência
+durável de texto inbound: `update_id`, `chat_id`, `message_id`, corpo, estado
+de resolução, identidade eventualmente resolvida e estado `pending`. A tabela
+usa RLS forçado e não concede leitura ou escrita direta a `vinx_runtime`.
+
+`notifications.resolve_inbound_telegram_actor(chat_id)` é `SECURITY DEFINER`,
+com owner e `search_path` fixos, e considera somente contato `telegram` de chat
+privado validado, membership ativa e empresa não excluída. O resultado é
+fechado: `admitted` apenas para uma identidade exata; ausência de contato,
+contato não validado, identidade inativa ou mais de uma identidade retornam,
+respectivamente, `unbound`, `unverified`, `inactive` ou `ambiguous`, sem IDs
+de usuário, empresa ou membership.
+
+`notifications.admit_inbound_telegram_text(...)` grava somente parâmetros
+válidos e deduplica por `(chat_id, message_id)`: a mesma combinação de
+`update_id` e corpo retorna `replay`; uma reutilização incompatível retorna
+`conflict`. Nenhum replay atualiza a primeira decisão persistida, inclusive se
+o contato for validado depois. Nesta PR não há endpoint, publicação, fila,
+worker nem função para concluir a linha; `completed` permanece fora do
+contrato até a fatia própria do worker.
+
 ## Inbound admissão e identidade (#272 PR1)
 
 O webhook (mesmo endpoint do W3) lê `messages[]` dos tipos `image`, `document`
