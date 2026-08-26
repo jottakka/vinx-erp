@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Regex = System.Text.RegularExpressions.Regex;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
@@ -24,6 +25,8 @@ public sealed class AtendimentoCardSchemaTests
                 (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'service_desk.atendimento_cards'::regclass AND conname = 'ck_atendimento_cards_priority'),
                 (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'service_desk.atendimento_cards'::regclass AND conname = 'ck_atendimento_cards_channel'),
                 (SELECT data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'service_desk' AND table_name = 'atendimento_cards' AND column_name = 'sla_due_at'),
+                (SELECT character_maximum_length || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'service_desk' AND table_name = 'atendimento_cards' AND column_name = 'priority'),
+                (SELECT character_maximum_length || ':' || is_nullable FROM information_schema.columns WHERE table_schema = 'service_desk' AND table_name = 'atendimento_cards' AND column_name = 'channel'),
                 (SELECT indexdef FROM pg_indexes WHERE schemaname = 'service_desk' AND indexname = 'ix_atendimento_cards_company_id_created_at_id_live'),
                 (SELECT relforcerowsecurity FROM pg_class WHERE oid = 'service_desk.atendimento_cards'::regclass),
                 has_table_privilege('vinx_runtime', 'service_desk.atendimento_cards', 'SELECT,INSERT,UPDATE'),
@@ -35,19 +38,20 @@ public sealed class AtendimentoCardSchemaTests
         Assert.True(await reader.ReadAsync());
         Assert.Equal("'media'::character varying", reader.GetString(0));
         Assert.Equal("'manual'::character varying", reader.GetString(1));
-        Assert.Contains("priority", reader.GetString(2));
-        Assert.Contains("ANY", reader.GetString(2));
-        Assert.Contains("critica", reader.GetString(2));
-        Assert.Contains("channel", reader.GetString(3));
-        Assert.Contains("ANY", reader.GetString(3));
-        Assert.Contains("whatsapp", reader.GetString(3));
+        Assert.Equal(["alta", "baixa", "critica", "media"], AllowedValues(reader.GetString(2)));
+        Assert.Equal(["email", "manual", "web", "whatsapp"], AllowedValues(reader.GetString(3)));
         Assert.Equal("timestamp with time zone:YES", reader.GetString(4));
-        Assert.Contains("(company_id, created_at DESC, id DESC)", reader.GetString(5));
-        Assert.Contains("WHERE (deleted_at IS NULL)", reader.GetString(5));
-        Assert.True(reader.GetBoolean(6));
-        Assert.True(reader.GetBoolean(7));
-        Assert.False(reader.GetBoolean(8));
+        Assert.Equal("10:NO", reader.GetString(5));
+        Assert.Equal("12:NO", reader.GetString(6));
+        Assert.Contains("(company_id, created_at DESC, id DESC)", reader.GetString(7));
+        Assert.Contains("WHERE (deleted_at IS NULL)", reader.GetString(7));
+        Assert.True(reader.GetBoolean(8));
+        Assert.True(reader.GetBoolean(9));
+        Assert.False(reader.GetBoolean(10));
     }
+
+    private static string[] AllowedValues(string definition) =>
+        Regex.Matches(definition, "'([^']+)'").Select(match => match.Groups[1].Value).OrderBy(value => value, StringComparer.Ordinal).ToArray();
 
     [Fact]
     public async Task Card_cancellation_constraint_accepts_each_complete_state_and_rejects_every_incomplete_combination()

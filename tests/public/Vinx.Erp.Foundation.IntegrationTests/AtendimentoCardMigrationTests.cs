@@ -34,6 +34,36 @@ public sealed class AtendimentoCardMigrationTests
         (KnownCapabilities.ServiceDeskTicketCancelId, KnownCapabilities.ServiceDeskTicketCancel),
     ];
 
+    [Fact]
+    public async Task Operational_metadata_up_preserves_legacy_cards_with_defaults()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(BeforeAtendimentoOperationalMetadata);
+        var actorId = Guid.NewGuid();
+        var companyId = Guid.NewGuid();
+        var cardId = Guid.NewGuid();
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var insert = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.groups (id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at) VALUES (gen_random_uuid(), 'Legacy', @actor, @actor, gen_random_uuid(), clock_timestamp(), clock_timestamp());
+            INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at) VALUES (@company, (SELECT id FROM foundation.groups WHERE name = 'Legacy'), 'Legacy', @actor, @actor, gen_random_uuid(), clock_timestamp(), clock_timestamp());
+            INSERT INTO service_desk.atendimento_cards (id, company_id, title, description, column_name, created_by_user_id, updated_by_user_id, request_id) VALUES (@card, @company, 'Legacy', 'Old columns only.', 'novo', @actor, @actor, gen_random_uuid());
+            """, administrator))
+        {
+            insert.Parameters.AddWithValue("actor", actorId); insert.Parameters.AddWithValue("company", companyId); insert.Parameters.AddWithValue("card", cardId);
+            await insert.ExecuteNonQueryAsync();
+        }
+        await migrator.Database.MigrateAsync();
+        await using var verify = await fixture.OpenAdministratorConnectionAsync();
+        await using var select = new NpgsqlCommand("SELECT priority, channel, sla_due_at IS NULL FROM service_desk.atendimento_cards WHERE id = @card", verify);
+        select.Parameters.AddWithValue("card", cardId);
+        await using var reader = await select.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("media", reader.GetString(0)); Assert.Equal("manual", reader.GetString(1)); Assert.True(reader.GetBoolean(2));
+    }
+
     [Theory]
     [InlineData("priority")]
     [InlineData("channel")]

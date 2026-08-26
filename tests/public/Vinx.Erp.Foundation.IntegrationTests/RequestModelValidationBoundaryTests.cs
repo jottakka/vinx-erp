@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
+using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -166,6 +167,13 @@ public sealed class RequestModelValidationBoundaryTests
                     $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_cards WHERE company_id = {scenario.CompanyId}"
                 )
                 .SingleAsync()
+        );
+        Assert.False(
+            await administrator.AuditEvents.AnyAsync(audit =>
+                audit.RequestedCompanyId == scenario.CompanyId
+                && audit.Action == "service_desk.ticket.create"
+                && audit.Outcome == AuditOutcome.Success
+            )
         );
     }
 
