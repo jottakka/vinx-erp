@@ -293,7 +293,9 @@ public partial class AddPendingMemberInvitations : Migration
                     COALESCE(roles_aggregated.aggregated_role_ids, '{}'::uuid[]),
                     COALESCE(roles_aggregated.aggregated_role_names, '{}'::text[]),
                     COALESCE(capabilities_aggregated.aggregated_capability_names, '{}'::text[]),
-                    invitation.status
+                    -- varchar(30) precisa do cast: RETURN QUERY exige o tipo exato
+                    -- da coluna declarada (text) do resultado da função.
+                    invitation.status::text
                 FROM (
                     SELECT
                         membership.id AS membership_id,
