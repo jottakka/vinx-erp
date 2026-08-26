@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Wolverine.Runtime.Serialization;
@@ -87,6 +88,16 @@ public sealed class TelegramInboundOutboxTests
     }
 
     [Fact]
+    public async Task Whitespace_secret_configuration_fails_host_startup()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithTelegramWebhookSecretAsync(" ");
+
+        var exception = Record.Exception(factory.CreateClient);
+
+        Assert.IsType<OptionsValidationException>(exception);
+    }
+
+    [Fact]
     public async Task Replay_of_an_admitted_private_update_keeps_one_row_and_one_envelope()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -165,6 +176,55 @@ public sealed class TelegramInboundOutboxTests
 
         Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
         Assert.Single(await ReadTelegramQueueAsync(factory));
+    }
+
+    [Fact]
+    public async Task Commit_acknowledgement_uncertainty_persists_once_and_retry_is_safe()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "810009",
+            telegramContactValidated: true
+        );
+        using var client = factory.CreateClient();
+        CommitAcknowledgementFailure.Arm(factory.Fixture);
+
+        using (var uncertain = await PostPrivateAsync(client, 1009, 810009, 2009, "ack uncertainty"))
+        {
+            Assert.False(uncertain.IsSuccessStatusCode);
+        }
+
+        Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Equal(1L, await CountTelegramOutgoingEnvelopesAsync(factory));
+
+        using (var retry = await PostPrivateAsync(client, 1009, 810009, 2009, "ack uncertainty"))
+        {
+            Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        }
+
+        Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Equal(1L, await CountTelegramOutgoingEnvelopesAsync(factory));
+    }
+
+    [Fact]
+    public async Task First_out_of_range_private_chat_id_is_accepted_without_row_or_envelope()
+    {
+        const long firstOutOfRangePrivateChatId = 4_503_599_627_370_496;
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var client = factory.CreateClient();
+
+        using var response = await PostPrivateAsync(
+            client,
+            1010,
+            firstOutOfRangePrivateChatId,
+            2010,
+            "out of range"
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Empty(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Empty(await ReadTelegramQueueAsync(factory));
     }
 
     [Theory]
@@ -316,6 +376,17 @@ public sealed class TelegramInboundOutboxTests
         }
 
         return envelopes;
+    }
+
+    private static async Task<long> CountTelegramOutgoingEnvelopesAsync(
+        FoundationApiFactory factory)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM vinx_wolverine.wolverine_outgoing_envelopes",
+            connection
+        );
+        return (long)(await command.ExecuteScalarAsync())!;
     }
 
     private sealed record TelegramQueueEnvelope(

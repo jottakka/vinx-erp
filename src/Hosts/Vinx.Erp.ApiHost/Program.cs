@@ -82,7 +82,7 @@ builder
     .Bind(builder.Configuration)
     .Validate(
         options =>
-            string.IsNullOrWhiteSpace(options.WebhookSecretToken)
+            string.IsNullOrEmpty(options.WebhookSecretToken)
             || TelegramOptions.IsValidWebhookSecret(options.WebhookSecretToken),
         "Telegram webhook secret token is invalid."
     )

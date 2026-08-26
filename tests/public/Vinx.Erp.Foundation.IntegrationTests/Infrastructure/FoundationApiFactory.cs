@@ -230,6 +230,13 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         return await CreateAsync(telegramWebhookSecret: string.Empty);
     }
 
+    public static async Task<FoundationApiFactory> CreateWithTelegramWebhookSecretAsync(
+        string webhookSecret)
+    {
+        ArgumentNullException.ThrowIfNull(webhookSecret);
+        return await CreateAsync(telegramWebhookSecret: webhookSecret);
+    }
+
     public static async Task<FoundationApiFactory> CreateWithAuthenticatedIdentityAsync(
         Guid? actorUserId = null,
         Guid? correlationId = null,

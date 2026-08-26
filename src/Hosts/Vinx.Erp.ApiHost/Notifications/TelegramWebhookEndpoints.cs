@@ -19,6 +19,7 @@ public static class TelegramWebhookEndpoints
 {
     private const string SecretHeader = "X-Telegram-Bot-Api-Secret-Token";
     private const int MaximumBodyBytes = ApiConstants.MaximumJsonBodyBytes;
+    private const long MaximumPrivateChatId = 4_503_599_627_370_495;
 
     /// <summary>
     /// Mapeia o POST público e recebe uma callback que resolve o ingress no
@@ -143,11 +144,13 @@ public static class TelegramWebhookEndpoints
             || !message.TryGetProperty("from", out var from)
             || from.ValueKind != JsonValueKind.Object
             || !TryGetPositiveId(from, "id", out var fromId)
+            || fromId > MaximumPrivateChatId
             || !from.TryGetProperty("is_bot", out var isBot)
             || isBot.ValueKind != JsonValueKind.False
             || !message.TryGetProperty("chat", out var chat)
             || chat.ValueKind != JsonValueKind.Object
             || !TryGetPositiveId(chat, "id", out var chatId)
+            || chatId > MaximumPrivateChatId
             || !chat.TryGetProperty("type", out var chatType)
             || chatType.ValueKind != JsonValueKind.String
             || !string.Equals(chatType.GetString(), "private", StringComparison.Ordinal)
