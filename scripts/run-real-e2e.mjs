@@ -5,8 +5,19 @@ import { createInterface } from "node:readline";
 
 const ALLOWED_PROFILES = new Set(["maria", "beatriz", "joao", "clara"]);
 const WEB_HOST = "127.0.0.1";
-const WEB_PORT = 4174;
+const WEB_PORTS = { clara: 4175, maria: 4174 };
+const WEB_PORT = WEB_PORTS.maria;
 const BROWSER_URL = `http://${WEB_HOST}:${WEB_PORT}`;
+const SHARED_READY_KEYS = [
+  "E2E_API_ORIGIN_MARIA",
+  "E2E_API_ORIGIN_CLARA",
+  "E2E_DB_HOST",
+  "E2E_DB_PORT",
+  "E2E_DB_DATABASE",
+  "E2E_DB_USER",
+  "E2E_DB_PASSWORD_FILE",
+  "E2E_SHARED_READY",
+];
 
 class LauncherError extends Error {
   constructor(category) {
@@ -17,14 +28,18 @@ class LauncherError extends Error {
 
 export function parseLauncherArgs(args) {
   if (
-    args.length !== 2 ||
-    args[0] !== "--profile" ||
-    !ALLOWED_PROFILES.has(args[1])
+    args.length === 2 &&
+    args[0] === "--profile" &&
+    ALLOWED_PROFILES.has(args[1])
   ) {
-    throw new LauncherError("invalid_arguments");
+    return { mode: "single", profile: args[1] };
   }
 
-  return { profile: args[1] };
+  if (args.length === 2 && args[0] === "--profiles" && args[1] === "maria,clara") {
+    return { mode: "shared", profiles: ["maria", "clara"] };
+  }
+
+  throw new LauncherError("invalid_arguments");
 }
 
 export function parseReadyOrigin(line) {
@@ -37,6 +52,56 @@ export function parseReadyOrigin(line) {
   }
 
   return match[1];
+}
+
+export function parseSharedReadiness(lines) {
+  if (!Array.isArray(lines) || lines.length !== SHARED_READY_KEYS.length) {
+    throw new LauncherError("invalid_host_readiness");
+  }
+
+  const values = {};
+  for (const [index, line] of lines.entries()) {
+    const separator = typeof line === "string" ? line.indexOf("=") : -1;
+    if (
+      separator <= 0 ||
+      line.indexOf("=", separator + 1) !== -1 ||
+      line.slice(0, separator) !== SHARED_READY_KEYS[index]
+    ) {
+      throw new LauncherError("invalid_host_readiness");
+    }
+    values[SHARED_READY_KEYS[index]] = line.slice(separator + 1);
+  }
+
+  const mariaApiOrigin = parseReadyOrigin(
+    `E2E_API_ORIGIN=${values.E2E_API_ORIGIN_MARIA}`,
+  );
+  const claraApiOrigin = parseReadyOrigin(
+    `E2E_API_ORIGIN=${values.E2E_API_ORIGIN_CLARA}`,
+  );
+  const databasePort = Number(values.E2E_DB_PORT);
+  if (
+    !["127.0.0.1", "localhost"].includes(values.E2E_DB_HOST) ||
+    !Number.isInteger(databasePort) ||
+    databasePort < 1 ||
+    databasePort > 65_535 ||
+    !/^vinx_fixture_[0-9a-f]+$/.test(values.E2E_DB_DATABASE) ||
+    values.E2E_DB_USER !== "postgres" ||
+    !path.isAbsolute(values.E2E_DB_PASSWORD_FILE) ||
+    /[\0\r\n]/.test(values.E2E_DB_PASSWORD_FILE) ||
+    values.E2E_SHARED_READY !== "1"
+  ) {
+    throw new LauncherError("invalid_host_readiness");
+  }
+
+  return {
+    mariaApiOrigin,
+    claraApiOrigin,
+    databaseHost: values.E2E_DB_HOST,
+    databasePort,
+    databaseName: values.E2E_DB_DATABASE,
+    databaseUser: values.E2E_DB_USER,
+    databasePasswordFilePath: values.E2E_DB_PASSWORD_FILE,
+  };
 }
 
 function normalizeError(error, category) {
@@ -99,6 +164,51 @@ function waitForHostOrigin(stream, timeoutMs) {
   });
 }
 
+function waitForSharedReadiness(stream, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const reader = createInterface({ crlfDelay: Infinity, input: stream });
+    const lines = [];
+    let done = false;
+    const finish = (error, readiness) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      reader.off("close", onClose);
+      reader.off("line", onLine);
+      reader.close();
+      if (error) {
+        reject(error);
+      } else {
+        stream.resume();
+        resolve(readiness);
+      }
+    };
+    const onClose = () => finish(new LauncherError("host_exit"));
+    const onLine = (line) => {
+      const expectedKey = SHARED_READY_KEYS[lines.length];
+      if (!expectedKey || !line.startsWith(`${expectedKey}=`)) {
+        finish(new LauncherError("invalid_host_readiness"));
+        return;
+      }
+
+      lines.push(line);
+      if (lines.length !== SHARED_READY_KEYS.length) return;
+      try {
+        finish(undefined, parseSharedReadiness(lines));
+      } catch (error) {
+        finish(normalizeError(error, "invalid_host_readiness"));
+      }
+    };
+    const timeout = setTimeout(
+      () => finish(new LauncherError("host_readiness_timeout")),
+      timeoutMs,
+    );
+
+    reader.once("close", onClose);
+    reader.on("line", onLine);
+  });
+}
+
 function delay(milliseconds, signal) {
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
@@ -148,13 +258,15 @@ async function waitForHttpReady(url, timeoutMs, cancellationSignal) {
   throw new LauncherError("vite_readiness_timeout");
 }
 
-function createSupervisor(child, spawnCategory, exitCategory) {
+function createSupervisor(child, spawnCategory, exitCategory, requireCleanExit = false) {
   let resolveSpawned;
   let rejectSpawned;
   let resolveOutcome;
   const supervisor = {
     child,
     error: undefined,
+    exitCode: undefined,
+    exitSignal: undefined,
     finished: false,
     outcome: new Promise((resolve) => {
       resolveOutcome = resolve;
@@ -165,10 +277,13 @@ function createSupervisor(child, spawnCategory, exitCategory) {
       rejectSpawned = reject;
     }),
     started: false,
+    requireCleanExit,
   };
-  const finish = (category) => {
+  const finish = (category, exitCode, exitSignal) => {
     if (supervisor.finished) return;
     supervisor.finished = true;
+    supervisor.exitCode = exitCode;
+    supervisor.exitSignal = exitSignal;
     supervisor.error = new LauncherError(category);
     if (!supervisor.started) rejectSpawned(supervisor.error);
     resolveOutcome({ error: supervisor.error, kind: "failure" });
@@ -180,10 +295,10 @@ function createSupervisor(child, spawnCategory, exitCategory) {
     resolveSpawned();
   });
   child.once("error", () =>
-    finish(supervisor.started ? exitCategory : spawnCategory),
+    finish(supervisor.started ? exitCategory : spawnCategory, undefined, undefined),
   );
-  child.once("exit", () =>
-    finish(supervisor.started ? exitCategory : spawnCategory),
+  child.once("exit", (code, signal) =>
+    finish(supervisor.started ? exitCategory : spawnCategory, code, signal),
   );
   return supervisor;
 }
@@ -194,6 +309,7 @@ function startSupervised(command, args, options, categories, deps) {
       deps.spawnProcess(command, args, options),
       categories.spawn,
       categories.exit,
+      categories.requireCleanExit,
     );
   } catch {
     throw new LauncherError(categories.spawn);
@@ -252,7 +368,7 @@ function failureOrSignal(event) {
   return event.kind === "signal" ? event.signal : undefined;
 }
 
-function startHost(profile, deps) {
+function startHost(request, deps) {
   const project = path.resolve(
     deps.repositoryRoot,
     "tests/tools/Vinx.Erp.Foundation.E2eHost/Vinx.Erp.Foundation.E2eHost.csproj",
@@ -265,8 +381,9 @@ function startHost(profile, deps) {
       project,
       "--no-launch-profile",
       "--",
-      "--profile",
-      profile,
+      ...(request.mode === "shared"
+        ? ["--profiles", "maria,clara"]
+        : ["--profile", request.profile]),
     ],
     {
       cwd: deps.repositoryRoot,
@@ -274,12 +391,16 @@ function startHost(profile, deps) {
       env: deps.environment,
       stdio: ["ignore", "pipe", "ignore"],
     },
-    { exit: "host_exit", spawn: "host_spawn_failed" },
+    {
+      exit: "host_exit",
+      spawn: "host_spawn_failed",
+      requireCleanExit: true,
+    },
     deps,
   );
 }
 
-function startVite(apiOrigin, deps) {
+function startVite(apiOrigin, port, deps) {
   const viteCli = path.resolve(
     deps.repositoryRoot,
     "node_modules/vite/bin/vite.js",
@@ -291,7 +412,7 @@ function startVite(apiOrigin, deps) {
       "--host",
       WEB_HOST,
       "--port",
-      String(WEB_PORT),
+      String(port),
       "--strictPort",
     ],
     {
@@ -305,8 +426,8 @@ function startVite(apiOrigin, deps) {
   );
 }
 
-async function runSupervised(profile, deps, signals, children) {
-  children.host = startHost(profile, deps);
+async function runSingleSupervised(profile, deps, signals, children) {
+  children.host = startHost({ mode: "single", profile }, deps);
   let event = await Promise.race([
     children.host.spawned.then(() => ({ kind: "spawned" })),
     signals.outcome,
@@ -331,7 +452,7 @@ async function runSupervised(profile, deps, signals, children) {
   if (signal) return signal;
   const apiOrigin = event.value;
 
-  children.vite = startVite(apiOrigin, deps);
+  children.vite = startVite(apiOrigin, WEB_PORT, deps);
   event = await Promise.race([
     children.vite.spawned.then(() => ({ kind: "spawned" })),
     children.host.outcome,
@@ -375,6 +496,102 @@ async function runSupervised(profile, deps, signals, children) {
   return signal;
 }
 
+async function runSharedSupervised(deps, signals, children) {
+  children.host = startHost({ mode: "shared" }, deps);
+  let event = await Promise.race([
+    children.host.spawned.then(() => ({ kind: "spawned" })),
+    signals.outcome,
+  ]);
+  let signal = failureOrSignal(event);
+  if (signal) return signal;
+  confirmSpawn(children.host, true);
+
+  event = await Promise.race([
+    readyEvent(
+      () => waitForSharedReadiness(children.host.child.stdout, deps.readinessTimeoutMs),
+      "host_readiness_timeout",
+    ),
+    children.host.outcome,
+    signals.outcome,
+  ]);
+  signal = failureOrSignal(event);
+  if (signal) return signal;
+  const readiness = event.value;
+
+  children.mariaVite = startVite(readiness.mariaApiOrigin, WEB_PORTS.maria, deps);
+  event = await Promise.race([
+    children.mariaVite.spawned.then(() => ({ kind: "spawned" })),
+    children.host.outcome,
+    signals.outcome,
+  ]);
+  signal = failureOrSignal(event);
+  if (signal) return signal;
+  confirmSpawn(children.mariaVite);
+
+  children.claraVite = startVite(readiness.claraApiOrigin, WEB_PORTS.clara, deps);
+  event = await Promise.race([
+    children.claraVite.spawned.then(() => ({ kind: "spawned" })),
+    children.host.outcome,
+    children.mariaVite.outcome,
+    signals.outcome,
+  ]);
+  signal = failureOrSignal(event);
+  if (signal) return signal;
+  confirmSpawn(children.claraVite);
+
+  const readinessCancellation = new AbortController();
+  try {
+    event = await Promise.race([
+      readyEvent(
+        () =>
+          Promise.all([
+            deps.waitForHttp(
+              `http://${WEB_HOST}:${WEB_PORTS.maria}`,
+              deps.httpTimeoutMs,
+              readinessCancellation.signal,
+            ),
+            deps.waitForHttp(
+              `http://${WEB_HOST}:${WEB_PORTS.clara}`,
+              deps.httpTimeoutMs,
+              readinessCancellation.signal,
+            ),
+          ]),
+        "vite_readiness_timeout",
+      ),
+      children.host.outcome,
+      children.mariaVite.outcome,
+      children.claraVite.outcome,
+      signals.outcome,
+    ]);
+  } finally {
+    readinessCancellation.abort();
+  }
+  signal = failureOrSignal(event);
+  if (signal) return signal;
+  if (children.host.finished) throw children.host.error;
+  if (children.mariaVite.finished) throw children.mariaVite.error;
+  if (children.claraVite.finished) throw children.claraVite.error;
+
+  deps.publishReady({
+    mode: "shared",
+    mariaBrowserUrl: `http://${WEB_HOST}:${WEB_PORTS.maria}`,
+    claraBrowserUrl: `http://${WEB_HOST}:${WEB_PORTS.clara}`,
+    databaseHost: readiness.databaseHost,
+    databasePort: readiness.databasePort,
+    databaseName: readiness.databaseName,
+    databaseUser: readiness.databaseUser,
+    databasePasswordFilePath: readiness.databasePasswordFilePath,
+  });
+  event = await Promise.race([
+    children.host.outcome,
+    children.mariaVite.outcome,
+    children.claraVite.outcome,
+    signals.outcome,
+  ]);
+  signal = failureOrSignal(event);
+  return signal;
+}
+
 function waitForOutcome(supervisor, timeoutMs) {
   if (supervisor.finished) return Promise.resolve(true);
   return new Promise((resolve) => {
@@ -402,19 +619,38 @@ async function stopChild(supervisor, signal, deps) {
     }
   };
 
+  const requireCleanExit = () => {
+    if (
+      supervisor.requireCleanExit &&
+      Number.isInteger(supervisor.exitCode) &&
+      supervisor.exitCode !== 0
+    ) {
+      throw new LauncherError("child_cleanup_failed");
+    }
+  };
+
   if (!send(signal)) return;
-  if (await waitForOutcome(supervisor, deps.shutdownTimeoutMs)) return;
+  if (await waitForOutcome(supervisor, deps.shutdownTimeoutMs)) {
+    requireCleanExit();
+    return;
+  }
   if (signal === "SIGKILL" || !send("SIGKILL")) {
     throw new LauncherError("child_cleanup_failed");
   }
   if (!(await waitForOutcome(supervisor, 5_000))) {
     throw new LauncherError("child_cleanup_failed");
   }
+  requireCleanExit();
 }
 
 async function stopChildren(children, signal, deps) {
   let firstError;
-  for (const child of [children.vite, children.host]) {
+  for (const child of [
+    children.claraVite,
+    children.mariaVite,
+    children.vite,
+    children.host,
+  ]) {
     try {
       await stopChild(child, signal, deps);
     } catch (error) {
@@ -437,9 +673,22 @@ export async function runLauncher(overrides = {}) {
     killProcessGroup: killOwnedProcessGroup,
     platform: process.platform,
     processExecPath: process.execPath,
-    publishReady: ({ browserUrl, profile }) => {
-      console.log(`E2E_BROWSER_URL=${browserUrl}`);
-      console.log(`E2E_PROFILE=${profile}`);
+    publishReady: (details) => {
+      if (details.mode === "shared") {
+        console.log(`E2E_BROWSER_URL_MARIA=${details.mariaBrowserUrl}`);
+        console.log("E2E_PROFILE_MARIA=maria");
+        console.log(`E2E_BROWSER_URL_CLARA=${details.claraBrowserUrl}`);
+        console.log("E2E_PROFILE_CLARA=clara");
+        console.log(`E2E_DB_HOST=${details.databaseHost}`);
+        console.log(`E2E_DB_PORT=${details.databasePort}`);
+        console.log(`E2E_DB_DATABASE=${details.databaseName}`);
+        console.log(`E2E_DB_USER=${details.databaseUser}`);
+        console.log(`E2E_DB_PASSWORD_FILE=${details.databasePasswordFilePath}`);
+        return;
+      }
+
+      console.log(`E2E_BROWSER_URL=${details.browserUrl}`);
+      console.log(`E2E_PROFILE=${details.profile}`);
     },
     readinessTimeoutMs: 90_000,
     repositoryRoot: repositoryRoot(),
@@ -449,9 +698,14 @@ export async function runLauncher(overrides = {}) {
     waitForHttp: waitForHttpReady,
     ...overrides,
   };
-  const { profile } = parseLauncherArgs(deps.args);
+  const request = parseLauncherArgs(deps.args);
   try {
-    await deps.checkWebPort(WEB_HOST, WEB_PORT);
+    const webPorts = request.mode === "shared"
+      ? [WEB_PORTS.maria, WEB_PORTS.clara]
+      : [WEB_PORT];
+    for (const port of webPorts) {
+      await deps.checkWebPort(WEB_HOST, port);
+    }
   } catch {
     throw new LauncherError("web_port_unavailable");
   }
@@ -462,7 +716,9 @@ export async function runLauncher(overrides = {}) {
   let cleanupError;
   let shutdownSignal = "SIGTERM";
   try {
-    shutdownSignal = await runSupervised(profile, deps, signals, children);
+    shutdownSignal = request.mode === "shared"
+      ? await runSharedSupervised(deps, signals, children)
+      : await runSingleSupervised(request.profile, deps, signals, children);
   } catch (error) {
     primaryError = normalizeError(error, "unexpected_failure");
   }

@@ -1,3 +1,4 @@
+using Npgsql;
 using Vinx.Erp.Foundation.Persistence;
 using Xunit;
 
@@ -88,16 +89,59 @@ public sealed class FoundationApiFactoryLifecycleTests
             calls);
     }
 
+    [Fact]
+    public async Task Prepared_e2e_factory_disposal_never_disposes_the_shared_owner()
+    {
+        var calls = new List<string>();
+        var owner = new ControlledFixture(calls, migrateException: null, disposeException: null);
+        var lease = new FoundationPostgresFixtureLease(owner);
+        var factory = FoundationApiFactory.CreateForPreparedLifecycleTest(
+            lease,
+            () => RecordCleanupAsync(calls, "host-dispose"),
+            () => RecordCleanupAsync(calls, "jwt-dispose"));
+
+        await factory.DisposeAsync();
+
+        Assert.Equal(["host-dispose", "jwt-dispose"], calls);
+        Assert.Equal(0, owner.DisposeCallCount);
+        Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(typeof(FoundationPostgresFixtureLease)));
+    }
+
+    [Fact]
+    public async Task Prepared_e2e_factory_cleanup_failure_never_disposes_the_shared_owner()
+    {
+        var calls = new List<string>();
+        var owner = new ControlledFixture(calls, migrateException: null, disposeException: null);
+        var lease = new FoundationPostgresFixtureLease(owner);
+        var hostCleanupFailure = new InvalidOperationException("host-cleanup-failure");
+        var factory = FoundationApiFactory.CreateForPreparedLifecycleTest(
+            lease,
+            () => FailCleanupAsync(calls, "host-dispose", hostCleanupFailure),
+            () => RecordCleanupAsync(calls, "jwt-dispose"));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => factory.DisposeAsync().AsTask());
+
+        Assert.Same(hostCleanupFailure, exception);
+        Assert.Equal(["host-dispose", "jwt-dispose"], calls);
+        Assert.Equal(0, owner.DisposeCallCount);
+    }
+
     private static ValueTask FailCleanupAsync(List<string> calls, string cleanupName, Exception exception)
     {
         calls.Add(cleanupName);
         return ValueTask.FromException(exception);
     }
 
+    private static ValueTask RecordCleanupAsync(List<string> calls, string cleanupName)
+    {
+        calls.Add(cleanupName);
+        return ValueTask.CompletedTask;
+    }
+
     private sealed class ControlledFixture(
         List<string> calls,
         Exception? migrateException,
-        Exception disposeException,
+        Exception? disposeException,
         Exception? createAdministratorDbContextException = null) : IFoundationFixtureLifecycle
     {
         public string RuntimeConnectionString =>
@@ -115,6 +159,16 @@ public sealed class FoundationApiFactoryLifecycleTests
             return migrateException is null ? Task.CompletedTask : Task.FromException(migrateException);
         }
 
+        public FoundationPostgresEndpoint Endpoint => new(
+            "127.0.0.1",
+            5432,
+            "fixture",
+            "postgres",
+            Pooling: false);
+
+        public Task<NpgsqlConnection> OpenAdministratorConnectionAsync() =>
+            Task.FromException<NpgsqlConnection>(new NotSupportedException("The lifecycle test does not open a connection."));
+
         public FoundationDbContext CreateAdministratorDbContext()
         {
             calls.Add("seed");
@@ -128,8 +182,13 @@ public sealed class FoundationApiFactoryLifecycleTests
 
         public ValueTask DisposeAsync()
         {
+            DisposeCallCount += 1;
             calls.Add("fixture-dispose");
-            return ValueTask.FromException(disposeException);
+            return disposeException is null
+                ? ValueTask.CompletedTask
+                : ValueTask.FromException(disposeException);
         }
+
+        public int DisposeCallCount { get; private set; }
     }
 }

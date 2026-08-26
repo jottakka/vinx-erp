@@ -115,7 +115,29 @@
 - [ ] Remove the duplicate Kanban alias from product navigation/route behavior; do not invent an unauthorised in-memory demand domain.
 - [ ] Run focused Atendimento web and backend tests plus required migration/model guard; commit.
 
-### Task 5: Correção consolidada e verificação proporcional
+### Task 5: Run manual descartável compartilhado Maria/Clara
+
+**Files:**
+- Modify: fixture/factory/host test-only e seus testes de lifecycle/readback
+- Create: owner composto/lease não proprietária e arquivo local protegido para DBeaver
+- Modify: `tests/tools/Vinx.Erp.Foundation.E2eHost/Program.cs`
+- Modify: `scripts/run-real-e2e.mjs` e `scripts/run-real-e2e.test.mjs`
+- Modify: runbook E2E, desenvolvimento local e manifesto de verificação
+
+**Interfaces:**
+- `npm run dev:real-e2e -- --profiles maria,clara` cria um único PostgreSQL/seed e inicia dois ApiHosts com principals fixos, Maria em Vite `4174` e Clara em Vite `4175`.
+- Um owner prepara/semeia/verifica e descarta o fixture uma vez; as duas factories recebem leases de acesso sem `IAsyncDisposable`, portanto nunca encerram a base compartilhada.
+- O launcher preserva o modo single `--profile <nome>` e só publica sucesso quando host composto e os dois Vites estão prontos; falha parcial limpa todos os recursos próprios.
+- O terminal publica um único host/porta/database/user PostgreSQL e o caminho de um arquivo secreto descartável em diretório `0700`/arquivo `0600`; nunca imprime senha ou connection string.
+- Browser não faz login: a identidade é injetada pelo host. Mutações e DBeaver compartilham o mesmo banco; DBeaver é inspeção administrativa local, não prova RLS.
+
+- [x] Escrever RED curto de owner/lease, args/readiness, arquivo protegido e supervisor de dois Vites sem iniciar Docker.
+- [x] Implementar preparação/seed únicos, duas factories/Kestrels e cleanup reverso, sem abstração fora da infraestrutura de teste.
+- [x] Substituir o teste pesado concorrente existente por um teste de um container/dois hosts; não duplicar a suíte pesada.
+- [x] Atualizar launcher e documentação com comando único, duas sessões, DBeaver via `pbcopy`, limites de evidência e cleanup.
+- [x] Executar a validação focada e entregar o comando manual ao responsável; esta tarefa não inicia nem mantém a demonstração viva.
+
+### Task 6: Correção consolidada e verificação proporcional
 
 **Files:**
 - Modify only files required by validated review findings

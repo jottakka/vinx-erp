@@ -113,15 +113,19 @@ browser ou log.
 ## Executar a API C#
 
 Para inspeção manual com banco descartável e identidades de teste, use o fluxo
-test-only de `docs/runbooks/real-e2e-fixture.md`. Um comando sobe PostgreSQL,
-ApiHost e Vite sem senha, token ou Supabase local:
+test-only de `docs/runbooks/real-e2e-fixture.md`. O modo compartilhado sobe um
+PostgreSQL, dois ApiHosts de principal fixo e dois Vites sem senha, token ou
+Supabase local:
 
 ```bash
-npm run dev:real-e2e -- --profile maria
+npm run dev:real-e2e -- --profiles maria,clara
 ```
 
-O fluxo aceita também `beatriz`, `joao` e `clara`; encerre com `Ctrl+C` e
-aguarde o cleanup antes de iniciar outro profile.
+Maria usa `4174` e Clara usa `4175`; seed e verify executam uma vez no banco
+compartilhado. O modo individual continua aceitando `--profile maria`,
+`beatriz`, `joao` ou `clara`. Não reutilize `54322`, não injete identidade pelo
+browser e encerre com `Ctrl+C` somente ao finalizar a sessão, aguardando o
+cleanup reverso.
 
 Com as variáveis de runtime da API já configuradas no processo pelo
 fluxo seguro do time, inicie a API de domínio em outro terminal:

@@ -7,35 +7,40 @@
 | Dataset fresco | PostgreSQL migrado e vazio | o seeder determinístico executa | três empresas, quatro pessoas, cinco memberships, cargos e linhas dos módulos existem; segunda execução falha sem merge | `E2eFixtureSeederTests` |
 | Profile multiempresa | profile `maria` | o host real inicia e chama bootstrap e módulos | Alfa e Beta aparecem, Gama não; employees, Paguai, cards e inbox retornam linhas autorizadas | `RealE2eFixtureHostTests` |
 | Negação entre empresas | Maria autenticada | employees e Paguai de Gama são solicitados | a API responde 403/404 conforme o contrato e não entrega conteúdo | `RealE2eFixtureHostTests` |
-| Isolamento concorrente | dois hosts reais iniciados juntos | um employee é criado pela API somente no host A | bancos, origins e portas são distintos; somente A contém a nova pessoa; ambos removem seus recursos | `RealE2eFixtureHostTests`; o teste existente de endpoints PostgreSQL é evidência complementar |
-| Lifecycle do launcher | argumentos allow-listed e porta web livre | launcher recebe readiness, inicia Vite e depois recebe SIGINT | publica URL/profile, encerra Vite antes do host, fecha portas e remove o Testcontainer próprio | `E2eFixtureHostOptionsTests`; `scripts/run-real-e2e.test.mjs`; smoke real condicionado |
+| Fixture compartilhada | Maria e Clara têm principals fixos e o banco ainda não existe | o host composto migra, semeia e verifica uma vez | duas origins API distintas compartilham host/porta/database PostgreSQL; Maria lê Alfa/Beta, Clara lê somente Gama e uma mutação Maria fica no owner | `RealE2eFixtureHostTests.Shared_host_seeds_once_and_keeps_profile_RLS_isolated` |
+| Export seguro | fixture compartilhada pronta | o host cria o arquivo administrativo local | diretório `0700`, arquivo regular `0600`, sem newline, sem symlink e removido antes do banco | `E2eFixtureHostOptionsTests` |
+| Lifecycle do launcher | argumentos allow-listed e portas `4174`/`4175` livres | launcher recebe readiness estrita, inicia dois Vites e depois recebe SIGINT | publica apenas URLs/profile/endpoint DBeaver/caminho protegido; encerra Clara, Maria e host; saída não zero do host no cleanup falha | `E2eFixtureHostOptionsTests`; `scripts/run-real-e2e.test.mjs` |
 
-## Inspeção manual Luna
+## Inspeção manual Maria/Clara
 
-Executar serialmente com `maria` e um único launcher/container/browser:
+Executar uma única sessão compartilhada com `maria,clara`, dois browsers e um
+único launcher/container:
 
-1. `/` — bootstrap e seletor mostram somente empresas autorizadas.
+1. Maria em `4174`: `/` mostra Alfa/Beta e não Gama; Clara em `4175`: `/` mostra
+   somente Gama.
 2. `/pessoas` — Alfa mostra Maria e Beatriz; Beta fica fora do seletor porque o
    cargo de Maria não concede o diretório nessa empresa. Cargos/capabilities não
    são conteúdo exibido na página.
 3. `/paguai` — rascunhos pertencem à empresa selecionada.
 4. `/atendimento` e `/kanban` — cards aparecem nos estados esperados.
 5. `/notificacoes` — itens lidos e não lidos aparecem sem payload bruto.
-6. tentativa Gama com profile Maria — dado permanece oculto/negado.
+6. Criar uma pessoa Alfa por Maria, confirmar a linha no DBeaver em modo
+   somente leitura e confirmar que Clara permanece sem acesso a Alfa.
 
-Registrar URL loopback, profile, rotas observadas e resultado. Não registrar
-IDs internos, e-mails, claims, connection string, token, payload ou conteúdo de
+Registrar apenas URLs loopback, profiles, campos do endpoint DBeaver, caminho
+protegido, rotas observadas e resultado. Não registrar IDs internos, e-mails,
+claims, origins API, connection string, senha, token, payload ou conteúdo de
 arquivo.
 
 ## Gate público desta fatia
 
 - Restore locked e build do executável test-only antes dos testes Node, porque o
   contrato de subprocesso executa o DLL já verificado e não faz build implícito.
-- Testes focados C# de seeder, host real e parser.
-- Testes Node do launcher e smoke real serial condicionado.
-- Teste Vitest do proxy, lint, format, build e proibição de Supabase direto.
-- `./scripts/verify-public.sh` uma vez após congelar o escopo, porque a fatia
-  altera infraestrutura compartilhada de teste e banco.
+- Testes focados C# de lifecycle, parser/output e host compartilhado; o último
+  requer uma única atribuição explícita do daemon Docker.
+- Testes Node do launcher single/compartilhado, sem smoke condicionado.
+- CI continua o gate público completo; não executar o gate local completo nesta
+  fatia isolada.
 
 Ordem mínima do trecho executável:
 
