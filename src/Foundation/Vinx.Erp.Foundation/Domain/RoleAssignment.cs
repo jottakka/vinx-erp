@@ -21,4 +21,19 @@ public sealed class RoleAssignment : SoftDeletableEntity, ICompanyScoped
     public Company Company { get; private set; } = null!;
     public Role Role { get; private set; } = null!;
     public Membership Membership { get; private set; } = null!;
+
+    /// <summary>Soft-delete idempotente: atribuição já revogada permanece inalterada.</summary>
+    public void Revoke(string reason, Guid actorUserId, Guid requestId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (DeletedAt is not null)
+        {
+            return;
+        }
+
+        DeletedAt = DateTimeOffset.UtcNow;
+        DeletedByUserId = actorUserId;
+        DeletedReason = reason;
+        RecordUpdate(actorUserId, requestId);
+    }
 }

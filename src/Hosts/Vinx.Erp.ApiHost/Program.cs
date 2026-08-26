@@ -157,6 +157,8 @@ builder.Services.AddScoped<EmployeeDirectoryService>();
 builder.Services.AddScoped<CompanyPermissionDirectoryService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
+builder.Services.AddScoped<RoleUnassignmentService>();
+builder.Services.AddScoped<RolePermissionsCopyService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 // Engine antimalware condicionada por configuração: sem "MalwareScanner:ClamAvEndpoint"
 // o host permanece fail-closed (BlockedMalwareScanner); endpoint válido ativa o clamd.
