@@ -55,9 +55,30 @@ public sealed class WolverineStorageScriptTests
 
         await using var administrator = await fixture.OpenAdministratorConnectionAsync();
         await using var grantCheck = new NpgsqlCommand(
-            "SELECT has_schema_privilege('vinx_runtime', 'vinx_wolverine', 'USAGE')",
+            """
+            SELECT
+                has_schema_privilege('vinx_runtime', 'vinx_wolverine', 'USAGE'),
+                to_regclass('vinx_wolverine_queues.wolverine_queue_telegram_inbound') IS NOT NULL,
+                to_regclass('vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled') IS NOT NULL,
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound',
+                    'SELECT, INSERT, UPDATE, DELETE'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled',
+                    'SELECT, INSERT, UPDATE, DELETE'
+                )
+            """,
             administrator
         );
-        Assert.True((bool)(await grantCheck.ExecuteScalarAsync())!);
+        await using var reader = await grantCheck.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.True(reader.GetBoolean(2));
+        Assert.True(reader.GetBoolean(3));
+        Assert.True(reader.GetBoolean(4));
     }
 }

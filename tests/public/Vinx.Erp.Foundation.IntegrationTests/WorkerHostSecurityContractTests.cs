@@ -69,6 +69,16 @@ public sealed class WorkerHostSecurityContractTests
                 has_table_privilege('vinx_worker', 'foundation.pending_owner_invitations', 'SELECT'),
                 has_table_privilege('vinx_worker', 'foundation.pending_owner_invitations', 'UPDATE'),
                 has_schema_privilege('vinx_worker', 'vinx_wolverine_queues', 'USAGE'),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound',
+                    'SELECT, INSERT, UPDATE, DELETE'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled',
+                    'SELECT, INSERT, UPDATE, DELETE'
+                ),
                 has_schema_privilege('vinx_worker', 'vinx_wolverine_queues', 'CREATE'),
                 has_database_privilege('vinx_worker', current_database(), 'TEMPORARY'),
                 has_database_privilege('vinx_worker', current_database(), 'CREATE')
@@ -81,9 +91,11 @@ public sealed class WorkerHostSecurityContractTests
         Assert.False(reader.GetBoolean(1));
         Assert.False(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
-        Assert.False(reader.GetBoolean(4));
+        Assert.True(reader.GetBoolean(4));
         Assert.True(reader.GetBoolean(5));
         Assert.False(reader.GetBoolean(6));
+        Assert.True(reader.GetBoolean(7));
+        Assert.False(reader.GetBoolean(8));
     }
 
     [Fact]
