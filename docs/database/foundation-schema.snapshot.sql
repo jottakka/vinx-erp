@@ -2525,6 +2525,11 @@ CREATE UNIQUE INDEX ix_users_email ON foundation.users USING btree (lower(btrim(
 CREATE TRIGGER audit_events_reject_mutation BEFORE DELETE OR UPDATE ON audit.audit_events FOR EACH ROW EXECUTE FUNCTION audit.reject_audit_event_mutation();
 
 
+-- Name: companies trg_seed_company_lookup_defaults; Type: TRIGGER; Schema: foundation; Owner: -
+
+CREATE TRIGGER trg_seed_company_lookup_defaults AFTER INSERT ON foundation.companies FOR EACH ROW EXECUTE FUNCTION service_desk.seed_company_lookup_defaults_trigger();
+
+
 -- Name: approvals fk_approvals_companies_company_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.approvals
