@@ -162,9 +162,34 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 GRANT EXECUTE ON FUNCTION foundation.ensure_company_default_roles(uuid)
                     TO vinx_runtime;
 
-                SELECT foundation.ensure_company_default_roles(company.id)
-                FROM foundation.companies AS company
-                WHERE company.deleted_at IS NULL;
+                -- Empresas sem membership ativo (ex.: dados legados) não têm ator
+                -- para semear papéis e são ignoradas; o guard interno da função
+                -- permanece para os chamadores de provisionamento, que sempre têm
+                -- o owner. O RLS de memberships exige app.company_id, por isso o
+                -- bloco define o contexto por empresa antes da checagem.
+                DO $block$
+                DECLARE
+                    company_record RECORD;
+                    has_active_membership boolean;
+                BEGIN
+                    FOR company_record IN
+                        SELECT id
+                        FROM foundation.companies
+                        WHERE deleted_at IS NULL
+                    LOOP
+                        PERFORM set_config('app.company_id', company_record.id::text, true);
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM foundation.memberships
+                            WHERE company_id = company_record.id
+                              AND deleted_at IS NULL)
+                        INTO has_active_membership;
+                        IF has_active_membership THEN
+                            PERFORM foundation.ensure_company_default_roles(company_record.id);
+                        END IF;
+                    END LOOP;
+                END;
+                $block$;
                 RESET ROLE;
                 REVOKE CREATE ON SCHEMA foundation FROM vinx_permissions_owner;
                 DROP POLICY companies_permissions_owner_backfill_select ON foundation.companies;

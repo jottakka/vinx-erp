@@ -157,6 +157,30 @@ public sealed class CompanyDefaultRolesMigrationTests
     }
 
     [Fact]
+    public async Task Backfill_skips_companies_without_an_active_membership()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using (var migrator = fixture.CreateMigratorDbContext())
+        {
+            await migrator.Database.MigrateAsync(BeforeCompanyDefaultRoles);
+        }
+        var seededCompanyId = await SeedCompanyWithMembershipAsync(fixture);
+        var orphanCompanyId = await SeedCompanyWithoutMembershipAsync(fixture);
+
+        await using (var migrator = fixture.CreateMigratorDbContext())
+        {
+            await migrator.Database.MigrateAsync();
+        }
+
+        var seeded = await ReadLiveRoleGrantsAsync(fixture, seededCompanyId);
+        Assert.Equal(AdminGrantNames, seeded["admin"]);
+        Assert.Equal(MemberGrantNames, seeded["member"]);
+        var orphan = await ReadLiveRoleGrantsAsync(fixture, orphanCompanyId);
+        Assert.Empty(orphan);
+    }
+
+    [Fact]
     public async Task Function_security_boundary()
     {
         await using var fixture = new FoundationPostgresFixture();
@@ -221,6 +245,28 @@ public sealed class CompanyDefaultRolesMigrationTests
         );
         administrator.Add(
             new Membership(Guid.NewGuid(), companyId, actorUserId, actorUserId, requestId)
+        );
+        await administrator.SaveChangesAsync();
+        return companyId;
+    }
+
+    /// <summary>
+    /// Empresa legada sem nenhuma membership: o backfill deve ignorá-la em vez
+    /// de falhar a migração inteira (o guard interno segue protegendo os
+    /// chamadores de provisionamento, que sempre têm o owner).
+    /// </summary>
+    private static async Task<Guid> SeedCompanyWithoutMembershipAsync(
+        FoundationPostgresFixture fixture)
+    {
+        var actorUserId = Guid.NewGuid();
+        var groupId = Guid.NewGuid();
+        var companyId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        administrator.Add(new User(actorUserId, "Actor", $"actor-{actorUserId:N}@example.test"));
+        administrator.Add(new Group(groupId, $"Group {groupId:N}", actorUserId, requestId));
+        administrator.Add(
+            new Company(companyId, groupId, $"Company {companyId:N}", actorUserId, requestId)
         );
         await administrator.SaveChangesAsync();
         return companyId;
