@@ -565,6 +565,119 @@ CREATE FUNCTION foundation.current_authorized_company_ids() RETURNS SETOF uuid
 $$;
 
 
+-- Name: ensure_company_default_roles(uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.ensure_company_default_roles(p_company_id uuid) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_seed_actor uuid;
+    v_role_id uuid;
+    v_grant_count integer;
+BEGIN
+    IF p_company_id IS NULL THEN
+        RAISE EXCEPTION 'company default roles parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM set_config('app.company_id', p_company_id::text, true);
+
+    SELECT membership.user_id
+    INTO v_seed_actor
+    FROM foundation.memberships AS membership
+    WHERE membership.company_id = p_company_id
+      AND membership.deleted_at IS NULL
+    ORDER BY membership.created_at, membership.id
+    LIMIT 1;
+    IF v_seed_actor IS NULL THEN
+        RAISE EXCEPTION 'company has no active membership'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM foundation.roles AS role_record
+        WHERE role_record.company_id = p_company_id
+          AND role_record.name = 'admin'
+          AND role_record.deleted_at IS NULL) THEN
+        v_role_id := gen_random_uuid();
+        INSERT INTO foundation.roles (
+            id, company_id, name, created_by_user_id, updated_by_user_id,
+            request_id, created_at, updated_at)
+        VALUES (
+            v_role_id, p_company_id, 'admin', v_seed_actor, v_seed_actor,
+            gen_random_uuid(), clock_timestamp(), clock_timestamp());
+        INSERT INTO foundation.role_capabilities (
+            id, company_id, role_id, capability_id, scope,
+            created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+        SELECT
+            gen_random_uuid(),
+            p_company_id,
+            v_role_id,
+            capability.id,
+            'company',
+            v_seed_actor,
+            v_seed_actor,
+            gen_random_uuid(),
+            clock_timestamp(),
+            clock_timestamp()
+        FROM foundation.capabilities AS capability
+        WHERE capability.name IN (
+            'foundation.roles.assign',
+            'foundation.employees.create',
+            'foundation.files.upload',
+            'foundation.files.confirm')
+        ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+            DO NOTHING;
+        GET DIAGNOSTICS v_grant_count = ROW_COUNT;
+        IF v_grant_count <> 4 THEN
+            RAISE EXCEPTION 'admin default role capability catalog is incomplete'
+                USING ERRCODE = '23514';
+        END IF;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM foundation.roles AS role_record
+        WHERE role_record.company_id = p_company_id
+          AND role_record.name = 'member'
+          AND role_record.deleted_at IS NULL) THEN
+        v_role_id := gen_random_uuid();
+        INSERT INTO foundation.roles (
+            id, company_id, name, created_by_user_id, updated_by_user_id,
+            request_id, created_at, updated_at)
+        VALUES (
+            v_role_id, p_company_id, 'member', v_seed_actor, v_seed_actor,
+            gen_random_uuid(), clock_timestamp(), clock_timestamp());
+        INSERT INTO foundation.role_capabilities (
+            id, company_id, role_id, capability_id, scope,
+            created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+        SELECT
+            gen_random_uuid(),
+            p_company_id,
+            v_role_id,
+            capability.id,
+            'company',
+            v_seed_actor,
+            v_seed_actor,
+            gen_random_uuid(),
+            clock_timestamp(),
+            clock_timestamp()
+        FROM foundation.capabilities AS capability
+        WHERE capability.name IN ('foundation.files.upload')
+        ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+            DO NOTHING;
+        GET DIAGNOSTICS v_grant_count = ROW_COUNT;
+        IF v_grant_count <> 1 THEN
+            RAISE EXCEPTION 'member default role capability catalog is incomplete'
+                USING ERRCODE = '23514';
+        END IF;
+    END IF;
+END;
+$$;
+
+
 -- Name: ensure_platform_owner_employee_create(uuid, uuid, uuid); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.ensure_platform_owner_employee_create(p_request_id uuid, p_company_id uuid, p_owner_membership_id uuid) RETURNS void
@@ -1978,6 +2091,11 @@ CREATE POLICY capabilities_employee_directory_owner_select ON foundation.capabil
 CREATE POLICY capabilities_notifications_owner_read ON foundation.capabilities FOR SELECT TO vinx_notifications_owner USING (((name)::text = 'foundation.files.upload'::text));
 
 
+-- Name: capabilities capabilities_permissions_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_permissions_owner_select ON foundation.capabilities FOR SELECT TO vinx_permissions_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying, 'foundation.files.upload'::character varying, 'foundation.files.confirm'::character varying])::text[])));
+
+
 -- Name: capabilities capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY capabilities_provisioning_owner ON foundation.capabilities FOR SELECT TO vinx_provisioning_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.memberships.revoke'::character varying, 'foundation.files.upload'::character varying, 'foundation.files.confirm'::character varying])::text[])));
@@ -2133,6 +2251,11 @@ CREATE POLICY memberships_employee_directory_owner_select ON foundation.membersh
 CREATE POLICY memberships_notifications_owner_read ON foundation.memberships FOR SELECT TO vinx_notifications_owner USING (true);
 
 
+-- Name: memberships memberships_permissions_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_permissions_owner_select ON foundation.memberships FOR SELECT TO vinx_permissions_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
 -- Name: memberships memberships_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY memberships_provisioning_owner ON foundation.memberships FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
@@ -2248,6 +2371,16 @@ CREATE POLICY role_capabilities_employee_directory_owner_select ON foundation.ro
 CREATE POLICY role_capabilities_notifications_owner_read ON foundation.role_capabilities FOR SELECT TO vinx_notifications_owner USING (true);
 
 
+-- Name: role_capabilities role_capabilities_permissions_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_permissions_owner_insert ON foundation.role_capabilities FOR INSERT TO vinx_permissions_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: role_capabilities role_capabilities_permissions_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_permissions_owner_select ON foundation.role_capabilities FOR SELECT TO vinx_permissions_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
 -- Name: role_capabilities role_capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_capabilities_provisioning_owner ON foundation.role_capabilities FOR INSERT TO vinx_provisioning_owner WITH CHECK (true);
@@ -2275,6 +2408,16 @@ CREATE POLICY roles_employee_directory_owner_select ON foundation.roles FOR SELE
 -- Name: roles roles_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY roles_notifications_owner_read ON foundation.roles FOR SELECT TO vinx_notifications_owner USING (true);
+
+
+-- Name: roles roles_permissions_owner_insert; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY roles_permissions_owner_insert ON foundation.roles FOR INSERT TO vinx_permissions_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: roles roles_permissions_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY roles_permissions_owner_select ON foundation.roles FOR SELECT TO vinx_permissions_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
 -- Name: roles roles_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -

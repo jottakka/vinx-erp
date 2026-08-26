@@ -160,6 +160,22 @@ internal static class FoundationDbFunctions
         );
 
     /// <summary>
+    /// Cria de forma idempotente e aditiva os papéis padrão (admin/member) da
+    /// empresa com as capabilities fixas do catálogo; papéis reservados
+    /// pré-existentes nunca são ampliados.
+    /// </summary>
+    internal static async Task<int> EnsureCompanyDefaultRolesAsync(
+        this FoundationDbContext database,
+        Guid companyId,
+        CancellationToken cancellationToken) =>
+        await UnwrapProviderExceptionAsync(
+            database.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT foundation.ensure_company_default_roles({companyId})",
+                cancellationToken
+            )
+        );
+
+    /// <summary>
     /// Cria a entrada idempotente de funcionário no diretório da empresa
     /// (created / replay / idempotency_conflict).
     /// </summary>
