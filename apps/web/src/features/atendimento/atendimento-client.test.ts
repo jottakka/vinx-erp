@@ -155,6 +155,35 @@ describe("atendimento client", () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(antiforgeryPath);
   });
 
+  it("uses web and medium defaults in the direct create request", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ requestToken: "csrf-token" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(createdCard), { status: 201 }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await createWithRequestId(
+      createdCard.companyId,
+      requestId,
+      createdCard.title,
+      createdCard.description,
+    );
+
+    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body))).toMatchObject(
+      {
+        channel: "web",
+        priority: "media",
+        slaDueAt: null,
+      },
+    );
+  });
+
   it("loads named assignment options only for the explicit company", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response(
@@ -233,6 +262,8 @@ describe("atendimento client", () => {
     ["unknown priority", { ...createdCard, priority: "urgent" }],
     ["unknown channel", { ...createdCard, channel: "phone" }],
     ["malformed SLA timestamp", { ...createdCard, slaDueAt: "tomorrow" }],
+    ["malformed created timestamp", { ...createdCard, createdAt: "yesterday" }],
+    ["malformed updated timestamp", { ...createdCard, updatedAt: "yesterday" }],
   ] as const)("rejects a response with %s", async (_label, card) => {
     const fetchSpy = vi
       .fn()
@@ -242,6 +273,58 @@ describe("atendimento client", () => {
     await expect(atendimentoClient.list(createdCard.companyId)).resolves.toBe(
       null,
     );
+  });
+
+  it("rejects a malformed successful command response", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ requestToken: "csrf-token" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...createdCard, priority: "urgent" }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      atendimentoClient.move(
+        createdCard.companyId,
+        createdCard,
+        "em_andamento",
+      ),
+    ).resolves.toEqual({ code: "atendimento_unavailable", ok: false });
+  });
+
+  it("omits a malformed current card from a conflict response", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ requestToken: "csrf-token" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            code: "integrity_conflict",
+            current: { ...createdCard, updatedAt: "not-a-timestamp" },
+          }),
+          { status: 409 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      atendimentoClient.move(
+        createdCard.companyId,
+        createdCard,
+        "em_andamento",
+      ),
+    ).resolves.toEqual({ code: "integrity_conflict", ok: false });
   });
 
   it("cancels with the current version, request ID, and trimmed reason", async () => {

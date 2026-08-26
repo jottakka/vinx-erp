@@ -353,6 +353,11 @@ describe("AtendimentoCreateDialog", () => {
       requestId?: string;
     };
     expect(first).toMatchObject({ attachmentFileId });
+    expect(first).toMatchObject({
+      channel: "web",
+      priority: "media",
+      slaDueAt: null,
+    });
     expect(first.requestId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
@@ -425,11 +430,16 @@ describe("AtendimentoCreateDialog", () => {
   });
 
   it.each([
-    ["priority", "Prioridade", "Alta"],
-    ["channel", "Canal", "WhatsApp"],
+    ["priority", "Prioridade", "Alta", { channel: "web", priority: "alta" }],
+    [
+      "channel",
+      "Canal",
+      "WhatsApp",
+      { channel: "whatsapp", priority: "media" },
+    ],
   ] as const)(
     "rotates a pending retry when %s changes",
-    async (_field, label, option) => {
+    async (_field, label, option, expected) => {
       const user = userEvent.setup();
       const onSubmit = vi.fn().mockResolvedValue({
         message: "Não foi possível concluir a ação. Tente novamente.",
@@ -458,6 +468,45 @@ describe("AtendimentoCreateDialog", () => {
       await user.click(screen.getByRole("button", { name: "Criar cartão" }));
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
       expect(onSubmit.mock.calls[1]?.[0]?.requestId).not.toBe(firstRequestId);
+      expect(onSubmit.mock.calls[1]?.[0]).toMatchObject(expected);
     },
   );
+
+  it("rotates a pending retry when only the local SLA changes and sends its normalized value", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue({
+      message: "Não foi possível concluir a ação. Tente novamente.",
+      ok: false,
+    });
+    const localDateTime = "2026-08-28T18:00";
+    render(
+      <VinxThemeProvider>
+        <AtendimentoCreateDialog
+          assignmentOptions={[]}
+          companyId="11111111-1111-4111-1111-111111111111"
+          onClose={() => undefined}
+          onSubmit={onSubmit}
+          open
+        />
+      </VinxThemeProvider>,
+    );
+
+    await user.type(screen.getByLabelText("Título"), "Pedido");
+    await user.type(screen.getByLabelText("Descrição"), "Descrição");
+    await user.click(screen.getByRole("button", { name: "Criar cartão" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const firstRequestId = onSubmit.mock.calls[0]?.[0]?.requestId;
+
+    fireEvent.change(screen.getByLabelText("Prazo de SLA"), {
+      target: { value: localDateTime },
+    });
+    await user.click(screen.getByRole("button", { name: "Criar cartão" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit.mock.calls[1]?.[0]?.requestId).not.toBe(firstRequestId);
+    expect(onSubmit.mock.calls[1]?.[0]).toMatchObject({
+      channel: "web",
+      priority: "media",
+      slaDueAt: new Date(localDateTime).toISOString(),
+    });
+  });
 });

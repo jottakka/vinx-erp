@@ -330,7 +330,7 @@ export function AtendimentoCreateDialog({
               value={form.watch("priority")}
               {...form.register("priority")}
               onChange={(event) => {
-                invalidateAttempt();
+                setError(null);
                 form.setValue(
                   "priority",
                   event.target.value as AtendimentoPriority,
@@ -359,7 +359,7 @@ export function AtendimentoCreateDialog({
               value={form.watch("channel")}
               {...form.register("channel")}
               onChange={(event) => {
-                invalidateAttempt();
+                setError(null);
                 form.setValue(
                   "channel",
                   event.target.value as AtendimentoChannel,
@@ -381,7 +381,7 @@ export function AtendimentoCreateDialog({
             value={form.watch("slaDueAt")}
             {...form.register("slaDueAt")}
             onChange={(event) => {
-              invalidateAttempt();
+              setError(null);
               form.setValue("slaDueAt", event.target.value, {
                 shouldDirty: true,
               });

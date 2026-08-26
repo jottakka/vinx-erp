@@ -36,8 +36,8 @@ export type AtendimentoAssignmentOption = {
 export type AtendimentoCreateOptions = {
   attachmentFileId?: string | null;
   participantMembershipIds?: readonly string[];
-  priority?: AtendimentoPriority | null;
-  channel?: AtendimentoChannel | null;
+  priority?: AtendimentoPriority;
+  channel?: AtendimentoChannel;
   slaDueAt?: string | null;
 };
 
@@ -131,11 +131,13 @@ async function command(path: string, body: object): Promise<CommandResult> {
     }
     const error = (await response.json().catch(() => null)) as {
       code?: string;
-      current?: AtendimentoCard;
+      current?: unknown;
     } | null;
+    const current =
+      error?.current === undefined ? undefined : parseCard(error.current);
     return {
       code: error?.code ?? "atendimento_unavailable",
-      current: error?.current,
+      ...(current ? { current } : {}),
       ok: false,
     };
   } catch {
@@ -181,7 +183,7 @@ export const atendimentoClient = {
       attachmentFileId = null,
       participantMembershipIds = [],
       priority = "media",
-      channel = "manual",
+      channel = "web",
       slaDueAt = null,
     }: AtendimentoCreateOptions = {},
   ) {
