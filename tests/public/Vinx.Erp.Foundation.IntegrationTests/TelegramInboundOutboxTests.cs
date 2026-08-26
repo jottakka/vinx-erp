@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Notifications;
 using Wolverine.Runtime.Serialization;
 using Xunit;
 
@@ -13,6 +14,10 @@ public sealed class TelegramInboundOutboxTests
     private const string WebhookPath = "/foundation/notifications/telegram/webhook";
     private const string SecretHeader = "X-Telegram-Bot-Api-Secret-Token";
     private const string WebhookSecret = "telegram-integration-test-secret";
+    private const string TelegramOutgoingDestination = "postgresql://telegram_inbound/";
+    private const long AcknowledgementUpdateId = 7_440_000_000_001;
+    private const long AcknowledgementChatId = 4_400_000_000_009;
+    private const long AcknowledgementMessageId = 8_880_000_000_009;
 
     [Fact]
     public async Task Configured_private_update_admits_one_row_and_one_opaque_envelope_through_the_public_api()
@@ -184,27 +189,57 @@ public sealed class TelegramInboundOutboxTests
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
             factory,
-            telegramAddress: "810009",
+            telegramAddress: AcknowledgementChatId.ToString(),
             telegramContactValidated: true
         );
         using var client = factory.CreateClient();
         CommitAcknowledgementFailure.Arm(factory.Fixture);
 
-        using (var uncertain = await PostPrivateAsync(client, 1009, 810009, 2009, "ack uncertainty"))
+        using (var uncertain = await PostPrivateAsync(
+            client,
+            AcknowledgementUpdateId,
+            AcknowledgementChatId,
+            AcknowledgementMessageId,
+            "ack uncertainty"
+        ))
         {
             Assert.False(uncertain.IsSuccessStatusCode);
         }
 
-        Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
-        Assert.Equal(1L, await CountTelegramOutgoingEnvelopesAsync(factory));
+        var inbound = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        var envelope = Assert.Single(await ReadTelegramOutgoingEnvelopesAsync(factory));
+        AssertDurableTelegramEnvelope(
+            envelope,
+            inbound.Id,
+            factory.CorrelationId,
+            "ack uncertainty",
+            AcknowledgementChatId.ToString(),
+            AcknowledgementUpdateId.ToString(),
+            AcknowledgementMessageId.ToString()
+        );
 
-        using (var retry = await PostPrivateAsync(client, 1009, 810009, 2009, "ack uncertainty"))
+        using (var retry = await PostPrivateAsync(
+            client,
+            AcknowledgementUpdateId,
+            AcknowledgementChatId,
+            AcknowledgementMessageId,
+            "ack uncertainty"
+        ))
         {
             Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
         }
 
-        Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
-        Assert.Equal(1L, await CountTelegramOutgoingEnvelopesAsync(factory));
+        var replayInbound = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        var replayEnvelope = Assert.Single(await ReadTelegramOutgoingEnvelopesAsync(factory));
+        AssertDurableTelegramEnvelope(
+            replayEnvelope,
+            replayInbound.Id,
+            factory.CorrelationId,
+            "ack uncertainty",
+            AcknowledgementChatId.ToString(),
+            AcknowledgementUpdateId.ToString(),
+            AcknowledgementMessageId.ToString()
+        );
     }
 
     [Fact]
@@ -378,15 +413,34 @@ public sealed class TelegramInboundOutboxTests
         return envelopes;
     }
 
-    private static async Task<long> CountTelegramOutgoingEnvelopesAsync(
+    private static async Task<IReadOnlyList<TelegramOutgoingEnvelope>> ReadTelegramOutgoingEnvelopesAsync(
         FoundationApiFactory factory)
     {
         await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
-            "SELECT count(*) FROM vinx_wolverine.wolverine_outgoing_envelopes",
+            "SELECT body, row_to_json(envelope)::text FROM vinx_wolverine.wolverine_outgoing_envelopes AS envelope WHERE body IS NOT NULL",
             connection
         );
-        return (long)(await command.ExecuteScalarAsync())!;
+        await using var reader = await command.ExecuteReaderAsync();
+        var envelopes = new List<TelegramOutgoingEnvelope>();
+        while (await reader.ReadAsync())
+        {
+            var body = reader.GetFieldValue<byte[]>(0);
+            var envelope = EnvelopeSerializer.Deserialize(body);
+            using var payload = System.Text.Json.JsonDocument.Parse(envelope.Data!);
+            envelopes.Add(new TelegramOutgoingEnvelope(
+                envelope.MessageType ?? string.Empty,
+                envelope.Destination?.ToString() ?? string.Empty,
+                envelope.CorrelationId ?? string.Empty,
+                payload.RootElement.GetProperty("inboundMessageId").GetGuid(),
+                payload.RootElement.EnumerateObject().Select(property => property.Name).ToArray(),
+                envelope.Headers.ToDictionary(header => header.Key, header => header.Value ?? string.Empty),
+                body,
+                reader.GetString(1)
+            ));
+        }
+
+        return envelopes;
     }
 
     private sealed record TelegramQueueEnvelope(
@@ -397,16 +451,54 @@ public sealed class TelegramInboundOutboxTests
         string RawMetadata
     );
 
+    private sealed record TelegramOutgoingEnvelope(
+        string MessageType,
+        string Destination,
+        string CorrelationId,
+        Guid InboundMessageId,
+        IReadOnlyList<string> PayloadPropertyNames,
+        IReadOnlyDictionary<string, string> Headers,
+        byte[] RawBody,
+        string RawMetadata
+    );
+
+    private static void AssertDurableTelegramEnvelope(
+        TelegramOutgoingEnvelope envelope,
+        Guid expectedInboundId,
+        Guid requestFactoryCorrelationId,
+        params string[] sensitiveValues)
+    {
+        Assert.EndsWith(nameof(InboundTelegramTextReceived), envelope.MessageType, StringComparison.Ordinal);
+        Assert.Equal(TelegramOutgoingDestination, envelope.Destination);
+        Assert.Equal(expectedInboundId, envelope.InboundMessageId);
+        Assert.Equal(["inboundMessageId"], envelope.PayloadPropertyNames);
+        Assert.True(Guid.TryParse(envelope.CorrelationId, out var correlationId));
+        Assert.NotEqual(Guid.Empty, correlationId);
+        Assert.NotEqual(requestFactoryCorrelationId, correlationId);
+        Assert.Empty(envelope.Headers);
+        AssertOpaque(envelope.RawBody, envelope.RawMetadata, envelope.Headers, sensitiveValues);
+    }
+
     private static void AssertOpaque(TelegramQueueEnvelope envelope, params string[] sensitiveValues)
     {
-        var headers = string.Join("\n", envelope.Headers.Select(header => $"{header.Key}={header.Value}"));
+        AssertOpaque(envelope.RawBody, envelope.RawMetadata, envelope.Headers, sensitiveValues);
+    }
+
+    private static void AssertOpaque(
+        byte[] rawBody,
+        string rawMetadata,
+        IReadOnlyDictionary<string, string> headers,
+        params string[] sensitiveValues)
+    {
+        var headersText = string.Join("\n", headers.Select(header => $"{header.Key}={header.Value}"));
         foreach (var value in sensitiveValues)
         {
-            Assert.Equal(-1, envelope.RawBody.AsSpan().IndexOf(Encoding.UTF8.GetBytes(value)));
-            Assert.DoesNotContain(value, envelope.RawMetadata, StringComparison.Ordinal);
-            Assert.DoesNotContain(value, headers, StringComparison.Ordinal);
-            Assert.DoesNotContain(Convert.ToBase64String(Encoding.UTF8.GetBytes(value)), envelope.RawMetadata, StringComparison.Ordinal);
-            Assert.DoesNotContain(Convert.ToBase64String(Encoding.UTF8.GetBytes(value)), headers, StringComparison.Ordinal);
+            var rawBodyIndex = rawBody.AsSpan().IndexOf(Encoding.UTF8.GetBytes(value));
+            Assert.True(rawBodyIndex < 0, $"Sensitive value '{value}' found in raw body at {rawBodyIndex}.");
+            Assert.DoesNotContain(value, rawMetadata, StringComparison.Ordinal);
+            Assert.DoesNotContain(value, headersText, StringComparison.Ordinal);
+            Assert.DoesNotContain(Convert.ToBase64String(Encoding.UTF8.GetBytes(value)), rawMetadata, StringComparison.Ordinal);
+            Assert.DoesNotContain(Convert.ToBase64String(Encoding.UTF8.GetBytes(value)), headersText, StringComparison.Ordinal);
         }
     }
 }
