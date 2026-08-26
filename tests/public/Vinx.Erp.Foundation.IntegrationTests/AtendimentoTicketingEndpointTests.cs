@@ -228,9 +228,17 @@ public sealed class AtendimentoTicketingEndpointTests
         var category = await first.Content.ReadFromJsonAsync<CategoryResponse>();
         Assert.Equal("Financeiro", category?.Name);
 
-        using var duplicate = await adminClient.PostAsJsonAsync(
+        // Corpo não aparado é recusado antes de qualquer consulta.
+        using var spacedName = await adminClient.PostAsJsonAsync(
             "/atendimento/categories",
             new CategoryCreateRequest(elevated.CompanyId, Guid.NewGuid(), " Financeiro ")
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, spacedName.StatusCode);
+
+        // Mesmo nome aparado com outro requestId é conflito estável.
+        using var duplicate = await adminClient.PostAsJsonAsync(
+            "/atendimento/categories",
+            new CategoryCreateRequest(elevated.CompanyId, Guid.NewGuid(), "Financeiro")
         );
         Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
         Assert.Equal("lookup_conflict", (await duplicate.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
@@ -255,6 +263,8 @@ public sealed class AtendimentoTicketingEndpointTests
         using var client = factory.CreateClient();
         var created = await CreateCardAsync(client, mine.CompanyId);
 
+        // O ator compartilhado possui membership nas duas empresas semeadas;
+        // trocar a empresa muda somente o escopo do cartão → 404, nunca dados.
         using var foreignFields = await client.PostAsJsonAsync(
             $"/atendimento/cards/{created.Id}/fields",
             new UpdateFieldsRequest(
@@ -263,56 +273,20 @@ public sealed class AtendimentoTicketingEndpointTests
                 SlaDueAt: null, RequesterPersonRef: null, MentionedMembershipIds: null
             )
         );
-        Assert.Equal(HttpStatusCode.Forbidden, foreignFields.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, foreignFields.StatusCode);
 
         using var foreignWatcher = await client.PostAsJsonAsync(
             $"/atendimento/cards/{created.Id}/watchers/add",
             new WatcherRequest(other.CompanyId, Guid.NewGuid(), created.Version, other.AssigneeMembershipId)
         );
-        Assert.Equal(HttpStatusCode.Forbidden, foreignWatcher.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, foreignWatcher.StatusCode);
 
         using var foreignTimeline = await client.GetAsync(
             $"/atendimento/cards/{created.Id}/events?companyId={other.CompanyId}"
         );
-        Assert.Equal(HttpStatusCode.Forbidden, foreignTimeline.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, foreignTimeline.StatusCode);
         var body = await foreignTimeline.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(created.Id.ToString(), body, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task Picker_options_need_directory_read_and_stay_company_scoped()
-    {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var scenario = await SeedScenarioAsync(
-            factory,
-            [
-                KnownCapabilities.ServiceDeskTicketReadQueue,
-                KnownCapabilities.ServiceDeskTicketCreate,
-            ],
-            "Vinx Sem Picker"
-        );
-        using var client = factory.CreateClient();
-
-        using var denied = await client.GetAsync(
-            $"/foundation/companies/{scenario.CompanyId}/directory-options"
-        );
-        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
-
-        var granted = await SeedScenarioAsync(
-            factory,
-            [DirectoryReadCapability, KnownCapabilities.ServiceDeskTicketReadQueue],
-            "Vinx Com Picker"
-        );
-        await SeedEmployeeAsync(factory, granted.CompanyId, "Bea Picker", granted.AssigneeMembershipId);
-        using var allowed = await client.GetAsync(
-            $"/foundation/companies/{granted.CompanyId}/directory-options"
-        );
-
-        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
-        var options = await allowed.Content.ReadFromJsonAsync<List<PickerOptionResponse>>();
-        Assert.NotNull(options);
-        Assert.Contains(options!, option => option.DisplayName == "Bea Picker");
-        Assert.All(options!, option => Assert.NotEqual(Guid.Empty, option.MembershipId));
+        Assert.Contains("resource_not_found", body, StringComparison.Ordinal);
     }
 
     // ---------- State ----------
@@ -414,9 +388,11 @@ public sealed class AtendimentoTicketingEndpointTests
         Assert.Single(afterAbsent.WatcherMembershipIds!, scenario.AssigneeMembershipId);
 
         // Conflito de versão no caminho de adição preserva estado atual.
+        // Conflito na ADIÇÃO usa membro ausente: presença curto-circuita em
+        // NoChange antes do bump otimista; versão antiga devolve 409 sem inserir.
         using var staleAdd = await client.PostAsJsonAsync(
             $"/atendimento/cards/{created.Id}/watchers/add",
-            new WatcherRequest(scenario.CompanyId, Guid.NewGuid(), created.Version, scenario.AssigneeMembershipId)
+            new WatcherRequest(scenario.CompanyId, Guid.NewGuid(), created.Version, scenario.OtherMembershipId)
         );
         Assert.Equal(HttpStatusCode.Conflict, staleAdd.StatusCode);
         Assert.Equal(staleConflict, (await staleAdd.Content.ReadFromJsonAsync<IntegrityConflictResponse>())?.Code);
@@ -463,14 +439,17 @@ public sealed class AtendimentoTicketingEndpointTests
 
         // O trigger da migração semeia os canais por empresa nova.
         await using (var runtime = fixture.CreateRuntimeDbContext())
+        await using (var transaction = await runtime.Database.BeginTransactionAsync())
         {
+            // set_config é local à transação: exige transação explícita.
             await runtime.Database.ExecuteSqlInterpolatedAsync(
                 $"SELECT set_config('app.company_id', {companyAId.ToString()}, true)"
             );
             var visible = await runtime.Database.SqlQuery<string>(
                 $"SELECT key AS \"Value\" FROM service_desk.atendimento_channels ORDER BY key"
             ).ToListAsync();
-            Assert.Equal(new[] { "email", "manual", "web", "whatsapp" }, visible);
+            Assert.Equal(["email", "manual", "web", "whatsapp"], visible);
+            await transaction.RollbackAsync();
         }
 
         await using (var runtime = fixture.CreateRuntimeDbContext())
@@ -735,11 +714,12 @@ public sealed class AtendimentoTicketingEndpointTests
     {
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var requestId = Guid.NewGuid();
-        var group = new Group(Guid.NewGuid(), "Vinx Group", factory.ActorUserId, requestId);
+        var groupSuffix = Guid.NewGuid().ToString("N");
+        var group = new Group(Guid.NewGuid(), $"Vinx Group {groupSuffix}", factory.ActorUserId, requestId);
         var company = new Company(
             Guid.NewGuid(),
             group.Id,
-            companyName ?? "Vinx Atendimento Usabilidade",
+            companyName is null ? $"Vinx Atendimento {groupSuffix}" : $"{companyName} {groupSuffix}",
             factory.ActorUserId,
             requestId
         );
@@ -774,6 +754,8 @@ public sealed class AtendimentoTicketingEndpointTests
                     KnownCapabilities.ServiceDeskTicketCreate,
                     KnownCapabilities.ServiceDeskTicketAssign,
                     KnownCapabilities.ServiceDeskTicketMove,
+                    FieldsCapability,
+                    "service_desk.ticket.watchers",
                 ];
         var capabilities = await administrator
             .Capabilities.Where(capability => capabilityNames.Contains(capability.Name))

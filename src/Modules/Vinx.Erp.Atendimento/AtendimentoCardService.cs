@@ -803,12 +803,12 @@ public sealed class AtendimentoCardService(
 
             var entries = (await database.Database.SqlQuery<TimelineRow>(
                 $"""
-                SELECT entry.id AS "Id",
-                       entry.event_seq AS "EventSeq",
-                       entry.action_kind AS "ActionKind",
-                       entry.actor_membership_id AS "ActorMembershipId",
-                       COALESCE(actor.display_name, '') AS "ActorDisplayName",
-                       entry.occurred_at AS "OccurredAt"
+                SELECT entry.id,
+                       entry.event_seq,
+                       entry.action_kind,
+                       entry.actor_membership_id,
+                       COALESCE(actor.display_name, '') AS actor_display_name,
+                       entry.occurred_at
                 FROM (
                     SELECT *
                     FROM service_desk.atendimento_card_events

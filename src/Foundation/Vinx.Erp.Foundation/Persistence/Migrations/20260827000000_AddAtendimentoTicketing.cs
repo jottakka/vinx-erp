@@ -155,6 +155,11 @@ public sealed class AddAtendimentoTicketing : Migration
             GRANT SELECT, INSERT, UPDATE ON service_desk.atendimento_categories TO vinx_runtime;
             GRANT SELECT, INSERT, DELETE ON service_desk.atendimento_card_watchers TO vinx_runtime;
             GRANT SELECT, INSERT ON service_desk.atendimento_card_events TO vinx_runtime;
+
+            -- Timeline resolve o nome do ator no servidor com leitura de menor
+            -- privilégio (mesmo padrão dos grants por coluna em memberships do
+            -- dono de notificações).
+            GRANT SELECT (id, display_name) ON foundation.users TO vinx_runtime;
             """
         );
 
@@ -179,6 +184,7 @@ public sealed class AddAtendimentoTicketing : Migration
             DROP TABLE service_desk.atendimento_categories;
             DROP TABLE service_desk.atendimento_channels;
             DROP FUNCTION service_desk.seed_company_lookup_defaults_trigger();
+            REVOKE SELECT (id, display_name) ON foundation.users FROM vinx_runtime;
             DO $block$
             BEGIN
                 DELETE FROM foundation.capabilities
