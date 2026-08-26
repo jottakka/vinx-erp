@@ -173,7 +173,7 @@ describe("AtendimentoPage", () => {
     expect(await screen.findByText(betaCard.title)).toBeVisible();
     expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
     expect(
-      screen.getByRole("combobox", { name: "Empresa para novo cartão" }),
+      screen.getByRole("combobox", { name: "Empresa do novo atendimento" }),
     ).toBeVisible();
   });
 
@@ -188,7 +188,9 @@ describe("AtendimentoPage", () => {
     await waitFor(() =>
       expect(atendimentoClient.list).toHaveBeenCalledTimes(2),
     );
-    expect(screen.getByRole("button", { name: "Novo cartão" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Novo atendimento" }),
+    ).toBeDisabled();
     expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
     expect(screen.queryByText(betaCard.title)).not.toBeInTheDocument();
     betaCards.resolve([betaCard]);
@@ -212,7 +214,7 @@ describe("AtendimentoPage", () => {
     renderPage();
 
     await user.click(
-      await screen.findByRole("button", { name: "Novo cartão" }),
+      await screen.findByRole("button", { name: "Novo atendimento" }),
     );
     await user.type(screen.getByLabelText("Título"), "Novo cartão");
     await user.type(screen.getByLabelText("Descrição"), "Descrição do cartão");
@@ -230,7 +232,9 @@ describe("AtendimentoPage", () => {
       ),
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Novo cartão" })).toBeVisible(),
+      expect(
+        screen.getByRole("button", { name: "Novo atendimento" }),
+      ).toBeVisible(),
     );
   });
 
@@ -241,7 +245,7 @@ describe("AtendimentoPage", () => {
     renderPage();
 
     await user.click(
-      await screen.findByRole("button", { name: "Novo cartão" }),
+      await screen.findByRole("button", { name: "Novo atendimento" }),
     );
     await user.upload(
       screen.getByTestId("atendimento-attachment-picker"),
@@ -258,7 +262,9 @@ describe("AtendimentoPage", () => {
     renderPage(snapshot([readCapability, moveCapability, assignCapability]));
 
     expect(await screen.findByText(alfaCard.title)).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Novo cartão" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Novo atendimento" }),
+    ).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Visualizar" }));
     const dialog = await screen.findByRole("dialog");
@@ -278,10 +284,11 @@ describe("AtendimentoPage", () => {
     renderPage();
 
     await user.click(
-      await screen.findByRole("button", { name: "Mover para Em andamento" }),
+      await screen.findByRole("button", { name: "Alterar status" }),
     );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
     expect(
-      screen.queryByRole("button", { name: "Mover para Cancelados" }),
+      screen.queryByRole("menuitem", { name: "Cancelados" }),
     ).not.toBeInTheDocument();
 
     await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
@@ -308,7 +315,10 @@ describe("AtendimentoPage", () => {
 
     renderPage();
 
-    await user.click(await screen.findByRole("button", { name: "Atribuir" }));
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Atribuir responsável" }),
+    );
     await user.click(
       await screen.findByRole("combobox", { name: "Responsável" }),
     );
@@ -341,8 +351,9 @@ describe("AtendimentoPage", () => {
 
     renderPage();
 
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
     await user.click(
-      await screen.findByRole("button", { name: "Cancelar cartão" }),
+      screen.getByRole("menuitem", { name: "Cancelar atendimento" }),
     );
     await user.type(
       screen.getByLabelText("Motivo do cancelamento"),
@@ -366,8 +377,9 @@ describe("AtendimentoPage", () => {
     vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
     const cancel = vi.spyOn(atendimentoClient, "cancel");
     renderPage();
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
     await user.click(
-      await screen.findByRole("button", { name: "Cancelar cartão" }),
+      screen.getByRole("menuitem", { name: "Cancelar atendimento" }),
     );
     fireEvent.change(screen.getByLabelText("Motivo do cancelamento"), {
       target: { value: "x".repeat(501) },

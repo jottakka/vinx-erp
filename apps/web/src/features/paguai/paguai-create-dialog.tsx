@@ -18,6 +18,7 @@ import {
   type AttachmentFieldValue,
   type AttachmentUploader,
 } from "../../shared/ui/attachment-field";
+import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { amountFromReais, isValidDateOnly } from "./paguai-format";
 
 export type PaguaiCreateValues = z.infer<typeof paguaiCreateSchema>;
@@ -43,6 +44,7 @@ const paguaiCreateSchema = z.object({
 type PaguaiFormValues = z.output<typeof paguaiCreateSchema>;
 
 type PaguaiCreateDialogProps = {
+  company: { companyId: string; companyName: string } | null;
   onClose: () => void;
   onSubmit: (values: {
     amount: string;
@@ -60,6 +62,7 @@ type PaguaiCreateDialogProps = {
 };
 
 export function PaguaiCreateDialog({
+  company,
   errorMessage,
   onClose,
   onSubmit,
@@ -119,6 +122,14 @@ export function PaguaiCreateDialog({
       open={open}
     >
       <DialogTitle>Nova solicitação</DialogTitle>
+      {company ? (
+        <Stack sx={{ px: 3, pb: 1 }}>
+          <CompanyIdentity
+            companyId={company.companyId}
+            companyName={company.companyName}
+          />
+        </Stack>
+      ) : null}
       <DialogContent>
         <Stack
           component="form"

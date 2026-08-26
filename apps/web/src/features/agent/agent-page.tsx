@@ -10,8 +10,8 @@ export function AgentPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const description = companyName
-    ? "Converse com o agente no contexto da empresa selecionada."
-    : "Selecione uma empresa para conversar com o agente; turnos anteriores não fazem parte do contexto.";
+    ? "Converse com o agente na empresa selecionada."
+    : "Escolha uma empresa para usar o agente.";
   function backToContext() {
     openDock();
 
@@ -27,7 +27,7 @@ export function AgentPage() {
     <Stack spacing={3}>
       <PageHeader
         description={description}
-        eyebrow={`${companyName ?? "Sem empresa"} · Página dedicada`}
+        eyebrow="Conversa com o agente"
         title="Agente"
       />
       {companyName ? (

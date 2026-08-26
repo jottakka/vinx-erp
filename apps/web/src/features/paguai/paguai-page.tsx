@@ -378,6 +378,14 @@ export function PaguaiPage({
         )}
       </Stack>
       <PaguaiCreateDialog
+        company={
+          createCompany
+            ? {
+                companyId: createCompany.companyId,
+                companyName: createCompany.companyName,
+              }
+            : null
+        }
         errorMessage={createError}
         onClose={() => {
           setCreateError(null);

@@ -1,6 +1,6 @@
 import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
 import DragIndicatorOutlinedIcon from "@mui/icons-material/DragIndicatorOutlined";
-import PersonAddAltOutlinedIcon from "@mui/icons-material/PersonAddAltOutlined";
+import MoreVertOutlinedIcon from "@mui/icons-material/MoreVertOutlined";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import {
   Alert,
@@ -14,6 +14,8 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  IconButton,
+  Menu,
   MenuItem,
   Stack,
   TextField,
@@ -82,6 +84,11 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [statusMenuCard, setStatusMenuCard] = useState<AtendimentoCard | null>(
+    null,
+  );
+  const [actionsMenuCard, setActionsMenuCard] =
+    useState<AtendimentoCard | null>(null);
   const [viewingCard, setViewingCard] = useState<AtendimentoCard | null>(null);
   const [assigningCard, setAssigningCard] = useState<AtendimentoCard | null>(
     null,
@@ -315,11 +322,11 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                 startIcon={<AddOutlinedIcon />}
                 variant="contained"
               >
-                Novo cartão
+                Novo atendimento
               </Button>
             ) : null
           }
-          description="Fila operacional das empresas autorizadas. Os cartões preservam a empresa de origem e só comandos explícitos alteram o estado."
+          description="Acompanhe e organize os atendimentos das empresas que você pode acessar."
           title={title}
         />
         {error ? (
@@ -340,7 +347,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             setAssigneeMembershipId("");
             setCompanyId(nextCompanyId);
           }}
-          label="Empresa para novo cartão"
+          label="Empresa do novo atendimento"
           value={companyId}
         />
         {!selectedCompany ? (
@@ -521,40 +528,23 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                         >
                           Visualizar
                         </Button>
-                        {canEditCard(card) && card.column !== "cancelado"
-                          ? workflowColumns
-                              .filter(
-                                (destination) => destination.id !== card.column,
-                              )
-                              .map((destination) => (
-                                <Button
-                                  key={destination.id}
-                                  onClick={() =>
-                                    void move(card, destination.id)
-                                  }
-                                  size="small"
-                                >
-                                  Mover para {destination.label}
-                                </Button>
-                              ))
-                          : null}
-                        {canAssignCard(card) && card.column !== "cancelado" ? (
-                          <Button
-                            onClick={() => void openAssignment(card)}
-                            size="small"
-                            startIcon={<PersonAddAltOutlinedIcon />}
-                          >
-                            Atribuir
-                          </Button>
-                        ) : null}
                         {canEditCard(card) && card.column !== "cancelado" ? (
                           <Button
-                            color="error"
-                            onClick={() => setCancellingCard(card)}
+                            onClick={() => setStatusMenuCard(card)}
                             size="small"
                           >
-                            Cancelar cartão
+                            Alterar status
                           </Button>
+                        ) : null}
+                        {(canAssignCard(card) || canEditCard(card)) &&
+                        card.column !== "cancelado" ? (
+                          <IconButton
+                            aria-label="Mais ações"
+                            onClick={() => setActionsMenuCard(card)}
+                            size="small"
+                          >
+                            <MoreVertOutlinedIcon />
+                          </IconButton>
                         ) : null}
                       </CardActions>
                     </Card>
@@ -581,6 +571,54 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
         open={createOpen}
       />
 
+      <Menu
+        anchorEl={statusMenuCard ? document.body : null}
+        onClose={() => setStatusMenuCard(null)}
+        open={Boolean(statusMenuCard)}
+      >
+        {statusMenuCard
+          ? workflowColumns
+              .filter((destination) => destination.id !== statusMenuCard.column)
+              .map((destination) => (
+                <MenuItem
+                  key={destination.id}
+                  onClick={() => {
+                    void move(statusMenuCard, destination.id);
+                    setStatusMenuCard(null);
+                  }}
+                >
+                  {destination.label}
+                </MenuItem>
+              ))
+          : null}
+      </Menu>
+      <Menu
+        anchorEl={actionsMenuCard ? document.body : null}
+        onClose={() => setActionsMenuCard(null)}
+        open={Boolean(actionsMenuCard)}
+      >
+        {actionsMenuCard && canAssignCard(actionsMenuCard) ? (
+          <MenuItem
+            onClick={() => {
+              void openAssignment(actionsMenuCard);
+              setActionsMenuCard(null);
+            }}
+          >
+            Atribuir responsável
+          </MenuItem>
+        ) : null}
+        {actionsMenuCard && canEditCard(actionsMenuCard) ? (
+          <MenuItem
+            onClick={() => {
+              setCancellingCard(actionsMenuCard);
+              setActionsMenuCard(null);
+            }}
+          >
+            Cancelar atendimento
+          </MenuItem>
+        ) : null}
+      </Menu>
+
       <ViewCardDialog
         card={viewingCard}
         companyName={
@@ -592,6 +630,8 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
       />
 
       <Dialog
+        fullWidth
+        maxWidth="sm"
         onClose={() => {
           assignmentEpoch.current++;
           assignmentAbort.current?.abort();
@@ -606,7 +646,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             label="Responsável"
             onChange={(event) => setAssigneeMembershipId(event.target.value)}
             select
-            sx={{ mt: 1, minWidth: 280 }}
+            sx={{ mt: 1 }}
             value={assigneeMembershipId}
           >
             {assignmentOptions.map((option) => (
@@ -637,10 +677,12 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
       </Dialog>
 
       <Dialog
+        fullWidth
+        maxWidth="sm"
         onClose={() => !cancelling && setCancellingCard(null)}
         open={Boolean(cancellingCard)}
       >
-        <DialogTitle>Cancelar cartão</DialogTitle>
+        <DialogTitle>Cancelar atendimento</DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
@@ -655,7 +697,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             }
             onChange={(event) => setCancellationReason(event.target.value)}
             slotProps={{ htmlInput: { maxLength: 501 } }}
-            sx={{ mt: 1, minWidth: 320 }}
+            sx={{ mt: 1 }}
             value={cancellationReason}
           />
         </DialogContent>
@@ -697,7 +739,7 @@ function ViewCardDialog({
 }) {
   return (
     <EntityDialog
-      description={`Cartão de ${companyName}. Apenas leitura.`}
+      description={`Atendimento de ${companyName}.`}
       onClose={onClose}
       open={Boolean(card)}
       title="Visualizar atendimento"
@@ -724,9 +766,6 @@ function ViewCardDialog({
               variant="outlined"
             />
           </Stack>
-          <Typography color="text.secondary" variant="caption">
-            Versão {card.version}
-          </Typography>
         </Stack>
       ) : null}
     </EntityDialog>

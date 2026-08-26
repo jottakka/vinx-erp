@@ -105,7 +105,7 @@ export function AgentConversation() {
   const thinking = status === "thinking";
   const emptyConversationNotice = companyName
     ? "Faça uma pergunta para começar."
-    : "Selecione uma empresa para iniciar.";
+    : "Escolha uma empresa para começar.";
 
   function submitFromInput() {
     sendMessage(draft);

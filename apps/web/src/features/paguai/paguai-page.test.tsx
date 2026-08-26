@@ -144,7 +144,10 @@ describe("PaguaiPage", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
 
     await openCreate(user);
-    expect(await screen.findByRole("dialog")).toBeVisible();
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeVisible();
+    expect(within(dialog).getByLabelText("Empresa Alfa")).toBeVisible();
+    expect(dialog.textContent).not.toContain(companyId);
   });
 
   it("keeps the native date label above the browser-rendered date value", async () => {
@@ -241,6 +244,14 @@ describe("PaguaiPage", () => {
     expect(screen.getByLabelText("Empresa Alfa")).toBeVisible();
     expect(screen.getByLabelText("Empresa Beta")).toBeVisible();
     expect(screen.getAllByText("Rascunho")).toHaveLength(2);
+    expect(
+      screen.queryByRole("button", { name: "Nova solicitação" }),
+    ).toBeNull();
+    expect(
+      screen.getByText(
+        "Selecione uma única empresa para criar uma solicitação.",
+      ),
+    ).toBeVisible();
   });
 
   it("keeps successful companies visible and reports a partial list failure", async () => {

@@ -44,8 +44,8 @@ function DockContent() {
           ) : null}
           <Typography color="text.secondary" variant="caption">
             {companyName
-              ? "Uma empresa por envio · Consultas independentes"
-              : "Selecione uma empresa · Consultas independentes"}
+              ? "Empresa selecionada · uma empresa por envio"
+              : "Escolha uma empresa para começar"}
           </Typography>
         </Stack>
         <IconButton

@@ -333,7 +333,7 @@ describe("agent workspace", () => {
       dock.getAllByRole("group", { name: "Empresa Alfa" }).length,
     ).toBeGreaterThan(0);
     expect(
-      dock.getByText("Uma empresa por envio · Consultas independentes"),
+      dock.getByText("Empresa selecionada · uma empresa por envio"),
     ).toBeVisible();
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
@@ -557,23 +557,21 @@ describe("agent workspace", () => {
   it("uses no-company wording throughout the dedicated page and composer", async () => {
     await renderAgentWorkspace("/agente", createCompanylessGateway());
 
+    expect(await screen.findByText("Conversa com o agente")).toBeVisible();
     expect(
-      await screen.findByText("Sem empresa · Página dedicada"),
+      screen.getByText("Escolha uma empresa para usar o agente."),
     ).toBeVisible();
-    expect(
-      screen.getByText(
-        "Selecione uma empresa para conversar com o agente; turnos anteriores não fazem parte do contexto.",
-      ),
-    ).toBeVisible();
-    expect(
-      screen.getByText("Selecione uma empresa para iniciar."),
-    ).toBeVisible();
+    expect(screen.getByText("Escolha uma empresa para começar.")).toBeVisible();
     expect(
       screen.queryByText(
         "Selecione uma empresa para habilitar o envio ao agente.",
       ),
     ).toBeNull();
-    expect(screen.queryByText(/empresa ativa/i)).toBeNull();
+    expect(
+      screen.queryByText(
+        /empresa ativa|Página dedicada|Consultas independentes/i,
+      ),
+    ).toBeNull();
     expect(screen.queryByText(/vinculados à empresa indicada/i)).toBeNull();
   });
 
