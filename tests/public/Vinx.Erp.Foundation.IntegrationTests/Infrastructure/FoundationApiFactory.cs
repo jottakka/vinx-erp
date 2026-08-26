@@ -205,7 +205,9 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     internal static E2eFixtureFactoryContext CreateWithPreparedE2eProfile(
         string profileName,
         FoundationPostgresFixtureLease fixtureLease,
-        E2eDatasetReceipt receipt)
+        E2eDatasetReceipt receipt,
+        IAgentModel? testAgentModel = null,
+        AgentRunOptions? testAgentRunOptions = null)
     {
         ArgumentNullException.ThrowIfNull(fixtureLease);
         if (!E2eFixtureProfileCatalog.TryGet(profileName, out var profile) || profile is null)
@@ -218,6 +220,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             profile.UserId,
             correlationId,
             CreateE2ePrincipalClaims(profile, correlationId),
+            testAgentModel: testAgentModel,
+            testAgentRunOptions: testAgentRunOptions,
             preparedFixtureAccess: fixtureLease,
             provisionWolverineStorage: false,
             disableWolverineForE2e: true);

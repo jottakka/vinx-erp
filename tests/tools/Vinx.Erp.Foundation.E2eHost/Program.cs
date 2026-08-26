@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
 return await RunAsync(args);
@@ -36,7 +37,18 @@ static async Task<int> RunAsync(string[] arguments)
             }
             case E2eFixtureHostMode.Shared:
             {
-                var sharedHost = await SharedE2eFixtureHost.StartAsync(shutdown.Token);
+                var testAgentModel = new DeterministicE2eAgentModel();
+                var testAgentRunOptions = new AgentRunOptions
+                {
+                    Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                    Endpoint = new Uri("https://agent-provider.example/v1"),
+                    ApiKey = "test-agent-key",
+                    Model = "test-agent-model",
+                };
+                var sharedHost = await SharedE2eFixtureHost.StartAsync(
+                    shutdown.Token,
+                    testAgentModel,
+                    testAgentRunOptions);
                 host = sharedHost;
                 if (!shutdown.IsCancellationRequested)
                 {

@@ -8,6 +8,7 @@
 | Profile multiempresa | profile `maria` | o host real inicia e chama bootstrap e módulos | Alfa e Beta aparecem, Gama não; employees, Paguai, cards e inbox retornam linhas autorizadas | `RealE2eFixtureHostTests` |
 | Negação entre empresas | Maria autenticada | employees e Paguai de Gama são solicitados | a API responde 403/404 conforme o contrato e não entrega conteúdo | `RealE2eFixtureHostTests` |
 | Fixture compartilhada | Maria e Clara têm principals fixos e o banco ainda não existe | o host composto migra, semeia e verifica uma vez | duas origins API distintas compartilham host/porta/database PostgreSQL; Maria lê Alfa/Beta, Clara lê somente Gama e uma mutação Maria fica no owner | `RealE2eFixtureHostTests.Shared_host_seeds_once_and_keeps_profile_RLS_isolated` |
+| Agente demonstrativo compartilhado | as duas origins compartilham o seed e um modelo fixo somente de teste | Maria solicita Alfa; depois Maria solicita Beta e Clara solicita Gama | Alfa retorna `200 result/ok` com texto fixo; Beta e Gama retornam `200 denied/capability_denied` sem texto; somente Alfa consulta o modelo, com seleção sintética | `RealE2eFixtureHostTests.Shared_host_seeds_once_and_keeps_profile_RLS_isolated` |
 | Export seguro | fixture compartilhada pronta | o host cria o arquivo administrativo local | diretório `0700`, arquivo regular `0600`, sem newline, sem symlink e removido antes do banco | `E2eFixtureHostOptionsTests` |
 | Lifecycle do launcher | argumentos allow-listed e portas `4174`/`4175` livres | launcher recebe readiness estrita, inicia dois Vites e depois recebe SIGINT | publica apenas URLs/profile/endpoint DBeaver/caminho protegido; encerra Clara, Maria e host; saída não zero do host no cleanup falha | `E2eFixtureHostOptionsTests`; `scripts/run-real-e2e.test.mjs` |
 
@@ -52,3 +53,7 @@ node --test scripts/run-real-e2e.test.mjs
 ```
 
 O gate não amplia o escopo para `quality/private` nem para #115.
+
+O caso do Agente é uma demonstração determinística interna ao fixture: não
+realiza HTTP para provider, não prova qualidade do modelo nem login Supabase, e
+não deve ser interpretado como evidência de provider, rede ou produção.

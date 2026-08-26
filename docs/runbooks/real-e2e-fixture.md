@@ -109,6 +109,13 @@ vê linhas permitidas por suas memberships, capabilities e RLS. Não há reset,
 reseed ou rollback global durante a sessão: para voltar ao estado determinístico,
 encerre a execução e crie outra.
 
+No mesmo modo compartilhado, `POST /agent/runs` usa exclusivamente um modelo
+determinístico de demonstração. Maria em Alfa recebe o texto fixo marcado como
+`[Demonstração E2E]`; Maria em Beta e Clara em Gama recebem a negação tipada
+`capability_denied`, antes de qualquer chamada ao modelo. Essa evidência é
+automática e prova a ordem autorização-modelo com os principals reais do
+fixture; ela não consulta provider externo nem avalia qualidade de resposta.
+
 ## Roteiro manual mínimo
 
 Abra Maria e Clara em contextos de browser separados; não faça login nem injete
@@ -161,7 +168,8 @@ e-mail, IDs do dataset, payloads ou mensagens internas de provider.
 ## Limites de evidência
 
 Este fluxo prova migrations, seed, autorização/RLS, session gate de teste,
-ApiHost real, proxy Vite e leitura dos módulos contra PostgreSQL real. Não prova
-login Supabase, MFA, provider externo, WorkerHost, Meta, ClamAV, AI, Storage,
-TLS/ingress, produção, reconnect ou revogação de sessão. A automação browser
-real completa permanece no escopo de #115.
+ApiHost real, proxy Vite, leitura dos módulos contra PostgreSQL real e, apenas
+no modo compartilhado, a demonstração determinística do endpoint do Agente.
+Não prova login Supabase, MFA, provider externo, qualidade de IA, WorkerHost,
+Meta, ClamAV, Storage, TLS/ingress, produção, reconnect ou revogação de sessão.
+A automação browser real completa permanece no escopo de #115.
