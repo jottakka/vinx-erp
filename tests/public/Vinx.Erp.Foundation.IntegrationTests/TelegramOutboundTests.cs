@@ -176,6 +176,59 @@ public sealed class TelegramOutboundTests
     }
 
     [Fact]
+    public async Task Ambient_Telegram_settings_cannot_enable_the_default_factory_or_call_the_Bot_API()
+    {
+        var originalBotToken = Environment.GetEnvironmentVariable("TELEGRAM_BOT_TOKEN");
+        var originalApiBaseUrl = Environment.GetEnvironmentVariable("TELEGRAM_API_BASE_URL");
+        var originalWebhookSecret = Environment.GetEnvironmentVariable(
+            "TELEGRAM_WEBHOOK_SECRET_TOKEN"
+        );
+        try
+        {
+            Environment.SetEnvironmentVariable("TELEGRAM_BOT_TOKEN", "123456:ambient-test-token");
+            Environment.SetEnvironmentVariable("TELEGRAM_API_BASE_URL", "https://api.telegram.test");
+            Environment.SetEnvironmentVariable(
+                "TELEGRAM_WEBHOOK_SECRET_TOKEN",
+                "ambient_webhook_secret"
+            );
+
+            await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+            var seed = await CreateEligibleSeedAsync(factory);
+            var deliveryId = await EnqueueTelegramAsync(factory, seed);
+            await using var worker = new NotificationWorkerHostFactory(
+                factory.Fixture.WorkerConnectionString
+            );
+            using var client = worker.CreateClient();
+            await using var scope = worker.Services.CreateAsyncScope();
+            var options = scope.ServiceProvider.GetRequiredService<IOptions<TelegramOptions>>().Value;
+
+            Assert.False(options.OutboundIsConfigured);
+
+            var handler = FindHandler<FailFastTelegramBotHandler>(
+                scope.ServiceProvider
+                    .GetRequiredService<IHttpMessageHandlerFactory>()
+                    .CreateHandler(TelegramClient.HttpClientName)
+            );
+            Assert.Equal(0, handler.Calls);
+
+            var state = await NotificationIntentSeed.WaitUntilDeliveryAsync(
+                factory,
+                deliveryId,
+                "provider_failed",
+                TimeSpan.FromSeconds(30)
+            );
+            Assert.Equal("provider_rejected", state.FailureReason);
+            Assert.Equal(0, handler.Calls);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TELEGRAM_BOT_TOKEN", originalBotToken);
+            Environment.SetEnvironmentVariable("TELEGRAM_API_BASE_URL", originalApiBaseUrl);
+            Environment.SetEnvironmentVariable("TELEGRAM_WEBHOOK_SECRET_TOKEN", originalWebhookSecret);
+        }
+    }
+
+    [Fact]
     public async Task Unvalidated_target_fails_closed_without_a_bot_API_call()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -412,6 +465,22 @@ public sealed class TelegramOutboundTests
         }
 
         return Assert.IsType<SocketsHttpHandler>(handler);
+    }
+
+    private static THandler FindHandler<THandler>(HttpMessageHandler handler)
+        where THandler : HttpMessageHandler
+    {
+        while (handler is DelegatingHandler delegating && delegating.InnerHandler is not null)
+        {
+            if (handler is THandler expected)
+            {
+                return expected;
+            }
+
+            handler = delegating.InnerHandler;
+        }
+
+        return Assert.IsType<THandler>(handler);
     }
 
     public sealed class FakeTelegramBotHandler : HttpMessageHandler
