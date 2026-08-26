@@ -47,6 +47,8 @@ public sealed class AtendimentoCardMigrationTests
         await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
         await using (var insert = new NpgsqlCommand(
             """
+            INSERT INTO foundation.users (id, display_name, email, created_at)
+            VALUES (@actor, 'Legacy actor', 'legacy-metadata-actor@example.test', clock_timestamp());
             INSERT INTO foundation.groups (id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at) VALUES (gen_random_uuid(), 'Legacy', @actor, @actor, gen_random_uuid(), clock_timestamp(), clock_timestamp());
             INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at) VALUES (@company, (SELECT id FROM foundation.groups WHERE name = 'Legacy'), 'Legacy', @actor, @actor, gen_random_uuid(), clock_timestamp(), clock_timestamp());
             INSERT INTO service_desk.atendimento_cards (id, company_id, title, description, column_name, created_by_user_id, updated_by_user_id, request_id) VALUES (@card, @company, 'Legacy', 'Old columns only.', 'novo', @actor, @actor, gen_random_uuid());
