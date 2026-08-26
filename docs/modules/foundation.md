@@ -300,6 +300,15 @@ telefone ou endereço. A validação do chat é externa e administrada até que 
 vinculação de uso único seja aprovada; alterar o endereço limpa
 `is_validated`. Nenhuma chamada ao Telegram pertence a esta fatia.
 
+A admissão inbound Telegram preserva em `notifications.inbound_telegram_messages`
+o `update_id`, o par privado `(chat_id, message_id)`, o texto e a decisão
+fechada da resolução. Somente um contato Telegram validado com exatamente uma
+membership ativa de empresa não removida resulta em `admitted`; ausência,
+validação pendente, inatividade ou ambiguidade ficam como evidência durável sem
+IDs de identidade. Runtime executa apenas as funções de resolução e admissão;
+replay exige o mesmo `update_id` e texto, e não altera a decisão inicial. Esta
+fatia não publica evento, não entrega ao worker e não responde ao chat.
+
 ## Diretório local de funcionários
 
 `POST /foundation/companies/{companyId}/employees` reserva uma pessoa no
