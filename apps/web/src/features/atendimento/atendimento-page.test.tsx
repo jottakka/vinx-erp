@@ -30,6 +30,12 @@ const alfaCard: AtendimentoCard = {
   description: "Visível somente para Alfa",
   id: "33333333-3333-4333-8333-333333333333",
   participantMembershipIds: [],
+  priority: "critica",
+  channel: "whatsapp",
+  slaDueAt: "2026-08-28T18:00:00.000Z",
+  isOverdue: true,
+  createdAt: "2026-08-26T12:00:00.000Z",
+  updatedAt: "2026-08-26T13:00:00.000Z",
   title: "Cartão Alfa",
   version: 1,
 };
@@ -41,6 +47,12 @@ const betaCard: AtendimentoCard = {
   description: "Não pode aparecer na fila Alfa",
   id: "44444444-4444-4444-8444-844444444444",
   participantMembershipIds: [],
+  priority: "baixa",
+  channel: "email",
+  slaDueAt: null,
+  isOverdue: false,
+  createdAt: "2026-08-26T11:00:00.000Z",
+  updatedAt: "2026-08-26T11:30:00.000Z",
   title: "Cartão Beta",
   version: 1,
 };
@@ -137,6 +149,80 @@ beforeEach(() =>
 );
 
 describe("AtendimentoPage", () => {
+  it("shows closed priority and channel labels, localized SLA, and server-authorized overdue state", async () => {
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+
+    renderPage();
+
+    expect(await screen.findByText("Crítica")).toBeVisible();
+    expect(screen.getByText("Crítica").closest(".MuiChip-root")).toHaveClass(
+      "MuiChip-colorError",
+    );
+    expect(screen.getByText("WhatsApp")).toBeVisible();
+    const localizedDeadline = new Intl.DateTimeFormat("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date(alfaCard.slaDueAt));
+    expect(screen.getByText(`Prazo: ${localizedDeadline}`)).toBeVisible();
+    expect(screen.getByText("Atrasado")).toBeVisible();
+    expect(screen.queryByText(alfaCard.id)).not.toBeInTheDocument();
+    expect(screen.queryByText("critica")).not.toBeInTheDocument();
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Visualizar" }));
+    const detail = await screen.findByRole("dialog");
+    expect(within(detail).getByText("Crítica")).toBeVisible();
+    expect(within(detail).getByText("WhatsApp")).toBeVisible();
+    expect(
+      within(detail).getByText(`Prazo: ${localizedDeadline}`),
+    ).toBeVisible();
+    expect(within(detail).getByText("Atrasado")).toBeVisible();
+  });
+
+  it("shows all professional priority and channel labels and never overdue on terminal cards", async () => {
+    const cards = [
+      {
+        ...alfaCard,
+        id: "a",
+        priority: "alta" as const,
+        channel: "web" as const,
+      },
+      {
+        ...alfaCard,
+        id: "b",
+        priority: "media" as const,
+        channel: "manual" as const,
+        isOverdue: true,
+        column: "concluido" as const,
+      },
+      {
+        ...alfaCard,
+        id: "c",
+        priority: "baixa" as const,
+        channel: "email" as const,
+        isOverdue: true,
+        column: "cancelado" as const,
+      },
+    ];
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue(cards);
+
+    renderPage();
+
+    expect(await screen.findByText("Alta")).toBeVisible();
+    expect(screen.getByText("Alta").closest(".MuiChip-root")).toHaveClass(
+      "MuiChip-colorWarning",
+    );
+    expect(screen.getByText("Média")).toBeVisible();
+    expect(screen.getByText("Baixa")).toBeVisible();
+    expect(screen.getByText("Web")).toBeVisible();
+    expect(screen.getByText("Manual")).toBeVisible();
+    expect(screen.getByText("E-mail")).toBeVisible();
+    expect(screen.getAllByText("Atrasado")).toHaveLength(1);
+    expect(screen.queryByText("alta")).not.toBeInTheDocument();
+    expect(screen.queryByText("media")).not.toBeInTheDocument();
+    expect(screen.queryByText("baixa")).not.toBeInTheDocument();
+  });
   it("aggregates every authorized company, labels each card, and renders the four real state columns", async () => {
     vi.spyOn(atendimentoClient, "list")
       .mockResolvedValueOnce([alfaCard])
@@ -238,7 +324,13 @@ describe("AtendimentoPage", () => {
       ),
       "Novo cartão",
       "Descrição do cartão",
-      { attachmentFileId: null, participantMembershipIds: [] },
+      {
+        attachmentFileId: null,
+        channel: "web",
+        participantMembershipIds: [],
+        priority: "media",
+        slaDueAt: null,
+      },
     );
     await waitFor(() =>
       expect(screen.getAllByText("Novo cartão").length).toBeGreaterThanOrEqual(
@@ -326,7 +418,10 @@ describe("AtendimentoPage", () => {
       "Tente novamente",
       {
         attachmentFileId,
+        channel: "web",
         participantMembershipIds: ["88888888-8888-4888-8888-888888888888"],
+        priority: "media",
+        slaDueAt: null,
       },
     );
     expect(screen.getByRole("dialog")).toBeVisible();

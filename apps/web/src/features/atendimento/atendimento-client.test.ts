@@ -34,6 +34,12 @@ const createdCard: AtendimentoCard = {
   description: "Pedido de ajuda",
   id: "22222222-2222-4222-8222-222222222222",
   participantMembershipIds: [],
+  priority: "media",
+  channel: "manual",
+  slaDueAt: null,
+  isOverdue: false,
+  createdAt: "2026-08-26T12:00:00.000Z",
+  updatedAt: "2026-08-26T12:00:00.000Z",
   title: "Ajuda com cobrança",
   version: 1,
 };
@@ -82,6 +88,9 @@ describe("atendimento client", () => {
         {
           attachmentFileId: "33333333-3333-4333-8333-333333333333",
           participantMembershipIds: ["44444444-4444-4444-8444-444444444444"],
+          priority: "alta",
+          channel: "web",
+          slaDueAt: "2026-08-28T18:00:00.000Z",
         },
       ),
     ).resolves.toEqual({ card: createdCard, ok: true });
@@ -118,6 +127,9 @@ describe("atendimento client", () => {
         description: createdCard.description,
         attachmentFileId: "33333333-3333-4333-8333-333333333333",
         participantMembershipIds: ["44444444-4444-4444-8444-444444444444"],
+        priority: "alta",
+        channel: "web",
+        slaDueAt: "2026-08-28T18:00:00.000Z",
         requestId,
         title: createdCard.title,
       },
@@ -214,6 +226,21 @@ describe("atendimento client", () => {
           atendimentoClient.assignmentOptions(createdCard.companyId),
         ).resolves.toBeNull();
       }),
+    );
+  });
+
+  it.each([
+    ["unknown priority", { ...createdCard, priority: "urgent" }],
+    ["unknown channel", { ...createdCard, channel: "phone" }],
+    ["malformed SLA timestamp", { ...createdCard, slaDueAt: "tomorrow" }],
+  ] as const)("rejects a response with %s", async (_label, card) => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify([card]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(atendimentoClient.list(createdCard.companyId)).resolves.toBe(
+      null,
     );
   });
 

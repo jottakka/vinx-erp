@@ -28,6 +28,7 @@ import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
+import { StatusChip } from "../../shared/ui/status-chip";
 import {
   hasCompanyCapability,
   resolveCompanyEntityPermissions,
@@ -36,13 +37,21 @@ import { useSession } from "../auth/session-provider";
 import {
   type AtendimentoAssignmentOption,
   type AtendimentoCard,
+  type AtendimentoChannel,
   type AtendimentoColumn,
+  type AtendimentoPriority,
   atendimentoClient,
 } from "./atendimento-client";
 import {
   type AtendimentoAttachmentUploader,
   AtendimentoCreateDialog,
 } from "./atendimento-create-dialog";
+import {
+  channelLabels,
+  formatAtendimentoDate,
+  isAtendimentoOverdue,
+  priorityPresentation,
+} from "./atendimento-presentation";
 
 const columns: readonly {
   id: AtendimentoColumn;
@@ -259,6 +268,9 @@ export function AtendimentoPage({
     description: string;
     attachmentFileId?: string;
     participantMembershipIds: readonly string[];
+    priority: AtendimentoPriority;
+    channel: AtendimentoChannel;
+    slaDueAt: string | null;
   }): Promise<{ ok: true } | { ok: false; message: string }> {
     if (!selectedCompany || !permissions.canCreate)
       return {
@@ -272,7 +284,10 @@ export function AtendimentoPage({
       values.description,
       {
         attachmentFileId: values.attachmentFileId ?? null,
+        channel: values.channel,
         participantMembershipIds: values.participantMembershipIds,
+        priority: values.priority,
+        slaDueAt: values.slaDueAt,
       },
     );
     if (!result.ok) {
@@ -661,6 +676,25 @@ export function AtendimentoPage({
                                 variant="outlined"
                               />
                             ) : null}
+                            <StatusChip
+                              label={priorityPresentation[card.priority].label}
+                              tone={priorityPresentation[card.priority].tone}
+                            />
+                            <Chip
+                              label={channelLabels[card.channel]}
+                              size="small"
+                              variant="outlined"
+                            />
+                            {formatAtendimentoDate(card.slaDueAt) ? (
+                              <Chip
+                                label={`Prazo: ${formatAtendimentoDate(card.slaDueAt)}`}
+                                size="small"
+                                variant="outlined"
+                              />
+                            ) : null}
+                            {isAtendimentoOverdue(card) ? (
+                              <StatusChip label="Atrasado" tone="error" />
+                            ) : null}
                           </Stack>
                         </CardContent>
                         <CardActions
@@ -951,6 +985,25 @@ function ViewCardDialog({
               size="small"
               variant="outlined"
             />
+            <StatusChip
+              label={priorityPresentation[card.priority].label}
+              tone={priorityPresentation[card.priority].tone}
+            />
+            <Chip
+              label={channelLabels[card.channel]}
+              size="small"
+              variant="outlined"
+            />
+            {formatAtendimentoDate(card.slaDueAt) ? (
+              <Chip
+                label={`Prazo: ${formatAtendimentoDate(card.slaDueAt)}`}
+                size="small"
+                variant="outlined"
+              />
+            ) : null}
+            {isAtendimentoOverdue(card) ? (
+              <StatusChip label="Atrasado" tone="error" />
+            ) : null}
           </Stack>
         </Stack>
       ) : null}

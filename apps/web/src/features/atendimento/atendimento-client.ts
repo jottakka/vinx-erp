@@ -17,7 +17,16 @@ export type AtendimentoCard = {
   assigneeMembershipId: string | null;
   attachmentFileId: string | null;
   participantMembershipIds: readonly string[];
+  priority: AtendimentoPriority;
+  channel: AtendimentoChannel;
+  slaDueAt: string | null;
+  isOverdue: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
 };
+
+export type AtendimentoPriority = "critica" | "alta" | "media" | "baixa";
+export type AtendimentoChannel = "whatsapp" | "email" | "web" | "manual";
 
 export type AtendimentoAssignmentOption = {
   membershipId: string;
@@ -27,7 +36,34 @@ export type AtendimentoAssignmentOption = {
 export type AtendimentoCreateOptions = {
   attachmentFileId?: string | null;
   participantMembershipIds?: readonly string[];
+  priority?: AtendimentoPriority | null;
+  channel?: AtendimentoChannel | null;
+  slaDueAt?: string | null;
 };
+
+const atendimentoCardSchema = z.object({
+  id: z.string(),
+  companyId: z.string(),
+  title: z.string(),
+  description: z.string(),
+  column: z.enum(["novo", "em_andamento", "concluido", "cancelado"]),
+  version: z.number(),
+  assigneeMembershipId: z.string().nullable(),
+  attachmentFileId: z.string().nullable(),
+  participantMembershipIds: z.array(z.string()),
+  priority: z.enum(["critica", "alta", "media", "baixa"]),
+  channel: z.enum(["whatsapp", "email", "web", "manual"]),
+  slaDueAt: z.string().datetime({ offset: true }).nullable(),
+  isOverdue: z.boolean(),
+  createdAt: z.string().datetime({ offset: true }).nullable(),
+  updatedAt: z.string().datetime({ offset: true }).nullable(),
+});
+const atendimentoCardsSchema = z.array(atendimentoCardSchema);
+
+function parseCard(value: unknown): AtendimentoCard | null {
+  const parsed = atendimentoCardSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 
 type CommandResult =
   | { ok: true; card: AtendimentoCard }
@@ -87,8 +123,12 @@ async function command(path: string, body: object): Promise<CommandResult> {
       },
       method: "POST",
     });
-    if (response.ok)
-      return { card: (await response.json()) as AtendimentoCard, ok: true };
+    if (response.ok) {
+      const card = parseCard(await response.json());
+      return card
+        ? { card, ok: true }
+        : { code: "atendimento_unavailable", ok: false };
+    }
     const error = (await response.json().catch(() => null)) as {
       code?: string;
       current?: AtendimentoCard;
@@ -109,9 +149,9 @@ export const atendimentoClient = {
       const response = await request(
         `${basePath}?companyId=${encodeURIComponent(companyId)}`,
       );
-      return response.ok
-        ? ((await response.json()) as AtendimentoCard[])
-        : null;
+      if (!response.ok) return null;
+      const parsed = atendimentoCardsSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
@@ -140,14 +180,20 @@ export const atendimentoClient = {
     {
       attachmentFileId = null,
       participantMembershipIds = [],
+      priority = "media",
+      channel = "manual",
+      slaDueAt = null,
     }: AtendimentoCreateOptions = {},
   ) {
     return command(basePath, {
       attachmentFileId,
+      channel,
       companyId,
       description,
       participantMembershipIds: [...participantMembershipIds],
+      priority,
       requestId,
+      slaDueAt,
       title,
     });
   },
