@@ -104,6 +104,89 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AgentExecutionLedger", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("channel");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("InboundMessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("inbound_message_id");
+
+                    b.Property<string>("Journey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("journey");
+
+                    b.Property<string>("PayloadHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payload_hash");
+
+                    b.Property<string>("ReasonCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("reason_code");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<string>("SafeResultJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("safe_result_json");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("state");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_agent_execution_ledger");
+
+                    b.HasAlternateKey("CompanyId", "Id")
+                        .HasName("ak_agent_execution_ledger_company_id_id");
+
+                    b.HasIndex("CompanyId", "ActorUserId", "Channel", "RequestId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_agent_execution_ledger_company_id_actor_user_id_channel_request_id");
+
+                    b.ToTable("agent_execution_ledger", "foundation", t =>
+                        {
+                            t.HasCheckConstraint("ck_agent_execution_ledger_payload_hash_format", "payload_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_agent_execution_ledger_state", "state IN ('claimed', 'vision_in_flight', 'model_in_flight', 'completed', 'failed_closed', 'ambiguous')");
+
+                            t.HasCheckConstraint("ck_agent_execution_ledger_terminal_data", "(state = 'completed' AND safe_result_json IS NOT NULL AND reason_code IS NULL) OR (state IN ('failed_closed', 'ambiguous') AND safe_result_json IS NULL AND reason_code IS NOT NULL) OR (state IN ('claimed', 'vision_in_flight', 'model_in_flight') AND safe_result_json IS NULL AND reason_code IS NULL)");
+                        });
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCard", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1502,6 +1585,18 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                             t.HasCheckConstraint("ck_user_sessions_revocation_complete", "(revoked_at IS NULL AND revoked_by_user_id IS NULL AND revocation_reason IS NULL) OR (revoked_at IS NOT NULL AND revoked_by_user_id IS NOT NULL AND revocation_reason IS NOT NULL AND btrim(revocation_reason) <> '')");
                         });
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AgentExecutionLedger", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.Company", "Company")
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_agent_execution_ledger_companies_company_id");
+
+                    b.Navigation("Company");
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCard", b =>

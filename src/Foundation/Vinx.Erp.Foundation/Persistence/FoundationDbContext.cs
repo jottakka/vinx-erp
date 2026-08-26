@@ -21,6 +21,7 @@ public sealed class FoundationDbContext(DbContextOptions<FoundationDbContext> op
     public DbSet<RoleAssignment> RoleAssignments => Set<RoleAssignment>();
     public DbSet<FileRecord> Files => Set<FileRecord>();
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
+    public DbSet<AgentExecutionLedger> AgentExecutionLedger => Set<AgentExecutionLedger>();
     public DbSet<FoundationApproval> Approvals => Set<FoundationApproval>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<PaguaiRequest> PaguaiRequests => Set<PaguaiRequest>();
