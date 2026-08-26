@@ -28,6 +28,7 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var root = document.RootElement;
+        AssertPublicDraftPropertySet(root);
         Assert.NotEqual(Guid.Empty, ReadGuid(root, "id"));
         Assert.Equal(scenario.CompanyId, ReadGuid(root, "companyId"));
         Assert.Equal(request.RequestId, ReadGuid(root, "requestId"));
@@ -57,16 +58,20 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
         using var created = JsonDocument.Parse(await create.Content.ReadAsStringAsync());
         var draftId = ReadGuid(created.RootElement, "id");
+        AssertPublicDraftPropertySet(created.RootElement);
         Assert.Equal(invoice.Id, ReadNullableGuid(created.RootElement, "invoiceFileId"));
 
         using var list = await client.GetAsync($"/paguai/requests?companyId={scenario.CompanyId}");
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
         using var listed = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
-        Assert.Equal(invoice.Id, ReadNullableGuid(Assert.Single(listed.RootElement.EnumerateArray()), "invoiceFileId"));
+        var listedDraft = Assert.Single(listed.RootElement.EnumerateArray());
+        AssertPublicDraftPropertySet(listedDraft);
+        Assert.Equal(invoice.Id, ReadNullableGuid(listedDraft, "invoiceFileId"));
 
         using var detail = await client.GetAsync($"/paguai/requests/{draftId}?companyId={scenario.CompanyId}");
         Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
         using var detailed = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+        AssertPublicDraftPropertySet(detailed.RootElement);
         Assert.Equal(invoice.Id, ReadNullableGuid(detailed.RootElement, "invoiceFileId"));
     }
 
@@ -577,9 +582,13 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal("uuid", properties.GetProperty("requestId").GetProperty("format").GetString());
         var invoiceFileId = properties.GetProperty("invoiceFileId");
         Assert.Equal("uuid", invoiceFileId.GetProperty("format").GetString());
-        Assert.Contains(
-            "null",
-            invoiceFileId.GetProperty("type").EnumerateArray().Select(value => value.GetString())
+        Assert.Equal(
+            ["null", "string"],
+            invoiceFileId
+                .GetProperty("type")
+                .EnumerateArray()
+                .Select(value => value.GetString())
+                .Order()
         );
         Assert.DoesNotContain(
             "invoiceFileId",
@@ -858,6 +867,26 @@ public sealed class PaguaiDraftEndpointTests
         Assert.True(Guid.TryParse(property.GetString(), out var value));
         return value;
     }
+
+    private static void AssertPublicDraftPropertySet(JsonElement root) => Assert.Equal(
+        [
+            "amount",
+            "beneficiaryDisplayName",
+            "companyId",
+            "createdAt",
+            "currency",
+            "description",
+            "dueDate",
+            "id",
+            "invoiceFileId",
+            "proofRequirement",
+            "requestId",
+            "state",
+            "title",
+            "version",
+        ],
+        root.EnumerateObject().Select(property => property.Name).Order()
+    );
 
     private static Guid? ReadNullableGuid(JsonElement root, string propertyName)
     {

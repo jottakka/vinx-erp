@@ -259,16 +259,17 @@ public sealed class PaguaiDraftService(
             return await CreateAsync(
                 actor,
                 new CreateDraftCommand(
-                    command.CompanyId,
-                    command.InboundMessageId,
-                    command.Title,
-                    command.Description,
-                    amount,
-                    currency,
-                    dueDate,
-                    beneficiary,
-                    command.ProofRequirement,
-                    SourceInboundMessageId: command.InboundMessageId
+                    CompanyId: command.CompanyId,
+                    RequestId: command.InboundMessageId,
+                    Title: command.Title,
+                    Description: command.Description,
+                    Amount: amount,
+                    Currency: currency,
+                    DueDate: dueDate,
+                    BeneficiaryDisplayName: beneficiary,
+                    ProofRequirement: command.ProofRequirement,
+                    SourceInboundMessageId: command.InboundMessageId,
+                    InvoiceFileId: null
                 ),
                 cancellationToken
             );

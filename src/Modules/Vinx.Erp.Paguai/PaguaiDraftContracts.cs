@@ -15,8 +15,8 @@ public sealed record CreateDraftCommand(
     DateOnly DueDate,
     string BeneficiaryDisplayName,
     string ProofRequirement,
-    Guid? InvoiceFileId = null,
-    Guid? SourceInboundMessageId = null
+    Guid? SourceInboundMessageId = null,
+    Guid? InvoiceFileId = null
 );
 
 /// <summary>

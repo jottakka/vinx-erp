@@ -6,6 +6,7 @@ using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Paguai;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -17,6 +18,27 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 /// </summary>
 public sealed class PaguaiInboundDocumentDraftTests
 {
+    [Fact]
+    public void Existing_positional_source_argument_remains_the_inbound_document()
+    {
+        var sourceInboundMessageId = Guid.NewGuid();
+        var command = new CreateDraftCommand(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "Aluguel setembro",
+            "Rascunho do recibo enviado por WhatsApp",
+            250.00m,
+            "BRL",
+            new DateOnly(2026, 9, 5),
+            "ACME LTDA",
+            "required",
+            sourceInboundMessageId
+        );
+
+        Assert.Null(command.InvoiceFileId);
+        Assert.Equal(sourceInboundMessageId, command.SourceInboundMessageId);
+    }
+
     [Fact]
     public async Task Valid_candidate_creates_one_idempotent_draft_linked_to_the_document()
     {
@@ -41,6 +63,7 @@ public sealed class PaguaiInboundDocumentDraftTests
         Assert.Equal("2026-09-05", root.GetProperty("dueDate").GetString());
         Assert.Equal("Aluguel setembro", root.GetProperty("title").GetString());
         Assert.Equal("required", root.GetProperty("proofRequirement").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("invoiceFileId").ValueKind);
 
         using var replay = await client.PostAsJsonAsync(
             "/paguai/requests/from-document",
@@ -52,11 +75,15 @@ public sealed class PaguaiInboundDocumentDraftTests
 
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
-            "SELECT source_inbound_message_id FROM paguai.requests WHERE id = @id",
+            "SELECT source_inbound_message_id, invoice_file_id FROM paguai.requests WHERE id = @id",
             administrator
         );
         command.Parameters.AddWithValue("id", draftId);
-        Assert.Equal(scenario.InboundMessageId, (Guid)(await command.ExecuteScalarAsync())!);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(scenario.InboundMessageId, reader.GetGuid(0));
+        Assert.True(reader.IsDBNull(1));
+        Assert.False(await reader.ReadAsync());
     }
 
     [Fact]

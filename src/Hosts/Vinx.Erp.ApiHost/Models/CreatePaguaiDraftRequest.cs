@@ -51,15 +51,16 @@ public sealed class CreatePaguaiDraftRequest
 
     public CreateDraftCommand ToCommand() =>
         new(
-            CompanyId,
-            RequestId,
-            Title,
-            Description,
-            Amount,
-            Currency,
-            DueDate,
-            BeneficiaryDisplayName,
-            ProofRequirement,
-            InvoiceFileId
+            CompanyId: CompanyId,
+            RequestId: RequestId,
+            Title: Title,
+            Description: Description,
+            Amount: Amount,
+            Currency: Currency,
+            DueDate: DueDate,
+            BeneficiaryDisplayName: BeneficiaryDisplayName,
+            ProofRequirement: ProofRequirement,
+            SourceInboundMessageId: null,
+            InvoiceFileId: InvoiceFileId
         );
 }
