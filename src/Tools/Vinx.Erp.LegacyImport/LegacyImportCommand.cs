@@ -96,11 +96,23 @@ public static class LegacyImportCommand
             WriteSummary(ApplyMode, result.Succeeded, mapping.SourceBatchId, result.Companies, []);
             return result.Succeeded ? 0 : 1;
         }
-        catch (Exception exception) when (exception is NpgsqlException or LegacyImportConflictException or DbException)
+        catch (LegacyImportConflictException)
         {
-            // Falha operacional ou conflito fail-closed: motivo no stderr, sem segredos.
             await Console.Error.WriteLineAsync(
-                $"legacy-import: {exception.GetType().Name}: {exception.Message} @{exception.StackTrace}");
+                "legacy-import: conflito fail-closed (lote mutado ou hash divergente sob o mesmo batch); nenhuma escrita parcial foi mantida");
+            return 1;
+        }
+        catch (DbException exception) when (exception is PostgresException postgres)
+        {
+            // Apenas código estável + SqlState: mensagens do servidor podem carregar dados.
+            await Console.Error.WriteLineAsync(
+                $"legacy-import: falha de banco (sqlstate={postgres.SqlState}); valide conexão e papel e reexecute em modo dry-run");
+            return 1;
+        }
+        catch (DbException)
+        {
+            await Console.Error.WriteLineAsync(
+                "legacy-import: falha de banco (sqlstate=desconhecido); valide conexão e reexecute em modo dry-run");
             return 1;
         }
     }
