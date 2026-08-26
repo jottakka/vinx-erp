@@ -495,7 +495,7 @@ function PeoplePageContent({
   return (
     <Stack spacing={3}>
       <PageHeader
-        description="Consulte pessoas autorizadas por empresa e cadastre um funcionário localmente."
+        description="Consulte pessoas por empresa e cadastre funcionários sem conceder acesso ao sistema."
         eyebrow="Pessoas"
         title="Pessoas"
       />
@@ -612,7 +612,7 @@ function PeoplePageContent({
         </CardContent>
       </Card>
       <EntityDialog
-        description="Cria um registro local de funcionário; nenhum convite ou acesso é enviado."
+        description="Este cadastro não envia convite nem concede acesso ao sistema."
         onClose={() => {
           setCreationOpen(false);
           resetCreation();
@@ -645,9 +645,6 @@ function PeoplePageContent({
             label="E-mail"
             type="email"
           />
-          <Typography color="text.secondary" variant="caption">
-            Este cadastro é local e não envia convite nem concede acesso.
-          </Typography>
           <Button
             disabled={
               !selectedCreateCompany ||

@@ -281,6 +281,11 @@ describe("PeoplePage", () => {
         name: "Cadastrar funcionário",
       }),
     );
+    expect(
+      within(screen.getByRole("dialog")).getByText(
+        "Este cadastro não envia convite nem concede acesso ao sistema.",
+      ),
+    ).toBeVisible();
 
     expect(await screen.findByText("Informe um nome válido.")).toBeVisible();
     expect(gateway.create).not.toHaveBeenCalled();
