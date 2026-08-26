@@ -139,14 +139,42 @@ describe("AtendimentoPage", () => {
       expect(atendimentoClient.list).toHaveBeenCalledTimes(2),
     );
     expect(await screen.findByText(betaCard.title)).toBeVisible();
+    expect(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    ).toHaveTextContent("Todas as empresas autorizadas");
     expect(atendimentoClient.list).toHaveBeenCalledWith(alfaCompanyId);
     expect(atendimentoClient.list).toHaveBeenCalledWith(betaCompanyId);
     expect(screen.getAllByText("Alfa").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Beta").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole("group", { name: "Empresa Alfa" }).length,
+    ).toBeGreaterThan(1);
     for (const label of ["Novos", "Em andamento", "Concluídos", "Cancelados"]) {
       expect(screen.getByRole("heading", { name: label })).toBeVisible();
     }
     expect(document.querySelectorAll("[data-state-tone]")).toHaveLength(4);
+  });
+
+  it("filters the board to one authorized company without changing the creation company selector", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockImplementation(async (companyId) =>
+      companyId === alfaCompanyId ? [alfaCard] : [betaCard],
+    );
+    renderPage();
+    expect(await screen.findByText(alfaCard.title)).toBeVisible();
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Beta" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(atendimentoClient.list).toHaveBeenLastCalledWith(betaCompanyId),
+    );
+    expect(await screen.findByText(betaCard.title)).toBeVisible();
+    expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Empresa para novo cartão" }),
+    ).toBeVisible();
   });
 
   it("waits for all authorized company reads before replacing the board", async () => {

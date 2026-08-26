@@ -20,7 +20,9 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AuthorizedCompanyFilter } from "../../shared/ui/authorized-company-filter";
 import { CompanyProvider } from "../../shared/ui/company-context";
+import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { CompanySelect } from "../../shared/ui/company-select";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
@@ -73,6 +75,9 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     [bootstrap],
   );
   const [companyId, setCompanyId] = useState("");
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<
+    readonly string[]
+  >([]);
   const [cards, setCards] = useState<AtendimentoCard[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -102,6 +107,15 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     () => companies.find((company) => company.companyId === companyId),
     [companies, companyId],
   );
+  const requestedCompanies = useMemo(() => {
+    const authorizedIds = new Set(
+      companies.map((company) => company.companyId),
+    );
+    const selected = selectedCompanyIds.filter((id) => authorizedIds.has(id));
+    return selected.length
+      ? companies.filter((company) => selected.includes(company.companyId))
+      : companies;
+  }, [companies, selectedCompanyIds]);
 
   const permissions = useMemo(
     () =>
@@ -119,7 +133,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   }, [companies, companyId]);
 
   useEffect(() => {
-    if (!companies.length) {
+    if (!requestedCompanies.length) {
       setCards([]);
       return;
     }
@@ -129,7 +143,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     setError(null);
     setViewingCard(null);
     void Promise.all(
-      companies.map(async (company) => ({
+      requestedCompanies.map(async (company) => ({
         companyId: company.companyId,
         cards: await atendimentoClient.list(company.companyId),
       })),
@@ -150,7 +164,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     return () => {
       active = false;
     };
-  }, [companies]);
+  }, [requestedCompanies]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -313,6 +327,13 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             {error}
           </Alert>
         ) : null}
+        <AuthorizedCompanyFilter
+          companies={companies}
+          disabled={loading}
+          label="Filtrar empresas"
+          onChange={setSelectedCompanyIds}
+          selectedCompanyIds={selectedCompanyIds}
+        />
         <CompanySelect
           companies={companies}
           onChange={(nextCompanyId) => {
@@ -441,17 +462,17 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                             <Typography color="text.secondary">
                               {card.description}
                             </Typography>
-                            <Chip
-                              label={
-                                companies.find(
-                                  (company) =>
-                                    company.companyId === card.companyId,
-                                )?.companyName ?? "Empresa autorizada"
-                              }
-                              size="small"
-                              sx={{ mt: 1 }}
-                              variant="outlined"
-                            />
+                            <Box sx={{ mt: 1 }}>
+                              <CompanyIdentity
+                                companyId={card.companyId}
+                                companyName={
+                                  companies.find(
+                                    (company) =>
+                                      company.companyId === card.companyId,
+                                  )?.companyName ?? "Empresa autorizada"
+                                }
+                              />
+                            </Box>
                           </Box>
                           {canEditCard(card) && card.column !== "cancelado" ? (
                             <DragIndicatorOutlinedIcon
@@ -485,7 +506,14 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                           ) : null}
                         </Stack>
                       </CardContent>
-                      <CardActions>
+                      <CardActions
+                        sx={{
+                          alignItems: "center",
+                          flexWrap: "wrap",
+                          gap: 0.5,
+                          "& > :not(style) ~ :not(style)": { ml: 0 },
+                        }}
+                      >
                         <Button
                           onClick={() => setViewingCard(card)}
                           size="small"
