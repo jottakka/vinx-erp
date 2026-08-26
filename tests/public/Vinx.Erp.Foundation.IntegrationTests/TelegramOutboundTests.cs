@@ -328,6 +328,15 @@ public sealed class TelegramOutboundTests
             using var client = tokenWithDefaultBase.CreateClient();
         }
 
+        foreach (var settings in WebhookOnlyTelegramSettings())
+        {
+            await using var ignoredByWorker = new NotificationWorkerHostFactory(
+                api.Fixture.WorkerConnectionString,
+                telegramSettings: settings
+            );
+            using var client = ignoredByWorker.CreateClient();
+        }
+
         foreach (var settings in InvalidTelegramSettings())
         {
             await using var invalid = new NotificationWorkerHostFactory(
@@ -425,16 +434,20 @@ public sealed class TelegramOutboundTests
             },
             new Dictionary<string, string>
             {
-                ["TELEGRAM_WEBHOOK_SECRET_TOKEN"] = "valid_webhook_secret",
-            },
-            new Dictionary<string, string>
-            {
                 ["TELEGRAM_BOT_TOKEN"] = "invalid token",
             },
             new Dictionary<string, string>
             {
                 ["TELEGRAM_BOT_TOKEN"] = TestToken,
                 ["TELEGRAM_API_BASE_URL"] = "http://api.telegram.test",
+            },
+        ];
+
+    private static IReadOnlyList<IReadOnlyDictionary<string, string>> WebhookOnlyTelegramSettings() =>
+        [
+            new Dictionary<string, string>
+            {
+                ["TELEGRAM_WEBHOOK_SECRET_TOKEN"] = "valid_webhook_secret",
             },
             new Dictionary<string, string>
             {

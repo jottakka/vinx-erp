@@ -234,9 +234,9 @@ builder
     .Bind(builder.Configuration)
     .Validate(
         options =>
-            // A ausência mantém filas independentes operacionais. Qualquer
-            // configuração presente precisa permitir envio seguro; o segredo
-            // de webhook continua opcional, mas se definido deve ser válido.
+            // A ausência mantém filas independentes operacionais. Este host
+            // só envia outbound, portanto valida exclusivamente token e base;
+            // o ApiHost assume o segredo de webhook quando o receber.
             (
                 string.IsNullOrWhiteSpace(options.BotToken)
                 && string.Equals(
@@ -244,15 +244,8 @@ builder
                     "https://api.telegram.org",
                     StringComparison.Ordinal
                 )
-                && string.IsNullOrWhiteSpace(options.WebhookSecretToken)
             )
-            || (
-                options.OutboundIsConfigured
-                && (
-                    string.IsNullOrWhiteSpace(options.WebhookSecretToken)
-                    || options.WebhookIsConfigured
-                )
-            ),
+            || options.OutboundIsConfigured,
         "Telegram options are invalid."
     )
     .ValidateOnStart();

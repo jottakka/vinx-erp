@@ -12,11 +12,12 @@ evidência de teste.
 | `TELEGRAM_API_BASE_URL` | Base HTTPS do Bot API; padrão `https://api.telegram.org` |
 | `TELEGRAM_WEBHOOK_SECRET_TOKEN` | Segredo opcional para um webhook futuro (segredo) |
 
-O WorkerHost aceita a configuração Telegram totalmente ausente para manter
-filas independentes operacionais. Se qualquer valor for informado, token e
-base HTTPS válidos são obrigatórios; configuração parcial ou inválida impede o
-startup. Esta fatia é somente outbound e não registra webhook nem processa
-mensagens recebidas.
+O WorkerHost considera somente `TELEGRAM_BOT_TOKEN` e
+`TELEGRAM_API_BASE_URL`: a ausência outbound mantém filas independentes
+operacionais, e token/base parciais ou inválidos impedem o startup. Ele ignora
+`TELEGRAM_WEBHOOK_SECRET_TOKEN`, inclusive quando está sozinho ou malformado;
+o ApiHost validará esse segredo quando a fatia de webhook existir. Esta fatia é
+somente outbound e não registra webhook nem processa mensagens recebidas.
 
 ## Provisionamento e cadastro confiável
 
