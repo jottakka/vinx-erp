@@ -18,6 +18,21 @@ public sealed class AtendimentoCard
 
     public Guid? AssigneeMembershipId { get; set; }
 
+    /// <summary>Solicitante como referência opaca; People Core pode resolver depois.</summary>
+    public string? RequesterPersonRef { get; set; }
+
+    /// <summary>Nullável para compatibilidade: ausente significa sem prioridade definida.</summary>
+    public string? Priority { get; set; }
+
+    /// <summary>Categoria por referência da tabela da empresa.</summary>
+    public Guid? CategoryRefId { get; set; }
+
+    /// <summary>Canal de origem por referência semeada (whatsapp/email/web/manual).</summary>
+    public Guid? ChannelRefId { get; set; }
+
+    /// <summary>Prazo de SLA; atraso é derivado em leitura (passado e não concluído).</summary>
+    public DateTimeOffset? SlaDueAt { get; set; }
+
     public Guid CreatedByUserId { get; set; }
 
     public Guid UpdatedByUserId { get; set; }

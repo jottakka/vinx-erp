@@ -114,6 +114,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("assignee_membership_id");
 
+                    b.Property<Guid?>("CategoryRefId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("category_ref_id");
+
+                    b.Property<Guid?>("ChannelRefId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("channel_ref_id");
+
                     b.Property<string>("Column")
                         .IsRequired()
                         .HasMaxLength(30)
@@ -151,14 +159,27 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("character varying(4000)")
                         .HasColumnName("description");
 
+                    b.Property<string>("Priority")
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("priority");
+
                     b.Property<Guid>("RequestId")
                         .HasColumnType("uuid")
                         .HasColumnName("request_id");
+
+                    b.Property<string>("RequesterPersonRef")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("requester_person_ref");
 
                     b.Property<long>("RowVersion")
                         .IsConcurrencyToken()
                         .HasColumnType("bigint")
                         .HasColumnName("row_version");
+
+                    b.Property<DateTimeOffset?>("SlaDueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sla_due_at");
 
                     b.Property<string>("Title")
                         .IsRequired()
@@ -182,6 +203,126 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasDatabaseName("ix_atendimento_cards_company_id_id");
 
                     b.ToTable("atendimento_cards", "service_desk");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCardCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("name");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_atendimento_categories");
+
+                    b.HasIndex("CompanyId", "Name")
+                        .IsUnique()
+                        .HasDatabaseName("ix_atendimento_categories_company_id_name");
+
+                    b.ToTable("atendimento_categories", "service_desk");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCardWatcher", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<Guid>("CardId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("card_id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<Guid>("MembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("membership_id");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_atendimento_card_watchers");
+
+                    b.HasIndex("CompanyId", "CardId", "MembershipId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_atendimento_card_watchers_company_id_card_id_membership_id");
+
+                    b.ToTable("atendimento_card_watchers", "service_desk");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoChannel", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("key");
+
+                    b.HasKey("Id")
+                        .HasName("pk_atendimento_channels");
+
+                    b.HasIndex("CompanyId", "Key")
+                        .IsUnique()
+                        .HasDatabaseName("ix_atendimento_channels_company_id_key");
+
+                    b.ToTable("atendimento_channels", "service_desk");
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Capability", b =>

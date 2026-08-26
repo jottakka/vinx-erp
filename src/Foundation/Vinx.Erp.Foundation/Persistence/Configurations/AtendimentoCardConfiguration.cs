@@ -20,6 +20,16 @@ public sealed class AtendimentoCardConfiguration : IEntityTypeConfiguration<Aten
         builder
             .Property(card => card.AssigneeMembershipId)
             .HasColumnName("assignee_membership_id");
+        builder
+            .Property(card => card.RequesterPersonRef)
+            .HasColumnName("requester_person_ref")
+            .HasMaxLength(200);
+        builder.Property(card => card.Priority).HasColumnName("priority").HasMaxLength(20);
+        builder
+            .Property(card => card.CategoryRefId)
+            .HasColumnName("category_ref_id");
+        builder.Property(card => card.ChannelRefId).HasColumnName("channel_ref_id");
+        builder.Property(card => card.SlaDueAt).HasColumnName("sla_due_at");
         builder.Property(card => card.CreatedByUserId).HasColumnName("created_by_user_id");
         builder.Property(card => card.UpdatedByUserId).HasColumnName("updated_by_user_id");
         builder.Property(card => card.RequestId).HasColumnName("request_id");
