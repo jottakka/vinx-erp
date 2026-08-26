@@ -15,6 +15,7 @@ import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
+  useRef,
   useState,
 } from "react";
 import type { AgentMessage } from "./agent-contract";
@@ -87,10 +88,10 @@ function attachmentFailureText(
 
 export function AgentConversation() {
   const {
+    access,
     attachments,
     attachmentSelectionAvailable,
     attachmentSelectionLimitReached,
-    companyName,
     messages,
     removeAttachment,
     selectAttachments,
@@ -98,10 +99,11 @@ export function AgentConversation() {
     status,
   } = useAgentConversation();
   const [draft, setDraft] = useState("");
+  const attachmentInput = useRef<HTMLInputElement>(null);
   const thinking = status === "thinking";
-  const emptyConversationNotice = companyName
+  const emptyConversationNotice = access.available
     ? "Cada envio é uma consulta independente ao agente da empresa ativa; turnos anteriores não são relembrados."
-    : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar o envio.";
+    : access.message;
 
   function submitFromInput() {
     sendMessage(draft);
@@ -152,7 +154,11 @@ export function AgentConversation() {
             <MessageBubble key={message.id} message={message} />
           ))
         ) : (
-          <Alert role="note" severity="info">
+          <Alert
+            id={access.available ? undefined : "agent-access-message"}
+            role={access.available ? "note" : "status"}
+            severity={access.available ? "info" : "warning"}
+          >
             {emptyConversationNotice}
           </Alert>
         )}
@@ -163,12 +169,12 @@ export function AgentConversation() {
           </Stack>
         ) : null}
       </Box>
-      <Stack component="form" onSubmit={submit} spacing={1}>
-        {!attachmentSelectionAvailable ? (
-          <Alert severity="info">
-            Selecione uma empresa para anexar documentos ao agente.
-          </Alert>
-        ) : null}
+      <Stack
+        aria-describedby={access.available ? undefined : "agent-access-message"}
+        component="form"
+        onSubmit={submit}
+        spacing={1}
+      >
         {attachmentSelectionLimitReached ? (
           <Alert severity="error">
             Você pode selecionar no máximo três anexos.
@@ -222,26 +228,38 @@ export function AgentConversation() {
             onKeyDown={handleComposerKeyDown}
             size="small"
             value={draft}
+            disabled={!access.available}
           />
           <IconButton
             aria-label="Anexar arquivo"
-            component="label"
-            disabled={thinking || !attachmentSelectionAvailable}
+            disabled={
+              thinking || !access.available || !attachmentSelectionAvailable
+            }
+            onClick={() => attachmentInput.current?.click()}
             title="Anexar arquivo"
+            type="button"
           >
             <AttachFileOutlinedIcon />
-            <input
-              accept="application/pdf,image/jpeg,image/png"
-              aria-label="Anexar documentos ao agente"
-              disabled={thinking || !attachmentSelectionAvailable}
-              multiple
-              onChange={selectFiles}
-              style={{ display: "none" }}
-              type="file"
-            />
           </IconButton>
+          <input
+            accept="application/pdf,image/jpeg,image/png"
+            aria-label="Anexar documentos ao agente"
+            disabled={
+              thinking || !access.available || !attachmentSelectionAvailable
+            }
+            multiple
+            onChange={selectFiles}
+            ref={attachmentInput}
+            style={{ display: "none" }}
+            type="file"
+          />
           <Button
-            disabled={!draft.trim() || thinking || hasBlockingAttachment}
+            disabled={
+              !access.available ||
+              !draft.trim() ||
+              thinking ||
+              hasBlockingAttachment
+            }
             startIcon={<SendOutlinedIcon />}
             type="submit"
           >

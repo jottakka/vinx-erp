@@ -268,21 +268,53 @@ describe("agent conversation scope key", () => {
 
 describe("agent attachment clarification", () => {
   it("gives a fixed remove-or-verify instruction for unavailable document context", () => {
-    expect(
-      agentReplyText({
+    const reply = agentReplyText({
+      ok: true,
+      run: {
+        correlationId,
+        reasonCode: "document_context_unavailable",
+        sources: null,
+        status: "needs_clarification",
+        text: null,
+      },
+    });
+
+    expect(reply).toBe(
+      "Não foi possível usar o anexo. Remova-o ou verifique-o antes de tentar novamente.",
+    );
+    expect(reply).not.toContain("document_context_unavailable");
+  });
+});
+
+describe("agent access copy", () => {
+  it.each([
+    [
+      "capability_denied",
+      "O assistente não está disponível para o seu perfil nesta empresa. Solicite acesso ao administrador da empresa.",
+    ],
+    ["company_required", "Selecione uma empresa para usar o assistente."],
+    [
+      "company_not_authorized",
+      "Você não tem acesso ao assistente nesta empresa. Selecione outra empresa ou solicite acesso ao administrador.",
+    ],
+  ] as const)(
+    "maps %s to actionable copy without exposing the code",
+    (reasonCode, expected) => {
+      const reply = agentReplyText({
         ok: true,
         run: {
           correlationId,
-          reasonCode: "document_context_unavailable",
+          reasonCode,
           sources: null,
-          status: "needs_clarification",
+          status: "denied",
           text: null,
         },
-      }),
-    ).toBe(
-      "Não foi possível usar o anexo. Remova-o ou verifique-o antes de tentar novamente. (document_context_unavailable)",
-    );
-  });
+      });
+
+      expect(reply).toBe(expected);
+      expect(reply).not.toContain(reasonCode);
+    },
+  );
 });
 
 describe("agent workspace", () => {
@@ -518,42 +550,162 @@ describe("agent workspace", () => {
     ).toBeVisible();
   });
 
-  it("uses no-company wording throughout the dedicated page and composer", async () => {
+  it("keeps the blocked composer status canonical on the dedicated page", async () => {
     await renderAgentWorkspace("/agente", createCompanylessGateway());
 
     expect(
       await screen.findByText("Sem empresa · Página dedicada"),
     ).toBeVisible();
     expect(
-      screen.getAllByText(
-        "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar o envio.",
-      ),
-    ).toHaveLength(2);
+      screen.getAllByText("Selecione uma empresa para usar o assistente."),
+    ).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Selecione uma empresa para usar o assistente.",
+    );
     expect(
       screen.getByText(
-        "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar cada envio; turnos anteriores não fazem parte do contexto.",
+        "Mensagens e anexos permanecem desativados até que uma empresa seja selecionada.",
       ),
     ).toBeVisible();
     expect(screen.queryByText(/empresa ativa/i)).toBeNull();
     expect(screen.queryByText(/vinculados à empresa indicada/i)).toBeNull();
   });
 
-  it("disables attachment selection without a company while keeping text-only sends", async () => {
+  it("blocks all interaction with no company before any request", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await renderAgentWorkspace("/", createCompanylessGateway());
+    await user.click(
+      screen.getByRole("button", {
+        name: "Abrir painel do agente — indisponível para este perfil",
+      }),
+    );
+    const dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+    expect(dock.getByRole("status")).toHaveTextContent(
+      "Selecione uma empresa para usar o assistente.",
+    );
+    expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
+    const picker = dock.getByLabelText("Anexar documentos ao agente");
+    expect(dock.getByRole("button", { name: "Anexar arquivo" })).toBeDisabled();
+    expect(picker).toBeDisabled();
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    const composer = dock.getByLabelText("Mensagem para o agente");
+    const blockedMessage = "tentativa sem empresa";
+
+    await user.type(composer, blockedMessage);
+    await user.upload(picker, attachmentFile("sem-empresa.pdf"));
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+
+    expect(picker).toHaveValue("");
+    expect(composer).toHaveValue("");
+    expect(
+      dock.queryByRole("list", { name: "Anexos selecionados" }),
+    ).toBeNull();
+    expect(dock.getByRole("log")).not.toHaveTextContent(blockedMessage);
+    expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks unavailable capability before any request", async () => {
+    const { createBootstrapSnapshot, mockSessionProfiles } = await import(
+      "../auth/mock-session-fixtures"
+    );
+    const snapshot = createBootstrapSnapshot(mockSessionProfiles.maria);
+    const withoutAiRead: BootstrapSnapshot = {
+      ...snapshot,
+      companies: snapshot.companies.map((company, index) =>
+        index === 0
+          ? {
+              ...company,
+              capabilities: company.capabilities.filter(
+                (capability) => capability.name !== "ai.read",
+              ),
+            }
+          : company,
+      ),
+    };
+    const gateway: MockSessionGateway = {
+      getBootstrap: async () => structuredClone(withoutAiRead),
+      login: async () => structuredClone(withoutAiRead),
+      logout: async () => {},
+    };
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await renderAgentWorkspace("/", gateway);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Abrir painel do agente — indisponível para este perfil",
+      }),
+    );
+    const dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+
+    expect(dock.getByText("Alfa · Assistente indisponível")).toBeVisible();
+    expect(dock.getByRole("status")).toHaveTextContent(
+      "O assistente não está disponível para o seu perfil nesta empresa.",
+    );
+    expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
+    const picker = dock.getByLabelText("Anexar documentos ao agente");
+    expect(dock.getByRole("button", { name: "Anexar arquivo" })).toBeDisabled();
+    expect(picker).toBeDisabled();
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    const composer = dock.getByLabelText("Mensagem para o agente");
+    const blockedMessage = "tentativa sem capability";
+
+    await user.type(composer, blockedMessage);
+    await user.upload(picker, attachmentFile("sem-capability.pdf"));
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+
+    expect(picker).toHaveValue("");
+    expect(composer).toHaveValue("");
+    expect(
+      dock.queryByRole("list", { name: "Anexos selecionados" }),
+    ).toBeNull();
+    expect(dock.getByRole("log")).not.toHaveTextContent(blockedMessage);
+    expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("renders a friendly capability denial returned after authorization", async () => {
     const fetchSpy = vi
       .fn()
       .mockResolvedValueOnce(antiforgeryTokenResponse())
       .mockResolvedValueOnce(
         agentRunResponse({
-          status: "result",
-          reasonCode: "ok",
-          text: "Resposta sem empresa",
+          status: "denied",
+          reasonCode: "capability_denied",
+          text: null,
           sources: null,
           correlationId,
         }),
       );
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
-    await renderAgentWorkspace("/", createCompanylessGateway());
+    await renderAgentWorkspace();
+
+    const dock = await openDockAndType(user, "consulta revogada");
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+
+    expect(
+      await dock.findByText(
+        "O assistente não está disponível para o seu perfil nesta empresa. Solicite acesso ao administrador da empresa.",
+      ),
+    ).toBeVisible();
+    expect(dock.queryByText("capability_denied")).toBeNull();
+    expect(runCalls(fetchSpy)).toHaveLength(1);
+  });
+
+  it("keeps the authorized attachment button focusable and opens its chooser", async () => {
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
     await user.click(
       screen.getByRole("button", { name: "Abrir painel do agente" }),
     );
@@ -561,23 +713,16 @@ describe("agent workspace", () => {
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
     const picker = dock.getByLabelText("Anexar documentos ao agente");
+    const openChooser = vi.spyOn(picker, "click");
+    const attachmentButton = dock.getByRole("button", {
+      name: "Anexar arquivo",
+    });
 
-    expect(
-      dock.getByText("Selecione uma empresa para anexar documentos ao agente."),
-    ).toBeVisible();
-    expect(
-      dock.getByRole("button", { name: "Anexar arquivo" }),
-    ).toHaveAttribute("aria-disabled", "true");
-    expect(picker).toBeDisabled();
-    await user.upload(picker, attachmentFile("sem-empresa.pdf"));
-    expect(fetchSpy).not.toHaveBeenCalled();
-
-    await user.type(dock.getByLabelText("Mensagem para o agente"), "consulta");
-    await user.click(dock.getByRole("button", { name: "Enviar" }));
-    expect(await dock.findByText("Resposta sem empresa")).toBeVisible();
-    const body = JSON.parse(runCalls(fetchSpy)[0][1].body as string);
-    expect(body).not.toHaveProperty("attachments");
-    expect(body).not.toHaveProperty("companyId");
+    expect(picker).toBeEnabled();
+    expect(attachmentButton).toBeEnabled();
+    expect(attachmentButton).not.toHaveAttribute("tabindex", "-1");
+    await user.click(attachmentButton);
+    expect(openChooser).toHaveBeenCalledOnce();
   });
 
   it("aborts and discards a pending reply when the workspace unmounts", async () => {
@@ -852,7 +997,7 @@ describe("agent workspace", () => {
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/agente"));
     expect(
-      screen.getByRole("list", { name: "Anexos selecionados" }),
+      await screen.findByRole("list", { name: "Anexos selecionados" }),
     ).toHaveTextContent("primeiro.pdf");
   });
 
