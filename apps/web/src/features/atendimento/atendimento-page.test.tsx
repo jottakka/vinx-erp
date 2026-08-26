@@ -330,11 +330,49 @@ describe("AtendimentoPage", () => {
     expect(
       screen.queryByRole("button", { name: "Novo atendimento" }),
     ).toBeNull();
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Empresa do novo atendimento",
+      }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Visualizar" }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeVisible();
     expect(within(dialog).getByText(alfaCard.description)).toBeVisible();
+  });
+
+  it("uses only create-capable companies for new atendimento controls", async () => {
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
+    const readOnlyAlfa = {
+      capabilities: [readCapability],
+      companyId: alfaCompanyId,
+      companyName: "Alfa",
+      membershipId: "55555555-5555-4555-8555-555555555555",
+    };
+    const createCapableBeta = {
+      capabilities: [readCapability, createCapability],
+      companyId: betaCompanyId,
+      companyName: "Beta",
+      membershipId: "66666666-6666-4666-8666-666666666666",
+    };
+
+    renderPage({
+      companies: [readOnlyAlfa, createCapableBeta],
+      flags: {},
+      platform: { isPlatformOperator: false },
+      user: { displayName: "Ana", id: "77777777-7777-4777-8777-777777777777" },
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Novo atendimento" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("combobox", { name: "Empresa do novo atendimento" }),
+    ).toHaveTextContent("Beta");
+    expect(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    ).toHaveTextContent("Todas as empresas autorizadas");
   });
 
   it("moves a card to another column by calling the move client", async () => {

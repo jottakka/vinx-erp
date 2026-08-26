@@ -160,7 +160,7 @@ describe("AppShell", () => {
     const router = renderShell("/", await signedInGateway());
     await screen.findByRole("heading", { name: "Início" });
     const moduleSection = screen
-      .getByRole("heading", { name: "Estrutura em evolução" })
+      .getByRole("heading", { name: "Áreas disponíveis" })
       .closest("section");
 
     expect(moduleSection).not.toBeNull();
@@ -170,7 +170,7 @@ describe("AppShell", () => {
 
     expect(
       await within(moduleSection).findByRole("link", {
-        name: "Paguai Módulo em preparação",
+        name: "Paguai Disponível",
       }),
     ).toBeVisible();
     expect(
@@ -188,7 +188,7 @@ describe("AppShell", () => {
 
     await user.click(
       within(moduleSection).getByRole("link", {
-        name: "Paguai Módulo em preparação",
+        name: "Paguai Disponível",
       }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/paguai"));
@@ -215,7 +215,7 @@ describe("AppShell", () => {
 
     await screen.findByRole("heading", { name: "Início" });
     const moduleSection = screen
-      .getByRole("heading", { name: "Estrutura em evolução" })
+      .getByRole("heading", { name: "Áreas disponíveis" })
       .closest("section");
 
     expect(moduleSection).not.toBeNull();
@@ -224,7 +224,7 @@ describe("AppShell", () => {
     }
 
     const paguaiCard = within(moduleSection)
-      .getByRole("link", { name: "Paguai Módulo em preparação" })
+      .getByRole("link", { name: "Paguai Disponível" })
       .closest("li");
     expect(paguaiCard).not.toBeNull();
     if (!paguaiCard) {
@@ -233,24 +233,24 @@ describe("AppShell", () => {
 
     expect(
       within(paguaiCard).getByRole("link", {
-        name: "Paguai Módulo em preparação",
+        name: "Paguai Disponível",
       }),
     ).toHaveAttribute("href", "/paguai");
     expect(
       within(paguaiCard).getByRole("link", {
-        name: "Abrir protótipo Paguai",
+        name: "Abrir demonstração do protótipo Paguai",
       }),
     ).toHaveAttribute("href", "/prototipos/paguai");
 
     expect(
       within(moduleSection).queryByRole("link", {
-        name: /Kanban Módulo em preparação/,
+        name: /Kanban Disponível/,
       }),
     ).not.toBeInTheDocument();
 
     for (const label of ["Atendimento", "Pessoas"]) {
       const card = within(moduleSection)
-        .getByRole("link", { name: `${label} Módulo em preparação` })
+        .getByRole("link", { name: `${label} Disponível` })
         .closest("li");
       expect(card).not.toBeNull();
       if (!card) {

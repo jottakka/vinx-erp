@@ -89,9 +89,9 @@ export const lightPalette = {
       contrastText: "#ffffff",
     },
     gamma: {
-      light: "#b77c16",
-      main: "#8a5a00",
-      dark: "#5c3c00",
+      light: "#7c63d6",
+      main: "#4f3aa7",
+      dark: "#35266e",
       contrastText: "#ffffff",
     },
     neutral: {
@@ -170,9 +170,9 @@ export const darkPalette = {
       contrastText: "#06121e",
     },
     gamma: {
-      light: "#f1c36c",
-      main: "#d99a2b",
-      dark: "#a96f0d",
+      light: "#d6ccff",
+      main: "#b8a8ff",
+      dark: "#8e7ad8",
       contrastText: "#06121e",
     },
     neutral: {

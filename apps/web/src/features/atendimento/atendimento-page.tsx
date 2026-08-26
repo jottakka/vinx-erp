@@ -28,7 +28,10 @@ import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { CompanySelect } from "../../shared/ui/company-select";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
-import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
+import {
+  hasCompanyCapability,
+  resolveCompanyEntityPermissions,
+} from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
   type AtendimentoAssignmentOption,
@@ -121,9 +124,16 @@ export function AtendimentoPage({
   const assignmentAbort = useRef<AbortController | null>(null);
   const assigningRef = useRef(false);
 
+  const createCompanies = useMemo(
+    () =>
+      companies.filter((company) =>
+        hasCompanyCapability(company, createCapability),
+      ),
+    [companies],
+  );
   const selectedCompany = useMemo(
-    () => companies.find((company) => company.companyId === companyId),
-    [companies, companyId],
+    () => createCompanies.find((company) => company.companyId === companyId),
+    [createCompanies, companyId],
   );
   const requestedCompanies = useMemo(() => {
     const authorizedIds = new Set(
@@ -145,10 +155,12 @@ export function AtendimentoPage({
   );
 
   useEffect(() => {
-    if (!companies.some((company) => company.companyId === companyId)) {
-      setCompanyId(companies[0]?.companyId ?? "");
+    if (!createCompanies.some((company) => company.companyId === companyId)) {
+      setAssigneeMembershipId("");
+      setCreateOptions([]);
+      setCompanyId(createCompanies[0]?.companyId ?? "");
     }
-  }, [companies, companyId]);
+  }, [companyId, createCompanies]);
 
   useEffect(() => {
     if (!requestedCompanies.length) {
@@ -202,7 +214,7 @@ export function AtendimentoPage({
     attachmentFileId?: string;
     participantMembershipIds: readonly string[];
   }): Promise<{ ok: true } | { ok: false; message: string }> {
-    if (!companyId || loading)
+    if (!selectedCompany || !permissions.canCreate || loading)
       return {
         message: "Não foi possível criar o atendimento. Tente novamente.",
         ok: false,
@@ -367,16 +379,19 @@ export function AtendimentoPage({
           onChange={setSelectedCompanyIds}
           selectedCompanyIds={selectedCompanyIds}
         />
-        <CompanySelect
-          companies={companies}
-          onChange={(nextCompanyId) => {
-            setAssigneeMembershipId("");
-            setCompanyId(nextCompanyId);
-          }}
-          label="Empresa do novo atendimento"
-          value={companyId}
-        />
-        {!selectedCompany ? (
+        {createCompanies.length ? (
+          <CompanySelect
+            companies={createCompanies}
+            onChange={(nextCompanyId) => {
+              setAssigneeMembershipId("");
+              setCreateOptions([]);
+              setCompanyId(nextCompanyId);
+            }}
+            label="Empresa do novo atendimento"
+            value={companyId}
+          />
+        ) : null}
+        {!companies.length ? (
           <Alert severity="info">
             Sua sessão não possui empresa com acesso à fila de {title}.
           </Alert>

@@ -180,6 +180,19 @@ describe("vinx semantic theme", () => {
     }
   });
 
+  it("keeps the Gamma company accent distinct from the warning semantic", () => {
+    for (const [scheme, palette] of palettes) {
+      expect(
+        palette.companyAccent.gamma.main,
+        `${scheme} Gamma must not reuse warning as page primary`,
+      ).not.toBe(palette.warning.main);
+      expect(
+        palette.companyAccent.gamma.main,
+        `${scheme} Gamma must remain contrast-safe for contained actions`,
+      ).toMatch(/^#(?:[3456789a-f][\da-f]){3}$/i);
+    }
+  });
+
   it("uses valid contrast pairs for every status palette", () => {
     for (const [scheme, palette] of palettes) {
       for (const status of [
