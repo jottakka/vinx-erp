@@ -13,6 +13,7 @@ const draft = {
   currency: "BRL" as const,
   dueDate: "2026-09-01",
   beneficiaryDisplayName: "Fornecedor Demo",
+  invoiceFileId: null,
   proofRequirement: "required" as const,
   state: "rascunho",
   version: 1,
@@ -38,6 +39,7 @@ describe("Paguai draft client", () => {
       currency: draft.currency,
       dueDate: draft.dueDate,
       beneficiaryDisplayName: draft.beneficiaryDisplayName,
+      invoiceFileId: draft.invoiceFileId,
       proofRequirement: draft.proofRequirement,
     });
 
@@ -55,6 +57,16 @@ describe("Paguai draft client", () => {
       }),
     ]);
     expect(JSON.parse(String(calls[1][1].body)).amount).toBe("1250.00");
+    expect(JSON.parse(String(calls[1][1].body)).invoiceFileId).toBeNull();
+  });
+
+  it("requires the nullable invoiceFileId field on strict readback", async () => {
+    const fetchImplementation: typeof fetch = async () =>
+      Response.json({ ...draft, invoiceFileId: "not-a-uuid" });
+
+    await expect(
+      createPaguaiDraftClient(fetchImplementation).detail(companyId, draft.id),
+    ).resolves.toEqual({ ok: false, error: "protocol" });
   });
 
   it("preserves the maximum decimal amount without IEEE-754 conversion", async () => {

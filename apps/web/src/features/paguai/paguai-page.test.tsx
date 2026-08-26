@@ -27,6 +27,7 @@ const draft = {
   currency: "BRL" as const,
   dueDate: "2026-09-01",
   beneficiaryDisplayName: "Fornecedor Demo",
+  invoiceFileId: null,
   proofRequirement: "required" as const,
   state: "rascunho" as const,
   version: 1 as const,
@@ -154,7 +155,7 @@ describe("PaguaiPage", () => {
     expect(dialog).toBeVisible();
     expect(within(dialog).getByText("Papel para impressora")).toBeVisible();
     expect(
-      within(dialog).getByText("Estado: rascunho · versão 1"),
+      within(dialog).getByText("Estado: Rascunho · versão 1"),
     ).toBeVisible();
     expect(
       within(dialog).getAllByText("R$ 1.250,00").length,
@@ -163,6 +164,102 @@ describe("PaguaiPage", () => {
     expect(
       within(dialog).getByText(/Beneficiário: Fornecedor Demo/),
     ).toBeVisible();
+  });
+
+  it("aggregates all authorized companies in deterministic order and identifies each card", async () => {
+    const betaDraft = {
+      ...draft,
+      id: "77777777-7777-4777-8777-777777777777",
+      companyId: secondCompanyId,
+      title: "Toner",
+      createdAt: "2026-08-17T12:00:00.000+00:00",
+    };
+    const twoCompanyBootstrap = bootstrapFor([
+      ...bootstrap.companies,
+      {
+        membershipId: "77777777-7777-4777-8777-777777777777",
+        companyId: secondCompanyId,
+        companyName: "Beta",
+        capabilities: [readCapability, createCapability],
+      },
+    ]);
+    const twoCompanyGateway: MockSessionGateway = {
+      ...gateway,
+      getBootstrap: async () => twoCompanyBootstrap,
+    };
+    const draftClient = {
+      create: async () => ({ ok: true as const, value: draft }),
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: vi.fn(async (id: string) =>
+        id === companyId
+          ? { ok: true as const, value: [draft] }
+          : { ok: true as const, value: [betaDraft] },
+      ),
+    };
+
+    renderPage(draftClient, twoCompanyGateway);
+
+    expect(
+      await screen.findByRole("heading", { name: "Papel", level: 3 }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Toner", level: 3 }),
+    ).toBeVisible();
+    const cards = screen.getAllByRole("heading", { level: 3 });
+    expect(cards.map((item) => item.textContent)).toEqual(["Toner", "Papel"]);
+    expect(screen.getByLabelText("Empresa Alfa")).toBeVisible();
+    expect(screen.getByLabelText("Empresa Beta")).toBeVisible();
+    expect(screen.getAllByText("Rascunho")).toHaveLength(2);
+  });
+
+  it("keeps successful companies visible and reports a partial list failure", async () => {
+    const twoCompanyBootstrap = bootstrapFor([
+      ...bootstrap.companies,
+      {
+        membershipId: "77777777-7777-4777-8777-777777777777",
+        companyId: secondCompanyId,
+        companyName: "Beta",
+        capabilities: [readCapability, createCapability],
+      },
+    ]);
+    const twoCompanyGateway: MockSessionGateway = {
+      ...gateway,
+      getBootstrap: async () => twoCompanyBootstrap,
+    };
+    const draftClient = {
+      create: async () => ({ ok: true as const, value: draft }),
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async (id: string) =>
+        id === companyId
+          ? { ok: true as const, value: [draft] }
+          : { ok: false as const, error: 503 as const },
+    };
+
+    renderPage(draftClient, twoCompanyGateway);
+
+    expect(
+      await screen.findByRole("heading", { name: "Papel", level: 3 }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Beta.*indisponível|indisponível.*Beta/i),
+    ).toBeVisible();
+  });
+
+  it("shows the persisted invoice identifier after opening detail", async () => {
+    const invoiceFileId = "88888888-8888-4888-8888-888888888888";
+    const persisted = { ...draft, invoiceFileId };
+    const draftClient = {
+      create: async () => ({ ok: true as const, value: persisted }),
+      detail: async () => ({ ok: true as const, value: persisted }),
+      list: async () => ({ ok: true as const, value: [persisted] }),
+    };
+
+    renderPage(draftClient);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Visualizar" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(new RegExp(invoiceFileId))).toBeVisible();
   });
 
   it("submits through the modal and resets it after the async create completes", async () => {
@@ -251,7 +348,7 @@ describe("PaguaiPage", () => {
     expect(screen.getByText("Selecione o comprovante.")).toBeVisible();
   });
 
-  it("warns when proof is required but no file is attached", async () => {
+  it("keeps payment proof requirement separate from the invoice attachment", async () => {
     const user = userEvent.setup();
     const create = vi.fn();
     const draftClient = {
@@ -269,10 +366,9 @@ describe("PaguaiPage", () => {
     );
 
     expect(
-      screen.getByText(
-        "O comprovante é obrigatório neste rascunho. Anexe um arquivo antes de criar.",
-      ),
+      screen.getByText("Fatura ou documento da solicitação"),
     ).toBeVisible();
+    expect(screen.queryByText(/O comprovante é obrigatório/)).toBeNull();
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -319,8 +415,7 @@ describe("PaguaiPage", () => {
     expect(screen.getByText(/valor válido em reais/)).toBeVisible();
   });
 
-  it("clears company A drafts before company B fails to load", async () => {
-    const user = userEvent.setup();
+  it("keeps successful drafts visible while another authorized company fails", async () => {
     let finishSecondList: (
       v: { ok: false; error: 503 } | { ok: true; value: readonly [] },
     ) => void = () => {
@@ -355,28 +450,19 @@ describe("PaguaiPage", () => {
 
     renderPage(draftClient, twoCompanyGateway);
 
-    expect(
-      await screen.findByRole("heading", { name: "Papel", level: 3 }),
-    ).toBeVisible();
-    await user.click(screen.getByRole("combobox", { name: "Empresa" }));
-    await user.click(await screen.findByRole("option", { name: "Beta" }));
-
-    expect(screen.getByText("Carregando…")).toBeVisible();
-    expect(
-      screen.queryByRole("heading", { name: "Papel", level: 3 }),
-    ).toBeNull();
+    expect(await screen.findByText("Carregando…")).toBeVisible();
     finishSecondList({ ok: false, error: 503 });
 
     await waitFor(() =>
       expect(
         screen.getByText(
-          "Paguai está indisponível. Tente novamente com o mesmo identificador.",
+          "Beta indisponível: Paguai está indisponível. Tente novamente com o mesmo identificador.",
         ),
       ).toBeVisible(),
     );
     expect(
-      screen.queryByRole("heading", { name: "Papel", level: 3 }),
-    ).toBeNull();
+      screen.getByRole("heading", { name: "Papel", level: 3 }),
+    ).toBeVisible();
   });
 
   it("hides create and exposes only Visualizar without create capability", async () => {

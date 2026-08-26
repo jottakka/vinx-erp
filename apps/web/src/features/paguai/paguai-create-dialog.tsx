@@ -1,7 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Alert,
-  Box,
   Button,
   Dialog,
   DialogActions,
@@ -31,7 +30,10 @@ const paguaiCreateSchema = z.object({
     .min(1, "Informe o beneficiário.")
     .max(200),
   description: z.string().trim().min(1, "Informe uma descrição.").max(4000),
-  dueDate: z.string().min(1, "Informe o vencimento."),
+  dueDate: z
+    .string()
+    .min(1, "Informe o vencimento.")
+    .refine((value) => isValidDateOnly(value), "Informe uma data válida."),
   proofRequirement: z.enum(["optional", "required"], {
     message: "Selecione o comprovante.",
   }),
@@ -48,12 +50,13 @@ type PaguaiCreateDialogProps = {
     description: string;
     dueDate: string;
     proofRequirement: "optional" | "required";
-    proofFileId: string | null;
+    invoiceFileId: string | null;
     title: string;
   }) => void;
   open: boolean;
   uploader?: AttachmentUploader;
   errorMessage?: string | null;
+  submitting?: boolean;
 };
 
 export function PaguaiCreateDialog({
@@ -61,6 +64,7 @@ export function PaguaiCreateDialog({
   onClose,
   onSubmit,
   open,
+  submitting = false,
   uploader,
 }: PaguaiCreateDialogProps) {
   const form = useForm<PaguaiFormValues>({
@@ -79,10 +83,6 @@ export function PaguaiCreateDialog({
   >([]);
   const [amountError, setAmountError] = useState<string | null>(null);
   const isUploading = attachments.some((item) => item.state === "uploading");
-  const hasReadyProof = attachments.some((item) => item.state === "ready");
-  const proofRequirement = form.watch("proofRequirement");
-  const missingRequiredProof =
-    proofRequirement === "required" && !hasReadyProof;
 
   function close() {
     form.reset();
@@ -97,13 +97,13 @@ export function PaguaiCreateDialog({
       setAmountError("Informe um valor válido em reais (ex.: 1.250,00).");
       return;
     }
-    const readyProof = attachments.find((item) => item.state === "ready");
+    const readyInvoice = attachments.find((item) => item.state === "ready");
     onSubmit({
       amount,
       beneficiaryDisplayName: values.beneficiaryDisplayName,
       description: values.description,
       dueDate: values.dueDate,
-      proofFileId: readyProof?.fileId ?? null,
+      invoiceFileId: readyInvoice?.fileId ?? null,
       proofRequirement: values.proofRequirement,
       title: values.title,
     });
@@ -176,7 +176,7 @@ export function PaguaiCreateDialog({
           />
           <AttachmentField
             accept="application/pdf,image/jpeg,image/png"
-            label="Anexar comprovante"
+            label="Fatura ou documento da solicitação"
             onChange={setAttachments}
             uploader={
               uploader ??
@@ -209,22 +209,29 @@ export function PaguaiCreateDialog({
       <DialogActions>
         <Button onClick={close}>Cancelar</Button>
         <Button
-          disabled={isUploading}
+          disabled={isUploading || submitting}
           form="paguai-create-form"
           type="submit"
           variant="contained"
         >
-          {isUploading ? "Anexando…" : "Criar rascunho"}
+          {isUploading
+            ? "Anexando…"
+            : submitting
+              ? "Criando…"
+              : "Criar rascunho"}
         </Button>
       </DialogActions>
-      {missingRequiredProof ? (
-        <Box sx={{ px: 3, pb: 2 }}>
-          <Alert severity="warning">
-            O comprovante é obrigatório neste rascunho. Anexe um arquivo antes
-            de criar.
-          </Alert>
-        </Box>
-      ) : null}
     </Dialog>
+  );
+}
+
+function isValidDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
   );
 }
