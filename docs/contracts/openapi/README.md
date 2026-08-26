@@ -163,13 +163,15 @@ da empresa selecionada, ou `400 invalid_request`, `401`, `403
 membership_required|capability_denied`, `429` e `503 atendimento_unavailable`.
 
 `POST /atendimento/cards` exige `service_desk.ticket.create`; o corpo possui
-`companyId`, `requestId`, `title`, `description`, `attachmentFileId` opcional e
-`participantMembershipIds` opcional com no máximo 25 entradas não vazias. O anexo
-precisa ser confirmado, da mesma empresa e da classificação
-`service_desk_attachment`; participantes precisam ser
-memberships ativas da empresa. Aceita somente `Content-Type: application/json`;
-mídia incorreta devolve `415`. Retorna `201` com `Location` da fila, ou `200` no
-replay equivalente;
+`companyId`, `requestId`, `title`, `description`, `priority` opcional,
+`channel` opcional, `slaDueAt` anulável, `attachmentFileId` opcional e
+`participantMembershipIds` opcional com no máximo 25 entradas não vazias.
+Defaults são `media`, `manual` e `null`; o formulário Web envia `channel:
+"web"`. O anexo precisa ser confirmado, da mesma empresa e da classificação
+`service_desk_attachment`; participantes precisam ser memberships ativas da
+empresa. Aceita somente `Content-Type: application/json`; mídia incorreta
+devolve `415`. Retorna `201` com `Location` da fila, ou `200` no replay
+equivalente;
 `400 invalid_request`, `401`, `403`, `404 resource_not_found`, `409
 idempotency_conflict`, `429` e `503` são publicados. `POST
 /atendimento/cards/{id}/assign` exige `.assign` e recebe também
@@ -182,11 +184,14 @@ cria o estado terminal `cancelado`. As três retornam `200`, e podem retornar
 idempotency_conflict|integrity_conflict|terminal_state`, `400`, `415`, `401`,
 `403`, `429` ou `503`. A resposta do cartão inclui `attachmentFileId` anulável e
 `participantMembershipIds` sempre como array; `integrity_conflict` e
-`terminal_state` devolvem apenas
-o estado atual já autorizado do cartão, nunca dados de outra empresa;
+`terminal_state` devolvem apenas o estado atual já autorizado do cartão, nunca
+dados de outra empresa;
 `terminal_state` sinaliza o cancelamento de um cartão já cancelado com um novo
 `requestId`, enquanto o replay do mesmo `requestId` devolve o resultado original.
-As quatro mutações publicam o header
+A resposta inclui `priority`, `channel`, `slaDueAt`, `createdAt`, `updatedAt` e
+o booleano calculado `isOverdue`; timestamps podem ser `null` somente em replay legado.
+`isOverdue` é falso em `concluido` e `cancelado`, e a fila ordena
+`createdAt DESC, id DESC`. As quatro mutações publicam o header
 `X-CSRF-TOKEN`: ele é obrigatório quando a operação usa cookie de sessão BFF e
 é obtido em `GET /foundation/identity/browser-session/antiforgery`; clientes
 bearer não precisam de antiforgery. Todas as respostas mantêm

@@ -14,6 +14,23 @@ MVP interno sem versão paralela. `GET /atendimento/cards?companyId=` lista a fi
 
 As colunas fixas são `novo`, `em_andamento`, `concluido` e `cancelado`. Apenas o cancelamento dedicado alcança `cancelado`: ele é terminal, exige a capability dedicada `service_desk.ticket.cancel` (não reutiliza `move`) e motivo aparado entre 1 e 500 caracteres, preserva idempotência, histórico e auditoria como `service_desk.ticket.cancel`. Create aceita no máximo um `attachmentFileId` confirmado da mesma empresa com classificação `service_desk_attachment` e até 25 participantes ativos; participantes repetidos são deduplicados e ordenados pelo UUID canônico. Quando a autenticação é pelo cookie BFF, cada mutação também exige o header `X-CSRF-TOKEN`, obtido de `GET /foundation/identity/browser-session/antiforgery`; bearer não depende desse token.
 
+## Operational metadata
+
+Create e read expõem `priority` (`critica|alta|media|baixa`, padrão `media`) e
+`channel` (`whatsapp|email|web|manual`, padrão `manual`); o formulário Web envia
+`web`. `slaDueAt` é anulável. `isOverdue` é calculado no servidor, não persiste,
+usa um instante UTC por operação e é sempre falso em `concluido`/`cancelado`.
+`createdAt`/`updatedAt` são anuláveis para replay legado; criação e lista novas
+os preenchem. A fila ordena `createdAt DESC, id DESC`.
+
+O hash legado permanece compatível somente com defaults, sem anexo nem
+participantes; qualquer metadado efetivo diferente produz conflito. A migration
+`20260826225942_AddAtendimentoOperationalMetadata` cria defaults, constraints e
+o índice da fila; o `Down` falha fechado se houver valor não-default.
+
+Esta fatia não inclui filtros, paginação, categoria, update, timeline, outbox ou
+IA; esses itens permanecem fora do contrato atual.
+
 ## Deletion strategy
 
 Cartões possuem campos de soft-delete para evolução compatível, mas esta fatia não publica exclusão. Histórico de movimento é append-only e não recebe UPDATE ou DELETE do runtime. Participantes usam RLS por empresa e concedem ao runtime somente `SELECT` e `INSERT`.
