@@ -158,6 +158,37 @@ describe("createPermissionsClient", () => {
     ).resolves.toEqual({ error: { kind: "protocol", status: 200 }, ok: false });
   });
 
+  it("parses a member whose invitation was delivered and awaits acceptance", async () => {
+    server.use(
+      http.get(handlerUrl(membersPath), () =>
+        HttpResponse.json([
+          {
+            capabilities: [],
+            displayName: "Maria",
+            invitationStatus: "pending_acceptance",
+            membershipId,
+            roles: [],
+          },
+        ]),
+      ),
+    );
+
+    await expect(
+      createPermissionsClient(createFetchSpy()).listMembers(companyId),
+    ).resolves.toEqual({
+      items: [
+        {
+          capabilities: [],
+          displayName: "Maria",
+          invitationStatus: "pending_acceptance",
+          membershipId,
+          roles: [],
+        },
+      ],
+      ok: true,
+    });
+  });
+
   it("gets a fresh antiforgery token before a single strict assignment request", async () => {
     const requests: Request[] = [];
     enableAntiforgery();

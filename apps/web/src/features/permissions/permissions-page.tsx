@@ -90,6 +90,7 @@ const invitationChipByStatus: Record<
   pending_delivery: { label: "Convite pendente", warning: false },
   pending_provider: { label: "Convite pendente", warning: false },
   provider_in_flight: { label: "Convite pendente", warning: false },
+  pending_acceptance: { label: "Convite enviado", warning: false },
   provider_failed: { label: "Falha na entrega", warning: true },
   provider_ambiguous: { label: "Entrega incerta", warning: true },
 };

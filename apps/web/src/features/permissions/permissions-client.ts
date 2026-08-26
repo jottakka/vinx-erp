@@ -21,6 +21,7 @@ const invitationStatusSchema = z.enum([
   "pending_delivery",
   "pending_provider",
   "provider_in_flight",
+  "pending_acceptance",
   "provider_failed",
   "provider_ambiguous",
 ]);

@@ -211,6 +211,24 @@ describe("PermissionsPage", () => {
     expect(await screen.findByText("Falha na entrega")).toBeVisible();
   });
 
+  it("maps a delivered invitation awaiting acceptance to a neutral chip", async () => {
+    const user = userEvent.setup();
+    const members = membersList();
+    if (members.ok) {
+      members.items[1].invitationStatus = "pending_acceptance";
+    }
+    renderPage({
+      gateway: createGateway({
+        listMembers: vi.fn().mockResolvedValue(members),
+      }),
+    });
+
+    await selectCompany(user);
+
+    expect(await screen.findByText("Convite enviado")).toBeVisible();
+    expect(screen.queryByText("Falha na entrega")).toBeNull();
+  });
+
   it("shows the empty members state after selection", async () => {
     const user = userEvent.setup();
     renderPage({
