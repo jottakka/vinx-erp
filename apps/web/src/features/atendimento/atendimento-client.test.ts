@@ -108,4 +108,75 @@ describe("atendimento client", () => {
     expect(fetchSpy.mock.calls).toHaveLength(1);
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(antiforgeryPath);
   });
+
+  it("sends only the provided ticketing fields and keeps null-means-unchanged semantics", async () => {
+    const fetchSpy = csrfThenOk(createdCard);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await atendimentoClient.fields(createdCard.companyId, createdCard, {
+      priority: "alta",
+      slaDueAt: "2026-09-01T12:00:00.000Z",
+    });
+
+    const body = JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body));
+    expect(body).toMatchObject({
+      companyId: createdCard.companyId,
+      expectedVersion: createdCard.version,
+      priority: "alta",
+      slaDueAt: "2026-09-01T12:00:00.000Z",
+    });
+    // Campos ausentes não são enviados (o servidor os mantém).
+    expect(body).not.toHaveProperty("categoryRefId");
+    expect(body).not.toHaveProperty("requesterPersonRef");
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
+      `/atendimento/cards/${createdCard.id}/fields`,
+    );
+  });
+
+  it("posts watcher add and remove to dedicated routes", async () => {
+    const membershipId = "33333333-3333-4333-8333-333333333333";
+    const fetchSpy = csrfThenOk(createdCard);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await atendimentoClient.addWatcher(createdCard.companyId, createdCard, membershipId);
+    await atendimentoClient.removeWatcher(createdCard.companyId, createdCard, membershipId);
+
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
+      `/atendimento/cards/${createdCard.id}/watchers/add`,
+    );
+    expect(fetchSpy.mock.calls[3]?.[0]).toBe(
+      `/atendimento/cards/${createdCard.id}/watchers/remove`,
+    );
+    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body))).toMatchObject({
+      memberMembershipId: membershipId,
+    });
+  });
+
+  it("reads timeline and lookups through company-scoped GETs", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await atendimentoClient.events(createdCard.id, createdCard.companyId);
+    await atendimentoClient.lookups(createdCard.companyId);
+    await atendimentoClient.directoryOptions(createdCard.companyId);
+
+    expect(fetchSpy.mock.calls.map(([path]) => path)).toEqual([
+      `/atendimento/cards/${createdCard.id}/events?companyId=${createdCard.companyId}`,
+      `/atendimento/lookups?companyId=${createdCard.companyId}`,
+      `/foundation/companies/${createdCard.companyId}/directory-options`,
+    ]);
+  });
 });
+
+function csrfThenOk(card: AtendimentoCard) {
+  return vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ requestToken: "csrf-token" }), {
+        status: 200,
+      }),
+    )
+    .mockResolvedValue(new Response(JSON.stringify(card), { status: 200 }));
+}

@@ -136,7 +136,10 @@ describe("AtendimentoPage", () => {
     await user.click(screen.getByRole("combobox", { name: "Empresa" }));
     await user.click(screen.getByRole("option", { name: "Beta" }));
     await waitFor(() =>
-      expect(atendimentoClient.list).toHaveBeenLastCalledWith(betaCompanyId),
+      expect(atendimentoClient.list).toHaveBeenLastCalledWith(
+        betaCompanyId,
+        {},
+      ),
     );
 
     expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
@@ -219,5 +222,34 @@ describe("AtendimentoPage", () => {
       column: "novo",
     });
     expect(move.mock.calls[0]?.[2]).toBe("em_andamento");
+  });
+
+  it("re-reads the queue with server-side filters and reflects them in the URL", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
+    vi.spyOn(atendimentoClient, "directoryOptions").mockResolvedValue([]);
+    const list = atendimentoClient.list as ReturnType<typeof vi.fn>;
+
+    renderPage();
+
+    await user.click(await screen.findByLabelText("Prioridade"));
+    await user.click(screen.getByRole("option", { name: "Alta" }));
+
+    await waitFor(() =>
+      expect(list).toHaveBeenLastCalledWith(alfaCompanyId, {
+        priority: "alta",
+      }),
+    );
+    expect(window.location.search).toBe("?priority=alta");
+  });
+
+  it("renders the derived overdue badge from the queue payload", async () => {
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([
+      { ...alfaCard, overdue: true },
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByText("Atrasado")).toBeVisible();
   });
 });
