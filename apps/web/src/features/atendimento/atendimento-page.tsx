@@ -1,6 +1,5 @@
 import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
 import DragIndicatorOutlinedIcon from "@mui/icons-material/DragIndicatorOutlined";
-import PersonAddAltOutlinedIcon from "@mui/icons-material/PersonAddAltOutlined";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import {
   Alert,
@@ -11,33 +10,49 @@ import {
   CardContent,
   Chip,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanySelect } from "../../shared/ui/company-select";
-import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
 import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
   type AtendimentoCard,
   type AtendimentoColumn,
+  type LookupsResponse,
+  type QueueFilter,
   atendimentoClient,
 } from "./atendimento-client";
 import { AtendimentoCreateDialog } from "./atendimento-create-dialog";
-
-const columns: readonly { id: AtendimentoColumn; label: string }[] = [
-  { id: "novo", label: "Novo" },
-  { id: "em_andamento", label: "Em andamento" },
-  { id: "concluido", label: "Concluído" },
-];
+import {
+  AtendimentoDetailDialog,
+} from "./atendimento-detail-dialog";
+import {
+  AtendimentoFilterBar,
+  filterFromSearchParams,
+  replaceUrlWithFilter,
+} from "./atendimento-filter-bar";
+import {
+  channelLabel,
+  columnLabels,
+  priorityColor,
+  priorityLabel,
+} from "./atendimento-lookup";
+import { CategoriesAdminSection } from "./atendimento-categories-admin";
 
 const readCapability = "service_desk.ticket.read_queue";
 const createCapability = "service_desk.ticket.create";
 const moveCapability = "service_desk.ticket.move";
 const assignCapability = "service_desk.ticket.assign";
+const lookupAdminCapability = "service_desk.lookup.admin";
+
+const columns: readonly AtendimentoColumn[] = [
+  "novo",
+  "em_andamento",
+  "concluido",
+];
 
 function messageFor(code: string) {
   if (code === "integrity_conflict")
@@ -65,10 +80,14 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [viewingCard, setViewingCard] = useState<AtendimentoCard | null>(null);
-  const [assigneeMembershipId, setAssigneeMembershipId] = useState("");
+  const [viewingCardId, setViewingCardId] = useState<string | null>(null);
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<AtendimentoColumn | null>(null);
+  // Filtros nascem da URL (compartilháveis por link) e reescrevem a URL.
+  const [filter, setFilter] = useState<QueueFilter>(() =>
+    filterFromSearchParams(window.location.search),
+  );
+  const [lookups, setLookups] = useState<LookupsResponse | null>(null);
 
   const selectedCompany = useMemo(
     () => companies.find((company) => company.companyId === companyId),
@@ -84,12 +103,11 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     [selectedCompany],
   );
 
-  const canAssign = useMemo(
-    () =>
+  const hasCapability = useCallback(
+    (name: string) =>
       selectedCompany?.capabilities.some(
         (capability) =>
-          capability.name === assignCapability &&
-          capability.scopes.includes("Company"),
+          capability.name === name && capability.scopes.includes("Company"),
       ) ?? false,
     [selectedCompany],
   );
@@ -106,8 +124,8 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     setCards([]);
     setLoading(true);
     setError(null);
-    setViewingCard(null);
-    void atendimentoClient.list(companyId).then((result) => {
+    setViewingCardId(null);
+    void atendimentoClient.list(companyId, filter).then((result) => {
       if (!active) return;
       if (result)
         setCards(result.filter((card) => card.companyId === companyId));
@@ -117,7 +135,19 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     return () => {
       active = false;
     };
+  }, [companyId, filter]);
+
+  useEffect(() => {
+    if (!companyId) return;
+    void atendimentoClient.lookups(companyId).then((result) => {
+      if (result) setLookups(result);
+    });
   }, [companyId]);
+
+  function applyFilter(next: QueueFilter) {
+    replaceUrlWithFilter(next);
+    setFilter(next);
+  }
 
   async function createCard(values: { title: string; description: string }) {
     if (!companyId) return;
@@ -133,19 +163,6 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   async function move(card: AtendimentoCard, column: AtendimentoColumn) {
     if (card.column === column) return;
     const result = await atendimentoClient.move(companyId, card, column);
-    if (!result.ok) return recover(result.code, result.current);
-    setCards((current) =>
-      current.map((item) => (item.id === card.id ? result.card : item)),
-    );
-  }
-
-  async function assign(card: AtendimentoCard) {
-    if (!assigneeMembershipId.trim()) return;
-    const result = await atendimentoClient.assign(
-      companyId,
-      card,
-      assigneeMembershipId.trim(),
-    );
     if (!result.ok) return recover(result.code, result.current);
     setCards((current) =>
       current.map((item) => (item.id === card.id ? result.card : item)),
@@ -168,7 +185,14 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     setDropTarget(null);
   }
 
-  const selectedCompanyName = selectedCompany?.companyName ?? "Sem empresa";
+  const viewingCard =
+    cards.find((card) => card.id === viewingCardId) ?? null;
+  const categoryNames = new Map(
+    (lookups?.categories ?? []).map((category) => [category.id, category.name]),
+  );
+  const channelKeys = new Map(
+    (lookups?.channels ?? []).map((channel) => [channel.id, channel.key]),
+  );
 
   return (
     <CompanyProvider company={selectedCompany ?? null}>
@@ -185,7 +209,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
               </Button>
             ) : null
           }
-          description="Fila operacional por empresa, com cartões e histórico de movimentos. Arraste os cartões entre as colunas para movê-los."
+          description="Fila operacional por empresa com filtros compartilháveis e histórico. Arraste os cartões entre as colunas para movê-los."
           title={title}
         />
         {error ? (
@@ -197,7 +221,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
           companies={companies}
           label="Empresa"
           onChange={(nextCompanyId) => {
-            setAssigneeMembershipId("");
+            setLookups(null);
             setCompanyId(nextCompanyId);
           }}
           value={companyId}
@@ -207,12 +231,22 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             Sua sessão não possui empresa com acesso à fila de {title}.
           </Alert>
         ) : null}
-        {canAssign ? (
-          <TextField
-            helperText="Informe o identificador de membership ativo da empresa para atribuir um cartão."
-            label="Membership do responsável"
-            onChange={(event) => setAssigneeMembershipId(event.target.value)}
-            value={assigneeMembershipId}
+        {companyId ? (
+          <AtendimentoFilterBar
+            companyId={companyId}
+            disabled={loading}
+            filter={filter}
+            onChange={applyFilter}
+          />
+        ) : null}
+        {hasCapability(lookupAdminCapability) ? (
+          <CategoriesAdminSection
+            categories={lookups?.categories ?? []}
+            companyId={companyId}
+            onChanged={() => {
+              void atendimentoClient.lookups(companyId).then(setLookups);
+            }}
+            onError={setError}
           />
         ) : null}
         {loading ? (
@@ -229,11 +263,11 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
         >
           {columns.map((column) => (
             <Box
-              key={column.id}
+              key={column}
               onDragOver={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                setDropTarget(column.id);
+                setDropTarget(column);
               }}
               onDragLeave={(event) => {
                 event.stopPropagation();
@@ -246,22 +280,22 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                   return;
                 }
                 setDropTarget((current) =>
-                  current === column.id ? null : current,
+                  current === column ? null : current,
                 );
               }}
               onDrop={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                handleDrop(column.id);
+                handleDrop(column);
               }}
               sx={{
                 bgcolor:
-                  dropTarget === column.id
+                  dropTarget === column
                     ? "action.selected"
                     : "background.paper",
                 border: 1,
                 borderColor:
-                  dropTarget === column.id ? "primary.main" : "divider",
+                  dropTarget === column ? "primary.main" : "divider",
                 borderRadius: 3,
                 minHeight: 220,
                 px: 1.5,
@@ -281,11 +315,11 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                 sx={{ mb: 1.5, textTransform: "uppercase" }}
                 variant="overline"
               >
-                {column.label}
+                {columnLabels[column]}
               </Typography>
               <Stack spacing={1.25}>
                 {cards
-                  .filter((card) => card.column === column.id)
+                  .filter((card) => card.column === column)
                   .map((card) => (
                     <Card
                       key={card.id}
@@ -328,14 +362,41 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                           sx={{ flexWrap: "wrap", mt: 1 }}
                         >
                           <Chip
-                            label={columnLabel(card.column)}
+                            label={columnLabels[card.column]}
                             size="small"
                             variant="outlined"
                           />
-                          {card.assigneeMembershipId ? (
+                          {card.priority ? (
                             <Chip
-                              color="primary"
-                              label="Responsável atribuído"
+                              color={priorityColor(card.priority)}
+                              label={priorityLabel(card.priority)}
+                              size="small"
+                            />
+                          ) : null}
+                          {card.overdue ? (
+                            <Chip
+                              color="error"
+                              label="Atrasado"
+                              size="small"
+                            />
+                          ) : null}
+                          {card.categoryRefId ? (
+                            <Chip
+                              label={
+                                categoryNames.get(card.categoryRefId) ??
+                                "Categoria"
+                              }
+                              size="small"
+                              variant="outlined"
+                            />
+                          ) : null}
+                          {card.channelRefId ? (
+                            <Chip
+                              label={
+                                channelKeys.get(card.channelRefId) === undefined
+                                  ? "Canal"
+                                  : (channelLabel(channelKeys.get(card.channelRefId) as string))
+                              }
                               size="small"
                               variant="outlined"
                             />
@@ -344,7 +405,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                       </CardContent>
                       <CardActions>
                         <Button
-                          onClick={() => setViewingCard(card)}
+                          onClick={() => setViewingCardId(card.id)}
                           size="small"
                           startIcon={<VisibilityOutlinedIcon />}
                         >
@@ -352,35 +413,21 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                         </Button>
                         {permissions.canEdit
                           ? columns
-                              .filter(
-                                (destination) => destination.id !== card.column,
-                              )
+                              .filter((destination) => destination !== card.column)
                               .map((destination) => (
                                 <Button
-                                  key={destination.id}
-                                  onClick={() =>
-                                    void move(card, destination.id)
-                                  }
+                                  key={destination}
+                                  onClick={() => void move(card, destination)}
                                   size="small"
                                 >
-                                  Mover para {destination.label}
+                                  Mover para {columnLabels[destination]}
                                 </Button>
                               ))
                           : null}
-                        {canAssign ? (
-                          <Button
-                            disabled={!assigneeMembershipId.trim()}
-                            onClick={() => void assign(card)}
-                            size="small"
-                            startIcon={<PersonAddAltOutlinedIcon />}
-                          >
-                            Atribuir
-                          </Button>
-                        ) : null}
                       </CardActions>
                     </Card>
                   ))}
-                {cards.filter((card) => card.column === column.id).length ===
+                {cards.filter((card) => card.column === column).length ===
                 0 ? (
                   <Typography color="text.secondary" variant="body2">
                     Nenhum cartão nesta coluna.
@@ -401,62 +448,21 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
         open={createOpen}
       />
 
-      <ViewCardDialog
-        card={viewingCard}
-        companyName={selectedCompanyName}
-        onClose={() => setViewingCard(null)}
-      />
-    </CompanyProvider>
-  );
-}
-
-function columnLabel(column: AtendimentoColumn): string {
-  return columns.find((item) => item.id === column)?.label ?? column;
-}
-
-function ViewCardDialog({
-  card,
-  companyName,
-  onClose,
-}: {
-  card: AtendimentoCard | null;
-  companyName: string;
-  onClose: () => void;
-}) {
-  return (
-    <EntityDialog
-      description={`Cartão de ${companyName}. Apenas leitura.`}
-      onClose={onClose}
-      open={Boolean(card)}
-      title="Visualizar atendimento"
-    >
-      {card ? (
-        <Stack spacing={1.5}>
-          <Typography component="p" variant="subtitle1">
-            {card.title}
-          </Typography>
-          <Typography color="text.secondary">{card.description}</Typography>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
-            <Chip
-              label={columnLabel(card.column)}
-              size="small"
-              variant="outlined"
-            />
-            <Chip
-              label={
-                card.assigneeMembershipId
-                  ? "Responsável atribuído"
-                  : "Sem responsável"
-              }
-              size="small"
-              variant="outlined"
-            />
-          </Stack>
-          <Typography color="text.secondary" variant="caption">
-            Versão {card.version}
-          </Typography>
-        </Stack>
+      {companyId ? (
+        <AtendimentoDetailDialog
+          canAssign={hasCapability(assignCapability)}
+          card={viewingCard}
+          categories={lookups?.categories ?? []}
+          channels={lookups?.channels ?? []}
+          companyId={companyId}
+          onClose={() => setViewingCardId(null)}
+          onUpdated={(next) =>
+            setCards((current) =>
+              current.map((card) => (card.id === next.id ? next : card)),
+            )
+          }
+        />
       ) : null}
-    </EntityDialog>
+    </CompanyProvider>
   );
 }
