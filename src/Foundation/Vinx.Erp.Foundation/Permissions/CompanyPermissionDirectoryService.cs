@@ -37,8 +37,9 @@ public sealed record CompanyPermissionDirectoryResult<T>(
 
 /// <summary>
 /// Leitura do diretório de permissões da empresa (membros com papéis e papéis com
-/// grants) por funções SQL com gate de capability no banco; negações 42501 geram
-/// auditoria <c>Denied</c> antes do 403, sem oráculo de existência de empresa.
+/// grants) por funções SQL com gate de capability no banco; negações do gate
+/// (SQLSTATE estável, sem casar mensagem) geram auditoria <c>Denied</c> antes
+/// do 403, sem oráculo de existência de empresa.
 /// </summary>
 public sealed class CompanyPermissionDirectoryService(
     FoundationDbContext database,
@@ -115,10 +116,7 @@ public sealed class CompanyPermissionDirectoryService(
             );
         }
         catch (PostgresException exception)
-            when (
-                exception.SqlState == PostgresErrorCodes.InsufficientPrivilege
-                && exception.MessageText == "member permissions capability is required"
-            )
+            when (exception.SqlState == PermissionsSqlStates.CapabilityDenied)
         {
             return await ToAuditedDenialAsync<TView>(actor, companyId, operation, resourceType, cancellationToken);
         }

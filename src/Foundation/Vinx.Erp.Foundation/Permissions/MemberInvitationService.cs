@@ -107,8 +107,7 @@ public sealed class MemberInvitationService(
         catch (PostgresException exception)
             when (
                 !commitAttempted
-                && exception.SqlState == PostgresErrorCodes.InsufficientPrivilege
-                && exception.MessageText == "member invitation capability is required"
+                && exception.SqlState == PermissionsSqlStates.CapabilityDenied
             )
         {
             return await AuditDeniedAsync(actor, normalized.CompanyId, cancellationToken)
@@ -156,6 +155,8 @@ public sealed class MemberInvitationService(
             return new(MemberInvitationWriteState.Unavailable);
         }
 
+        // `result` nunca é null aqui: todo catch acima retorna ou relança
+        // antes deste ponto. Replay não republica o envelope de entrega.
         if (result.State is MemberInvitationWriteState.Created)
         {
             try

@@ -5,6 +5,7 @@ using Npgsql;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Persistence;
 using Xunit;
 
@@ -194,6 +195,45 @@ public sealed class CompanyMemberPermissionsReadEndpointTests
                 audit.RequestedCompanyId == nonMemberCompany
                 || audit.RequestedCompanyId == scenario.CompanyId
             )
+        );
+    }
+
+    [Fact]
+    public async Task Capability_denial_uses_stable_sql_state()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedAuthorizedCompanyAsync(factory, grantRolesAssign: false);
+
+        // Sonda no nível do banco: a negação carrega o SQLSTATE estável do
+        // contrato; a mensagem é texto para humanos e não participa da
+        // classificação no C#.
+        await using var connection = new NpgsqlConnection(
+            factory.Fixture.RuntimeConnectionString
+        );
+        await connection.OpenAsync();
+        await using (var applyContext = new NpgsqlCommand(
+            "SELECT set_config('app.user_id', $1::text, false), set_config('app.company_id', $2::text, false)",
+            connection
+        ))
+        {
+            applyContext.Parameters.AddWithValue(factory.ActorUserId);
+            applyContext.Parameters.AddWithValue(scenario.CompanyId);
+            await applyContext.ExecuteNonQueryAsync();
+        }
+
+        await using var command = new NpgsqlCommand(
+            "SELECT * FROM foundation.list_company_members_with_roles($1)",
+            connection
+        );
+        command.Parameters.AddWithValue(scenario.CompanyId);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(
+            () => command.ExecuteReaderAsync()
+        );
+        Assert.Equal(PermissionsSqlStates.CapabilityDenied, exception.SqlState);
+        Assert.Equal(
+            "member permissions capability is required",
+            exception.MessageText
         );
     }
 

@@ -734,7 +734,7 @@ BEGIN
               AND membership.user_id = v_actor_user_id
               AND membership.deleted_at IS NULL) THEN
         RAISE EXCEPTION 'member invitation capability is required'
-            USING ERRCODE = '42501';
+            USING ERRCODE = 'PX425';
     END IF;
 
     PERFORM pg_advisory_xact_lock(
@@ -1339,7 +1339,7 @@ BEGIN
               AND membership.user_id = v_actor_user_id
               AND membership.deleted_at IS NULL) THEN
         RAISE EXCEPTION 'member permissions capability is required'
-            USING ERRCODE = '42501';
+            USING ERRCODE = 'PX425';
     END IF;
 
     RETURN QUERY
@@ -1460,7 +1460,7 @@ BEGIN
               AND membership.user_id = v_actor_user_id
               AND membership.deleted_at IS NULL) THEN
         RAISE EXCEPTION 'member permissions capability is required'
-            USING ERRCODE = '42501';
+            USING ERRCODE = 'PX425';
     END IF;
 
     RETURN QUERY

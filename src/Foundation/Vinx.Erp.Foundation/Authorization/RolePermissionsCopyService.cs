@@ -110,8 +110,11 @@ public sealed class RolePermissionsCopyService(
                         .Select(assignment => assignment.RoleId)
                         .ToHashSet();
 
-                    // Estado final: alvo com o conjunto da fonte; sem outros administradores
-                    // e sem grant no conjunto de entrada, a empresa ficaria sem administrador.
+                    // Estado final: alvo com o conjunto vivo da fonte. O guard consulta a
+                    // ORIGEM (e não o alvo) de propósito: o conjunto de entrada vira o estado
+                    // final do alvo, então a retenção do grant pela origem equivale a conferir
+                    // o pós-estado. Sem outro administrador e sem grant no conjunto de
+                    // entrada, a empresa ficaria sem administrador.
                     if (
                         !await LastAdminGuard.CompanyRetainsRolesAssignAdminAsync(
                             database, command.CompanyId, command.TargetMembershipId, cancellationToken)
