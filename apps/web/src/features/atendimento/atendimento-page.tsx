@@ -237,6 +237,14 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
               }}
               onDragLeave={(event) => {
                 event.stopPropagation();
+                // Só limpa o alvo ao sair realmente da coluna, não ao passar
+                // por um cartão filho (relatedTarget dentro do contêiner).
+                if (
+                  event.relatedTarget instanceof Node &&
+                  event.currentTarget.contains(event.relatedTarget)
+                ) {
+                  return;
+                }
                 setDropTarget((current) =>
                   current === column.id ? null : current,
                 );
