@@ -10,6 +10,10 @@ type VinxApiProxy = {
     changeOrigin: false;
     target: string;
   };
+  "^/atendimento/assignment-options(?:\\?|$)": {
+    changeOrigin: false;
+    target: string;
+  };
   "/foundation": {
     changeOrigin: false;
     target: string;
@@ -55,6 +59,10 @@ export function resolveDevelopmentApiProxy(
         target: target.origin,
       },
       "^/atendimento/cards(?:/|\\?|$)": {
+        changeOrigin: false,
+        target: target.origin,
+      },
+      "^/atendimento/assignment-options(?:\\?|$)": {
         changeOrigin: false,
         target: target.origin,
       },

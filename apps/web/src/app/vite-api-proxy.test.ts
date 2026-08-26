@@ -27,6 +27,10 @@ describe("development API proxy", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
+      "^/atendimento/assignment-options(?:\\?|$)": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
       "^/atendimento/cards(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
@@ -44,6 +48,27 @@ describe("development API proxy", () => {
         changeOrigin: false,
       },
     });
+  });
+
+  it("proxies only assignment-options under Atendimento while keeping the SPA route local", () => {
+    const proxy = resolveDevelopmentApiProxy("http://127.0.0.1:5080");
+    expect(proxy).toBeDefined();
+    if (!proxy) {
+      throw new Error("Development API proxy was not configured");
+    }
+
+    expect(proxy["^/atendimento/assignment-options(?:\\?|$)"]).toEqual({
+      target: "http://127.0.0.1:5080",
+      changeOrigin: false,
+    });
+    expect(Object.keys(proxy)).not.toContain("/atendimento");
+
+    for (const context of Object.keys(proxy)) {
+      const matches = context.startsWith("^")
+        ? new RegExp(context).test("/atendimento")
+        : "/atendimento".startsWith(context);
+      expect(matches).toBe(false);
+    }
   });
 
   it.each(["/paguai", "/atendimento"])(
@@ -146,6 +171,10 @@ describe("web Vite configuration", () => {
 
     expect(config.server?.proxy).toEqual({
       "^/agent/runs(?:\\?.*)?$": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "^/atendimento/assignment-options(?:\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
