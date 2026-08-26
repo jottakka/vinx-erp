@@ -30,7 +30,8 @@ public sealed class AddAtendimentoTicketing : Migration
                 company_id uuid NOT NULL REFERENCES foundation.companies(id) ON DELETE RESTRICT,
                 key varchar(20) NOT NULL CHECK (key IN ('whatsapp', 'email', 'web', 'manual')),
                 is_active boolean NOT NULL DEFAULT true,
-                CONSTRAINT uq_atendimento_channels_company_id_key UNIQUE (company_id, key)
+                CONSTRAINT uq_atendimento_channels_company_id_key UNIQUE (company_id, key),
+                CONSTRAINT uq_atendimento_channels_company_id_id UNIQUE (company_id, id)
             );
 
             CREATE TABLE service_desk.atendimento_categories (
@@ -43,7 +44,8 @@ public sealed class AddAtendimentoTicketing : Migration
                 request_id uuid NOT NULL,
                 created_at timestamp with time zone NOT NULL DEFAULT clock_timestamp(),
                 updated_at timestamp with time zone NOT NULL DEFAULT clock_timestamp(),
-                CONSTRAINT uq_atendimento_categories_company_id_name UNIQUE (company_id, name)
+                CONSTRAINT uq_atendimento_categories_company_id_name UNIQUE (company_id, name),
+                CONSTRAINT uq_atendimento_categories_company_id_id UNIQUE (company_id, id)
             );
 
             CREATE TABLE service_desk.atendimento_card_watchers (
