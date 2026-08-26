@@ -586,13 +586,16 @@ describe("agent workspace", () => {
     );
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const picker = dock.getByLabelText("Anexar documentos ao agente");
+    const composer = dock.getByLabelText("Mensagem para o agente");
     const blockedMessage = "tentativa sem empresa";
 
+    await user.type(composer, blockedMessage);
     await user.click(dock.getByRole("button", { name: "Anexar" }));
     await user.upload(picker, attachmentFile("sem-empresa.pdf"));
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
     expect(picker).toHaveValue("");
+    expect(composer).toHaveValue("");
     expect(
       dock.queryByRole("list", { name: "Anexos selecionados" }),
     ).toBeNull();
@@ -650,13 +653,16 @@ describe("agent workspace", () => {
     );
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const picker = dock.getByLabelText("Anexar documentos ao agente");
+    const composer = dock.getByLabelText("Mensagem para o agente");
     const blockedMessage = "tentativa sem capability";
 
+    await user.type(composer, blockedMessage);
     await user.click(dock.getByRole("button", { name: "Anexar" }));
     await user.upload(picker, attachmentFile("sem-capability.pdf"));
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
     expect(picker).toHaveValue("");
+    expect(composer).toHaveValue("");
     expect(
       dock.queryByRole("list", { name: "Anexos selecionados" }),
     ).toBeNull();
