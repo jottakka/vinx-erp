@@ -335,6 +335,82 @@ e-mail, chave, conexão ou corpo do provedor; sua saída é uma categoria estáv
 Reexecução do mesmo issuer e subject devolve `already_configured`, enquanto
 outro sujeito falha em conflito sem anexar identidade por e-mail.
 
+## Permissões de membros
+
+O diretório de permissões expõe seis rotas sob
+`/foundation/companies/{companyId}`, todas exigindo membership ativa e a
+capability `foundation.roles.assign` em escopo `company`, com
+`Cache-Control: private, no-store`. Empresa inexistente e ausência de
+capability convergem no mesmo `403 {"code":"capability_denied"}`, sem
+revelar a empresa; falha de auditoria retorna `503` seguro. As leituras
+`GET .../members` (membros ativos com papéis e capabilities efetivas) e
+`GET .../roles` (papéis da empresa com grants) não recebem corpo e não
+expoem e-mail, identidade externa ou dados de autenticação. As mutações
+exigem `X-CSRF-TOKEN` quando autenticadas por cookie BFF, corpo
+`application/json` estrito limitado a 8 KiB e `requestId` canônico:
+
+- `POST .../role-assignments` — corpo `requestId`, `membershipId`, `roleId`;
+  `200 {roleAssignmentId}`; erros `400 invalid_request`, `404
+  resource_not_found` e `409 idempotency_conflict | integrity_conflict`;
+- `POST .../role-unassignments` — mesmo corpo; `200 {roleAssignmentId,
+  removed: true}`; `409` adicional `last_admin_guard`;
+- `POST .../permission-copies` — corpo `requestId`, `sourceMembershipId`,
+  `targetMembershipId`; substitui em uma transação os papéis da membresia
+  alvo pelos da origem; `200 {targetMembershipId, appliedRoleIds}`; `409
+  idempotency_conflict | last_admin_guard`;
+- `POST .../invitations` — convite de membro; `201` criado e `200` replay
+  com `{membershipId, invitationId, invitationStatus}`; `409
+  idempotency_conflict | member_conflict`; `503
+  member_invitation_unavailable`.
+
+Cada mutação grava recibo de idempotência e auditoria
+(`foundation.roles.assign`, `foundation.roles.unassign`,
+`foundation.roles.copy`, `foundation.member.invite`) na mesma transação.
+Replay do mesmo ator, request e payload devolve o recibo original sem
+duplicar auditoria; payload divergente retorna `idempotency_conflict`.
+
+A função `foundation.ensure_company_default_roles(companyId)` cria de forma
+aditiva, por nome e sem recriar papéis existentes, os papéis default por
+empresa: `admin` recebe `foundation.roles.assign`,
+`foundation.employees.create`, `foundation.files.upload` e
+`foundation.files.confirm`; `member` recebe somente
+`foundation.files.upload`. O papel `owner` do provisionamento não é alterado
+e a função falha fechado se o catálogo de capabilities estiver incompleto.
+O provisionamento de organização chama a função na mesma transação da
+criação.
+
+### Convite de membro
+
+`POST .../invitations` reserva `User`, `Membership` e `Employee`, grava o
+convite `pending_delivery`, recibo e auditoria na mesma transação e publica
+a mensagem durável `MemberInvitationDeliveryRequested` na fila
+`member-invitation-delivery`; o envelope carrega somente o UUID opaco
+`invitationId`. E-mail é normalizado para unicidade global e nunca volta na
+resposta, na auditoria ou no log; e-mail já cadastrado retorna
+`member_conflict` sem revelar o cadastro. A entrega replica a máquina de
+estados do convite do dono: `pending_delivery → pending_provider →
+provider_in_flight → pending_acceptance | provider_failed |
+provider_ambiguous`, com motivo estável `provider_rejected` na rejeição
+definitiva. O worker chama `POST /invite` do Supabase Auth Admin fora de
+transação aberta; sucesso validado por `issuer` + `subject` vai a
+`pending_acceptance`; timeout, 5xx, redirect ou corpo inválido vão a
+`provider_ambiguous`, sem retry cego. Token, e-mail, corpo HTTP e segredo
+não persistem em envelope, log ou auditoria.
+
+### last_admin_guard
+
+`role-unassignments` e `permission-copies` que deixariam a empresa sem
+nenhuma membership ativa com grant de `foundation.roles.assign` em escopo
+company são negados com `409 {"code":"last_admin_guard"}` e auditados; a
+mutação não acontece.
+
+### O que fica adiado
+
+Aceite do convite e primeiro login da identidade reservada (#211C), edição
+e criação de papéis, canais WhatsApp/Telegram (#305/#306) e re-convite após
+entrega falha ou incerta: o e-mail reservado retorna `member_conflict` até
+a reconciliação prevista na #211C.
+
 ## Reprovisionamento offline de identidade
 
 `Vinx.Erp.PlatformBootstrap reprovision-identity` é uma recuperação offline e
@@ -482,7 +558,7 @@ auditoria; a purga física continua fora desta fatia, na issue #201.
 
 ## Contract version
 
-`1.5`
+`1.6`
 
 ## Modelo de entidades e dados
 
