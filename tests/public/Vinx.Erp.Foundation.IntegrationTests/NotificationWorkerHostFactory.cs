@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
+using Vinx.Erp.Notifications.Providers.Telegram;
 using WorkerProgram = workerhost::Program;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -59,7 +60,8 @@ internal sealed class NotificationWorkerHostFactory(
     HttpMessageHandler? inboundTextAiHandler = null,
     HttpMessageHandler? inboundVisionAiHandler = null,
     Vinx.Erp.Foundation.Files.FileStorage? testFileStorage = null,
-    Vinx.Erp.Foundation.Files.IMalwareScanner? testMalwareScanner = null
+    Vinx.Erp.Foundation.Files.IMalwareScanner? testMalwareScanner = null,
+    HttpMessageHandler? telegramBotHandler = null
 )
     : WebApplicationFactory<WorkerProgram>
 {
@@ -123,6 +125,20 @@ internal sealed class NotificationWorkerHostFactory(
                 services
                     .AddHttpClient(MetaWhatsAppClient.HttpClientName)
                     .ConfigurePrimaryHttpMessageHandler(() => metaGraphHandler)
+            );
+        }
+
+        if (telegramBotHandler is not null)
+        {
+            // Perfil de envio somente para o Bot API falso. Os placeholders
+            // não representam uma credencial e o handler intercepta antes de
+            // qualquer tráfego externo.
+            builder.UseSetting("TELEGRAM_BOT_TOKEN", "123456:telegram-test-placeholder");
+            builder.UseSetting("TELEGRAM_API_BASE_URL", "https://api.telegram.test");
+            builder.ConfigureTestServices(services =>
+                services
+                    .AddHttpClient(TelegramClient.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() => telegramBotHandler)
             );
         }
 
