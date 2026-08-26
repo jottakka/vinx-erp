@@ -17,7 +17,6 @@ import {
   type KeyboardEvent,
   useState,
 } from "react";
-import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { CompanySelect } from "../../shared/ui/company-select";
 import type { AgentMessage } from "./agent-contract";
 import { useAgentConversation } from "./agent-conversation-provider";
@@ -105,8 +104,8 @@ export function AgentConversation() {
   const [draft, setDraft] = useState("");
   const thinking = status === "thinking";
   const emptyConversationNotice = companyName
-    ? "Cada envio é uma consulta independente ao agente da empresa ativa; turnos anteriores não são relembrados."
-    : "Selecione uma empresa para iniciar uma conversa com o agente.";
+    ? "Faça uma pergunta para começar."
+    : "Selecione uma empresa para iniciar.";
 
   function submitFromInput() {
     sendMessage(draft);
@@ -150,15 +149,9 @@ export function AgentConversation() {
           value={selectedCompanyId}
         />
         {companyName ? (
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <CompanyIdentity
-              companyId={selectedCompanyId}
-              companyName={companyName}
-            />
-            <Typography color="text.secondary" variant="caption">
-              Uma empresa por envio.
-            </Typography>
-          </Stack>
+          <Typography color="text.secondary" variant="caption">
+            Uma empresa por envio.
+          </Typography>
         ) : null}
       </Stack>
       <Box
@@ -177,9 +170,7 @@ export function AgentConversation() {
           ))
         ) : (
           <Alert role="note" severity="info">
-            {companyName
-              ? emptyConversationNotice
-              : "Uma empresa por envio. Selecione uma empresa para iniciar."}
+            {emptyConversationNotice}
           </Alert>
         )}
         {thinking ? (

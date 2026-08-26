@@ -481,7 +481,7 @@ describe("agent workspace", () => {
     );
     await waitFor(() =>
       expect(dock.getByRole("note")).toHaveTextContent(
-        /consulta independente/i,
+        /Faça uma pergunta para começar/i,
       ),
     );
     expect(dock.queryByText("resposta tardia")).toBeNull();
@@ -549,7 +549,7 @@ describe("agent workspace", () => {
     expect(screen.queryByText("Dados de demonstração")).toBeNull();
     expect(
       screen.getByText(
-        "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado.",
+        "O agente usa somente dados autorizados da empresa selecionada.",
       ),
     ).toBeVisible();
   });
@@ -566,9 +566,7 @@ describe("agent workspace", () => {
       ),
     ).toBeVisible();
     expect(
-      screen.getByText(
-        "Uma empresa por envio. Selecione uma empresa para iniciar.",
-      ),
+      screen.getByText("Selecione uma empresa para iniciar."),
     ).toBeVisible();
     expect(
       screen.queryByText(
@@ -854,7 +852,7 @@ describe("agent workspace", () => {
     expect(oldRunSignal.aborted).toBe(true);
     await waitFor(() =>
       expect(refreshedDock.getByRole("note")).toHaveTextContent(
-        /consulta independente/i,
+        /Faça uma pergunta para começar/i,
       ),
     );
     expect(refreshedDock.queryByText("consulta da Alfa")).toBeNull();

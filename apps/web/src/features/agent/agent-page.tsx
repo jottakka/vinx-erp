@@ -1,21 +1,17 @@
 import ArrowBackOutlinedIcon from "@mui/icons-material/ArrowBackOutlined";
 import { Alert, Button, Card, CardContent, Stack } from "@mui/material";
 import { useLocation, useNavigate } from "react-router-dom";
-import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { PageHeader } from "../../shared/ui/page-header";
 import { AgentConversation } from "./agent-conversation";
 import { useAgentConversation } from "./agent-conversation-provider";
 
 export function AgentPage() {
-  const { companyName, openDock, selectedCompanyId } = useAgentConversation();
+  const { companyName, openDock } = useAgentConversation();
   const location = useLocation();
   const navigate = useNavigate();
   const description = companyName
-    ? "Cada mensagem é uma consulta independente ao agente da empresa ativa; turnos anteriores não fazem parte do contexto."
+    ? "Converse com o agente no contexto da empresa selecionada."
     : "Selecione uma empresa para conversar com o agente; turnos anteriores não fazem parte do contexto.";
-  const processingNotice =
-    "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado.";
-
   function backToContext() {
     openDock();
 
@@ -35,14 +31,8 @@ export function AgentPage() {
         title="Agente"
       />
       {companyName ? (
-        <CompanyIdentity
-          companyId={selectedCompanyId}
-          companyName={companyName}
-        />
-      ) : null}
-      {companyName ? (
         <Alert role="note" severity="info" variant="outlined">
-          {processingNotice}
+          O agente usa somente dados autorizados da empresa selecionada.
         </Alert>
       ) : null}
       <Card variant="outlined">
