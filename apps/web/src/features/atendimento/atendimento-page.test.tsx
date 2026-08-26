@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
@@ -335,10 +341,9 @@ describe("AtendimentoPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "Cancelar cartão" }),
     );
-    await user.type(
-      screen.getByLabelText("Motivo do cancelamento"),
-      "x".repeat(501),
-    );
+    fireEvent.change(screen.getByLabelText("Motivo do cancelamento"), {
+      target: { value: "x".repeat(501) },
+    });
     expect(screen.getByText("Use no máximo 500 caracteres.")).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Confirmar cancelamento" }),

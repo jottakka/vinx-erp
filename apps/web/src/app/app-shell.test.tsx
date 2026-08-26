@@ -177,8 +177,8 @@ describe("AppShell", () => {
       within(moduleSection).getByRole("link", { name: /Atendimento/ }),
     ).toBeVisible();
     expect(
-      within(moduleSection).getByRole("link", { name: /Kanban/ }),
-    ).toBeVisible();
+      within(moduleSection).queryByRole("link", { name: /Kanban/ }),
+    ).not.toBeInTheDocument();
     expect(
       within(moduleSection).getByRole("link", { name: /Pessoas/ }),
     ).toBeVisible();
@@ -197,7 +197,7 @@ describe("AppShell", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Rascunhos de solicitações financeiras por empresa. O MVP não cria cobrança ou pagamento.",
+        "Solicitações financeiras por empresa. O MVP não cria cobrança ou pagamento.",
       ),
     ).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent(
@@ -242,7 +242,13 @@ describe("AppShell", () => {
       }),
     ).toHaveAttribute("href", "/prototipos/paguai");
 
-    for (const label of ["Kanban", "Atendimento", "Pessoas"]) {
+    expect(
+      within(moduleSection).queryByRole("link", {
+        name: /Kanban Módulo em preparação/,
+      }),
+    ).not.toBeInTheDocument();
+
+    for (const label of ["Atendimento", "Pessoas"]) {
       const card = within(moduleSection)
         .getByRole("link", { name: `${label} Módulo em preparação` })
         .closest("li");
