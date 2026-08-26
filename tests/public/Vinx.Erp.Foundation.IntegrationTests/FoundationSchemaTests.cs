@@ -51,6 +51,7 @@ public sealed class FoundationSchemaTests
         "foundation.idempotency_records",
         "foundation.memberships",
         "foundation.organization_provisioning_receipts",
+        "foundation.pending_member_invitations",
         "foundation.pending_owner_invitations",
         "foundation.platform_operators",
         "foundation.role_assignments",
