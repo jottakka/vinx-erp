@@ -48,7 +48,7 @@ public sealed class InboundTelegramIngressService(
         AddParameter(command, "update_id", text.UpdateId);
         AddParameter(command, "chat_id", text.ChatId);
         AddParameter(command, "message_id", text.MessageId);
-        AddParameter(command, "text_body", text.Text);
+        AddParameter(command, "text_body", text.Body);
         AddParameter(command, "resolution_state", resolution.SerializeState());
         AddParameter(
             command,

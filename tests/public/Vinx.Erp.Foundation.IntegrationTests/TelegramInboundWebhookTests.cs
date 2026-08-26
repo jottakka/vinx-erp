@@ -28,8 +28,16 @@ public sealed class TelegramInboundWebhookTests
             NullLogger<InboundTelegramIngressService>.Instance
         );
 
+        var text = new InboundTelegramText(
+            UpdateId: 1001,
+            ChatId: 810001,
+            MessageId: 2001,
+            Body: "approved Telegram text"
+        );
+        Assert.Equal("approved Telegram text", text.Body);
+
         var created = await service.RecordAsync(
-            new InboundTelegramText(1001, 810001, 2001, "approved Telegram text"),
+            text,
             CancellationToken.None
         );
 

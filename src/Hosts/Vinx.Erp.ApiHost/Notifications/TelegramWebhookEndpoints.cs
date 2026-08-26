@@ -9,7 +9,7 @@ namespace Vinx.Erp.ApiHost.Notifications;
 /// Texto privado inbound do Telegram que já passou pela autenticação do
 /// webhook e pelo allowlist semântico do transporte.
 /// </summary>
-public sealed record InboundTelegramText(long UpdateId, long ChatId, long MessageId, string Text);
+public sealed record InboundTelegramText(long UpdateId, long ChatId, long MessageId, string Body);
 
 /// <summary>
 /// Webhook público do Telegram: autentica o único header de segredo antes de
@@ -161,7 +161,12 @@ public static class TelegramWebhookEndpoints
             return null;
         }
 
-        return new InboundTelegramText(updateId, chatId, messageId, textBody);
+        return new InboundTelegramText(
+            UpdateId: updateId,
+            ChatId: chatId,
+            MessageId: messageId,
+            Body: textBody
+        );
     }
 
     private static bool TryGetPositiveId(JsonElement parent, string propertyName, out long value)

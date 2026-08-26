@@ -48,7 +48,15 @@ public sealed class TelegramWebhookTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         Assert.Equal("{\"code\":\"accepted\"}", await response.Content.ReadAsStringAsync());
-        Assert.Equal(new InboundTelegramText(101, 202, 303, "Olá"), received);
+        Assert.Equal(
+            new InboundTelegramText(
+                UpdateId: 101,
+                ChatId: 202,
+                MessageId: 303,
+                Body: "Olá"
+            ),
+            received
+        );
     }
 
     [Fact]
