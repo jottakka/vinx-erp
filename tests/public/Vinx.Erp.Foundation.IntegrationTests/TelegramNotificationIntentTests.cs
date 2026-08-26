@@ -177,8 +177,21 @@ public sealed partial class TelegramNotificationIntentTests
     [InlineData(" ")]
     [InlineData("\t")]
     [InlineData("\n")]
+    [InlineData("\v")]
+    [InlineData("\f")]
+    [InlineData("\r")]
+    [InlineData(" approved")]
+    [InlineData("approved ")]
     [InlineData("\tapproved")]
     [InlineData("approved\t")]
+    [InlineData("\napproved")]
+    [InlineData("approved\n")]
+    [InlineData("\vapproved")]
+    [InlineData("approved\v")]
+    [InlineData("\fapproved")]
+    [InlineData("approved\f")]
+    [InlineData("\rapproved")]
+    [InlineData("approved\r")]
     public async Task Telegram_template_constraint_rejects_btrim_whitespace_only_and_edge_text(
         string invalidText
     )
@@ -193,6 +206,25 @@ public sealed partial class TelegramNotificationIntentTests
             $"telegram-invalid-{Guid.NewGuid():N}",
             invalidText
         ));
+    }
+
+    [Theory]
+    [InlineData("vapproved")]
+    [InlineData("approvedv")]
+    public async Task Telegram_template_constraint_accepts_lowercase_v_at_text_edges(
+        string validText
+    )
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(factory);
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+
+        await InsertTemplateAsync(
+            administrator,
+            seed.CompanyId,
+            $"telegram-valid-v-{Guid.NewGuid():N}",
+            validText
+        );
     }
 
     [Fact]
