@@ -61,7 +61,8 @@ internal sealed class NotificationWorkerHostFactory(
     HttpMessageHandler? inboundVisionAiHandler = null,
     Vinx.Erp.Foundation.Files.FileStorage? testFileStorage = null,
     Vinx.Erp.Foundation.Files.IMalwareScanner? testMalwareScanner = null,
-    HttpMessageHandler? telegramBotHandler = null
+    HttpMessageHandler? telegramBotHandler = null,
+    IReadOnlyDictionary<string, string>? telegramSettings = null
 )
     : WebApplicationFactory<WorkerProgram>
 {
@@ -140,6 +141,14 @@ internal sealed class NotificationWorkerHostFactory(
                     .AddHttpClient(TelegramClient.HttpClientName)
                     .ConfigurePrimaryHttpMessageHandler(() => telegramBotHandler)
             );
+        }
+
+        if (telegramSettings is not null)
+        {
+            foreach (var (key, value) in telegramSettings)
+            {
+                builder.UseSetting(key, value);
+            }
         }
 
         if (configureInboundAi)

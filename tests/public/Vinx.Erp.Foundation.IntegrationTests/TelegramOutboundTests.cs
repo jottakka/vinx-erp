@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Notifications;
@@ -22,7 +23,10 @@ public sealed class TelegramOutboundTests
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var seed = await CreateEligibleSeedAsync(factory);
-        var bot = FakeTelegramBotHandler.Response(HttpStatusCode.OK, "{\"ok\":true,\"result\":{\"message_id\":42}}");
+        var bot = FakeTelegramBotHandler.Response(
+            HttpStatusCode.OK,
+            $"{{\"ok\":true,\"result\":{{\"message_id\":42}},\"description\":\"{ProviderDetail}\"}}"
+        );
         var logPath = Path.Combine(Path.GetTempPath(), $"telegram-outbound-{Guid.NewGuid():N}.log");
         var deliveryId = await EnqueueTelegramAsync(factory, seed);
 
@@ -53,8 +57,15 @@ public sealed class TelegramOutboundTests
         }
 
         var logs = File.Exists(logPath) ? await File.ReadAllTextAsync(logPath) : string.Empty;
+        Assert.NotEmpty(logs);
         Assert.DoesNotContain(TestToken, logs, StringComparison.Ordinal);
-        Assert.DoesNotContain("https://api.telegram.test", logs, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            $"https://api.telegram.test/bot{TestToken}/sendMessage",
+            logs,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(seed.TelegramAddress, logs, StringComparison.Ordinal);
+        Assert.DoesNotContain(seed.TelegramText, logs, StringComparison.Ordinal);
         Assert.DoesNotContain(request.Body, logs, StringComparison.Ordinal);
         Assert.DoesNotContain(ProviderDetail, logs, StringComparison.Ordinal);
     }
@@ -242,6 +253,42 @@ public sealed class TelegramOutboundTests
     }
 
     [Fact]
+    public async Task Worker_validates_Telegram_root_configuration_at_startup()
+    {
+        await using var api = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+
+        await using (var absent = new NotificationWorkerHostFactory(
+            api.Fixture.WorkerConnectionString
+        ))
+        {
+            using var client = absent.CreateClient();
+        }
+
+        await using (var tokenWithDefaultBase = new NotificationWorkerHostFactory(
+            api.Fixture.WorkerConnectionString,
+            telegramSettings: new Dictionary<string, string>
+            {
+                ["TELEGRAM_BOT_TOKEN"] = TestToken,
+            }
+        ))
+        {
+            using var client = tokenWithDefaultBase.CreateClient();
+        }
+
+        foreach (var settings in InvalidTelegramSettings())
+        {
+            await using var invalid = new NotificationWorkerHostFactory(
+                api.Fixture.WorkerConnectionString,
+                telegramSettings: settings
+            );
+            var failure = Assert.ThrowsAny<Exception>(() => invalid.CreateClient());
+
+            Assert.NotNull(FindException<OptionsValidationException>(failure));
+            Assert.DoesNotContain(TestToken, failure.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task Concurrent_worker_calls_claim_once_and_send_once()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -315,6 +362,46 @@ public sealed class TelegramOutboundTests
         await using var scope = worker.Services.CreateAsyncScope();
         var service = scope.ServiceProvider.GetRequiredService<NotificationDeliveryWorkerService>();
         return await service.DeliverAsync(deliveryId, correlationId, CancellationToken.None);
+    }
+
+    private static IReadOnlyList<IReadOnlyDictionary<string, string>> InvalidTelegramSettings() =>
+        [
+            new Dictionary<string, string>
+            {
+                ["TELEGRAM_API_BASE_URL"] = "https://api.telegram.test",
+            },
+            new Dictionary<string, string>
+            {
+                ["TELEGRAM_WEBHOOK_SECRET_TOKEN"] = "valid_webhook_secret",
+            },
+            new Dictionary<string, string>
+            {
+                ["TELEGRAM_BOT_TOKEN"] = "invalid token",
+            },
+            new Dictionary<string, string>
+            {
+                ["TELEGRAM_BOT_TOKEN"] = TestToken,
+                ["TELEGRAM_API_BASE_URL"] = "http://api.telegram.test",
+            },
+            new Dictionary<string, string>
+            {
+                ["TELEGRAM_BOT_TOKEN"] = TestToken,
+                ["TELEGRAM_WEBHOOK_SECRET_TOKEN"] = "invalid webhook secret",
+            },
+        ];
+
+    private static TException? FindException<TException>(Exception failure)
+        where TException : Exception
+    {
+        for (var current = failure; current is not null; current = current.InnerException)
+        {
+            if (current is TException expected)
+            {
+                return expected;
+            }
+        }
+
+        return null;
     }
 
     private static SocketsHttpHandler FindSocketsHandler(HttpMessageHandler handler)
