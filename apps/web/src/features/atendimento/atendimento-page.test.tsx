@@ -341,6 +341,56 @@ describe("AtendimentoPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("locks assignment controls and suppresses a duplicate confirmation", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    vi.spyOn(atendimentoClient, "assignmentOptions").mockResolvedValue([
+      {
+        displayName: "Maria Silva",
+        membershipId: "88888888-8888-4888-8888-888888888888",
+      },
+    ]);
+    const result =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.assign>>>();
+    const assign = vi
+      .spyOn(atendimentoClient, "assign")
+      .mockReturnValue(result.promise);
+
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Atribuir responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("combobox", { name: "Responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Maria Silva" }),
+    );
+
+    const confirm = screen.getByRole("button", {
+      name: "Confirmar atribuição",
+    });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Atribuindo…" })).toBeDisabled();
+    expect(
+      screen.getByRole("combobox", { name: "Responsável" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Atribuindo responsável…",
+    );
+
+    result.resolve({ card: alfaCard, ok: true });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+  });
+
   it("cancels through the dedicated terminal command", async () => {
     const user = userEvent.setup();
     vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);

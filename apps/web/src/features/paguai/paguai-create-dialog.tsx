@@ -29,8 +29,12 @@ const paguaiCreateSchema = z.object({
     .string()
     .trim()
     .min(1, "Informe o beneficiário.")
-    .max(200),
-  description: z.string().trim().min(1, "Informe uma descrição.").max(4000),
+    .max(200, "O nome do beneficiário deve ter no máximo 200 caracteres."),
+  description: z
+    .string()
+    .trim()
+    .min(1, "Informe uma descrição.")
+    .max(4000, "A descrição deve ter no máximo 4.000 caracteres."),
   dueDate: z
     .string()
     .min(1, "Informe o vencimento.")
@@ -38,7 +42,11 @@ const paguaiCreateSchema = z.object({
   proofRequirement: z.enum(["optional", "required"], {
     message: "Selecione o comprovante.",
   }),
-  title: z.string().trim().min(1, "Informe um título.").max(200),
+  title: z
+    .string()
+    .trim()
+    .min(1, "Informe um título.")
+    .max(200, "O título deve ter no máximo 200 caracteres."),
 });
 
 type PaguaiFormValues = z.output<typeof paguaiCreateSchema>;
@@ -86,6 +94,12 @@ export function PaguaiCreateDialog({
   >([]);
   const [amountError, setAmountError] = useState<string | null>(null);
   const isUploading = attachments.some((item) => item.state === "uploading");
+  const hasFailedAttachment = attachments.some(
+    (item) => item.state === "failed",
+  );
+  const failedAttachmentMessage = hasFailedAttachment
+    ? "O anexo selecionado não foi enviado. Remova-o e selecione o arquivo novamente antes de criar a solicitação."
+    : null;
 
   function close() {
     form.reset();
@@ -95,6 +109,7 @@ export function PaguaiCreateDialog({
   }
 
   function submit(values: PaguaiFormValues) {
+    if (hasFailedAttachment) return;
     const amount = amountFromReais(values.amountReais);
     if (amount === null) {
       setAmountError("Informe um valor válido em reais (ex.: 1.250,00).");
@@ -217,6 +232,11 @@ export function PaguaiCreateDialog({
             }
             value={attachments}
           />
+          {failedAttachmentMessage ? (
+            <Alert role="alert" severity="error">
+              {failedAttachmentMessage}
+            </Alert>
+          ) : null}
           <TextField
             error={Boolean(form.formState.errors.description)}
             helperText={form.formState.errors.description?.message}
@@ -238,7 +258,7 @@ export function PaguaiCreateDialog({
           Cancelar
         </Button>
         <Button
-          disabled={isUploading || submitting}
+          disabled={isUploading || hasFailedAttachment || submitting}
           form="paguai-create-form"
           type="submit"
           variant="contained"

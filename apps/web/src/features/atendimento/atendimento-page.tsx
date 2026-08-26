@@ -100,6 +100,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     readonly AtendimentoAssignmentOption[]
   >([]);
   const [assigneeMembershipId, setAssigneeMembershipId] = useState("");
+  const [assigning, setAssigning] = useState(false);
   const [cancellingCard, setCancellingCard] = useState<AtendimentoCard | null>(
     null,
   );
@@ -109,6 +110,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   const [dropTarget, setDropTarget] = useState<AtendimentoColumn | null>(null);
   const assignmentEpoch = useRef(0);
   const assignmentAbort = useRef<AbortController | null>(null);
+  const assigningRef = useRef(false);
 
   const selectedCompany = useMemo(
     () => companies.find((company) => company.companyId === companyId),
@@ -225,18 +227,29 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   }
 
   async function assign(card: AtendimentoCard) {
-    if (!assigneeMembershipId.trim()) return;
-    const result = await atendimentoClient.assign(
-      card.companyId,
-      card,
-      assigneeMembershipId.trim(),
-    );
-    if (!result.ok) return recover(result.code, result.current);
-    setCards((current) =>
-      current.map((item) => (item.id === card.id ? result.card : item)),
-    );
-    setAssigningCard(null);
-    setAssigneeMembershipId("");
+    if (assigning || assigningRef.current || !assigneeMembershipId.trim())
+      return;
+    assigningRef.current = true;
+    setAssigning(true);
+    try {
+      const result = await atendimentoClient.assign(
+        card.companyId,
+        card,
+        assigneeMembershipId.trim(),
+      );
+      if (!result.ok) {
+        recover(result.code, result.current);
+        return;
+      }
+      setCards((current) =>
+        current.map((item) => (item.id === card.id ? result.card : item)),
+      );
+      setAssigningCard(null);
+      setAssigneeMembershipId("");
+    } finally {
+      assigningRef.current = false;
+      setAssigning(false);
+    }
   }
 
   async function openAssignment(card: AtendimentoCard) {
@@ -633,6 +646,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
         fullWidth
         maxWidth="sm"
         onClose={() => {
+          if (assigning) return;
           assignmentEpoch.current++;
           assignmentAbort.current?.abort();
           setAssigningCard(null);
@@ -642,6 +656,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
         <DialogTitle>Atribuir responsável</DialogTitle>
         <DialogContent>
           <TextField
+            disabled={assigning}
             fullWidth
             label="Responsável"
             onChange={(event) => setAssigneeMembershipId(event.target.value)}
@@ -658,6 +673,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
         </DialogContent>
         <DialogActions>
           <Button
+            disabled={assigning}
             onClick={() => {
               assignmentEpoch.current++;
               assignmentAbort.current?.abort();
@@ -667,13 +683,18 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             Cancelar
           </Button>
           <Button
-            disabled={!assigningCard || !assigneeMembershipId}
+            disabled={assigning || !assigningCard || !assigneeMembershipId}
             onClick={() => assigningCard && void assign(assigningCard)}
             variant="contained"
           >
-            Confirmar atribuição
+            {assigning ? "Atribuindo…" : "Confirmar atribuição"}
           </Button>
         </DialogActions>
+        {assigning ? (
+          <Typography aria-live="polite" role="status" sx={{ px: 3, pb: 2 }}>
+            Atribuindo responsável…
+          </Typography>
+        ) : null}
       </Dialog>
 
       <Dialog

@@ -35,12 +35,16 @@ import { EmployeeProfileDialog } from "./employee-profile-dialog";
 
 const employeeCapability = "foundation.employees.create";
 const employeeFormSchema = z.object({
-  displayName: z.string().trim().min(1, "Informe um nome válido.").max(200),
+  displayName: z
+    .string()
+    .trim()
+    .min(1, "Informe um nome válido.")
+    .max(200, "O nome deve ter no máximo 200 caracteres."),
   email: z
     .string()
     .trim()
     .min(1, "Informe um e-mail válido.")
-    .max(320)
+    .max(320, "O e-mail deve ter no máximo 320 caracteres.")
     .email("Informe um e-mail válido."),
 });
 type EmployeeForm = z.infer<typeof employeeFormSchema>;
@@ -579,7 +583,7 @@ function PeoplePageContent({
             ) : null}
             {!isLoading && !failures && !rows.length ? (
               <Typography color="text.secondary">
-                Nenhum funcionário reservado.
+                Nenhum funcionário encontrado.
               </Typography>
             ) : null}
             {!isLoading && rows.length && !visibleRows.length ? (
@@ -637,12 +641,14 @@ function PeoplePageContent({
             error={Boolean(form.formState.errors.displayName)}
             helperText={form.formState.errors.displayName?.message}
             label="Nome"
+            slotProps={{ htmlInput: { maxLength: 200 } }}
           />
           <TextField
             {...form.register("email")}
             error={Boolean(form.formState.errors.email)}
             helperText={form.formState.errors.email?.message}
             label="E-mail"
+            slotProps={{ htmlInput: { maxLength: 320 } }}
             type="email"
           />
           <Button

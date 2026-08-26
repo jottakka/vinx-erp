@@ -9,6 +9,7 @@ import {
   MenuItem,
   Stack,
   TextField,
+  Typography,
 } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -18,8 +19,16 @@ import type { AtendimentoAssignmentOption } from "./atendimento-client";
 
 export type AtendimentoCreateValues = z.infer<typeof schema>;
 const schema = z.object({
-  description: z.string().trim().min(1, "Informe uma descrição.").max(4000),
-  title: z.string().trim().min(1, "Informe um título.").max(200),
+  description: z
+    .string()
+    .trim()
+    .min(1, "Informe uma descrição.")
+    .max(4000, "A descrição deve ter no máximo 4.000 caracteres."),
+  title: z
+    .string()
+    .trim()
+    .min(1, "Informe um título.")
+    .max(200, "O título deve ter no máximo 200 caracteres."),
 });
 type Values = z.output<typeof schema> & {
   attachmentFileId?: string;
@@ -31,16 +40,21 @@ type Props = {
   onClose: () => void;
   onSubmit: (values: Values) => Promise<void>;
   open: boolean;
+  uploader?: AtendimentoAttachmentUploader;
 };
-const uploader = createAtendimentoAttachmentUploader();
+type AtendimentoAttachmentUploader = ReturnType<
+  typeof createAtendimentoAttachmentUploader
+>;
+const defaultUploader = createAtendimentoAttachmentUploader();
 
-/** Collects one confirmed attachment and named participants for one explicit company. */
+/** Reúne um anexo confirmado e participantes nomeados para uma empresa explícita. */
 export function AtendimentoCreateDialog({
   assignmentOptions,
   companyId,
   onClose,
   onSubmit,
   open,
+  uploader: providedUploader,
 }: Props) {
   const form = useForm<AtendimentoCreateValues>({
     defaultValues: { description: "", title: "" },
@@ -50,7 +64,7 @@ export function AtendimentoCreateDialog({
   const epochRef = useRef(0);
   const [attachment, setAttachment] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [committing, setCommitting] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "attaching" | "creating">("idle");
   const [participantMembershipIds, setParticipantMembershipIds] = useState<
     readonly string[]
   >([]);
@@ -61,11 +75,11 @@ export function AtendimentoCreateDialog({
     form.reset({ description: "", title: "" });
   }
   function close() {
-    if (committing) return;
+    if (phase !== "idle") return;
     epochRef.current++;
     uploadRef.current?.abort();
     uploadRef.current = null;
-    setCommitting(false);
+    setPhase("idle");
     reset();
     onClose();
   }
@@ -76,22 +90,22 @@ export function AtendimentoCreateDialog({
     epochRef.current++;
     uploadRef.current?.abort();
     uploadRef.current = null;
-    setCommitting(false);
+    setPhase("idle");
     setAttachment(null);
     setError(null);
     setParticipantMembershipIds([]);
     form.reset({ description: "", title: "" });
   }, [companyId, form, open]);
   async function submit(values: AtendimentoCreateValues) {
-    if (committing) return;
-    setCommitting(true);
+    if (phase !== "idle") return;
+    setPhase(attachment ? "attaching" : "creating");
     setError(null);
     const epoch = ++epochRef.current;
     let attachmentFileId: string | undefined;
     if (attachment) {
       const controller = new AbortController();
       uploadRef.current = controller;
-      const result = await uploader.upload({
+      const result = await (providedUploader ?? defaultUploader).upload({
         companyId,
         file: attachment,
         signal: controller.signal,
@@ -99,19 +113,21 @@ export function AtendimentoCreateDialog({
       if (epoch !== epochRef.current) return;
       uploadRef.current = null;
       if (!result.ok) {
-        setCommitting(false);
+        setPhase("idle");
         setError(result.message);
         return;
       }
       attachmentFileId = result.attachmentFileId;
     }
+    if (epoch !== epochRef.current) return;
+    setPhase("creating");
     await onSubmit({
       ...values,
       attachmentFileId,
       participantMembershipIds: [...new Set(participantMembershipIds)].sort(),
     });
     if (epoch !== epochRef.current) return;
-    setCommitting(false);
+    setPhase("idle");
     reset();
     onClose();
   }
@@ -127,9 +143,16 @@ export function AtendimentoCreateDialog({
           sx={{ pt: 1 }}
         >
           {error ? <Alert severity="error">{error}</Alert> : null}
+          {phase !== "idle" ? (
+            <Typography aria-live="polite" role="status">
+              {phase === "attaching"
+                ? "Anexando arquivo…"
+                : "Criando atendimento…"}
+            </Typography>
+          ) : null}
           <TextField
             label="Título"
-            disabled={committing}
+            disabled={phase !== "idle"}
             error={Boolean(form.formState.errors.title)}
             helperText={form.formState.errors.title?.message}
             slotProps={{ htmlInput: { maxLength: 200 } }}
@@ -137,7 +160,7 @@ export function AtendimentoCreateDialog({
           />
           <TextField
             label="Pessoas envolvidas"
-            disabled={committing}
+            disabled={phase !== "idle"}
             select
             slotProps={{ select: { multiple: true } }}
             value={participantMembershipIds}
@@ -153,7 +176,11 @@ export function AtendimentoCreateDialog({
               </MenuItem>
             ))}
           </TextField>
-          <Button component="label" disabled={committing} variant="outlined">
+          <Button
+            component="label"
+            disabled={phase !== "idle"}
+            variant="outlined"
+          >
             {attachment ? attachment.name : "Anexar arquivo (opcional)"}
             <input
               accept="application/pdf,image/jpeg,image/png"
@@ -167,7 +194,7 @@ export function AtendimentoCreateDialog({
           </Button>
           <TextField
             label="Descrição"
-            disabled={committing}
+            disabled={phase !== "idle"}
             error={Boolean(form.formState.errors.description)}
             helperText={form.formState.errors.description?.message}
             minRows={3}
@@ -178,16 +205,20 @@ export function AtendimentoCreateDialog({
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button disabled={committing} onClick={close}>
+        <Button disabled={phase !== "idle"} onClick={close}>
           Cancelar
         </Button>
         <Button
-          disabled={committing}
+          disabled={phase !== "idle"}
           form="atendimento-create-form"
           type="submit"
           variant="contained"
         >
-          {committing ? "Criando…" : "Criar cartão"}
+          {phase === "attaching"
+            ? "Anexando…"
+            : phase === "creating"
+              ? "Criando…"
+              : "Criar cartão"}
         </Button>
       </DialogActions>
     </Dialog>

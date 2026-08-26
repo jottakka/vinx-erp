@@ -217,6 +217,44 @@ describe("PeoplePage", () => {
     expect(gateway.create).not.toHaveBeenCalled();
   });
 
+  it("uses plain directory wording when no employees are found", async () => {
+    const gateway = createGateway({
+      list: vi.fn().mockResolvedValue({ items: [], ok: true }),
+    });
+    renderPage({ gateway });
+
+    expect(
+      await screen.findByText("Nenhum funcionário encontrado."),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("Nenhum funcionário reservado."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a Portuguese name limit instead of the default Zod message", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Cadastrar funcionário" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await changeCreationCompany(user, /Alfa/);
+    const name = within(dialog).getByLabelText("Nome");
+    fireEvent.change(name, { target: { value: "x".repeat(201) } });
+    const form = name.closest("form");
+    if (!form) throw new Error("Expected reservation form");
+    fireEvent.submit(form);
+
+    expect(
+      await within(dialog).findByText(
+        "O nome deve ter no máximo 200 caracteres.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(dialog).queryByText(/String must contain/),
+    ).not.toBeInTheDocument();
+  });
+
   it("defaults to all eligible companies and only renders human directory data", async () => {
     const gateway = createGateway({
       list: vi.fn().mockResolvedValue({

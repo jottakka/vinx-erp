@@ -40,11 +40,11 @@ function message(error: PaguaiDraftError) {
       401: "Sua sessão expirou.",
       403: "Você não tem acesso a esta empresa.",
       404: "Solicitação não encontrada.",
-      409: "Este identificador já foi usado com outros dados.",
+      409: "Esta solicitação já foi enviada com outros dados. Tente novamente com os mesmos dados.",
       429: "Muitas tentativas. Aguarde antes de tentar novamente.",
-      503: "Paguai está indisponível. Tente novamente com o mesmo identificador.",
+      503: "Paguai está indisponível. Tente novamente com os mesmos dados.",
       network:
-        "Não foi possível alcançar o servidor. Tente novamente com o mesmo identificador.",
+        "Não foi possível alcançar o servidor. Tente novamente com os mesmos dados.",
       protocol: "A resposta do servidor não pôde ser validada.",
     } as const
   )[error];

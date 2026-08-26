@@ -543,7 +543,7 @@ describe("PaguaiPage", () => {
     await waitFor(() =>
       expect(
         screen.getByText(
-          "Beta indisponível: Paguai está indisponível. Tente novamente com o mesmo identificador.",
+          "Beta indisponível: Paguai está indisponível. Tente novamente com os mesmos dados.",
         ),
       ).toBeVisible(),
     );

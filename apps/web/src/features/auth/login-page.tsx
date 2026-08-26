@@ -44,8 +44,18 @@ export function LoginPage() {
       emailInput.current?.focus();
       return;
     }
+    if (normalizedEmail.length > 320) {
+      setValidationError("O e-mail deve ter no máximo 320 caracteres.");
+      emailInput.current?.focus();
+      return;
+    }
     if (!password) {
       setValidationError("Informe sua senha");
+      passwordInput.current?.focus();
+      return;
+    }
+    if (password.length > 1024) {
+      setValidationError("A senha deve ter no máximo 1024 caracteres.");
       passwordInput.current?.focus();
       return;
     }
@@ -88,6 +98,7 @@ export function LoginPage() {
             slotProps={{
               htmlInput: {
                 "aria-describedby": visibleError ? loginErrorId : undefined,
+                maxLength: 320,
               },
               input: {
                 startAdornment: (
@@ -114,6 +125,7 @@ export function LoginPage() {
             slotProps={{
               htmlInput: {
                 "aria-describedby": visibleError ? loginErrorId : undefined,
+                maxLength: 1024,
               },
               input: {
                 startAdornment: (
