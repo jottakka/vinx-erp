@@ -255,8 +255,9 @@ na mesma transação. A mudança de preferência é self-service por
 `notifications.set_channel_preference` (somente WhatsApp), com auditoria
 somente na transição efetiva.
 
-Nenhuma coluna ou envelope guarda telefone, e-mail, corpo de mensagem, payload
-de negócio ou segredo; o deep-link é um selector relativo opcional. Não há
+Nenhum envelope guarda telefone, e-mail, corpo de mensagem, payload de negócio
+ou segredo; os contatos persistem somente os endereços necessários ao provider
+e o deep-link é um selector relativo opcional. Não há
 produtor de evento de negócio nesta fatia: Paguai permanece rascunho e nenhum
 evento é fabricado. O worker de entrega (#48) e o adapter Meta (#28) consomem
 a fila `notification-delivery` em fatias posteriores; o WorkerHost não é
@@ -286,6 +287,16 @@ colunas `meta_template_name/meta_language` em `notification_templates`
 tentativa em curso, `vinx_worker`) e `record_provider_event`
 (`vinx_runtime`, usada pelo webhook do ApiHost após verificação de
 assinatura).
+
+A fatia #307 acrescenta o canal opt-in `telegram` ao contrato compartilhado.
+Templates Telegram guardam somente texto aprovado de 1 a 4096 caracteres;
+contatos privados usam `address` com o chat ID decimal positivo, enquanto
+WhatsApp preserva o telefone E.164 em `phone_number`. A intenção Telegram
+revalida o opt-in no banco e participa do fan-out transacional com o in-app;
+cada entrega nova publica o mesmo envelope Wolverine opaco, sem texto,
+telefone ou endereço. A validação do chat é externa e administrada até que uma
+vinculação de uso único seja aprovada; alterar o endereço limpa
+`is_validated`. Nenhuma chamada ao Telegram pertence a esta fatia.
 
 ## Diretório local de funcionários
 
