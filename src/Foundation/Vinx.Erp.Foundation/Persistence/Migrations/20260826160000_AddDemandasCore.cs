@@ -34,6 +34,7 @@ public sealed class AddDemandasCore : Migration
                 departamento varchar(100) NULL,
                 auto_assignee_membership_id uuid NULL,
                 routing_order integer NOT NULL DEFAULT 100,
+                default_checklist_items jsonb NOT NULL DEFAULT '[]'::jsonb,
                 is_active boolean NOT NULL DEFAULT TRUE,
                 created_by_user_id uuid NOT NULL REFERENCES foundation.users(id) ON DELETE RESTRICT,
                 updated_by_user_id uuid NOT NULL REFERENCES foundation.users(id) ON DELETE RESTRICT,

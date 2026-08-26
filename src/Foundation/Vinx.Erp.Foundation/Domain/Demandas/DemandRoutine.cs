@@ -27,6 +27,9 @@ public sealed class DemandRoutine
     /// <summary>Desempate entre rotinas de mesma especificidade (menor primeiro).</summary>
     public int RoutingOrder { get; set; }
 
+    /// <summary>Checklist padrão aplicado à demanda na adesão da rotina.</summary>
+    public List<string> DefaultChecklistItems { get; set; } = [];
+
     public bool IsActive { get; set; } = true;
 
     public Guid CreatedByUserId { get; set; }

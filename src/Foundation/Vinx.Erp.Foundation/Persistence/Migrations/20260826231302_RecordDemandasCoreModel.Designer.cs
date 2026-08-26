@@ -12,7 +12,7 @@ using Vinx.Erp.Foundation.Persistence;
 namespace Vinx.Erp.Foundation.Persistence.Migrations
 {
     [DbContext(typeof(FoundationDbContext))]
-    [Migration("20260826230015_RecordDemandasCoreModel")]
+    [Migration("20260826231302_RecordDemandasCoreModel")]
     partial class RecordDemandasCoreModel
     {
         /// <inheritdoc />
@@ -616,6 +616,13 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Property<Guid>("CreatedByUserId")
                         .HasColumnType("uuid")
                         .HasColumnName("created_by_user_id");
+
+                    b.PrimitiveCollection<string>("DefaultChecklistItems")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("default_checklist_items")
+                        .HasDefaultValueSql("'[]'::jsonb");
 
                     b.Property<DateTimeOffset?>("DeletedAt")
                         .HasColumnType("timestamp with time zone")

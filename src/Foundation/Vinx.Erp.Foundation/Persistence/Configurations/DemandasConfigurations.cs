@@ -92,6 +92,11 @@ public sealed class DemandRoutineConfiguration : IEntityTypeConfiguration<Demand
             .Property(routine => routine.AutoAssigneeMembershipId)
             .HasColumnName("auto_assignee_membership_id");
         builder.Property(routine => routine.RoutingOrder).HasColumnName("routing_order");
+        builder
+            .Property(routine => routine.DefaultChecklistItems)
+            .HasColumnName("default_checklist_items")
+            .HasColumnType("jsonb")
+            .HasDefaultValueSql("'[]'::jsonb");
         builder.Property(routine => routine.IsActive).HasColumnName("is_active");
         builder
             .Property(routine => routine.CreatedByUserId)
