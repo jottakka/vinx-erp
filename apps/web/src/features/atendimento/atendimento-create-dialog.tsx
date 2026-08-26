@@ -65,6 +65,7 @@ export function AtendimentoCreateDialog({
     epochRef.current++;
     uploadRef.current?.abort();
     uploadRef.current = null;
+    setCommitting(false);
     reset();
     onClose();
   }
@@ -75,6 +76,7 @@ export function AtendimentoCreateDialog({
     epochRef.current++;
     uploadRef.current?.abort();
     uploadRef.current = null;
+    setCommitting(false);
     setAttachment(null);
     setError(null);
     setParticipantMembershipIds([]);

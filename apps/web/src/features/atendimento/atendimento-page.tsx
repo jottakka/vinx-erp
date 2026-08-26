@@ -296,6 +296,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
           actions={
             permissions.canCreate ? (
               <Button
+                disabled={loading}
                 onClick={() => setCreateOpen(true)}
                 startIcon={<AddOutlinedIcon />}
                 variant="contained"

@@ -154,6 +154,7 @@ describe("AtendimentoPage", () => {
     await waitFor(() =>
       expect(atendimentoClient.list).toHaveBeenCalledTimes(2),
     );
+    expect(screen.getByRole("button", { name: "Novo cartão" })).toBeDisabled();
     expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
     expect(screen.queryByText(betaCard.title)).not.toBeInTheDocument();
     betaCards.resolve([betaCard]);
