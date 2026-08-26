@@ -309,6 +309,7 @@ builder.Host.UseWolverine(options =>
     options.Discovery.IncludeType<InboundWhatsAppImageReceivedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppTextCorrelationExpiredHandler>();
     options.Discovery.IncludeType<InboundWhatsAppDocumentReceivedHandler>();
+    options.Discovery.IncludeType<InboundTelegramTextReceivedHandler>();
     options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
     options
         .PersistMessagesWithPostgresql(workerDataSource, schemaName: "vinx_wolverine_worker")
@@ -320,6 +321,7 @@ builder.Host.UseWolverine(options =>
     options.ListenToPostgresqlQueue("notification-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound-documents").UseDurableInbox();
+    options.ListenToPostgresqlQueue("telegram-inbound").UseDurableInbox();
 });
 
 

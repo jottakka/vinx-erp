@@ -46,7 +46,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE
         vinx_wolverine_queues.wolverine_queue_whatsapp_inbound,
         vinx_wolverine_queues.wolverine_queue_whatsapp_inbound_scheduled,
         vinx_wolverine_queues.wolverine_queue_whatsapp_inbound_documents,
-        vinx_wolverine_queues.wolverine_queue_whatsapp_inbound_documents_scheduled
+        vinx_wolverine_queues.wolverine_queue_whatsapp_inbound_documents_scheduled,
+        vinx_wolverine_queues.wolverine_queue_telegram_inbound,
+        vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled
     TO vinx_worker;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE vinx_migrator IN SCHEMA vinx_wolverine_worker
