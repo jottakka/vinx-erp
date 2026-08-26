@@ -30,14 +30,11 @@ public sealed partial class TelegramNotificationIntentTests
         Assert.Equal(["in_app", "telegram"], [.. intents.Select(intent => intent.Channel).Order()]);
         var messages = await NotificationIntentSeed.ReadNotificationMessagesAsync(factory);
         Assert.Equal(2, messages.Count);
-        Assert.All(
+        AssertOpaqueDeliveryEnvelopes(
             messages,
-            message => AssertOpaqueDeliveryEnvelope(
-                message,
-                [result.Telegram.DeliveryId!.Value, result.InApp.DeliveryId!.Value],
-                seed.TelegramText,
-                seed.TelegramAddress
-            )
+            [result.Telegram.DeliveryId!.Value, result.InApp.DeliveryId!.Value],
+            seed.TelegramText,
+            seed.TelegramAddress
         );
     }
 
@@ -77,7 +74,18 @@ public sealed partial class TelegramNotificationIntentTests
             ["in_app", "telegram", "whatsapp"],
             [.. (await NotificationIntentSeed.ReadIntentsAsync(factory)).Select(intent => intent.Channel).Order()]
         );
-        Assert.Equal(3, (await NotificationIntentSeed.ReadNotificationMessagesAsync(factory)).Count);
+        var messages = await NotificationIntentSeed.ReadNotificationMessagesAsync(factory);
+        Assert.Equal(3, messages.Count);
+        AssertOpaqueDeliveryEnvelopes(
+            messages,
+            [
+                result.WhatsApp.DeliveryId!.Value,
+                result.Telegram.DeliveryId!.Value,
+                result.InApp.DeliveryId!.Value,
+            ],
+            seed.TelegramText,
+            seed.TelegramAddress
+        );
     }
 
     [Fact]
@@ -483,11 +491,61 @@ public sealed partial class TelegramNotificationIntentTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private static void AssertOpaqueDeliveryEnvelope(
-        NotificationQueueMessage message,
+    private sealed record ParsedDeliveryEnvelope(
+        NotificationQueueMessage Message,
+        Guid DeliveryId,
+        string SerializedData
+    );
+
+    private static void AssertOpaqueDeliveryEnvelopes(
+        IReadOnlyList<NotificationQueueMessage> messages,
         Guid[] expectedDeliveryIds,
         string telegramText,
         string telegramAddress
+    )
+    {
+        var envelopes = messages.Select(ParseOpaqueDeliveryEnvelope).ToArray();
+        var expected = expectedDeliveryIds.Distinct().Order().ToArray();
+        var actual = envelopes.Select(envelope => envelope.DeliveryId).Order().ToArray();
+
+        Assert.Equal(expectedDeliveryIds.Length, expected.Length);
+        Assert.Equal(actual.Length, actual.Distinct().Count());
+        Assert.Equal(expected, actual);
+        Assert.All(
+            envelopes,
+            envelope =>
+            {
+                Assert.Contains(
+                    "NotificationDeliveryRequested",
+                    envelope.Message.Metadata,
+                    StringComparison.Ordinal
+                );
+                Assert.DoesNotContain(
+                    telegramText,
+                    envelope.Message.Metadata,
+                    StringComparison.OrdinalIgnoreCase
+                );
+                Assert.DoesNotContain(
+                    telegramAddress,
+                    envelope.Message.Metadata,
+                    StringComparison.OrdinalIgnoreCase
+                );
+                Assert.DoesNotContain(
+                    telegramText,
+                    envelope.SerializedData,
+                    StringComparison.OrdinalIgnoreCase
+                );
+                Assert.DoesNotContain(
+                    telegramAddress,
+                    envelope.SerializedData,
+                    StringComparison.OrdinalIgnoreCase
+                );
+            }
+        );
+    }
+
+    private static ParsedDeliveryEnvelope ParseOpaqueDeliveryEnvelope(
+        NotificationQueueMessage message
     )
     {
         var envelope = EnvelopeSerializer.Deserialize(message.Body);
@@ -497,11 +555,6 @@ public sealed partial class TelegramNotificationIntentTests
         var deliveryIdProperty = Assert.Single(properties);
         Assert.Equal("deliveryId", deliveryIdProperty.Name);
         Assert.Equal(JsonValueKind.String, deliveryIdProperty.Value.ValueKind);
-        Assert.Contains(deliveryIdProperty.Value.GetGuid(), expectedDeliveryIds);
-        Assert.Contains("NotificationDeliveryRequested", message.Metadata, StringComparison.Ordinal);
-        Assert.DoesNotContain(telegramText, message.Metadata, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(telegramAddress, message.Metadata, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(telegramText, serializedData, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(telegramAddress, serializedData, StringComparison.OrdinalIgnoreCase);
+        return new ParsedDeliveryEnvelope(message, deliveryIdProperty.Value.GetGuid(), serializedData);
     }
 }
