@@ -66,29 +66,6 @@ public partial class AddTelegramOutboundTarget : Migration
         migrationBuilder.Sql(
             """
             SET ROLE vinx_notifications_owner;
-            DO $block$
-            BEGIN
-                IF EXISTS (
-                    SELECT 1
-                    FROM notifications.notification_preferences AS preference
-                    WHERE preference.channel = 'telegram')
-                    OR EXISTS (
-                        SELECT 1
-                        FROM notifications.notification_templates AS template
-                        WHERE template.channel = 'telegram')
-                    OR EXISTS (
-                        SELECT 1
-                        FROM notifications.notification_intents AS intent
-                        WHERE intent.channel = 'telegram')
-                    OR EXISTS (
-                        SELECT 1
-                        FROM notifications.notification_recipient_contacts AS contact
-                        WHERE contact.channel = 'telegram') THEN
-                    RAISE EXCEPTION 'cannot downgrade Telegram outbound target while Telegram state exists'
-                        USING ERRCODE = '23514';
-                END IF;
-            END;
-            $block$;
             REVOKE ALL ON FUNCTION notifications.get_telegram_notification_delivery_target(uuid, uuid)
                 FROM PUBLIC, vinx_worker, vinx_migrator;
             DROP FUNCTION notifications.get_telegram_notification_delivery_target(uuid, uuid);

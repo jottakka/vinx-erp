@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Notifications;
@@ -8,6 +9,9 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 [Collection("notification-worker")]
 public sealed class TelegramOutboundTargetTests
 {
+    private const string TelegramChannelMigration =
+        "20260826120000_AddTelegramNotificationChannel";
+
     [Fact]
     public async Task Worker_reads_only_the_matching_in_flight_telegram_target_and_no_other_attempt()
     {
@@ -78,6 +82,99 @@ public sealed class TelegramOutboundTargetTests
         Assert.False(reader.GetBoolean(1));
         Assert.False(reader.GetBoolean(2));
         Assert.False(reader.GetBoolean(3));
+    }
+
+    [Fact]
+    public async Task Downgrade_to_the_PR1_Telegram_contract_removes_only_the_outbound_target()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramOptedIn: true,
+            telegramContactValidated: true
+        );
+        var original = await NotificationIntentSeed.EnqueueAsync(
+            factory,
+            new NotificationIntentCommand(
+                seed.CompanyId,
+                seed.RecipientUserId,
+                NotificationIntentSeed.NewEventKey(),
+                seed.InAppTemplateKey,
+                TelegramTemplateKey: seed.TelegramTemplateKey
+            )
+        );
+        Assert.True(original.Telegram!.Created);
+
+        await using (var migrator = factory.Fixture.CreateMigratorDbContext())
+        {
+            await migrator.Database.MigrateAsync(TelegramChannelMigration);
+        }
+
+        await using (var administrator = await factory.Fixture.OpenAdministratorConnectionAsync())
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT
+                    to_regprocedure(
+                        'notifications.get_telegram_notification_delivery_target(uuid,uuid)') IS NULL,
+                    to_regprocedure(
+                        'notifications.enqueue_notification_intent(uuid,uuid,text,text,text,text)') IS NOT NULL,
+                    EXISTS (
+                        SELECT 1
+                        FROM pg_constraint AS constraint_row
+                        WHERE constraint_row.conrelid =
+                                'notifications.notification_templates'::regclass
+                          AND constraint_row.conname = 'ck_notification_templates_telegram_text'),
+                    EXISTS (
+                        SELECT 1
+                        FROM notifications.notification_preferences AS preference
+                        WHERE preference.company_id = @company_id
+                          AND preference.user_id = @user_id
+                          AND preference.channel = 'telegram'),
+                    EXISTS (
+                        SELECT 1
+                        FROM notifications.notification_templates AS template
+                        WHERE template.company_id = @company_id
+                          AND template.channel = 'telegram'
+                          AND template.template_key = @template_key),
+                    EXISTS (
+                        SELECT 1
+                        FROM notifications.notification_recipient_contacts AS contact
+                        WHERE contact.company_id = @company_id
+                          AND contact.user_id = @user_id
+                          AND contact.channel = 'telegram'
+                          AND contact.is_validated),
+                    EXISTS (
+                        SELECT 1
+                        FROM notifications.notification_intents AS intent
+                        WHERE intent.id = @delivery_id
+                          AND intent.channel = 'telegram')
+                """,
+                administrator
+            );
+            command.Parameters.AddWithValue("company_id", seed.CompanyId);
+            command.Parameters.AddWithValue("user_id", seed.RecipientUserId);
+            command.Parameters.AddWithValue("template_key", seed.TelegramTemplateKey);
+            command.Parameters.AddWithValue("delivery_id", original.Telegram.DeliveryId!.Value);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            for (var column = 0; column < reader.FieldCount; column++)
+            {
+                Assert.True(reader.GetBoolean(column));
+            }
+        }
+
+        var enqueuedAfterDowngrade = await NotificationIntentSeed.EnqueueAsync(
+            factory,
+            new NotificationIntentCommand(
+                seed.CompanyId,
+                seed.RecipientUserId,
+                NotificationIntentSeed.NewEventKey(),
+                seed.InAppTemplateKey,
+                TelegramTemplateKey: seed.TelegramTemplateKey
+            )
+        );
+        Assert.True(enqueuedAfterDowngrade.Telegram!.Created);
     }
 
     internal static async Task<TelegramDeliveryClaim> CreateClaimedTelegramAsync(
