@@ -392,7 +392,9 @@ test.describe("Permissões de membros", () => {
     await openPermissionsScreen(page);
     await selectAlfa(page);
 
-    await page.getByRole("button", { name: "Papéis de Bruno Lima" }).click();
+    await page
+      .getByRole("button", { name: "Gerenciar acesso de Bruno Lima" })
+      .click();
     await page.getByRole("combobox", { name: "Adicionar papel" }).click();
     await page.getByRole("option", { name: "Leitor" }).click();
     await page.getByRole("button", { name: "Atribuir papel" }).click();
@@ -408,11 +410,11 @@ test.describe("Permissões de membros", () => {
     });
 
     await page
-      .getByRole("button", { name: "Copiar de outro membro para Bruno Lima" })
+      .getByRole("button", { name: "Gerenciar acesso de Bruno Lima" })
       .click();
-    await page.getByRole("combobox", { name: "Copiar de" }).click();
+    await page.getByRole("combobox", { name: "Copiar papéis de" }).click();
     await page.getByRole("option", { name: "Ana Souza" }).click();
-    await page.getByRole("button", { name: "Copiar permissões" }).click();
+    await page.getByRole("button", { name: "Copiar papéis" }).click();
 
     await expect(
       page.getByText("Permissões copiadas.", { exact: true }),

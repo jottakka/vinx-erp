@@ -10,9 +10,12 @@ informativo, sem nenhuma consulta ao servidor.
 
 A tela lista membros com chips de papel — a remoção acontece no próprio chip —
 e chip de convite (`Convite pendente`, `Falha na entrega`, `Entrega incerta`).
-Por membro, é possível adicionar um papel do catálogo da empresa, copiar os
-papéis de outro membro (substituição completa) e convidar uma pessoa por nome
-e e-mail. O convite cria a reserva do membro e o convite `pending_delivery`;
+Um único diálogo por membro, "Gerenciar acesso", reúne os papéis atuais
+removíveis, a adição de um papel do catálogo da empresa e a cópia dos papéis
+de outro membro (substituição completa); convidar uma pessoa por nome e e-mail
+usa o diálogo de convite. A empresa selecionada exibe o resumo de membros e
+administradores, e a lista aceita busca por nome sem diferenciar maiúsculas ou
+acentos. O convite cria a reserva do membro e o convite `pending_delivery`;
 o aceite e o primeiro login chegam com a #211C. O navegador usa apenas os
 caminhos BFF same-origin, sem token ou armazenamento local. Para cada POST,
 obtém um antiforgery transitório em memória e o envia uma única vez. Não

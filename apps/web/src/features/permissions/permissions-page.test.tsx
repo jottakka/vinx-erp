@@ -136,12 +136,14 @@ async function selectCompany(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole("option", { name: "Alfa" }));
 }
 
-async function openRolesDialog(
+async function openManageDialog(
   user: ReturnType<typeof userEvent.setup>,
   memberName = "Ana Souza",
 ) {
   await user.click(
-    await screen.findByRole("button", { name: `Papéis de ${memberName}` }),
+    await screen.findByRole("button", {
+      name: "Gerenciar acesso de " + memberName,
+    }),
   );
 }
 
@@ -192,6 +194,52 @@ describe("PermissionsPage", () => {
       companyId,
       expect.anything(),
     );
+  });
+
+  it("shows the company summary after selection", async () => {
+    const user = userEvent.setup();
+    renderPage({});
+
+    await selectCompany(user);
+
+    expect(
+      await screen.findByText("2 membros · 1 administrador"),
+    ).toBeVisible();
+  });
+
+  it("filters members by accent-insensitive search", async () => {
+    const user = userEvent.setup();
+    const members = membersList();
+    if (members.ok) {
+      members.items.push({
+        capabilities: [],
+        displayName: "André Santos",
+        invitationStatus: null,
+        membershipId: "dddddddd-eeee-4eee-8eee-dddddddddddd",
+        roles: [],
+      });
+    }
+    renderPage({
+      gateway: createGateway({
+        listMembers: vi.fn().mockResolvedValue(members),
+      }),
+    });
+
+    await selectCompany(user);
+    expect(await screen.findByText("André Santos")).toBeVisible();
+
+    await user.type(screen.getByLabelText("Buscar membro"), "andre");
+
+    expect(await screen.findByText("André Santos")).toBeVisible();
+    expect(screen.queryByText("Ana Souza")).toBeNull();
+    expect(screen.queryByText("Bruno Lima")).toBeNull();
+
+    await user.clear(screen.getByLabelText("Buscar membro"));
+    await user.type(screen.getByLabelText("Buscar membro"), "inexistente");
+
+    expect(
+      await screen.findByText("Nenhum membro corresponde à busca."),
+    ).toBeVisible();
   });
 
   it("maps a failed invitation delivery to a warning chip", async () => {
@@ -310,16 +358,18 @@ describe("PermissionsPage", () => {
     ).toBeNull();
   });
 
-  it("assigns a role from the dialog and closes it on success", async () => {
+  it("assigns a role from the manage dialog and closes it on success", async () => {
     const user = userEvent.setup();
     const gateway = createGateway();
     renderPage({ createRequestId: () => fixedRequestId, gateway });
 
     await selectCompany(user);
-    await openRolesDialog(user);
+    await openManageDialog(user);
 
     expect(
-      await screen.findByRole("heading", { name: "Papéis de Ana Souza" }),
+      await screen.findByRole("heading", {
+        name: "Gerenciar acesso de Ana Souza",
+      }),
     ).toBeVisible();
     await user.click(screen.getByRole("combobox", { name: "Adicionar papel" }));
     await user.click(await screen.findByRole("option", { name: "Leitor" }));
@@ -334,7 +384,7 @@ describe("PermissionsPage", () => {
     });
     expect(await screen.findByText("Papel atribuído.")).toBeVisible();
     expect(
-      screen.queryByRole("heading", { name: "Papéis de Ana Souza" }),
+      screen.queryByRole("heading", { name: "Gerenciar acesso de Ana Souza" }),
     ).toBeNull();
   });
 
@@ -344,20 +394,16 @@ describe("PermissionsPage", () => {
     renderPage({ createRequestId: () => fixedRequestId, gateway });
 
     await selectCompany(user);
-    await user.click(
-      await screen.findByRole("button", {
-        name: "Copiar de outro membro para Bruno Lima",
-      }),
-    );
+    await openManageDialog(user, "Bruno Lima");
 
     const sourceSelect = await screen.findByRole("combobox", {
-      name: "Copiar de",
+      name: "Copiar papéis de",
     });
     await user.click(sourceSelect);
     const options = await screen.findAllByRole("option");
     expect(options.map((option) => option.textContent)).toEqual(["Ana Souza"]);
     await user.click(screen.getByRole("option", { name: "Ana Souza" }));
-    await user.click(screen.getByRole("button", { name: "Copiar permissões" }));
+    await user.click(screen.getByRole("button", { name: "Copiar papéis" }));
 
     await waitFor(() =>
       expect(gateway.copyPermissions).toHaveBeenCalledTimes(1),
@@ -483,7 +529,7 @@ describe("PermissionsPage", () => {
     });
 
     await selectCompany(user);
-    await openRolesDialog(user);
+    await openManageDialog(user);
     await user.click(screen.getByRole("combobox", { name: "Adicionar papel" }));
     await user.click(await screen.findByRole("option", { name: "Leitor" }));
     await user.click(screen.getByRole("button", { name: "Atribuir papel" }));

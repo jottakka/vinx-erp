@@ -103,14 +103,12 @@ export function PermissionsPage({
   const { notify } = useFeedback();
   const queryClient = useQueryClient();
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
-  const [rolesDialogMemberId, setRolesDialogMemberId] = useState<string | null>(
+  const [manageDialogMemberId, setManageDialogMemberId] = useState<string | null>(
     null,
   );
-  const [rolesDialogRoleId, setRolesDialogRoleId] = useState("");
-  const [copyDialogMemberId, setCopyDialogMemberId] = useState<string | null>(
-    null,
-  );
-  const [copyDialogSourceId, setCopyDialogSourceId] = useState("");
+  const [manageDialogRoleId, setManageDialogRoleId] = useState("");
+  const [manageDialogSourceId, setManageDialogSourceId] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [attempt, setAttempt] = useState<PermissionsOperation | null>(null);
   const [feedback, setFeedback] = useState<PageFeedback>(null);
@@ -172,18 +170,12 @@ export function PermissionsPage({
     }
   }, []);
 
-  const closeRolesDialog = useCallback(() => {
+  const closeManageDialog = useCallback(() => {
     abandonAttempt();
     setFeedback(null);
-    setRolesDialogMemberId(null);
-    setRolesDialogRoleId("");
-  }, [abandonAttempt]);
-
-  const closeCopyDialog = useCallback(() => {
-    abandonAttempt();
-    setFeedback(null);
-    setCopyDialogMemberId(null);
-    setCopyDialogSourceId("");
+    setManageDialogMemberId(null);
+    setManageDialogRoleId("");
+    setManageDialogSourceId("");
   }, [abandonAttempt]);
 
   const closeInviteDialog = useCallback(() => {
@@ -196,10 +188,10 @@ export function PermissionsPage({
     operationGeneration.current += 1;
     processedReadFailure.current = null;
     setSelectedCompanyId("");
-    setRolesDialogMemberId(null);
-    setRolesDialogRoleId("");
-    setCopyDialogMemberId(null);
-    setCopyDialogSourceId("");
+    setMemberSearch("");
+    setManageDialogMemberId(null);
+    setManageDialogRoleId("");
+    setManageDialogSourceId("");
     setInviteDialogOpen(false);
     setAttempt(null);
     attemptRef.current = null;
@@ -211,10 +203,10 @@ export function PermissionsPage({
     operationGeneration.current += 1;
     processedReadFailure.current = null;
     setSelectedCompanyId(companyId);
-    setRolesDialogMemberId(null);
-    setRolesDialogRoleId("");
-    setCopyDialogMemberId(null);
-    setCopyDialogSourceId("");
+    setMemberSearch("");
+    setManageDialogMemberId(null);
+    setManageDialogRoleId("");
+    setManageDialogSourceId("");
     setInviteDialogOpen(false);
     setAttempt(null);
     attemptRef.current = null;
@@ -277,14 +269,11 @@ export function PermissionsPage({
             : "Convite já havia sido enviado.",
         );
       } else {
-        if (operation.kind === "assign" || operation.kind === "unassign") {
-          setRolesDialogMemberId(null);
-          setRolesDialogRoleId("");
-        }
-        if (operation.kind === "copy") {
-          setCopyDialogMemberId(null);
-          setCopyDialogSourceId("");
-        }
+        // Mutação concluída: fecha o diálogo de gestão para devolver o foco
+        // à lista e notifica o desfecho pelo snackbar.
+        setManageDialogMemberId(null);
+        setManageDialogRoleId("");
+        setManageDialogSourceId("");
         notify(successMessageFor(operation.kind));
       }
       void queryClient.invalidateQueries({
@@ -305,7 +294,7 @@ export function PermissionsPage({
 
   useEffect(() => {
     if (!readFailure) return;
-    const failureKey = `${selectedCompanyIdRef.current}:${readFailure.kind}`;
+    const failureKey = selectedCompanyIdRef.current + ":" + readFailure.kind;
     if (processedReadFailure.current === failureKey) return;
     processedReadFailure.current = failureKey;
 
@@ -452,17 +441,24 @@ export function PermissionsPage({
 
   const memberItems = members.data?.ok ? members.data.items : [];
   const roleItems = roles.data?.ok ? roles.data.items : [];
-  const rolesDialogMember = memberItems.find(
-    (member) => member.membershipId === rolesDialogMemberId,
+  const normalizedSearch = normalizeSearchText(memberSearch);
+  const visibleMembers =
+    normalizedSearch === ""
+      ? memberItems
+      : memberItems.filter((member) =>
+          normalizeSearchText(member.displayName).includes(normalizedSearch),
+        );
+  const adminCount = memberItems.filter((member) =>
+    member.capabilities.includes(permissionsCapability),
+  ).length;
+  const manageDialogMember = memberItems.find(
+    (member) => member.membershipId === manageDialogMemberId,
   );
-  const copyDialogMember = memberItems.find(
-    (member) => member.membershipId === copyDialogMemberId,
+  const manageDialogRole = roleItems.find(
+    (role) => role.roleId === manageDialogRoleId,
   );
-  const rolesDialogMemberRole = roleItems.find(
-    (role) => role.roleId === rolesDialogRoleId,
-  );
-  const copyDialogSource = memberItems.find(
-    (member) => member.membershipId === copyDialogSourceId,
+  const manageDialogSource = memberItems.find(
+    (member) => member.membershipId === manageDialogSourceId,
   );
   const membersFailed =
     (members.data !== undefined && !members.data.ok) || members.isError;
@@ -491,35 +487,41 @@ export function PermissionsPage({
       />
       <Card component="section" variant="outlined">
         <CardContent>
-          <TextField
-            label="Empresa"
-            onChange={(event) => selectCompany(event.target.value)}
-            select
-            sx={{ maxWidth: "24rem" }}
-            value={selectedCompany?.companyId ?? ""}
-          >
-            <MenuItem value="">Selecione uma empresa</MenuItem>
-            {eligibleCompanies.map((company) => (
-              <MenuItem key={company.companyId} value={company.companyId}>
-                {company.companyName}
-              </MenuItem>
-            ))}
-          </TextField>
+          <Stack spacing={1}>
+            <Typography component="h2" variant="h6">
+              Empresa
+            </Typography>
+            <TextField
+              label="Empresa"
+              onChange={(event) => selectCompany(event.target.value)}
+              select
+              sx={{ maxWidth: "24rem" }}
+              value={selectedCompany?.companyId ?? ""}
+            >
+              <MenuItem value="">Selecione uma empresa</MenuItem>
+              {eligibleCompanies.map((company) => (
+                <MenuItem key={company.companyId} value={company.companyId}>
+                  {company.companyName}
+                </MenuItem>
+              ))}
+            </TextField>
+            {members.data?.ok ? (
+              <Typography color="text.secondary">
+                {memberItems.length}{" "}
+                {memberItems.length === 1 ? "membro" : "membros"} ·{" "}
+                {adminCount}{" "}
+                {adminCount === 1 ? "administrador" : "administradores"}
+              </Typography>
+            ) : null}
+          </Stack>
         </CardContent>
       </Card>
-      {feedback &&
-      !attempt &&
-      !rolesDialogMember &&
-      !copyDialogMember &&
-      !inviteDialogOpen ? (
+      {feedback && !attempt && !manageDialogMember && !inviteDialogOpen ? (
         <Alert role="alert" severity={feedback.severity}>
           {feedback.message}
         </Alert>
       ) : null}
-      {attempt &&
-      !rolesDialogMember &&
-      !copyDialogMember &&
-      !inviteDialogOpen ? (
+      {attempt && !manageDialogMember && !inviteDialogOpen ? (
         <Alert
           action={
             <Button
@@ -540,9 +542,29 @@ export function PermissionsPage({
         <Card aria-label="Membros" component="section" variant="outlined">
           <CardContent>
             <Stack spacing={2}>
-              <Typography component="h2" variant="h6">
-                Membros
-              </Typography>
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  justifyContent: "space-between",
+                  rowGap: 1,
+                }}
+              >
+                <Typography component="h2" variant="h6">
+                  Membros
+                </Typography>
+                <TextField
+                  aria-label="Buscar membro"
+                  disabled={!members.data?.ok}
+                  label="Buscar membro"
+                  onChange={(event) => setMemberSearch(event.target.value)}
+                  size="small"
+                  sx={{ maxWidth: "20rem" }}
+                  value={memberSearch}
+                />
+              </Stack>
               {members.isPending ? (
                 <Stack
                   aria-label="Carregando membros"
@@ -581,12 +603,19 @@ export function PermissionsPage({
                   Nenhum membro na empresa.
                 </Typography>
               ) : null}
-              {members.data?.ok && memberItems.length > 0 ? (
+              {members.data?.ok &&
+              memberItems.length > 0 &&
+              visibleMembers.length === 0 ? (
+                <Typography color="text.secondary">
+                  Nenhum membro corresponde à busca.
+                </Typography>
+              ) : null}
+              {visibleMembers.length > 0 ? (
                 <List disablePadding>
-                  {memberItems.map((member, index) => (
+                  {visibleMembers.map((member, index) => (
                     <ListItem
                       disableGutters
-                      divider={index < memberItems.length - 1}
+                      divider={index < visibleMembers.length - 1}
                       key={member.membershipId}
                       sx={{ display: "block", py: 1.5 }}
                     >
@@ -611,7 +640,12 @@ export function PermissionsPage({
                           >
                             {member.roles.map((role) => (
                               <Chip
-                                aria-label={`Remover papel ${role.name} de ${member.displayName}`}
+                                aria-label={
+                                  "Remover papel " +
+                                  role.name +
+                                  " de " +
+                                  member.displayName
+                                }
                                 key={role.roleId}
                                 label={role.name}
                                 onDelete={
@@ -631,7 +665,7 @@ export function PermissionsPage({
                                     ? "warning"
                                     : "default"
                                 }
-                                key={`${member.membershipId}-invitation`}
+                                key={member.membershipId + "-invitation"}
                                 label={
                                   invitationChipByStatus[
                                     member.invitationStatus
@@ -643,30 +677,20 @@ export function PermissionsPage({
                             ) : null}
                           </Stack>
                         </Stack>
-                        <Stack direction="row" spacing={1}>
-                          <Button
-                            aria-label={`Papéis de ${member.displayName}`}
-                            onClick={() => {
-                              setRolesDialogMemberId(member.membershipId);
-                              setRolesDialogRoleId("");
-                            }}
-                            size="small"
-                            variant="outlined"
-                          >
-                            Papéis
-                          </Button>
-                          <Button
-                            aria-label={`Copiar de outro membro para ${member.displayName}`}
-                            onClick={() => {
-                              setCopyDialogMemberId(member.membershipId);
-                              setCopyDialogSourceId("");
-                            }}
-                            size="small"
-                            variant="outlined"
-                          >
-                            Copiar de…
-                          </Button>
-                        </Stack>
+                        <Button
+                          aria-label={
+                            "Gerenciar acesso de " + member.displayName
+                          }
+                          onClick={() => {
+                            setManageDialogMemberId(member.membershipId);
+                            setManageDialogRoleId("");
+                            setManageDialogSourceId("");
+                          }}
+                          size="small"
+                          variant="outlined"
+                        >
+                          Gerenciar acesso
+                        </Button>
                       </Stack>
                     </ListItem>
                   ))}
@@ -676,9 +700,11 @@ export function PermissionsPage({
           </CardContent>
         </Card>
       ) : null}
-      {rolesDialogMember ? (
-        <Dialog onClose={closeRolesDialog} open={rolesDialogMember !== null}>
-          <DialogTitle>Papéis de {rolesDialogMember.displayName}</DialogTitle>
+      {manageDialogMember ? (
+        <Dialog onClose={closeManageDialog} open={manageDialogMember !== null}>
+          <DialogTitle>
+            Gerenciar acesso de {manageDialogMember.displayName}
+          </DialogTitle>
           <DialogContent>
             <Stack aria-busy={mutation.isPending} spacing={2} sx={{ pt: 1 }}>
               {feedback && !attempt ? (
@@ -687,36 +713,51 @@ export function PermissionsPage({
                 </Alert>
               ) : null}
               {attemptNotice}
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}
-              >
-                {rolesDialogMember.roles.length === 0 ? (
+              <Stack spacing={1}>
+                <Typography component="h3" variant="subtitle2">
+                  Papéis atuais
+                </Typography>
+                {manageDialogMember.roles.length === 0 ? (
                   <Typography color="text.secondary">
                     Nenhum papel atribuído.
                   </Typography>
                 ) : (
-                  rolesDialogMember.roles.map((role) => (
-                    <Chip
-                      aria-label={`Remover papel ${role.name} de ${rolesDialogMember.displayName}`}
-                      key={role.roleId}
-                      label={role.name}
-                      onDelete={
-                        locked
-                          ? undefined
-                          : () => beginUnassign(rolesDialogMember, role)
-                      }
-                      size="small"
-                    />
-                  ))
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                      rowGap: 0.5,
+                    }}
+                  >
+                    {manageDialogMember.roles.map((role) => (
+                      <Chip
+                        aria-label={
+                          "Remover papel " +
+                          role.name +
+                          " de " +
+                          manageDialogMember.displayName
+                        }
+                        key={role.roleId}
+                        label={role.name}
+                        onDelete={
+                          locked
+                            ? undefined
+                            : () => beginUnassign(manageDialogMember, role)
+                        }
+                        size="small"
+                      />
+                    ))}
+                  </Stack>
                 )}
               </Stack>
               {rolesFailed ? (
                 <Alert role="alert" severity="error">
                   Não foi possível carregar os papéis.
                 </Alert>
-              ) : assignableRoles(roleItems, rolesDialogMember).length === 0 ? (
+              ) : null}
+              {assignableRoles(roleItems, manageDialogMember).length === 0 ? (
                 <Typography color="text.secondary">
                   Todos os papéis já estão atribuídos.
                 </Typography>
@@ -731,11 +772,11 @@ export function PermissionsPage({
                     label="Adicionar papel"
                     labelId="permissions-assign-role-label"
                     onChange={(event) =>
-                      setRolesDialogRoleId(event.target.value)
+                      setManageDialogRoleId(event.target.value)
                     }
-                    value={rolesDialogRoleId}
+                    value={manageDialogRoleId}
                   >
-                    {assignableRoles(roleItems, rolesDialogMember).map(
+                    {assignableRoles(roleItems, manageDialogMember).map(
                       (role) => (
                         <MenuItem key={role.roleId} value={role.roleId}>
                           {role.name}
@@ -748,6 +789,39 @@ export function PermissionsPage({
                   </FormHelperText>
                 </FormControl>
               )}
+              <FormControl disabled={locked} fullWidth>
+                <InputLabel id="permissions-copy-source-label">
+                  Copiar papéis de
+                </InputLabel>
+                <Select
+                  id="permissions-copy-source"
+                  label="Copiar papéis de"
+                  labelId="permissions-copy-source-label"
+                  onChange={(event) =>
+                    setManageDialogSourceId(event.target.value)
+                  }
+                  value={manageDialogSourceId}
+                >
+                  {memberItems
+                    .filter(
+                      (member) =>
+                        member.membershipId !==
+                        manageDialogMember.membershipId,
+                    )
+                    .map((member) => (
+                      <MenuItem
+                        key={member.membershipId}
+                        value={member.membershipId}
+                      >
+                        {member.displayName}
+                      </MenuItem>
+                    ))}
+                </Select>
+                <FormHelperText>
+                  Os papéis atuais serão substituídos pelos papéis do membro
+                  escolhido.
+                </FormHelperText>
+              </FormControl>
               {mutation.isPending ? (
                 <Stack
                   direction="row"
@@ -756,7 +830,7 @@ export function PermissionsPage({
                   sx={{ alignItems: "center" }}
                 >
                   <CircularProgress
-                    aria-label="Aplicando alteração de papel"
+                    aria-label="Aplicando alteração de acesso"
                     size={20}
                   />
                   Aplicando alteração…
@@ -770,99 +844,28 @@ export function PermissionsPage({
                 Tentar novamente
               </Button>
             ) : null}
-            <Button onClick={closeRolesDialog}>Cancelar</Button>
+            <Button onClick={closeManageDialog}>Fechar</Button>
             <Button
-              disabled={!rolesDialogMemberRole || locked}
+              disabled={!manageDialogRole || locked}
               onClick={() =>
-                rolesDialogMember &&
-                rolesDialogMemberRole &&
-                beginAssign(rolesDialogMember, rolesDialogMemberRole)
+                manageDialogMember &&
+                manageDialogRole &&
+                beginAssign(manageDialogMember, manageDialogRole)
               }
               variant="contained"
             >
               Atribuir papel
             </Button>
-          </DialogActions>
-        </Dialog>
-      ) : null}
-      {copyDialogMember ? (
-        <Dialog onClose={closeCopyDialog} open={copyDialogMember !== null}>
-          <DialogTitle>
-            Copiar permissões para {copyDialogMember.displayName}
-          </DialogTitle>
-          <DialogContent>
-            <Stack aria-busy={mutation.isPending} spacing={2} sx={{ pt: 1 }}>
-              {feedback && !attempt ? (
-                <Alert role="alert" severity={feedback.severity}>
-                  {feedback.message}
-                </Alert>
-              ) : null}
-              {attemptNotice}
-              <Typography color="text.secondary">
-                Os papéis atuais serão substituídos pelos papéis do membro
-                escolhido.
-              </Typography>
-              <FormControl disabled={locked} fullWidth>
-                <InputLabel id="permissions-copy-source-label">
-                  Copiar de
-                </InputLabel>
-                <Select
-                  id="permissions-copy-source"
-                  label="Copiar de"
-                  labelId="permissions-copy-source-label"
-                  onChange={(event) =>
-                    setCopyDialogSourceId(event.target.value)
-                  }
-                  value={copyDialogSourceId}
-                >
-                  {memberItems
-                    .filter(
-                      (member) =>
-                        member.membershipId !== copyDialogMember.membershipId,
-                    )
-                    .map((member) => (
-                      <MenuItem
-                        key={member.membershipId}
-                        value={member.membershipId}
-                      >
-                        {member.displayName}
-                      </MenuItem>
-                    ))}
-                </Select>
-              </FormControl>
-              {mutation.isPending ? (
-                <Stack
-                  direction="row"
-                  role="status"
-                  spacing={1}
-                  sx={{ alignItems: "center" }}
-                >
-                  <CircularProgress
-                    aria-label="Copiando permissões"
-                    size={20}
-                  />
-                  Copiando permissões…
-                </Stack>
-              ) : null}
-            </Stack>
-          </DialogContent>
-          <DialogActions>
-            {attempt && !mutation.isPending ? (
-              <Button onClick={retry} variant="outlined">
-                Tentar novamente
-              </Button>
-            ) : null}
-            <Button onClick={closeCopyDialog}>Cancelar</Button>
             <Button
-              disabled={!copyDialogSource || locked}
+              disabled={!manageDialogSource || locked}
               onClick={() =>
-                copyDialogMember &&
-                copyDialogSource &&
-                beginCopy(copyDialogMember, copyDialogSource.membershipId)
+                manageDialogMember &&
+                manageDialogSource &&
+                beginCopy(manageDialogMember, manageDialogSource.membershipId)
               }
-              variant="contained"
+              variant="outlined"
             >
-              Copiar permissões
+              Copiar papéis
             </Button>
           </DialogActions>
         </Dialog>
@@ -942,6 +945,16 @@ function assignableRoles(
     (role) =>
       !member.roles.some((memberRole) => memberRole.roleId === role.roleId),
   );
+}
+
+// Busca amigável para nomes em pt-BR: remove acentos e compara sem caixa,
+// para que quem busca "andre" encontre "André" e vice-versa.
+function normalizeSearchText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR")
+    .trim();
 }
 
 function isAuthorizationFailure(failure: PermissionsFailure): boolean {
