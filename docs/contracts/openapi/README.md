@@ -155,18 +155,30 @@ da empresa selecionada, ou `400 invalid_request`, `401`, `403
 membership_required|capability_denied`, `429` e `503 atendimento_unavailable`.
 
 `POST /atendimento/cards` exige `service_desk.ticket.create`; o corpo possui
-`companyId`, `requestId`, `title` e `description`. Retorna `201`, ou `200` no
-replay equivalente; `400 invalid_request`, `401`, `403`, `409
+`companyId`, `requestId`, `title`, `description`, `attachmentFileId` opcional e
+`participantMembershipIds` opcional. O anexo precisa ser confirmado, da mesma
+empresa e da classificação `service_desk_attachment`; participantes precisam ser
+memberships ativas da empresa. Retorna `201`, ou `200` no replay equivalente;
+`400 invalid_request`, `401`, `403`, `404 resource_not_found`, `409
 idempotency_conflict`, `429` e `503` são publicados. `POST
 /atendimento/cards/{id}/assign` exige `.assign` e recebe também
 `expectedVersion` e `assigneeMembershipId`. `POST /atendimento/cards/{id}/move`
 exige `.move` e recebe `expectedVersion` e `column` (`novo`, `em_andamento` ou
-`concluido`). As duas retornam `200`, e podem retornar `404 resource_not_found`,
-`409 idempotency_conflict|integrity_conflict`, `400`, `401`, `403`, `429` ou
-`503`. `integrity_conflict` devolve apenas o estado atual já autorizado do
-cartão, nunca dados de outra empresa. As três mutações publicam o header
+`concluido`). `POST /atendimento/cards/{id}/cancel` reutiliza `.move`, recebe
+`expectedVersion` e `reason` aparado de 1 a 500 caracteres, e cria o estado
+terminal `cancelado`. As três retornam `200`, e podem retornar `404
+resource_not_found`, `409 idempotency_conflict|integrity_conflict`, `400`, `401`,
+`403`, `429` ou `503`. A resposta do cartão inclui `attachmentFileId` anulável e
+`participantMembershipIds` sempre como array; `integrity_conflict` devolve apenas
+o estado atual já autorizado do cartão, nunca dados de outra empresa. As quatro
+mutações publicam o header
 `X-CSRF-TOKEN`: ele é obrigatório quando a operação usa cookie de sessão BFF e
 é obtido em `GET /foundation/identity/browser-session/antiforgery`; clientes
 bearer não precisam de antiforgery. Todas as respostas mantêm
 `X-Correlation-ID`, usam `Cache-Control: private, no-store` e as mutações usam
 auditoria transacional.
+
+`GET /atendimento/assignment-options?companyId={uuid}` exige
+`service_desk.ticket.assign` e retorna somente memberships ativas da empresa
+autorizada como `{ membershipId, displayName }`, ordenadas por nome e UUID. Não
+publica e-mail, role nem acesso direto a `foundation.users`.

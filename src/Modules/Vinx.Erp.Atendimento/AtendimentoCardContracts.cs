@@ -5,7 +5,12 @@ public sealed record CreateAtendimentoCardCommand(
     Guid RequestId,
     string Title,
     string Description
-);
+)
+{
+    public Guid? AttachmentFileId { get; init; }
+
+    public IReadOnlyList<Guid>? ParticipantMembershipIds { get; init; }
+}
 
 public sealed record AssignAtendimentoCardCommand(
     Guid CompanyId,
@@ -21,6 +26,13 @@ public sealed record MoveAtendimentoCardCommand(
     string Column
 );
 
+public sealed record CancelAtendimentoCardCommand(
+    Guid CompanyId,
+    Guid RequestId,
+    long ExpectedVersion,
+    string Reason
+);
+
 public sealed record AtendimentoCardResponse(
     Guid Id,
     Guid CompanyId,
@@ -29,7 +41,14 @@ public sealed record AtendimentoCardResponse(
     string Column,
     long Version,
     Guid? AssigneeMembershipId
-);
+)
+{
+    public Guid? AttachmentFileId { get; init; }
+
+    public IReadOnlyList<Guid> ParticipantMembershipIds { get; init; } = [];
+}
+
+public sealed record AtendimentoAssignmentOptionResponse(Guid MembershipId, string DisplayName);
 
 public enum AtendimentoCardOperationState
 {
@@ -49,5 +68,6 @@ public sealed record AtendimentoCardOperationResult(
     AtendimentoCardOperationState State,
     AtendimentoCardResponse? Card = null,
     AtendimentoCardResponse? Current = null,
-    IReadOnlyList<AtendimentoCardResponse>? Cards = null
+    IReadOnlyList<AtendimentoCardResponse>? Cards = null,
+    IReadOnlyList<AtendimentoAssignmentOptionResponse>? AssignmentOptions = null
 );

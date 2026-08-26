@@ -25,6 +25,7 @@ public sealed class FoundationDbContext(DbContextOptions<FoundationDbContext> op
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<PaguaiRequest> PaguaiRequests => Set<PaguaiRequest>();
     public DbSet<AtendimentoCard> AtendimentoCards => Set<AtendimentoCard>();
+    public DbSet<AtendimentoCardParticipant> AtendimentoCardParticipants => Set<AtendimentoCardParticipant>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

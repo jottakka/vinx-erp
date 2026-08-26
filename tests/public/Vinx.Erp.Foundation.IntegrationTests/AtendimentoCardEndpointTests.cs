@@ -106,6 +106,155 @@ public sealed class AtendimentoCardEndpointTests
     }
 
     [Fact]
+    public async Task Creating_a_card_with_a_confirmed_attachment_and_duplicate_participants_returns_the_canonical_contract()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var secondParticipantId = Guid.NewGuid();
+        var attachmentId = Guid.NewGuid();
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var secondParticipant = new User(secondParticipantId, "Ana", "ana@example.test");
+            var secondMembership = new Membership(
+                Guid.NewGuid(),
+                scenario.CompanyId,
+                secondParticipantId,
+                factory.ActorUserId,
+                Guid.NewGuid()
+            );
+            var attachment = new FileRecord(
+                attachmentId,
+                scenario.CompanyId,
+                scenario.AssigneeMembershipId,
+                "evidencia.pdf",
+                ".pdf",
+                42,
+                "application/pdf",
+                "a".PadLeft(64, 'a'),
+                "service_desk_attachment",
+                "web",
+                DateTimeOffset.UtcNow.AddDays(1),
+                factory.ActorUserId,
+                Guid.NewGuid()
+            );
+            attachment.MarkVerified(factory.ActorUserId, Guid.NewGuid());
+            attachment.MarkConfirmed(factory.ActorUserId, Guid.NewGuid());
+            administrator.AddRange(secondParticipant, secondMembership, attachment);
+            await administrator.SaveChangesAsync();
+
+            var request = new CreateCardRequest(
+                scenario.CompanyId,
+                Guid.NewGuid(),
+                "Acesso bloqueado",
+                "Usuário não consegue entrar no portal."
+            )
+            {
+                AttachmentFileId = attachmentId,
+                ParticipantMembershipIds =
+                [secondMembership.Id, scenario.AssigneeMembershipId, secondMembership.Id],
+            };
+
+            using var response = await client.PostAsJsonAsync("/atendimento/cards", request);
+
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            var created = await response.Content.ReadFromJsonAsync<CardResponse>();
+            Assert.NotNull(created);
+            Assert.Equal(attachmentId, created.AttachmentFileId);
+            Assert.Equal(
+                new[]
+                {
+                    scenario.AssigneeMembershipId,
+                    secondMembership.Id,
+                }.OrderBy(value => value.ToString("N"), StringComparer.Ordinal),
+                created.ParticipantMembershipIds
+            );
+
+            using var replay = await client.PostAsJsonAsync(
+                "/atendimento/cards",
+                request with
+                {
+                    ParticipantMembershipIds = new[]
+                    {
+                        scenario.AssigneeMembershipId,
+                        secondMembership.Id,
+                    },
+                }
+            );
+            Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+            var replayed = await replay.Content.ReadFromJsonAsync<CardResponse>();
+            Assert.Equal(created.Id, replayed?.Id);
+
+            Assert.Equal(
+                2,
+                await administrator.Database.SqlQuery<long>(
+                    $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_card_participants WHERE card_id = {created.Id}"
+                ).SingleAsync()
+            );
+        }
+    }
+
+    [Fact]
+    public async Task Creating_a_card_with_an_unavailable_attachment_leaves_no_card_or_receipt()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var attachmentId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var attachment = new FileRecord(
+                attachmentId,
+                scenario.CompanyId,
+                scenario.AssigneeMembershipId,
+                "quarentena.pdf",
+                ".pdf",
+                42,
+                "application/pdf",
+                "b".PadLeft(64, 'b'),
+                "service_desk_attachment",
+                "web",
+                DateTimeOffset.UtcNow.AddDays(1),
+                factory.ActorUserId,
+                Guid.NewGuid()
+            );
+            administrator.Files.Add(attachment);
+            await administrator.SaveChangesAsync();
+        }
+
+        using var response = await client.PostAsJsonAsync(
+            "/atendimento/cards",
+            new CreateCardRequest(
+                scenario.CompanyId,
+                requestId,
+                "Acesso bloqueado",
+                "Usuário não consegue entrar no portal."
+            )
+            {
+                AttachmentFileId = attachmentId,
+            }
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("resource_not_found", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var verify = factory.Fixture.CreateAdministratorDbContext();
+        Assert.False(
+            await verify.IdempotencyRecords.AnyAsync(record =>
+                record.CompanyId == scenario.CompanyId && record.RequestId == requestId
+            )
+        );
+        Assert.Equal(
+            0L,
+            await verify.Database.SqlQuery<long>(
+                $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_cards WHERE company_id = {scenario.CompanyId}"
+            ).SingleAsync()
+        );
+    }
+
+    [Fact]
     public async Task Queue_never_exposes_a_card_from_an_unselected_or_inaccessible_company()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -251,6 +400,106 @@ public sealed class AtendimentoCardEndpointTests
         Assert.NotNull(replayed);
         Assert.Equal(assigned.Id, replayed.Id);
         Assert.Equal(assigned.Version, replayed.Version);
+    }
+
+    [Fact]
+    public async Task Assignment_options_return_only_active_company_membership_names_in_canonical_order()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync(
+            $"/atendimento/assignment-options?companyId={scenario.CompanyId}"
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var options = await response.Content.ReadFromJsonAsync<List<AssignmentOptionResponse>>();
+        Assert.NotNull(options);
+        Assert.Equal(
+            options.OrderBy(option => option.DisplayName, StringComparer.Ordinal)
+                .ThenBy(option => option.MembershipId),
+            options
+        );
+        Assert.Contains(options, option => option.MembershipId == scenario.AssigneeMembershipId && option.DisplayName == "Bea");
+    }
+
+    [Fact]
+    public async Task Cancelling_a_card_is_terminal_audited_and_replays_before_reading_the_current_state()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var created = await CreateCardAsync(client, scenario.CompanyId);
+        var cancellation = new CancelCardRequest(
+            scenario.CompanyId,
+            Guid.NewGuid(),
+            created.Version,
+            "Solicitação duplicada."
+        );
+
+        using var first = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/cancel",
+            cancellation
+        );
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var cancelled = await first.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.NotNull(cancelled);
+        Assert.Equal("cancelado", cancelled.Column);
+        Assert.Equal(created.Version + 1, cancelled.Version);
+
+        using var replay = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/cancel",
+            cancellation
+        );
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(cancelled.Id, (await replay.Content.ReadFromJsonAsync<CardResponse>())?.Id);
+
+        using var distinct = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/cancel",
+            cancellation with { RequestId = Guid.NewGuid() }
+        );
+        Assert.Equal(HttpStatusCode.Conflict, distinct.StatusCode);
+        var conflict = await distinct.Content.ReadFromJsonAsync<IntegrityConflictResponse>();
+        Assert.Equal("integrity_conflict", conflict?.Code);
+        Assert.Equal("cancelado", conflict?.Current?.Column);
+
+        using var move = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/move",
+            new MoveCardRequest(scenario.CompanyId, Guid.NewGuid(), cancelled.Version, "concluido")
+        );
+        Assert.Equal(HttpStatusCode.Conflict, move.StatusCode);
+        var moveConflict = await move.Content.ReadFromJsonAsync<IntegrityConflictResponse>();
+        Assert.Equal("cancelado", moveConflict?.Current?.Column);
+
+        using var assign = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/assign",
+            new AssignCardRequest(
+                scenario.CompanyId,
+                Guid.NewGuid(),
+                cancelled.Version,
+                scenario.AssigneeMembershipId
+            )
+        );
+        Assert.Equal(HttpStatusCode.Conflict, assign.StatusCode);
+        var assignConflict = await assign.Content.ReadFromJsonAsync<IntegrityConflictResponse>();
+        Assert.Equal("cancelado", assignConflict?.Current?.Column);
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(
+            1L,
+            await administrator.Database.SqlQuery<long>(
+                $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_card_history WHERE card_id = {created.Id} AND from_column = 'novo' AND to_column = 'cancelado'"
+            ).SingleAsync()
+        );
+        Assert.Single(
+            await administrator.AuditEvents.Where(audit =>
+                audit.Action == "service_desk.ticket.cancel"
+                && audit.Outcome == AuditOutcome.Success
+                && audit.ResourceId == created.Id
+            ).ToListAsync()
+        );
     }
 
     [Fact]
@@ -522,6 +771,62 @@ public sealed class AtendimentoCardEndpointTests
     }
 
     [Fact]
+    public async Task Browser_cookie_cancel_requires_csrf_and_succeeds_with_a_fresh_bff_token()
+    {
+        var provider = new BrowserSessionProviderHandler();
+        await using var factory =
+            await FoundationApiFactory.CreateWithJwtBearerAndBrowserSessionProviderAsync(provider);
+        provider.ResponseFactory = _ => ProviderResponse(factory.CreateJwtToken(JwtTokenVariation.Valid));
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient(
+            new WebApplicationFactoryClientOptions { HandleCookies = true }
+        );
+        using var signIn = await SignInAsync(client);
+        Assert.Equal(HttpStatusCode.NoContent, signIn.StatusCode);
+        var createCsrf = await GetAntiforgeryTokenAsync(client);
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/atendimento/cards")
+        {
+            Content = JsonContent.Create(
+                new CreateCardRequest(
+                    scenario.CompanyId,
+                    Guid.NewGuid(),
+                    "Sessão BFF",
+                    "O cancelamento também exige antiforgery."
+                )
+            ),
+        };
+        createRequest.Headers.Add("X-CSRF-TOKEN", createCsrf);
+        using var createResponse = await client.SendAsync(createRequest);
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        var created = (await createResponse.Content.ReadFromJsonAsync<CardResponse>())!;
+        var cancellation = new CancelCardRequest(
+            scenario.CompanyId,
+            Guid.NewGuid(),
+            created.Version,
+            "Solicitação duplicada."
+        );
+
+        using var missingCsrf = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/cancel",
+            cancellation
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, missingCsrf.StatusCode);
+
+        var csrf = await GetAntiforgeryTokenAsync(client);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/atendimento/cards/{created.Id}/cancel"
+        )
+        {
+            Content = JsonContent.Create(cancellation),
+        };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        using var cancelled = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, cancelled.StatusCode);
+    }
+
+    [Fact]
     public async Task Openapi_marks_each_atendimento_mutation_with_the_bff_antiforgery_header_and_conflict_schema()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -537,6 +842,7 @@ public sealed class AtendimentoCardEndpointTests
                 "/atendimento/cards",
                 "/atendimento/cards/{id}/assign",
                 "/atendimento/cards/{id}/move",
+                "/atendimento/cards/{id}/cancel",
             }
         )
         {
@@ -552,7 +858,12 @@ public sealed class AtendimentoCardEndpointTests
 
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
         foreach (
-            var path in new[] { "/atendimento/cards/{id}/assign", "/atendimento/cards/{id}/move" }
+            var path in new[]
+            {
+                "/atendimento/cards/{id}/assign",
+                "/atendimento/cards/{id}/move",
+                "/atendimento/cards/{id}/cancel",
+            }
         )
         {
             var conflictSchema = paths
@@ -577,6 +888,20 @@ public sealed class AtendimentoCardEndpointTests
             conflictProperties.GetProperty("code").GetProperty("type").GetString()
         );
         Assert.True(IsNullableSchema(conflictProperties.GetProperty("current")));
+
+        var assignmentOptions = paths.GetProperty("/atendimento/assignment-options").GetProperty("get");
+        Assert.Equal(
+            "#/components/schemas/AtendimentoAssignmentOptionResponse",
+            assignmentOptions
+                .GetProperty("responses")
+                .GetProperty("200")
+                .GetProperty("content")
+                .GetProperty("application/json")
+                .GetProperty("schema")
+                .GetProperty("items")
+                .GetProperty("$ref")
+                .GetString()
+        );
     }
 
     private static readonly string[] sourceArray = new[] { "anyOf", "oneOf" };
@@ -753,7 +1078,18 @@ public sealed class AtendimentoCardEndpointTests
         Guid RequestId,
         string Title,
         string Description
-    );
+    )
+    {
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        )]
+        public Guid? AttachmentFileId { get; init; }
+
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        )]
+        public IReadOnlyList<Guid>? ParticipantMembershipIds { get; init; }
+    }
 
     private sealed record MoveCardRequest(
         Guid CompanyId,
@@ -769,6 +1105,15 @@ public sealed class AtendimentoCardEndpointTests
         Guid AssigneeMembershipId
     );
 
+    private sealed record CancelCardRequest(
+        Guid CompanyId,
+        Guid RequestId,
+        long ExpectedVersion,
+        string Reason
+    );
+
+    private sealed record AssignmentOptionResponse(Guid MembershipId, string DisplayName);
+
     private sealed record CardResponse(
         Guid Id,
         Guid CompanyId,
@@ -776,7 +1121,9 @@ public sealed class AtendimentoCardEndpointTests
         string Description,
         string Column,
         long Version,
-        Guid? AssigneeMembershipId
+        Guid? AssigneeMembershipId,
+        Guid? AttachmentFileId = null,
+        IReadOnlyList<Guid>? ParticipantMembershipIds = null
     );
 
     private sealed record ErrorResponse(string Code);

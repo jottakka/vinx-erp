@@ -565,6 +565,25 @@ CREATE FUNCTION foundation.current_authorized_company_ids() RETURNS SETOF uuid
 $$;
 
 
+-- Name: current_company_membership_options(); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.current_company_membership_options() RETURNS TABLE(membership_id uuid, display_name text)
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'foundation', 'pg_catalog'
+    AS $$
+    SELECT membership.id, user_record.display_name::text
+    FROM foundation.memberships AS membership
+    INNER JOIN foundation.users AS user_record ON user_record.id = membership.user_id
+    WHERE membership.company_id = NULLIF(current_setting('app.company_id', true), '')::uuid
+      AND membership.deleted_at IS NULL
+      AND EXISTS (
+          SELECT 1
+          FROM foundation.current_actor_memberships() AS actor_membership
+          WHERE actor_membership.company_id = membership.company_id)
+    ORDER BY user_record.display_name, membership.id;
+$$;
+
+
 -- Name: ensure_platform_owner_employee_create(uuid, uuid, uuid); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.ensure_platform_owner_employee_create(p_request_id uuid, p_company_id uuid, p_owner_membership_id uuid) RETURNS void

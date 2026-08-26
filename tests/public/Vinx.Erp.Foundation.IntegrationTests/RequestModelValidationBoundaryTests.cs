@@ -163,6 +163,58 @@ public sealed class RequestModelValidationBoundaryTests
     }
 
     [Fact]
+    public async Task Atendimento_card_create_rejects_empty_attachment_or_participant_ids_without_persisting_anything()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var requestIds = new[] { Guid.NewGuid(), Guid.NewGuid() };
+        var cases = new object[]
+        {
+            new
+            {
+                companyId = scenario.CompanyId,
+                requestId = requestIds[0],
+                title = "T",
+                description = "D",
+                attachmentFileId = Guid.Empty,
+            },
+            new
+            {
+                companyId = scenario.CompanyId,
+                requestId = requestIds[1],
+                title = "T",
+                description = "D",
+                participantMembershipIds = new[] { Guid.Empty },
+            },
+        };
+
+        foreach (var payload in cases)
+        {
+            using var response = await client.PostAsJsonAsync("/atendimento/cards", payload);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal(
+                "{\"code\":\"invalid_request\"}",
+                await response.Content.ReadAsStringAsync()
+            );
+        }
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.False(
+            await administrator.IdempotencyRecords.AnyAsync(record =>
+                record.CompanyId == scenario.CompanyId && requestIds.Contains(record.RequestId)
+            )
+        );
+        Assert.Equal(
+            0L,
+            await administrator.Database.SqlQuery<long>(
+                $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_cards WHERE company_id = {scenario.CompanyId}"
+            ).SingleAsync()
+        );
+    }
+
+    [Fact]
     public async Task Atendimento_assign_rejects_invalid_request_models_without_changing_the_card()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -263,6 +315,70 @@ public sealed class RequestModelValidationBoundaryTests
         {
             using var response = await client.PostAsJsonAsync(
                 $"/atendimento/cards/{created.Id}/move",
+                payload()
+            );
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal(
+                "{\"code\":\"invalid_request\"}",
+                await response.Content.ReadAsStringAsync()
+            );
+        }
+
+        await AssertCardUnchangedAndNoReceiptAsync(factory, client, scenario, created, requestIds);
+    }
+
+    [Fact]
+    public async Task Atendimento_cancel_rejects_invalid_or_untrimmed_models_without_changing_the_card()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var created = await CreateCardAsync(client, scenario.CompanyId);
+        var requestIds = new List<Guid>();
+        var cases = new List<Func<object>>
+        {
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+                reason = string.Empty,
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = 0L,
+                reason = "Cancelamento válido.",
+            },
+            () => new
+            {
+                companyId = Guid.Empty,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+                reason = "Cancelamento válido.",
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+                reason = " Não aparado ",
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+                reason = new string('a', 501),
+            },
+        };
+
+        foreach (var payload in cases)
+        {
+            using var response = await client.PostAsJsonAsync(
+                $"/atendimento/cards/{created.Id}/cancel",
                 payload()
             );
 

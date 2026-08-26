@@ -155,4 +155,44 @@ public sealed class AtendimentoCardMigrationTests
 
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
     }
+
+    [Fact]
+    public async Task Migration_creates_cancellation_attachment_and_participant_schema_without_broad_runtime_grants()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                to_regclass('service_desk.atendimento_card_participants') IS NOT NULL,
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'service_desk'
+                      AND table_name = 'atendimento_cards'
+                      AND column_name = 'attachment_file_id'),
+                EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'service_desk'
+                      AND table_name = 'atendimento_cards'
+                      AND column_name = 'cancelled_at'),
+                has_table_privilege('vinx_runtime', 'service_desk.atendimento_card_participants', 'SELECT,INSERT'),
+                has_table_privilege('vinx_runtime', 'service_desk.atendimento_card_participants', 'UPDATE'),
+                has_table_privilege('vinx_runtime', 'service_desk.atendimento_card_participants', 'DELETE');
+            """,
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.True(reader.GetBoolean(2));
+        Assert.True(reader.GetBoolean(3));
+        Assert.False(reader.GetBoolean(4));
+        Assert.False(reader.GetBoolean(5));
+    }
 }
