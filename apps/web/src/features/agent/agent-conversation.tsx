@@ -17,6 +17,8 @@ import {
   type KeyboardEvent,
   useState,
 } from "react";
+import { CompanyIdentity } from "../../shared/ui/company-identity";
+import { CompanySelect } from "../../shared/ui/company-select";
 import type { AgentMessage } from "./agent-contract";
 import { useAgentConversation } from "./agent-conversation-provider";
 
@@ -88,9 +90,12 @@ function attachmentFailureText(
 export function AgentConversation() {
   const {
     attachments,
+    authorizedCompanies,
     attachmentSelectionAvailable,
     attachmentSelectionLimitReached,
     companyName,
+    selectCompany,
+    selectedCompanyId,
     messages,
     removeAttachment,
     selectAttachments,
@@ -101,7 +106,7 @@ export function AgentConversation() {
   const thinking = status === "thinking";
   const emptyConversationNotice = companyName
     ? "Cada envio é uma consulta independente ao agente da empresa ativa; turnos anteriores não são relembrados."
-    : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar o envio.";
+    : "Selecione uma empresa para iniciar uma conversa com o agente.";
 
   function submitFromInput() {
     sendMessage(draft);
@@ -137,6 +142,29 @@ export function AgentConversation() {
 
   return (
     <Stack sx={{ flexGrow: 1, minHeight: 0 }}>
+      <Stack spacing={1} sx={{ mb: 2 }}>
+        <CompanySelect
+          companies={authorizedCompanies}
+          label="Empresa do envio"
+          onChange={selectCompany}
+          value={selectedCompanyId}
+        />
+        {companyName ? (
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <CompanyIdentity
+              companyId={selectedCompanyId}
+              companyName={companyName}
+            />
+            <Typography color="text.secondary" variant="caption">
+              Uma empresa por envio
+            </Typography>
+          </Stack>
+        ) : (
+          <Typography color="text.secondary" variant="caption">
+            Uma empresa por envio. Escolha uma empresa para habilitar o envio.
+          </Typography>
+        )}
+      </Stack>
       <Box
         aria-label="Mensagens do agente"
         role="log"
@@ -214,6 +242,7 @@ export function AgentConversation() {
         ) : null}
         <Stack direction="row" spacing={1} sx={{ alignItems: "flex-end" }}>
           <TextField
+            disabled={!selectedCompanyId || thinking}
             fullWidth
             label="Mensagem para o agente"
             maxRows={3}
@@ -241,7 +270,12 @@ export function AgentConversation() {
             />
           </IconButton>
           <Button
-            disabled={!draft.trim() || thinking || hasBlockingAttachment}
+            disabled={
+              !selectedCompanyId ||
+              !draft.trim() ||
+              thinking ||
+              hasBlockingAttachment
+            }
             startIcon={<SendOutlinedIcon />}
             type="submit"
           >

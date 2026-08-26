@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -25,7 +26,7 @@ import type { AgentMessage, AgentStatus } from "./agent-contract";
 /**
  * Conecta o workspace do agente ao POST /agent/runs real. Cada envio é uma
  * consulta independente (o runner não mantém turnos anteriores) contra a
- * primeira empresa do bootstrap; a conversa é abortada e limpa quando a
+ * empresa explicitamente selecionada; a conversa é abortada e limpa quando a
  * empresa muda. Nenhum resultado tardio sobrevive a reset/unmount/troca.
  */
 export function agentReplyText(result: AgentRunSendResult): string {
@@ -99,11 +100,14 @@ function replySources(result: AgentRunSendResult) {
 }
 
 type AgentConversationContextValue = {
+  authorizedCompanies: readonly AuthorizedCompanyMembership[];
   attachments: readonly AgentConversationAttachment[];
   attachmentSelectionAvailable: boolean;
   attachmentSelectionLimitReached: boolean;
   closeDock: () => void;
   companyName: string | null;
+  selectCompany: (companyId: string) => void;
+  selectedCompanyId: string;
   dockOpen: boolean;
   messages: readonly AgentMessage[];
   openDock: () => void;
@@ -129,11 +133,14 @@ export type AgentConversationAttachment = {
  * produção): nenhum dado de demonstração é exposto e os controles não operam.
  */
 const inertValue: AgentConversationContextValue = {
+  authorizedCompanies: [],
   attachments: [],
   attachmentSelectionAvailable: false,
   attachmentSelectionLimitReached: false,
   closeDock: () => {},
   companyName: null,
+  selectCompany: () => {},
+  selectedCompanyId: "",
   dockOpen: false,
   messages: [],
   openDock: () => {},
@@ -169,23 +176,33 @@ export function AgentConversationProvider({
   children: ReactNode;
 }) {
   const { bootstrap } = useSession();
-  const company = bootstrap?.companies[0] ?? null;
+  const authorizedCompanies = bootstrap?.companies ?? [];
+  const [selectedCompanyId, setSelectedCompanyId] = useState("");
+  const selectedCompany =
+    authorizedCompanies.find(
+      (company) => company.companyId === selectedCompanyId,
+    ) ?? null;
+  useEffect(() => {
+    if (!selectedCompany) setSelectedCompanyId("");
+  }, [selectedCompany]);
   const [dockOpen, setDockOpen] = useState(false);
   const openDock = useCallback(() => setDockOpen(true), []);
   const closeDock = useCallback(() => setDockOpen(false), []);
   const scopeKey = createAgentConversationScopeKey({
-    companyId: company?.companyId ?? null,
-    membershipId: company?.membershipId ?? null,
+    companyId: selectedCompany?.companyId ?? null,
+    membershipId: selectedCompany?.membershipId ?? null,
     userId: bootstrap?.user.id ?? null,
   });
 
   return (
     <ScopedAgentConversationProvider
       closeDock={closeDock}
-      company={company}
+      company={selectedCompany}
       dockOpen={dockOpen}
       key={scopeKey}
       openDock={openDock}
+      authorizedCompanies={authorizedCompanies}
+      onCompanyChange={setSelectedCompanyId}
     >
       {children}
     </ScopedAgentConversationProvider>
@@ -198,12 +215,16 @@ function ScopedAgentConversationProvider({
   company,
   dockOpen,
   openDock,
+  authorizedCompanies,
+  onCompanyChange,
 }: {
   children: ReactNode;
   closeDock: () => void;
   company: AuthorizedCompanyMembership | null;
   dockOpen: boolean;
   openDock: () => void;
+  authorizedCompanies: readonly AuthorizedCompanyMembership[];
+  onCompanyChange: (companyId: string) => void;
 }) {
   const companyId = company?.companyId ?? null;
   const attachmentSelectionAvailable = Boolean(
@@ -385,6 +406,7 @@ function ScopedAgentConversationProvider({
 
       // Trava síncrona: um envio por vez, exatamente um requestId novo.
       if (
+        !companyId ||
         !normalized ||
         inFlight.current ||
         attachmentIds.length !== selectedAttachments.length
@@ -412,7 +434,7 @@ function ScopedAgentConversationProvider({
       client.current
         .send({
           message: normalized,
-          ...(companyId ? { companyId } : {}),
+          companyId,
           ...(attachmentIds.length ? { attachments: attachmentIds } : {}),
           signal: controller.signal,
         })
@@ -459,11 +481,14 @@ function ScopedAgentConversationProvider({
 
   const value = useMemo(
     () => ({
+      authorizedCompanies,
       attachments,
       attachmentSelectionAvailable,
       attachmentSelectionLimitReached,
       closeDock,
       companyName: company?.companyName ?? null,
+      selectCompany: onCompanyChange,
+      selectedCompanyId: companyId ?? "",
       dockOpen,
       messages,
       openDock,
@@ -475,7 +500,9 @@ function ScopedAgentConversationProvider({
     }),
     [
       closeDock,
+      authorizedCompanies,
       company,
+      onCompanyChange,
       dockOpen,
       messages,
       openDock,
@@ -487,6 +514,7 @@ function ScopedAgentConversationProvider({
       selectAttachments,
       sendMessage,
       status,
+      companyId,
     ],
   );
 
