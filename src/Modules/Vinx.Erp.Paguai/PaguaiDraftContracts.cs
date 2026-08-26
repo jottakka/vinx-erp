@@ -165,3 +165,28 @@ public sealed record PaguaiProofLinkResult(
 {
     public static PaguaiProofLinkResult Of(PaguaiDraftState state) => new(state);
 }
+
+/// <summary>
+/// Evento de domínio publicado no outbox durável NA MESMA transação da criação
+/// do rascunho; o worker resolve destinatários só na entrega.
+/// </summary>
+public sealed record PaguaiDraftCreated(
+    Guid CompanyId,
+    Guid DraftId,
+    Guid RequesterUserId
+);
+
+/// <summary>Chaves determinísticas do primeiro produtor real de notificações.</summary>
+public static class PaguaiNotificationKeys
+{
+    /// <summary>Formato canônico: paguai.&lt;draftId:N&gt;.draft-created (sem discriminar destinatário).</summary>
+    public static string DraftCreatedEventKey(Guid draftId) =>
+        $"paguai.{draftId:N}.draft-created";
+
+    /// <summary>Template in-app obrigatório; intents só enfileiram com template aprovado.</summary>
+    public const string DraftCreatedApproverTemplateKey = "paguai.draft_created.approver";
+
+    /// <summary>Deep-link estável para o rascunho; NUNCA contém URL assinada.</summary>
+    public static string DraftCreatedDeepLink(Guid companyId, Guid draftId) =>
+        $"/paguai/requests/{draftId}?companyId={companyId}";
+}

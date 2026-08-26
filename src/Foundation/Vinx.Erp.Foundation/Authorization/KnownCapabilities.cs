@@ -52,6 +52,14 @@ public static class KnownCapabilities
         "aecaa296-6a6f-5815-93ac-bd1ccdff3f44"
     );
 
+    // Destinatários do evento "rascunho criado" são resolvidos na fila por
+    // este nome (dispatch time, nunca snapshot). UUID canônico por nome
+    // (UUIDv5 de https://vinx.erp/capabilities/paguai.draft.approve).
+    public const string PaguaiDraftApprove = "paguai.draft.approve";
+    public static readonly Guid PaguaiDraftApproveId = Guid.Parse(
+        "e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a"
+    );
+
     public const string ServiceDeskTicketReadQueue = "service_desk.ticket.read_queue";
     public static readonly Guid ServiceDeskTicketReadQueueId = Guid.Parse(
         "f02fa2b2-aa34-50ca-99bd-b17a55d2989f"
