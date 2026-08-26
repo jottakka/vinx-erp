@@ -126,6 +126,10 @@ builder.Host.UseWolverine(options =>
         .ToPostgresqlQueue("owner-invitation-delivery")
         .UseDurableOutbox();
     options
+        .PublishMessage<MemberInvitationDeliveryRequested>()
+        .ToPostgresqlQueue("member-invitation-delivery")
+        .UseDurableOutbox();
+    options
         .PublishMessage<NotificationDeliveryRequested>()
         .ToPostgresqlQueue("notification-delivery")
         .UseDurableOutbox();
@@ -159,6 +163,7 @@ builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RoleUnassignmentService>();
 builder.Services.AddScoped<RolePermissionsCopyService>();
+builder.Services.AddScoped<MemberInvitationService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 // Engine antimalware condicionada por configuração: sem "MalwareScanner:ClamAvEndpoint"
 // o host permanece fail-closed (BlockedMalwareScanner); endpoint válido ativa o clamd.

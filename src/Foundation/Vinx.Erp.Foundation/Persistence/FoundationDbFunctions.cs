@@ -2,6 +2,7 @@ using System.Runtime.ExceptionServices;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Vinx.Erp.Foundation.Employees;
+using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
 
 namespace Vinx.Erp.Foundation.Persistence;
@@ -260,6 +261,98 @@ internal static class FoundationDbFunctions
             row.UserId);
     }
 
+    /// <summary>
+    /// Reserva o gráfico de membro com convite pendente de forma idempotente
+    /// (created / replay / idempotency_conflict).
+    /// </summary>
+    internal static async Task<MemberInvitationEntry> CreatePendingMemberInvitationAsync(
+        this FoundationDbContext database,
+        Guid requestId,
+        Guid companyId,
+        string displayName,
+        string email,
+        string payloadHash,
+        CancellationToken cancellationToken)
+    {
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<MemberInvitationEntryRow>(
+                    $"""
+                    SELECT status, membership_id, user_id, employee_id, invitation_id
+                    FROM foundation.create_pending_member_invitation({requestId}, {companyId}, {displayName}, {email}, {payloadHash})
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+        ) ?? throw new InvalidOperationException("Member invitation function returned no result.");
+        return new MemberInvitationEntry(
+            MapMemberInvitationState(row.Status),
+            row.MembershipId,
+            row.UserId,
+            row.EmployeeId,
+            row.InvitationId);
+    }
+
+    /// <summary>Registra o aceite do convite de membro e a transição para entrega via provedor.</summary>
+    internal static async Task<MemberInvitationDeliveryIngressResult> AcceptMemberInvitationDeliveryAsync(
+        this FoundationDbContext database,
+        Guid invitationId,
+        Guid correlationId,
+        CancellationToken cancellationToken)
+    {
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<MemberInvitationDeliveryIngressRow>(
+                    $"""
+                    SELECT status, provider_pending_at, transitioned
+                    FROM foundation.accept_member_invitation_delivery({invitationId}, {correlationId})
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+        );
+        return ToMemberIngressResult(row);
+    }
+
+    /// <summary>Reivindicação single-flight da entrega do convite de membro pelo provedor externo.</summary>
+    internal static async Task<MemberInvitationProviderClaim> ClaimMemberInvitationProviderDeliveryAsync(
+        this FoundationDbContext database,
+        Guid invitationId,
+        Guid correlationId,
+        CancellationToken cancellationToken)
+    {
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<MemberInvitationProviderClaimRow>(
+                    $"""
+                    SELECT status, attempt_id, member_email, claimed
+                    FROM foundation.claim_member_invitation_provider_delivery({invitationId}, {correlationId})
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+        );
+        return ToMemberProviderClaim(row);
+    }
+
+    /// <summary>Registra o desfecho da tentativa de entrega do convite de membro.</summary>
+    internal static async Task<MemberInvitationProviderFinalization> FinalizeMemberInvitationProviderDeliveryAsync(
+        this FoundationDbContext database,
+        Guid invitationId,
+        Guid attemptId,
+        Guid correlationId,
+        string outcome,
+        string? issuer,
+        Guid? subject,
+        string? failureReason,
+        CancellationToken cancellationToken)
+    {
+        var row = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<MemberInvitationProviderFinalizationRow>(
+                    $"""
+                    SELECT status, finalized
+                    FROM foundation.finalize_member_invitation_provider_delivery({invitationId}, {attemptId}, {correlationId}, {outcome}, {issuer}, {subject}, {failureReason})
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+        );
+        return ToMemberProviderFinalization(row);
+    }
+
     /// <summary>Linha de retorno: <c>sessions_valid_after timestamp with time zone</c> (0 ou 1 linha).</summary>
     private sealed record SessionLockRow(DateTimeOffset? SessionsValidAfter);
 
@@ -322,6 +415,35 @@ internal static class FoundationDbFunctions
         Guid UserId);
 
     /// <summary>
+    /// Linha de retorno: <c>status text, membership_id uuid, user_id uuid,
+    /// employee_id uuid, invitation_id uuid</c>.
+    /// </summary>
+    private sealed record MemberInvitationEntryRow(
+        string Status,
+        Guid MembershipId,
+        Guid UserId,
+        Guid EmployeeId,
+        Guid InvitationId);
+
+    /// <summary>
+    /// Linha de retorno: <c>status text, provider_pending_at timestamptz, transitioned boolean</c>.
+    /// </summary>
+    private sealed record MemberInvitationDeliveryIngressRow(
+        string Status,
+        DateTimeOffset? ProviderPendingAt,
+        bool Transitioned);
+
+    /// <summary>Linha de retorno: <c>status text, attempt_id uuid, member_email text, claimed boolean</c>.</summary>
+    private sealed record MemberInvitationProviderClaimRow(
+        string Status,
+        Guid? AttemptId,
+        string? MemberEmail,
+        bool Claimed);
+
+    /// <summary>Linha de retorno: <c>status text, finalized boolean</c>.</summary>
+    private sealed record MemberInvitationProviderFinalizationRow(string Status, bool Finalized);
+
+    /// <summary>
     /// Linha de retorno: <c>membership_id uuid, display_name text, role_ids uuid[],
     /// role_names text[], capability_names text[], invitation_status text</c>.
     /// </summary>
@@ -369,6 +491,44 @@ internal static class FoundationDbFunctions
         return new OwnerInvitationProviderFinalization(row.Status, row.Finalized);
     }
 
+    private static MemberInvitationDeliveryIngressResult ToMemberIngressResult(MemberInvitationDeliveryIngressRow? row)
+    {
+        if (row is null || string.Equals(row.Status, "not_found", StringComparison.Ordinal))
+        {
+            throw new MemberInvitationIngressPermanentException();
+        }
+
+        return new MemberInvitationDeliveryIngressResult(row.Status, row.ProviderPendingAt, row.Transitioned);
+    }
+
+    private static MemberInvitationProviderClaim ToMemberProviderClaim(MemberInvitationProviderClaimRow? row)
+    {
+        if (row is null || string.Equals(row.Status, "not_found", StringComparison.Ordinal))
+        {
+            throw new MemberInvitationIngressPermanentException();
+        }
+
+        return new MemberInvitationProviderClaim(row.Status, row.AttemptId, row.MemberEmail, row.Claimed);
+    }
+
+    private static MemberInvitationProviderFinalization ToMemberProviderFinalization(MemberInvitationProviderFinalizationRow? row)
+    {
+        if (row is null || string.Equals(row.Status, "not_found", StringComparison.Ordinal))
+        {
+            throw new MemberInvitationIngressPermanentException();
+        }
+
+        return new MemberInvitationProviderFinalization(row.Status, row.Finalized);
+    }
+
+    private static MemberInvitationWriteState MapMemberInvitationState(string status) => status switch
+    {
+        "created" => MemberInvitationWriteState.Created,
+        "replay" => MemberInvitationWriteState.Replay,
+        "idempotency_conflict" => MemberInvitationWriteState.IdempotencyConflict,
+        _ => throw new InvalidOperationException("Member invitation function returned unknown status."),
+    };
+
     private static PlatformOrganizationProvisioningState MapProvisioningState(string status) => status switch
     {
         "created" => PlatformOrganizationProvisioningState.Created,
@@ -409,6 +569,22 @@ internal sealed record EmployeeDirectoryEntry(
     Guid EmployeeId,
     Guid MembershipId,
     Guid UserId);
+
+/// <summary>Gráfico reservado de membro com o convite pendente criado.</summary>
+internal sealed record MemberInvitationEntry(
+    MemberInvitationWriteState State,
+    Guid MembershipId,
+    Guid UserId,
+    Guid EmployeeId,
+    Guid InvitationId);
+
+internal sealed record MemberInvitationProviderClaim(
+    string Status,
+    Guid? AttemptId,
+    string? MemberEmail,
+    bool Claimed);
+
+internal sealed record MemberInvitationProviderFinalization(string Status, bool Finalized);
 
 /// <summary>Membro ativo com papéis e capabilities efetivos; email nunca é retornado.</summary>
 internal sealed record CompanyMemberWithRoles(
