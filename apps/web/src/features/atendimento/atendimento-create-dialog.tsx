@@ -1,6 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Alert,
+  Box,
   Button,
   Dialog,
   DialogActions,
@@ -234,31 +235,44 @@ export function AtendimentoCreateDialog({
             </Typography>
           ) : null}
           <Stack direction={{ md: "row", xs: "column" }} spacing={2}>
-            <TextField
-              fullWidth
-              label="Título"
-              disabled={phase !== "idle"}
-              error={Boolean(form.formState.errors.title)}
-              helperText={form.formState.errors.title?.message}
-              slotProps={{ htmlInput: { maxLength: 200 } }}
-              {...titleField}
-              onChange={(event) => {
-                invalidateAttempt();
-                titleField.onChange(event);
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <TextField
+                fullWidth
+                label="Título"
+                disabled={phase !== "idle"}
+                error={Boolean(form.formState.errors.title)}
+                helperText={form.formState.errors.title?.message}
+                slotProps={{ htmlInput: { maxLength: 200 } }}
+                {...titleField}
+                onChange={(event) => {
+                  invalidateAttempt();
+                  titleField.onChange(event);
+                }}
+              />
+            </Box>
+            <Box
+              data-testid="atendimento-create-company-field"
+              sx={{
+                "& > .MuiFormControl-root": { width: "100%" },
+                flex: 1,
+                minWidth: 0,
               }}
-            />
-            <CompanySelect
-              companies={
-                companies ?? [{ companyId, companyName: "Empresa selecionada" }]
-              }
-              disabled={phase !== "idle" || !onCompanyChange}
-              label="Empresa do atendimento"
-              onChange={(nextCompanyId) => {
-                if (nextCompanyId !== companyId)
-                  onCompanyChange?.(nextCompanyId);
-              }}
-              value={companyId}
-            />
+            >
+              <CompanySelect
+                companies={
+                  companies ?? [
+                    { companyId, companyName: "Empresa selecionada" },
+                  ]
+                }
+                disabled={phase !== "idle" || !onCompanyChange}
+                label="Empresa do atendimento"
+                onChange={(nextCompanyId) => {
+                  if (nextCompanyId !== companyId)
+                    onCompanyChange?.(nextCompanyId);
+                }}
+                value={companyId}
+              />
+            </Box>
           </Stack>
           <TextField
             label="Pessoas envolvidas"

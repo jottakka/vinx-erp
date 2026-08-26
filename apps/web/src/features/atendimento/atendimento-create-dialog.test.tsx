@@ -140,6 +140,11 @@ describe("AtendimentoCreateDialog", () => {
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveClass("MuiDialog-paperFullWidth");
     expect(dialog).toHaveClass("MuiDialog-paperWidthMd");
+    const companyField = screen.getByTestId("atendimento-create-company-field");
+    expect(companyField).toHaveStyle({ flex: "1 1 0%", minWidth: "0px" });
+    expect(companyField.querySelector(".MuiFormControl-root")).toHaveStyle({
+      width: "100%",
+    });
     expect(
       within(dialog).getByRole("button", { name: "Cancelar" }),
     ).toBeVisible();
