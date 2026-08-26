@@ -215,7 +215,8 @@ public sealed class TelegramInboundOutboxTests
             "ack uncertainty",
             AcknowledgementChatId.ToString(),
             AcknowledgementUpdateId.ToString(),
-            AcknowledgementMessageId.ToString()
+            AcknowledgementMessageId.ToString(),
+            WebhookSecret
         );
 
         using (var retry = await PostPrivateAsync(
@@ -238,8 +239,10 @@ public sealed class TelegramInboundOutboxTests
             "ack uncertainty",
             AcknowledgementChatId.ToString(),
             AcknowledgementUpdateId.ToString(),
-            AcknowledgementMessageId.ToString()
+            AcknowledgementMessageId.ToString(),
+            WebhookSecret
         );
+        AssertSameDurableTelegramEnvelope(envelope, replayEnvelope);
     }
 
     [Fact]
@@ -477,6 +480,23 @@ public sealed class TelegramInboundOutboxTests
         Assert.NotEqual(requestFactoryCorrelationId, correlationId);
         Assert.Empty(envelope.Headers);
         AssertOpaque(envelope.RawBody, envelope.RawMetadata, envelope.Headers, sensitiveValues);
+    }
+
+    private static void AssertSameDurableTelegramEnvelope(
+        TelegramOutgoingEnvelope expected,
+        TelegramOutgoingEnvelope actual)
+    {
+        Assert.Equal(expected.MessageType, actual.MessageType);
+        Assert.Equal(expected.Destination, actual.Destination);
+        Assert.Equal(expected.CorrelationId, actual.CorrelationId);
+        Assert.Equal(expected.InboundMessageId, actual.InboundMessageId);
+        Assert.Equal(expected.PayloadPropertyNames, actual.PayloadPropertyNames);
+        Assert.Equal(
+            expected.Headers.OrderBy(header => header.Key),
+            actual.Headers.OrderBy(header => header.Key)
+        );
+        Assert.Equal(expected.RawBody, actual.RawBody);
+        Assert.Equal(expected.RawMetadata, actual.RawMetadata);
     }
 
     private static void AssertOpaque(TelegramQueueEnvelope envelope, params string[] sensitiveValues)
