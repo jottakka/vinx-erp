@@ -1,0 +1,11 @@
+# Casos testados — tooling de migração legada (Q1/P2)
+
+| Cenário/BDD | Teste ou caminho | Intenção | Situação |
+|---|---|---|---|
+| Dado fixture sintética de 2 empresas e 5 clientes, quando `--apply`, então 5 linhas em staging e 2 receipts | `ImporterCommandTests.Idempotent_replay_skips_and_mutated_input_conflicts` | Detecta perda de linhas ou receipts ausentes na carga inicial | coberto |
+| Dado segunda execução idêntica, quando re-aplica, então contagens e receipts não mudam e o resumo reporta `replayed_skip` | mesmo teste | Detecta importação não idempotente | coberto |
+| Dado payload mutado sob o mesmo batch, quando re-aplica, então sai com código ≠ 0 e nenhuma escrita parcial permanece | mesmo teste | Detecta conflito fail-closed com rollback por empresa | coberto |
+| Dado dry-run padrão (sem `--apply`), quando executa contra dados de entrada válidos, então schema, staging e receipts continuam inexistindo/vazios | `ImporterCommandTests.Dry_run_writes_nothing` | Garante que validação nunca escreve, nem receipt | coberto |
+| Dado caminho de saída dentro do repositório ou já existente, quando roda snapshot/profiler, então recusa antes de capturar | garantia do script `tools/legacy-snapshot/snapshot.sh` (guardas iniciais) | Evita vazamento/confusão entre versões de bundle | coberto por escopo do script; sem teste automatizado — decisão do dono sobre destino é operacional |
+| Dado perfil de colunas configuradas, quando o profiler gera SQL, então só agregações com LIMIT fixo saem e o SQL fica arquivado para auditoria | `tools/legacy-snapshot/profile-tables.sh` (SQL gerada gravada na saída) | Impede exfiltração de linha completa via profiling | coberto por escopo do script |
+| Dado o diff da branch, quando revisado, então apenas tools/, docs/migration/, docs/runbooks/, docs/verification/, src/Tools/ e tests/tools/ mudam | Verificação por revisão do diff desta branch | Mantém isolamento da fatia (nada de ERP/groundwork é tocado) | coberto por escopo |
