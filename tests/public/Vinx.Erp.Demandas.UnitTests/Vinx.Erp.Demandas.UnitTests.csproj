@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.Demandas/Vinx.Erp.Demandas.csproj" />
+  </ItemGroup>
+</Project>
