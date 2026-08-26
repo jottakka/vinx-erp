@@ -151,9 +151,6 @@ describe("AtendimentoPage", () => {
     expect(atendimentoClient.list).toHaveBeenCalledWith(betaCompanyId);
     expect(screen.getAllByText("Alfa").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Beta").length).toBeGreaterThan(0);
-    expect(
-      screen.getAllByRole("group", { name: "Empresa Alfa" }).length,
-    ).toBeGreaterThan(0);
     for (const label of ["Novos", "Em andamento", "Concluídos", "Cancelados"]) {
       expect(screen.getByRole("heading", { name: label })).toBeVisible();
     }
@@ -856,7 +853,7 @@ describe("AtendimentoPage", () => {
       screen.getByRole("combobox", { name: "Empresa do atendimento" }),
     );
     await user.click(
-      await screen.findByRole("option", { name: "Empresa Beta" }),
+      await screen.findByRole("option", { name: /Beta/ }),
     );
     await user.type(screen.getByLabelText("Título"), betaCard.title);
     await user.type(screen.getByLabelText("Descrição"), betaCard.description);

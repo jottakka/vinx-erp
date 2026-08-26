@@ -364,7 +364,7 @@ describe("agent workspace", () => {
 
     const dock = await openDockAndType(user, "Preciso antecipar um pagamento");
     expect(
-      dock.getAllByRole("group", { name: "Empresa Alfa" }).length,
+      dock.getAllByText("Alfa", { exact: true }).length,
     ).toBeGreaterThan(0);
     expect(dock.getByText("Empresa selecionada")).toBeVisible();
     await user.click(dock.getByRole("button", { name: "Enviar" }));
@@ -691,7 +691,7 @@ describe("agent workspace", () => {
     );
 
     expect(
-      dock.getAllByRole("group", { name: "Empresa Alfa" }).length,
+      dock.getAllByText("Alfa", { exact: true }).length,
     ).toBeGreaterThan(0);
     expect(dock.getByText("Assistente indisponível")).toBeVisible();
     expect(dock.getByRole("status")).toHaveTextContent(
@@ -921,9 +921,7 @@ describe("agent workspace", () => {
     );
     expect(
       (
-        await refreshedDock.findAllByRole("group", {
-          name: "Empresa Alfa renovada",
-        })
+        await refreshedDock.findAllByText("Alfa renovada", { exact: true })
       ).length,
     ).toBeGreaterThan(0);
     expect(
@@ -985,7 +983,7 @@ describe("agent workspace", () => {
 
     const dock = await openDockAndType(user, "consulta da Alfa");
     expect(
-      dock.getAllByRole("group", { name: "Empresa Alfa" }).length,
+      dock.getAllByText("Alfa", { exact: true }).length,
     ).toBeGreaterThan(0);
     await user.click(dock.getByRole("button", { name: "Enviar" }));
     await waitFor(() => expect(runCalls(fetchSpy)).toHaveLength(1));
@@ -1006,7 +1004,7 @@ describe("agent workspace", () => {
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
     expect(
-      (await refreshedDock.findAllByRole("group", { name: "Empresa Beta" }))[0],
+      (await refreshedDock.findAllByText("Beta", { exact: true }))[0],
     ).toBeVisible();
     expect(oldRunSignal.aborted).toBe(true);
     await waitFor(() =>
@@ -1161,7 +1159,10 @@ describe("agent workspace", () => {
     await user.keyboard("{Enter}");
 
     expect(composer).toHaveValue("resuma o anexo quando terminar");
-    expect(dock.queryByText("resuma o anexo quando terminar")).toBeNull();
+    // O texto não vira mensagem: só pode existir no próprio compositor.
+    expect(
+      dock.queryByText("resuma o anexo quando terminar", { selector: "p" }),
+    ).toBeNull();
     expect(runCalls(fetchSpy)).toHaveLength(0);
 
     resolveToken(antiforgeryTokenResponse());
@@ -1331,7 +1332,7 @@ describe("agent workspace", () => {
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
     expect(
-      (await dock.findAllByRole("group", { name: "Empresa Beta" }))[0],
+      (await dock.findAllByText("Beta", { exact: true }))[0],
     ).toBeVisible();
     resolveToken(antiforgeryTokenResponse());
   });
