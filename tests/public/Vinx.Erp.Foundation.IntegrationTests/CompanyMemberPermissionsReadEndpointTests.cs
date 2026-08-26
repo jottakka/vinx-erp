@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -64,6 +65,58 @@ public sealed class CompanyMemberPermissionsReadEndpointTests
         var carla = members[2];
         Assert.Empty(carla.GetProperty("roles").EnumerateArray());
         Assert.Empty(carla.GetProperty("capabilities").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task List_returns_pending_acceptance_invitation_status()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedAuthorizedCompanyAsync(factory);
+
+        // Estado pós-entrega confirmada pelo provedor: o convite persiste até o
+        // primeiro login do convidado (aceitação é fatia posterior).
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.pending_member_invitations (
+                id, membership_id, user_id, company_id, status, created_at,
+                provider_pending_at, provider_attempt_id, provider_started_at,
+                provider_completed_at, provider_issuer, provider_subject)
+            VALUES (
+                @invitation_id, @membership_id, @user_id, @company_id,
+                'pending_acceptance', clock_timestamp(),
+                clock_timestamp(), @provider_attempt_id, clock_timestamp(),
+                clock_timestamp(), 'https://provider.example/auth/v1', @provider_subject)
+            """,
+            connection
+        );
+        command.Parameters.AddWithValue("invitation_id", Guid.NewGuid());
+        command.Parameters.AddWithValue("membership_id", scenario.BrunoMembershipId);
+        command.Parameters.AddWithValue("user_id", scenario.BrunoUserId);
+        command.Parameters.AddWithValue("company_id", scenario.CompanyId);
+        command.Parameters.AddWithValue("provider_attempt_id", Guid.NewGuid());
+        command.Parameters.AddWithValue("provider_subject", Guid.NewGuid());
+        await command.ExecuteNonQueryAsync();
+
+        using var response = await factory
+            .CreateClient()
+            .GetAsync($"/foundation/companies/{scenario.CompanyId}/members");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var members = document.RootElement.EnumerateArray().ToList();
+        Assert.Equal(3, members.Count);
+        var bruno = members.Single(member =>
+            member.GetProperty("displayName").GetString() == "Bruno"
+        );
+        Assert.Equal(
+            "pending_acceptance",
+            bruno.GetProperty("invitationStatus").GetString()
+        );
+        var ana = members.Single(member =>
+            member.GetProperty("displayName").GetString() == "Ana"
+        );
+        Assert.Equal(JsonValueKind.Null, ana.GetProperty("invitationStatus").ValueKind);
     }
 
     [Fact]
@@ -187,7 +240,12 @@ public sealed class CompanyMemberPermissionsReadEndpointTests
         );
     }
 
-    private sealed record Scenario(Guid CompanyId, Guid ActorMembershipId, Guid AdminRoleId);
+    private sealed record Scenario(
+        Guid CompanyId,
+        Guid ActorMembershipId,
+        Guid AdminRoleId,
+        Guid BrunoMembershipId,
+        Guid BrunoUserId);
 
     private static async Task<Scenario> SeedAuthorizedCompanyAsync(
         FoundationApiFactory factory,
@@ -235,7 +293,12 @@ public sealed class CompanyMemberPermissionsReadEndpointTests
         }
         await NewCapabilityGrantAsync(zetaRole, company, factory, administrator, FilesConfirmCapability);
         await administrator.SaveChangesAsync();
-        return new Scenario(company.Id, actorMembership.Id, adminRole.Id);
+        return new Scenario(
+            company.Id,
+            actorMembership.Id,
+            adminRole.Id,
+            brunoMembership.Id,
+            bruno.Id);
     }
 
     private static RoleAssignment NewAssignment(
