@@ -1,0 +1,16 @@
+# Casos testados — Atendimento fatia de usabilidade (P6)
+
+| Cenário/BDD | Teste ou caminho | Intenção | Situação |
+|---|---|---|---|
+| Dado card criado, quando atualiza campos de ticket, então resposta e fila refletem prioridade/categoria/canal/SLA/solicitante e lookups listam canais semeados | `AtendimentoTicketingEndpointTests.Ticket_fields_roundtrip_update_and_survive_the_queue_read` | Detecta perda de campo no roundtrip e seeds ausentes | pendente de janela |
+| Dado mutations encadeadas, quando lê a timeline, então eventos crescentes com ator resolvido no servidor | `Ticket_timeline_lists_each_mutation_in_order_with_actor_names` | Detecta ordenação instável ou nome do ator vazando não resolvido | pendente de janela |
+| Dado prioridade inválida, ref desconhecida ou SLA no passado, quando atualiza, então rejeições tipadas (`400`/`404`) sem alterar o cartão | `Unknown_priority_unknown_refs_and_past_sla_are_typed_rejections` | Detecta validação frouxa e mutação parcial | pendente de janela |
+| Dado membro sem `service_desk.lookup.admin`, quando cria categoria, então `403`; com capability, duplicata dá `409 lookup_conflict` e replay idempotente | `Lookup_category_crud_is_gated_and_validated` | Detecta lookup sem gate e conflito silencioso | pendente de janela |
+| Dado empresa alheia, quando fields/watchers/timeline, então sempre negado sem vazar id ou conteúdo | `Cross_company_fields_watchers_and_timeline_never_leak` | Detecta vazamento entre empresas | pendente de janela |
+| Dado membro com apenas leitura de fila, quando pede directory-options, então `403`; com `directory.read`, recebe opções sem UUID cru na UI | `Picker_options_need_directory_read_and_stay_company_scoped` | Pin de privilégio: picker ≠ criação de funcionário | pendente de janela |
+| Dado SLA retroagido em cartão aberto, então `overdue=true`; após mover para concluído, sai do filtro | `Overdue_is_derived_only_while_open_and_sla_has_passed` | Prova badge derivada (não armazenada) dependente de estado | pendente de janela |
+| Dado watcher adicionado, repetição devolve mesma versão e remoção esvazia a lista | `Watchers_add_remove_and_repeat_adds_return_no_change` | Detecta bump de versão em no-op e vínculo fantasma | pendente de janela |
+| Dado versão obsoleta no update de campos, então `409 integrity_conflict` com estado atual prioritário preservado | `Stale_fields_update_conflicts_without_overwriting_current_state` | Detecta overwrite otimista indevido | pendente de janela |
+| Dado mesmo responsável atribuído duas vezes, então exatamente 1 intent determinístico em `notifications.notification_intents` | `Repeated_assignment_enqueues_one_deterministic_notification_intent` | Detecta spam de intents e dedupe por chave | pendente de janela |
+| Dados filtros status/priority/assignee/search por query param, então resultado filtrado server-side | `Queue_filters_status_priority_assignee_overdue_and_search_respond_server_side` | Detecta filtro client-side regressivo ou LIKE injectável | pendente de janela |
+| Dada migração aplicada em base limpa, quando dump normalizado é comparado ao snapshot versionado, então sem drift (rodar `generate-foundation-schema-snapshot.sh --write` ao abrir a janela) | `scripts/verify-foundation-database.sh` + snapshot regenerado | Detecta modelo EF vs schema divergentes | pendente de janela (fence Docker) |

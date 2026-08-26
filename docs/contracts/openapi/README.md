@@ -170,3 +170,48 @@ cartão, nunca dados de outra empresa. As três mutações publicam o header
 bearer não precisam de antiforgery. Todas as respostas mantêm
 `X-Correlation-ID`, usam `Cache-Control: private, no-store` e as mutações usam
 auditoria transacional.
+
+## Atendimento / usabilidade P6
+
+`GET /atendimento/cards?companyId=` passa a aceitar filtros server-side
+opcionais combináveis por query param — `status` (`novo|em_andamento|concluido`),
+`priority` (`critica|alta|media|baixa`), `assigneeMembershipId`, `overdue=true`
+(derivado: SLA vencido e não concluído) e `search` (case-insensitive em
+título/descrição, curingas escapados). Valor fora da allowlist devolve `400
+invalid_request`; os parâmetros são compartilháveis por URL. A resposta do
+cartão ganha campos aditivos: `priority`, `categoryRefId`, `channelRefId`,
+`slaDueAt`, `overdue`, `requesterPersonRef` e `watcherMembershipIds`.
+
+`POST /atendimento/cards/{id}/fields` exige `service_desk.ticket.fields`,
+`requestId` e `expectedVersion`; cada campo é opcional com semântica null =
+inalterado (`priority`, `categoryRefId`, `channelRefId`, `slaDueAt`,
+`requesterPersonRef`, `mentionedMembershipIds`). `slaDueAt` no passado devolve
+`400 invalid_request`; categoria/canal/menção desconhecidos devolvem `404
+resource_not_found`. Sucesso, replay e conflitos seguem a tabela das mutações
+acima, incluindo CSRF para cookie BFF.
+
+`POST /atendimento/cards/{id}/watchers/add` e
+`POST /atendimento/cards/{id}/watchers/remove` exigem
+`service_desk.ticket.watchers` (`companyId`, `requestId`, `expectedVersion`,
+`memberMembershipId`). Repetição idempotente devolve `200` com a versão atual
+sem alterá-la; membership inativa é `404 resource_not_found`.
+
+`GET /atendimento/cards/{id}/events?companyId=` exige
+`service_desk.ticket.read_queue` e devolve até 100 eventos em ordem crescente
+(`{id, eventSeq, actionKind, actorMembershipId, actorDisplayName, occurredAt}`);
+cartão de outra empresa é `404 resource_not_found` e o nome do ator é resolvido
+no servidor.
+
+`GET /atendimento/lookups?companyId=` (capability de leitura da fila) devolve
+`categories` (`{id,name,isActive}`) e canais fixos
+(`whatsapp/email/web/manual`). `POST /atendimento/categories`
+(`companyId,requestId,name`) exige `service_desk.lookup.admin`: criação `201`,
+replay idêntico `200`, duplicata `409 lookup_conflict`;
+`POST /atendimento/categories/{id}/deactivate` desativa sem DELETE público.
+Canais são somente leitura em todas as rotas.
+
+`GET /foundation/companies/{companyId}/directory-options` (Foundation) expõe o
+picker de pessoas sob a nova capability `directory.read`: lista apenas
+`employeeId`, `membershipId` e `displayName` da empresa autorizada; nunca
+exige `foundation.employees.create` e publica as respostas seguras do list
+existente.
