@@ -17,7 +17,7 @@ informativo aparado de 1 a 200 caracteres e não é uma identificação autorita
 `proofRequirement` exige escolha explícita entre `optional` e `required`.
 
 Este corte não representa documento binário, cobrança ou pagamento. Também não oferece
-edição, remoção, envio, conferência, aprovação, devolução, cancelamento,
+envio, conferência, aprovação, devolução, cancelamento,
 integração de provedor, PIX, cartão, WhatsApp, MCP, outbox ou automação.
 O estado permanece sempre `rascunho`; esses comportamentos permanecem bloqueados
 até as decisões de #45.
@@ -56,7 +56,32 @@ converte centavos para reais em `numeric(18,2)` e preserva os valores já
 persistidos. Ela também converte o valor dos recibos de idempotência e mantém
 o hash legado aceito pelo replay durante a transição.
 
-Qualquer PR futuro de comportamento Paguai registra `docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
+## Comprovante vinculado (P1, faixa A)
+
+O `POST /paguai/requests` aceita `proofFileId` opcional e o PATCH
+`/paguai/requests/{id}/proof` troca o comprovante com verificação otimista
+(`expectedVersion` → `version + 1`). Antes de vincular, o serviço valida pela
+fronteira pública de arquivos Foundation (conjunto `FileRecord` do único
+`FoundationDbContext`, sem nova dependência): arquivo existente, mesma empresa,
+mesma membership autora do upload, estado `confirmed` (quarentena e scan
+antimalware concluídos) e ainda não vinculado a outro rascunho. Rejeições usam
+códigos tipados (`proof_file_not_found`, `proof_file_denied`,
+`proof_file_not_ready`, `proof_file_bound`) e ganham auditoria de negação; a
+troca bem-sucedida audita `paguai.draft.replace_proof` no MESMO commit do
+rebind. Em storage, o índice parcial único
+`uq_paguai_requests_proof_file (proof_file_id) WHERE proof_file_id IS NOT NULL`
+e a FK composta para `foundation.files (company_id, id)` tornam duplo vínculo
+e referência cruzada de empresa impossíveis, inclusive em corrida.
+
+Leitura: lista/detalhe retornam apenas metadados (`proofFileId`,
+`proofFileName`, mimeType, tamanho). `GET /paguai/requests/{id}/proof-link`
+emite sob autorização fresca (`paguai.draft.read` + RLS por GUC) uma URL
+assinada de 5 minutos via `FileStorage`; URL durável nunca entra em payload.
+Sem comprovante no comando, o hash canônico permanece byte-idêntico ao corte
+anterior, preservando replay de recibos antigos.
+
+Qualquer PR futuro de comportamento Paguai registra
+`docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
 
 ## Limite da V1
 
