@@ -1,4 +1,6 @@
+using System.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications;
 using Wolverine;
@@ -116,26 +118,43 @@ public sealed class InboundTelegramTextReceivedHandler(
     )
     {
         var connection = database.Database.GetDbConnection();
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT status, transitioned FROM notifications.complete_inbound_telegram_text(@inbound_id)";
-        var parameter = command.CreateParameter();
-        parameter.ParameterName = "inbound_id";
-        parameter.Value = inboundMessageId;
-        command.Parameters.Add(parameter);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        var openedConnection = connection.State != ConnectionState.Open;
+        if (openedConnection)
         {
-            throw new InvalidOperationException("Inbound Telegram receipt returned no result.");
+            await database.Database.OpenConnectionAsync(cancellationToken);
         }
 
-        var receipt = new TelegramInboundReceipt(reader.GetString(0), reader.GetBoolean(1));
-        if (await reader.ReadAsync(cancellationToken))
+        try
         {
-            throw new InvalidOperationException("Inbound Telegram receipt returned multiple results.");
-        }
+            await using var command = connection.CreateCommand();
+            command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
+            command.CommandText =
+                "SELECT status, transitioned FROM notifications.complete_inbound_telegram_text(@inbound_id)";
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "inbound_id";
+            parameter.Value = inboundMessageId;
+            command.Parameters.Add(parameter);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new InvalidOperationException("Inbound Telegram receipt returned no result.");
+            }
 
-        return receipt;
+            var receipt = new TelegramInboundReceipt(reader.GetString(0), reader.GetBoolean(1));
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                throw new InvalidOperationException("Inbound Telegram receipt returned multiple results.");
+            }
+
+            return receipt;
+        }
+        finally
+        {
+            if (openedConnection)
+            {
+                await database.Database.CloseConnectionAsync();
+            }
+        }
     }
 
     private sealed record TelegramInboundReceipt(string Status, bool Transitioned);
