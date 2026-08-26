@@ -225,6 +225,7 @@ export function PeoplePage({
     attemptRef.current = null;
     setFeedback(null);
     setKnownCreatedOperation(null);
+    setProfileEmployee(null);
     setPendingRefresh(null);
     refreshGate.current = false;
     form.reset();
@@ -245,6 +246,7 @@ export function PeoplePage({
       attemptRef.current = null;
       setFeedback(null);
       setKnownCreatedOperation(null);
+      setProfileEmployee(null);
       authorizationRefreshInFlight.current = false;
       refreshGate.current = false;
       form.reset();
@@ -360,6 +362,7 @@ export function PeoplePage({
     setSelectedCompanyId(companyId);
     setSelectedCompanyUserId(userId ?? "");
     setViewOwnerUserId(userId ?? "");
+    setProfileEmployee(null);
     abandonAttempt();
   };
   const reserve = (values: EmployeeForm) => {
