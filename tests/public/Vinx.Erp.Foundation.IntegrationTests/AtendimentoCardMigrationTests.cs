@@ -231,6 +231,13 @@ public sealed class AtendimentoCardMigrationTests
 
         Assert.Equal(actor.Id, profile.UserId);
         Assert.Equal("Perfil preservado", profile.DisplayName);
+
+        await using var verify = await fixture.OpenAdministratorConnectionAsync();
+        await AssertTablesRemainForcedAsync(
+            verify,
+            "atendimento_cards",
+            "atendimento_card_history"
+        );
     }
 
     [Theory]
@@ -328,6 +335,13 @@ public sealed class AtendimentoCardMigrationTests
         Assert.Equal(retainedReference == "attachment", reader.GetBoolean(3));
         Assert.Equal(retainedReference == "cancelled_card", reader.GetBoolean(4));
         Assert.Equal(retainedReference == "cancel_history", reader.GetBoolean(5));
+        await reader.CloseAsync();
+        await AssertTablesRemainForcedAsync(
+            verify,
+            "atendimento_cards",
+            "atendimento_card_history",
+            "atendimento_card_participants"
+        );
     }
 
     private static async Task<CancellationDowngradeSeed> SeedCancellationDowngradeDataAsync(
@@ -468,6 +482,34 @@ public sealed class AtendimentoCardMigrationTests
         insert.Parameters.AddWithValue("actor_id", seeded.ActorId);
         insert.Parameters.AddWithValue("request_id", Guid.NewGuid());
         await insert.ExecuteNonQueryAsync();
+    }
+
+    private static async Task AssertTablesRemainForcedAsync(
+        NpgsqlConnection administrator,
+        params string[] tableNames
+    )
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT relation.relname, relation.relforcerowsecurity
+            FROM pg_class AS relation
+            INNER JOIN pg_namespace AS schema ON schema.oid = relation.relnamespace
+            WHERE schema.nspname = 'service_desk'
+              AND relation.relname = ANY (@table_names)
+            ORDER BY relation.relname
+            """,
+            administrator
+        );
+        command.Parameters.AddWithValue("table_names", tableNames);
+        await using var reader = await command.ExecuteReaderAsync();
+        var forced = new List<(string Table, bool IsForced)>();
+        while (await reader.ReadAsync())
+        {
+            forced.Add((reader.GetString(0), reader.GetBoolean(1)));
+        }
+
+        Assert.Equal(tableNames.OrderBy(table => table, StringComparer.Ordinal), forced.Select(row => row.Table));
+        Assert.All(forced, row => Assert.True(row.IsForced, $"{row.Table} must keep FORCE RLS."));
     }
 
     private sealed record ActorProfile(Guid UserId, string DisplayName);

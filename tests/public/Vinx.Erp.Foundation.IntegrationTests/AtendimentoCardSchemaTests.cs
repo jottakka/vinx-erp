@@ -246,6 +246,137 @@ public sealed class AtendimentoCardSchemaTests
     }
 
     [Fact]
+    public async Task Participant_composite_foreign_keys_are_exact_restrict_constraints_and_reject_cross_company_pairs_for_an_administrator()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var seeded = await SeedCardsAsync(fixture);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        var foreignCard = await Assert.ThrowsAsync<PostgresException>(() =>
+            ExecuteParticipantInsertAsync(
+                administrator,
+                seeded.CompanyAId,
+                seeded.CardBId,
+                seeded.MembershipAId
+            )
+        );
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, foreignCard.SqlState);
+
+        var foreignMembership = await Assert.ThrowsAsync<PostgresException>(() =>
+            ExecuteParticipantInsertAsync(
+                administrator,
+                seeded.CompanyAId,
+                seeded.CardAId,
+                seeded.MembershipBId
+            )
+        );
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, foreignMembership.SqlState);
+
+        await using (var deleteCard = new NpgsqlCommand(
+            "DELETE FROM service_desk.atendimento_cards WHERE id = @card_id",
+            administrator
+        ))
+        {
+            deleteCard.Parameters.AddWithValue("card_id", seeded.CardAId);
+            var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+                deleteCard.ExecuteNonQueryAsync()
+            );
+            Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
+        }
+
+        await using (var deleteMembership = new NpgsqlCommand(
+            "DELETE FROM foundation.memberships WHERE id = @membership_id",
+            administrator
+        ))
+        {
+            deleteMembership.Parameters.AddWithValue("membership_id", seeded.MembershipAId);
+            var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+                deleteMembership.ExecuteNonQueryAsync()
+            );
+            Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
+        }
+
+        await using var catalog = new NpgsqlCommand(
+            """
+            SELECT
+                constraint_row.conname,
+                source_schema.nspname,
+                source_table.relname,
+                array_agg(source_column.attname ORDER BY source_key.ordinality),
+                target_schema.nspname,
+                target_table.relname,
+                array_agg(target_column.attname ORDER BY source_key.ordinality),
+                constraint_row.confdeltype::text
+            FROM pg_constraint AS constraint_row
+            INNER JOIN pg_class AS source_table ON source_table.oid = constraint_row.conrelid
+            INNER JOIN pg_namespace AS source_schema ON source_schema.oid = source_table.relnamespace
+            INNER JOIN pg_class AS target_table ON target_table.oid = constraint_row.confrelid
+            INNER JOIN pg_namespace AS target_schema ON target_schema.oid = target_table.relnamespace
+            INNER JOIN unnest(constraint_row.conkey) WITH ORDINALITY AS source_key(attnum, ordinality)
+                ON TRUE
+            INNER JOIN pg_attribute AS source_column
+                ON source_column.attrelid = source_table.oid
+               AND source_column.attnum = source_key.attnum
+            INNER JOIN unnest(constraint_row.confkey) WITH ORDINALITY AS target_key(attnum, ordinality)
+                ON target_key.ordinality = source_key.ordinality
+            INNER JOIN pg_attribute AS target_column
+                ON target_column.attrelid = target_table.oid
+               AND target_column.attnum = target_key.attnum
+            WHERE constraint_row.conrelid = 'service_desk.atendimento_card_participants'::regclass
+              AND constraint_row.contype = 'f'
+            GROUP BY
+                constraint_row.conname,
+                source_schema.nspname,
+                source_table.relname,
+                target_schema.nspname,
+                target_table.relname,
+                constraint_row.confdeltype
+            ORDER BY constraint_row.conname
+            """,
+            administrator
+        );
+        await using var reader = await catalog.ExecuteReaderAsync();
+        var foreignKeys = new List<ParticipantForeignKey>();
+        while (await reader.ReadAsync())
+        {
+            foreignKeys.Add(
+                new ParticipantForeignKey(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetFieldValue<string[]>(3),
+                    reader.GetString(4),
+                    reader.GetString(5),
+                    reader.GetFieldValue<string[]>(6),
+                    reader.GetString(7)
+                )
+            );
+        }
+
+        Assert.Collection(
+            foreignKeys,
+            key => AssertParticipantForeignKey(
+                key,
+                "fk_atendimento_card_participants_atendimento_cards_company_id_",
+                ["company_id", "card_id"],
+                "service_desk",
+                "atendimento_cards",
+                ["company_id", "id"]
+            ),
+            key => AssertParticipantForeignKey(
+                key,
+                "fk_atendimento_card_participants_memberships_company_id_member",
+                ["company_id", "membership_id"],
+                "foundation",
+                "memberships",
+                ["company_id", "id"]
+            )
+        );
+    }
+
+    [Fact]
     public async Task Assignment_options_function_is_security_definer_scoped_and_does_not_grant_runtime_user_reads()
     {
         await using var fixture = new FoundationPostgresFixture();
@@ -439,6 +570,45 @@ public sealed class AtendimentoCardSchemaTests
         await insert.ExecuteNonQueryAsync();
     }
 
+    private static async Task ExecuteParticipantInsertAsync(
+        NpgsqlConnection administrator,
+        Guid companyId,
+        Guid cardId,
+        Guid membershipId
+    )
+    {
+        await using var insert = new NpgsqlCommand(
+            """
+            INSERT INTO service_desk.atendimento_card_participants (company_id, card_id, membership_id)
+            VALUES (@company_id, @card_id, @membership_id)
+            """,
+            administrator
+        );
+        insert.Parameters.AddWithValue("company_id", companyId);
+        insert.Parameters.AddWithValue("card_id", cardId);
+        insert.Parameters.AddWithValue("membership_id", membershipId);
+        await insert.ExecuteNonQueryAsync();
+    }
+
+    private static void AssertParticipantForeignKey(
+        ParticipantForeignKey key,
+        string expectedName,
+        IReadOnlyList<string> expectedSourceColumns,
+        string expectedTargetSchema,
+        string expectedTargetTable,
+        IReadOnlyList<string> expectedTargetColumns
+    )
+    {
+        Assert.Equal(expectedName, key.Name);
+        Assert.Equal("service_desk", key.SourceSchema);
+        Assert.Equal("atendimento_card_participants", key.SourceTable);
+        Assert.Equal(expectedSourceColumns, key.SourceColumns);
+        Assert.Equal(expectedTargetSchema, key.TargetSchema);
+        Assert.Equal(expectedTargetTable, key.TargetTable);
+        Assert.Equal(expectedTargetColumns, key.TargetColumns);
+        Assert.Equal("r", key.DeleteAction);
+    }
+
     private sealed record AssignmentOption(Guid MembershipId, string DisplayName);
 
     private sealed record CancellationCardCase(
@@ -447,6 +617,17 @@ public sealed class AtendimentoCardSchemaTests
         Guid? CancelledByUserId,
         string? Reason,
         bool Accepted
+    );
+
+    private sealed record ParticipantForeignKey(
+        string Name,
+        string SourceSchema,
+        string SourceTable,
+        IReadOnlyList<string> SourceColumns,
+        string TargetSchema,
+        string TargetTable,
+        IReadOnlyList<string> TargetColumns,
+        string DeleteAction
     );
 
     private sealed record SeededCards(

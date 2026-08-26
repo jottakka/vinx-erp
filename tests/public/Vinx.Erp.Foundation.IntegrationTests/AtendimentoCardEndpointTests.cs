@@ -227,7 +227,7 @@ public sealed class AtendimentoCardEndpointTests
     }
 
     [Fact]
-    public async Task Creating_a_card_with_a_confirmed_attachment_and_duplicate_participants_returns_the_canonical_contract()
+    public async Task Creating_a_card_with_a_confirmed_attachment_and_duplicate_participants_preserves_the_canonical_contract_through_its_lifecycle()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory);
@@ -283,14 +283,12 @@ public sealed class AtendimentoCardEndpointTests
             var created = await response.Content.ReadFromJsonAsync<CardResponse>();
             Assert.NotNull(created);
             Assert.Equal(attachmentId, created.AttachmentFileId);
-            Assert.Equal(
-                new[]
-                {
-                    scenario.AssigneeMembershipId,
-                    secondMembership.Id,
-                }.OrderBy(value => value.ToString("N"), StringComparer.Ordinal),
-                created.ParticipantMembershipIds
-            );
+            var expectedParticipants = new[]
+            {
+                scenario.AssigneeMembershipId,
+                secondMembership.Id,
+            }.OrderBy(value => value.ToString("N"), StringComparer.Ordinal).ToArray();
+            Assert.Equal(expectedParticipants, created.ParticipantMembershipIds);
 
             using var replay = await client.PostAsJsonAsync(
                 "/atendimento/cards",
@@ -306,6 +304,69 @@ public sealed class AtendimentoCardEndpointTests
             Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
             var replayed = await replay.Content.ReadFromJsonAsync<CardResponse>();
             Assert.Equal(created.Id, replayed?.Id);
+            AssertExtendedCardFields(replayed, attachmentId, expectedParticipants);
+
+            using var queue = await client.GetAsync(
+                $"/atendimento/cards?companyId={scenario.CompanyId}"
+            );
+            Assert.Equal(HttpStatusCode.OK, queue.StatusCode);
+            var queued = Assert.Single(
+                (await queue.Content.ReadFromJsonAsync<List<CardResponse>>())!,
+                card => card.Id == created.Id
+            );
+            AssertExtendedCardFields(queued, attachmentId, expectedParticipants);
+
+            using var assign = await client.PostAsJsonAsync(
+                $"/atendimento/cards/{created.Id}/assign",
+                new AssignCardRequest(
+                    scenario.CompanyId,
+                    Guid.NewGuid(),
+                    created.Version,
+                    scenario.AssigneeMembershipId
+                )
+            );
+            Assert.Equal(HttpStatusCode.OK, assign.StatusCode);
+            var assigned = await assign.Content.ReadFromJsonAsync<CardResponse>();
+            AssertExtendedCardFields(assigned, attachmentId, expectedParticipants);
+
+            using var move = await client.PostAsJsonAsync(
+                $"/atendimento/cards/{created.Id}/move",
+                new MoveCardRequest(
+                    scenario.CompanyId,
+                    Guid.NewGuid(),
+                    assigned!.Version,
+                    "em_andamento"
+                )
+            );
+            Assert.Equal(HttpStatusCode.OK, move.StatusCode);
+            var moved = await move.Content.ReadFromJsonAsync<CardResponse>();
+            AssertExtendedCardFields(moved, attachmentId, expectedParticipants);
+
+            using var cancel = await client.PostAsJsonAsync(
+                $"/atendimento/cards/{created.Id}/cancel",
+                new CancelCardRequest(
+                    scenario.CompanyId,
+                    Guid.NewGuid(),
+                    moved!.Version,
+                    "Encerramento da lifecycle."
+                )
+            );
+            Assert.Equal(HttpStatusCode.OK, cancel.StatusCode);
+            var cancelled = await cancel.Content.ReadFromJsonAsync<CardResponse>();
+            AssertExtendedCardFields(cancelled, attachmentId, expectedParticipants);
+
+            using var conflict = await client.PostAsJsonAsync(
+                $"/atendimento/cards/{created.Id}/move",
+                new MoveCardRequest(
+                    scenario.CompanyId,
+                    Guid.NewGuid(),
+                    cancelled!.Version,
+                    "concluido"
+                )
+            );
+            Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+            var conflictBody = await conflict.Content.ReadFromJsonAsync<IntegrityConflictResponse>();
+            AssertExtendedCardFields(conflictBody?.Current, attachmentId, expectedParticipants);
 
             Assert.Equal(
                 2,
@@ -658,6 +719,7 @@ public sealed class AtendimentoCardEndpointTests
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory);
         using var client = factory.CreateClient();
+        var revokedMembershipId = Guid.NewGuid();
 
         await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
         {
@@ -669,7 +731,17 @@ public sealed class AtendimentoCardEndpointTests
                 factory.ActorUserId,
                 Guid.NewGuid()
             );
-            administrator.AddRange(ana, anaMembership);
+            var revoked = new User(Guid.NewGuid(), "Revogada", "revogada-options@example.test");
+            var revokedMembership = new Membership(
+                revokedMembershipId,
+                scenario.CompanyId,
+                revoked.Id,
+                factory.ActorUserId,
+                Guid.NewGuid()
+            );
+            administrator.AddRange(ana, anaMembership, revoked, revokedMembership);
+            await administrator.SaveChangesAsync();
+            revokedMembership.Revoke("test_revocation", factory.ActorUserId, Guid.NewGuid());
             await administrator.SaveChangesAsync();
         }
 
@@ -691,6 +763,8 @@ public sealed class AtendimentoCardEndpointTests
                 < options.FindIndex(option => option.DisplayName == "Bea")
         );
         Assert.Contains(options, option => option.MembershipId == scenario.AssigneeMembershipId && option.DisplayName == "Bea");
+        Assert.DoesNotContain(options, option => option.MembershipId == revokedMembershipId);
+        Assert.DoesNotContain(options, option => option.DisplayName == "Revogada");
     }
 
     [Fact]
@@ -909,6 +983,54 @@ public sealed class AtendimentoCardEndpointTests
         Assert.Contains("membership_required", foreignBody, StringComparison.Ordinal);
         Assert.DoesNotContain(foreignCardId.ToString(), foreignBody, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Cartão externo", foreignBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Foreign_card_id_with_an_authorized_company_context_returns_not_found_without_enumeration()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var foreignCompanyId = Guid.NewGuid();
+        var foreignCardId = Guid.NewGuid();
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            administrator.Companies.Add(
+                new Company(
+                    foreignCompanyId,
+                    scenario.GroupId,
+                    "Empresa estrangeira autorizada no corpo",
+                    factory.ActorUserId,
+                    Guid.NewGuid()
+                )
+            );
+            await administrator.SaveChangesAsync();
+            await administrator.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                INSERT INTO service_desk.atendimento_cards
+                    (id, company_id, title, description, column_name, created_by_user_id, updated_by_user_id, request_id)
+                VALUES ({foreignCardId}, {foreignCompanyId}, 'Cartão externo oculto', 'Não pode ser enumerado.', 'novo', {factory.ActorUserId}, {factory.ActorUserId}, {Guid.NewGuid()})
+                """
+            );
+        }
+
+        using var response = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{foreignCardId}/cancel",
+            new CancelCardRequest(
+                scenario.CompanyId,
+                Guid.NewGuid(),
+                1,
+                "Contexto autorizado da empresa local."
+            )
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("resource_not_found", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("membership_required", body, StringComparison.Ordinal);
+        Assert.DoesNotContain(foreignCardId.ToString(), body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Cartão externo oculto", body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1451,6 +1573,17 @@ public sealed class AtendimentoCardEndpointTests
             ? type.GetString() == expectedType
             : type.ValueKind == JsonValueKind.Array
                 && type.EnumerateArray().Any(value => value.GetString() == expectedType));
+
+    private static void AssertExtendedCardFields(
+        CardResponse? card,
+        Guid attachmentFileId,
+        IReadOnlyList<Guid> participantMembershipIds
+    )
+    {
+        Assert.NotNull(card);
+        Assert.Equal(attachmentFileId, card!.AttachmentFileId);
+        Assert.Equal(participantMembershipIds, card.ParticipantMembershipIds);
+    }
 
     private static async Task AssertConcurrentCancellationRaceAsync(
         CancellationRaceCompetitor competitor
