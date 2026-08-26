@@ -4,7 +4,7 @@ import {
   createVinxTheme,
   vinxTheme,
 } from "./create-vinx-theme";
-import { vinxFieldBorder } from "./surface-tokens";
+import { vinxFieldBorder, vinxShadow } from "./surface-tokens";
 import { readDensity } from "./visual-preferences";
 
 function relativeLuminance(color: string) {
@@ -99,6 +99,20 @@ describe("vinx semantic theme", () => {
       vinxTheme.colorSchemes.dark.palette.background.default,
     ).toBeDefined();
     expect(vinxTheme.colorSchemes.light.palette.navigation).toBeDefined();
+  });
+
+  it("uses the established blue and slate visual primitives", () => {
+    expect(vinxTheme.colorSchemes.light.palette.primary.main).toBe("#0f5b78");
+    expect(vinxTheme.colorSchemes.light.palette.navigation.main).toBe(
+      "#102a43",
+    );
+    expect(vinxTheme.colorSchemes.light.palette.background.default).toBe(
+      "#f7fafc",
+    );
+    expect(vinxTheme.colorSchemes.dark.palette.background.default).toBe(
+      "#0b1726",
+    );
+    expect(vinxShadow.card).not.toContain("30, 21, 14");
   });
 
   it("derives smaller usable layout tokens for compact density", () => {
