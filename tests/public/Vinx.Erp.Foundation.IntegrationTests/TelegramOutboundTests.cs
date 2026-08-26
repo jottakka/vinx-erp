@@ -149,11 +149,29 @@ public sealed class TelegramOutboundTests
         using var client = worker.CreateClient();
 
         await WaitForCallsAsync(bot, 4, TimeSpan.FromSeconds(90));
+        var bodies = await NotificationWorkerSecurityTests.WaitDeadLetterBodyAsync(factory, 1);
+        var body = Assert.Single(bodies);
+        var envelope = Wolverine.Runtime.Serialization.EnvelopeSerializer.Deserialize(body);
+        Assert.Empty(envelope.Headers);
+        using var payload = JsonDocument.Parse(envelope.Data);
+        var property = Assert.Single(payload.RootElement.EnumerateObject());
+        Assert.Equal("deliveryId", property.Name);
+        Assert.Equal(Guid.Empty, property.Value.GetGuid());
+        var serializedEnvelope = Encoding.UTF8.GetString(body);
+        Assert.DoesNotContain(
+            deliveryId.ToString("D"),
+            serializedEnvelope,
+            StringComparison.OrdinalIgnoreCase
+        );
+        Assert.DoesNotContain(seed.TelegramAddress, serializedEnvelope, StringComparison.Ordinal);
+        Assert.DoesNotContain(seed.TelegramText, serializedEnvelope, StringComparison.Ordinal);
+        Assert.DoesNotContain(TestToken, serializedEnvelope, StringComparison.Ordinal);
+
         var state = await NotificationIntentSeed.ReadDeliveryAsync(factory, deliveryId);
-        Assert.Equal(4, bot.Calls);
         Assert.Equal("pending_provider", state.Status);
         Assert.False(state.Resolved);
         Assert.Equal(4, state.AttemptCount);
+        Assert.Equal(4, bot.Calls);
     }
 
     [Fact]
