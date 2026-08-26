@@ -40,6 +40,12 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
         {
             migrationBuilder.Sql(
                 """
+                -- The migrator owns this table, but FORCE RLS hides every row without a
+                -- company context. Temporarily restore the owner's migration visibility so
+                -- the fail-closed check sees references from every company. The migration
+                -- transaction rolls this back on refusal and restores FORCE before a safe Down.
+                ALTER TABLE paguai.requests NO FORCE ROW LEVEL SECURITY;
+
                 DO $block$
                 BEGIN
                     IF EXISTS (
@@ -50,6 +56,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     END IF;
                 END;
                 $block$;
+
+                ALTER TABLE paguai.requests FORCE ROW LEVEL SECURITY;
                 """
             );
             migrationBuilder.DropForeignKey(
