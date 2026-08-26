@@ -287,7 +287,7 @@ describe("PaguaiPage", () => {
     ).toBeVisible();
   });
 
-  it("shows the persisted invoice identifier after opening detail", async () => {
+  it("shows a human invoice attachment label without exposing its identifier", async () => {
     const invoiceFileId = "88888888-8888-4888-8888-888888888888";
     const persisted = { ...draft, invoiceFileId };
     const draftClient = {
@@ -301,7 +301,8 @@ describe("PaguaiPage", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Visualizar" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(new RegExp(invoiceFileId))).toBeVisible();
+    expect(within(dialog).getByText("Fatura anexada")).toBeVisible();
+    expect(dialog.textContent).not.toContain(invoiceFileId);
   });
 
   it("submits through the modal and resets it after the async create completes", async () => {

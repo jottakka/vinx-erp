@@ -455,7 +455,7 @@ function DraftViewDialog({
             <AttachFileOutlinedIcon color="action" fontSize="small" />
             <Typography>
               {draft.invoiceFileId
-                ? `Fatura anexada: ${draft.invoiceFileId}`
+                ? "Fatura anexada"
                 : "Nenhuma fatura anexada."}
             </Typography>
           </Stack>
