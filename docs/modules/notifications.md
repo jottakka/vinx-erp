@@ -156,8 +156,22 @@ publica `InboundTelegramTextReceived(InboundMessageId)` no outbox durável para
 `telegram-inbound`, na mesma transação da evidência. O envelope e seus
 metadados contêm somente o GUID opaco: nunca texto, chat ID, update ID ou
 message ID. Replay é 2xx/no-op; erro antes do commit preserva ausência de linha
-e envelope. Esta PR não instala listener, grant de fila, receipt ou efeito de
-negócio: a fronteira de consumo e conclusão é a PR5.
+e envelope.
+
+O WorkerHost público escuta `telegram-inbound` com inbox durável e
+`AutoCreate.None`. O handler tipado usa apenas o GUID e a função restrita a
+`vinx_worker`: uma linha `pending + admitted` muda uma vez para `completed`;
+replay é no-op e resolução fechada permanece `pending` como evidência. As duas
+tabelas da fila, incluindo `_scheduled`, recebem somente o DML necessário do
+worker, sem `CREATE` e sem devolver ao worker acesso ao storage do ApiHost.
+
+Nesse contrato, `completed` é **apenas recibo técnico da fila**. Não representa
+confirmação humana, leitura, resposta, efeito de negócio ou envio ao Telegram.
+O worker não lê o texto e não chama HTTP, Bot API ou IA. A confirmação continua
+sendo uma decisão explícita do servidor em fluxo próprio e nunca é inferida do
+recibo. Envelope inválido, retry Npgsql esgotado após 1 s/5 s/30 s e erro
+inesperado entram na DLQ com tipos estáveis, payload `Guid.Empty`, headers
+removidos e sem UUID, conteúdo, IDs do provedor ou detalhe original da exceção.
 
 ## Inbound admissão e identidade (#272 PR1)
 

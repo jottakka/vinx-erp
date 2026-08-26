@@ -1,5 +1,7 @@
 extern alias workerhost;
 
+using System.Diagnostics;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -12,7 +14,9 @@ using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications;
 using Wolverine;
 using Wolverine.Persistence.Durability;
+using Wolverine.Runtime.Serialization;
 using Xunit;
+using Xunit.Abstractions;
 using WorkerHostTypes = workerhost::Vinx.Erp.WorkerHost;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -22,8 +26,504 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 /// o recibo do worker e nunca uma confirmação para a pessoa remetente.
 /// </summary>
 [Collection("notification-worker")]
-public sealed class TelegramInboundWorkerTests
+public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
 {
+    [Fact]
+    public async Task Public_webhook_and_real_worker_complete_an_admitted_pending_row_as_queue_receipt()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "930001",
+            telegramContactValidated: true
+        );
+        using var apiClient = factory.CreateClient();
+
+        using (var response = await PostPrivateAsync(
+            apiClient,
+            updateId: 9301,
+            chatId: 930001,
+            messageId: 93001,
+            text: "public receipt-only text"
+        ))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        var pending = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Equal("pending", pending.Status);
+        Assert.Equal("admitted", pending.ResolutionState);
+        Assert.Null(pending.CompletedAt);
+
+        await using var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        );
+        using var workerClient = worker.CreateClient();
+        using var health = await workerClient.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+
+        var completed = await WaitForInboundStatusAsync(factory, pending.Id, "completed");
+
+        Assert.NotNull(completed.CompletedAt);
+        Assert.Equal("public receipt-only text", completed.TextBody);
+    }
+
+    [Fact]
+    public async Task Real_worker_persists_an_invalid_envelope_as_a_redacted_telegram_dead_letter()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var apiClient = factory.CreateClient();
+        using var apiHealth = await apiClient.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, apiHealth.StatusCode);
+        await using var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        );
+        using var workerClient = worker.CreateClient();
+        using var workerHealth = await workerClient.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, workerHealth.StatusCode);
+        var secretHeader = "telegram-invalid-secret-header";
+        var options = new DeliveryOptions().WithHeader("diagnostic", secretHeader);
+
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<IMessageBus>()
+                .PublishAsync(new InboundTelegramTextReceived(Guid.Empty), options);
+        }
+
+        var deadLetter = await WaitForTelegramDeadLetterAsync(factory);
+        var envelope = EnvelopeSerializer.Deserialize(deadLetter.Body);
+        Assert.Equal("telegram_inbound_invalid", deadLetter.ExceptionType);
+        Assert.Equal(
+            "Inbound Telegram receipt rejected the envelope.",
+            deadLetter.ExceptionMessage
+        );
+        Assert.Empty(envelope.Headers);
+        Assert.NotNull(envelope.Data);
+        using var payload = JsonDocument.Parse(envelope.Data!);
+        Assert.Equal(Guid.Empty, payload.RootElement.GetProperty("inboundMessageId").GetGuid());
+        Assert.DoesNotContain(
+            secretHeader,
+            Encoding.UTF8.GetString(deadLetter.Body),
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(secretHeader, deadLetter.ExceptionMessage, StringComparison.Ordinal);
+        Assert.Equal(1L, await CountTelegramDeadLettersAsync(factory));
+    }
+
+    [Fact]
+    public async Task Racing_real_worker_envelopes_report_one_transition_and_replays_are_noops()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "930002",
+            telegramContactValidated: true
+        );
+        using var apiClient = factory.CreateClient();
+        using (var response = await PostPrivateAsync(
+            apiClient,
+            updateId: 9302,
+            chatId: 930002,
+            messageId: 93002,
+            text: "racing receipt-only text"
+        ))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        var pending = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        await PublishTelegramEnvelopeAsync(factory, pending.Id);
+        await PublishTelegramEnvelopeAsync(factory, pending.Id);
+        await WaitForTelegramQueueCountAsync(factory, expectedCount: 3);
+        var firstLog = Path.Combine(Path.GetTempPath(), $"telegram-worker-{Guid.NewGuid():N}.log");
+        var secondLog = Path.Combine(Path.GetTempPath(), $"telegram-worker-{Guid.NewGuid():N}.log");
+
+        IReadOnlyList<string> receiptLogs;
+        try
+        {
+            await using (var firstWorker = new NotificationWorkerHostFactory(
+                factory.Fixture.WorkerConnectionString,
+                debugLogPath: firstLog
+            ))
+            await using (var secondWorker = new NotificationWorkerHostFactory(
+                factory.Fixture.WorkerConnectionString,
+                debugLogPath: secondLog
+            ))
+            {
+                using var firstClient = firstWorker.CreateClient();
+                using var secondClient = secondWorker.CreateClient();
+                using var firstHealth = await firstClient.GetAsync("/health");
+                using var secondHealth = await secondClient.GetAsync("/health");
+                Assert.Equal(HttpStatusCode.OK, firstHealth.StatusCode);
+                Assert.Equal(HttpStatusCode.OK, secondHealth.StatusCode);
+                await WaitForInboundStatusAsync(factory, pending.Id, "completed");
+                receiptLogs = await WaitForReceiptDecisionsAsync(
+                    [firstLog, secondLog],
+                    queueReceiptCount: 1,
+                    replayCount: 2
+                );
+            }
+
+            Assert.Single(receiptLogs, line =>
+                line.Contains("completed queue_receipt", StringComparison.Ordinal)
+            );
+            Assert.Equal(
+                2,
+                receiptLogs.Count(line => line.Contains("noop replay", StringComparison.Ordinal))
+            );
+            Assert.All(receiptLogs, line =>
+            {
+                Assert.DoesNotContain(pending.Id.ToString("D"), line, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("racing receipt-only text", line, StringComparison.Ordinal);
+                Assert.DoesNotContain("930002", line, StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    FoundationApiFactory.TelegramWebhookSecret,
+                    line,
+                    StringComparison.Ordinal
+                );
+            });
+        }
+        finally
+        {
+            File.Delete(firstLog);
+            File.Delete(secondLog);
+        }
+    }
+
+    [Fact]
+    public async Task Real_worker_keeps_a_non_admitted_webhook_row_as_pending_evidence()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var apiClient = factory.CreateClient();
+        using (var response = await PostPrivateAsync(
+            apiClient,
+            updateId: 9303,
+            chatId: 930003,
+            messageId: 93003,
+            text: "closed evidence text"
+        ))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        var closed = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Equal("unbound", closed.ResolutionState);
+        Assert.Equal("pending", closed.Status);
+        Assert.Null(closed.CompletedAt);
+        var closedRows = new List<(Guid Id, string ResolutionState)>
+        {
+            (closed.Id, "unbound"),
+        };
+        foreach (var (resolutionState, discriminator) in new[]
+        {
+            ("unverified", 9401L),
+            ("inactive", 9402L),
+            ("ambiguous", 9403L),
+        })
+        {
+            var inboundId = Guid.NewGuid();
+            Assert.Equal(
+                "created",
+                await AdmitClosedAsync(
+                    factory.Fixture.RuntimeConnectionString,
+                    inboundId,
+                    resolutionState,
+                    discriminator
+                )
+            );
+            closedRows.Add((inboundId, resolutionState));
+        }
+
+        foreach (var (inboundId, _) in closedRows)
+        {
+            await PublishTelegramEnvelopeAsync(factory, inboundId);
+        }
+
+        await WaitForTelegramQueueCountAsync(factory, expectedCount: 4);
+
+        var workerLog = Path.Combine(Path.GetTempPath(), $"telegram-worker-{Guid.NewGuid():N}.log");
+        try
+        {
+            await using (var worker = new NotificationWorkerHostFactory(
+                factory.Fixture.WorkerConnectionString,
+                debugLogPath: workerLog
+            ))
+            {
+                using var workerClient = worker.CreateClient();
+                using var health = await workerClient.GetAsync("/health");
+                Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+                await WaitForReceiptDecisionsAsync(
+                    [workerLog],
+                    notAdmittedCount: 4
+                );
+            }
+
+            var retained = await TelegramNotificationSeed.ReadInboundMessagesAsync(factory);
+            Assert.Equal(4, retained.Count);
+            foreach (var (inboundId, resolutionState) in closedRows)
+            {
+                var row = Assert.Single(retained, candidate => candidate.Id == inboundId);
+                Assert.Equal(resolutionState, row.ResolutionState);
+                Assert.Equal("pending", row.Status);
+                Assert.Null(row.CompletedAt);
+            }
+
+            Assert.Equal(
+                "closed evidence text",
+                Assert.Single(retained, candidate => candidate.Id == closed.Id).TextBody
+            );
+            Assert.Equal(0L, await CountTelegramDeadLettersAsync(factory));
+        }
+        finally
+        {
+            File.Delete(workerLog);
+        }
+    }
+
+    [Fact]
+    public async Task Unexpected_database_failure_is_dead_lettered_once_without_sensitive_content()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var apiClient = factory.CreateClient();
+        using var apiHealth = await apiClient.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, apiHealth.StatusCode);
+        var originalFunction = await ReplaceCompletionFunctionWithUnexpectedFailureAsync(factory);
+        var inboundId = Guid.NewGuid();
+        const string failureSecret = "telegram-unexpected-secret";
+        const string headerSecret = "telegram-unexpected-header";
+
+        try
+        {
+            await using (var worker = new NotificationWorkerHostFactory(
+                factory.Fixture.WorkerConnectionString
+            ))
+            {
+                using var workerClient = worker.CreateClient();
+                using var workerHealth = await workerClient.GetAsync("/health");
+                Assert.Equal(HttpStatusCode.OK, workerHealth.StatusCode);
+                await PublishTelegramEnvelopeAsync(factory, inboundId, headerSecret);
+
+                var deadLetter = await WaitForTelegramDeadLetterAsync(factory);
+                Assert.Equal("telegram_inbound_unexpected", deadLetter.ExceptionType);
+                Assert.Equal(
+                    "Inbound Telegram receipt failed unexpectedly.",
+                    deadLetter.ExceptionMessage
+                );
+                AssertTelegramDeadLetterIsRedacted(
+                    deadLetter,
+                    inboundId.ToString("D"),
+                    failureSecret,
+                    headerSecret
+                );
+                Assert.Equal(new AttemptSequenceState(1, true), await ReadAttemptCountAsync(factory));
+                Assert.Equal(1L, await CountTelegramDeadLettersAsync(factory));
+            }
+        }
+        finally
+        {
+            await RestoreCompletionFunctionAsync(factory, originalFunction);
+        }
+    }
+
+    [Fact]
+    public async Task Transient_database_failure_retries_after_one_five_and_thirty_seconds_then_redacts_dlq()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var apiClient = factory.CreateClient();
+        using var apiHealth = await apiClient.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, apiHealth.StatusCode);
+        var originalFunction = await ReplaceCompletionFunctionWithTransientFailureAsync(factory);
+        var inboundId = Guid.NewGuid();
+        const string failureSecret = "telegram-transient-secret";
+        const string headerSecret = "telegram-transient-header";
+
+        try
+        {
+            await using (var worker = new NotificationWorkerHostFactory(
+                factory.Fixture.WorkerConnectionString
+            ))
+            {
+                using var workerClient = worker.CreateClient();
+                using var workerHealth = await workerClient.GetAsync("/health");
+                Assert.Equal(HttpStatusCode.OK, workerHealth.StatusCode);
+                await PublishTelegramEnvelopeAsync(factory, inboundId, headerSecret);
+
+                var deadLetter = await WaitForTelegramDeadLetterAsync(
+                    factory,
+                    TimeSpan.FromSeconds(90)
+                );
+                Assert.Equal("telegram_inbound_retry_exhausted", deadLetter.ExceptionType);
+                Assert.Equal(
+                    "Inbound Telegram receipt exhausted transient retries.",
+                    deadLetter.ExceptionMessage
+                );
+                AssertTelegramDeadLetterIsRedacted(
+                    deadLetter,
+                    inboundId.ToString("D"),
+                    failureSecret,
+                    headerSecret
+                );
+
+                var attempts = await ReadAttemptTimestampsAsync(factory);
+                Assert.Equal(4, attempts.Count);
+                output.WriteLine(
+                    "retry_intervals_ms={0},{1},{2}",
+                    (attempts[1] - attempts[0]).TotalMilliseconds,
+                    (attempts[2] - attempts[1]).TotalMilliseconds,
+                    (attempts[3] - attempts[2]).TotalMilliseconds
+                );
+                Assert.InRange(
+                    attempts[1] - attempts[0],
+                    TimeSpan.FromMilliseconds(800),
+                    TimeSpan.FromSeconds(20)
+                );
+                Assert.InRange(
+                    attempts[2] - attempts[1],
+                    TimeSpan.FromSeconds(4.5),
+                    TimeSpan.FromSeconds(20)
+                );
+                Assert.InRange(
+                    attempts[3] - attempts[2],
+                    TimeSpan.FromSeconds(29),
+                    TimeSpan.FromSeconds(60)
+                );
+                Assert.Equal(1L, await CountTelegramDeadLettersAsync(factory));
+            }
+        }
+        finally
+        {
+            await RestoreCompletionFunctionAsync(factory, originalFunction);
+        }
+    }
+
+    [Fact]
+    public async Task Runtime_cannot_complete_a_pending_row_and_only_worker_has_function_execute()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "930004",
+            telegramContactValidated: true
+        );
+        var resolution = await TelegramNotificationSeed.ResolveInboundActorAsync(factory, 930004);
+        var inboundId = Guid.NewGuid();
+        Assert.Equal(
+            "created",
+            await AdmitAsync(
+                factory.Fixture.RuntimeConnectionString,
+                inboundId,
+                resolution,
+                "runtime denial evidence"
+            )
+        );
+
+        var denied = await Assert.ThrowsAsync<PostgresException>(async () =>
+            await CompleteAsync(factory.Fixture.RuntimeConnectionString, inboundId)
+        );
+
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var grants = new NpgsqlCommand(
+            """
+            SELECT
+                has_function_privilege(
+                    'vinx_worker',
+                    'notifications.complete_inbound_telegram_text(uuid)',
+                    'EXECUTE'),
+                has_function_privilege(
+                    'vinx_runtime',
+                    'notifications.complete_inbound_telegram_text(uuid)',
+                    'EXECUTE')
+            """,
+            administrator
+        );
+        await using var reader = await grants.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.False(reader.GetBoolean(1));
+        var row = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Equal(inboundId, row.Id);
+        Assert.Equal("pending", row.Status);
+        Assert.Null(row.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Public_handler_propagates_cancellation_without_recording_a_receipt()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "930005",
+            telegramContactValidated: true
+        );
+        var resolution = await TelegramNotificationSeed.ResolveInboundActorAsync(factory, 930005);
+        var inboundId = Guid.NewGuid();
+        Assert.Equal(
+            "created",
+            await AdmitAsync(
+                factory.Fixture.RuntimeConnectionString,
+                inboundId,
+                resolution,
+                "cancelled receipt evidence"
+            )
+        );
+        await using var database = CreateWorkerDatabase(factory);
+        var handler = new WorkerHostTypes.InboundTelegramTextReceivedHandler(
+            database,
+            new CapturingLogger<WorkerHostTypes.InboundTelegramTextReceivedHandler>()
+        );
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            handler.Handle(new InboundTelegramTextReceived(inboundId), cancellation.Token)
+        );
+
+        var row = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Equal(inboundId, row.Id);
+        Assert.Equal("pending", row.Status);
+        Assert.Null(row.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Real_worker_consumes_a_missing_row_envelope_as_a_noop_without_dlq()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var apiClient = factory.CreateClient();
+        using var apiHealth = await apiClient.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, apiHealth.StatusCode);
+        var missingId = Guid.NewGuid();
+        await PublishTelegramEnvelopeAsync(factory, missingId);
+        await WaitForTelegramQueueCountAsync(factory, expectedCount: 1);
+
+        var workerLog = Path.Combine(Path.GetTempPath(), $"telegram-worker-{Guid.NewGuid():N}.log");
+        try
+        {
+            await using (var worker = new NotificationWorkerHostFactory(
+                factory.Fixture.WorkerConnectionString,
+                debugLogPath: workerLog
+            ))
+            {
+                using var workerClient = worker.CreateClient();
+                using var workerHealth = await workerClient.GetAsync("/health");
+                Assert.Equal(HttpStatusCode.OK, workerHealth.StatusCode);
+                await WaitForReceiptDecisionsAsync([workerLog], notFoundCount: 1);
+            }
+
+            Assert.Empty(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+            Assert.Equal(0L, await CountTelegramDeadLettersAsync(factory));
+            Assert.DoesNotContain(
+                missingId.ToString("D"),
+                File.ReadAllText(workerLog),
+                StringComparison.OrdinalIgnoreCase
+            );
+        }
+        finally
+        {
+            File.Delete(workerLog);
+        }
+    }
+
     [Fact]
     public async Task Admitted_pending_message_completes_once_as_a_queue_receipt()
     {
@@ -272,7 +772,12 @@ public sealed class TelegramInboundWorkerTests
         return (string)(await command.ExecuteScalarAsync())!;
     }
 
-    private static async Task<string> AdmitClosedAsync(string connectionString, Guid inboundId)
+    private static async Task<string> AdmitClosedAsync(
+        string connectionString,
+        Guid inboundId,
+        string resolutionState = "unbound",
+        long discriminator = 92L
+    )
     {
         await using var runtime = new NpgsqlConnection(connectionString);
         await runtime.OpenAsync();
@@ -280,15 +785,16 @@ public sealed class TelegramInboundWorkerTests
             """
             SELECT notifications.admit_inbound_telegram_text(
                 @inbound_id, @update_id, @chat_id, @message_id, @text_body,
-                'unbound', NULL, NULL, NULL)
+                @resolution_state, NULL, NULL, NULL)
             """,
             runtime
         );
         command.Parameters.AddWithValue("inbound_id", NpgsqlDbType.Uuid, inboundId);
-        command.Parameters.AddWithValue("update_id", NpgsqlDbType.Bigint, 92L);
-        command.Parameters.AddWithValue("chat_id", NpgsqlDbType.Bigint, 920001L);
-        command.Parameters.AddWithValue("message_id", NpgsqlDbType.Bigint, 9201L);
-        command.Parameters.AddWithValue("text_body", NpgsqlDbType.Text, "closed receipt text");
+        command.Parameters.AddWithValue("update_id", NpgsqlDbType.Bigint, discriminator);
+        command.Parameters.AddWithValue("chat_id", NpgsqlDbType.Bigint, discriminator * 100L);
+        command.Parameters.AddWithValue("message_id", NpgsqlDbType.Bigint, discriminator * 10L);
+        command.Parameters.AddWithValue("text_body", NpgsqlDbType.Text, $"{resolutionState} closed receipt text");
+        command.Parameters.AddWithValue("resolution_state", NpgsqlDbType.Text, resolutionState);
         return (string)(await command.ExecuteScalarAsync())!;
     }
 
@@ -319,5 +825,393 @@ public sealed class TelegramInboundWorkerTests
                 .Options
         );
 
+    private static Task<HttpResponseMessage> PostPrivateAsync(
+        HttpClient client,
+        long updateId,
+        long chatId,
+        long messageId,
+        string text
+    )
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/foundation/notifications/telegram/webhook"
+        )
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new
+                {
+                    update_id = updateId,
+                    message = new
+                    {
+                        message_id = messageId,
+                        from = new { id = chatId, is_bot = false },
+                        chat = new { id = chatId, type = "private" },
+                        text,
+                    },
+                }),
+                Encoding.UTF8,
+                "application/json"
+            )
+        };
+        request.Headers.Add(
+            "X-Telegram-Bot-Api-Secret-Token",
+            FoundationApiFactory.TelegramWebhookSecret
+        );
+        return client.SendAsync(request);
+    }
+
+    private static async Task<TelegramInboundMessageRow> WaitForInboundStatusAsync(
+        FoundationApiFactory factory,
+        Guid inboundId,
+        string expectedStatus
+    )
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        TelegramInboundMessageRow? last = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            last = (await TelegramNotificationSeed.ReadInboundMessagesAsync(factory))
+                .SingleOrDefault(row => row.Id == inboundId);
+            if (last?.Status == expectedStatus)
+            {
+                return last;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert.Fail(
+            $"Inbound Telegram row did not reach {expectedStatus}; last status was {last?.Status ?? "missing"}."
+        );
+        throw new UnreachableException();
+    }
+
+    private static async Task<TelegramDeadLetterRow> WaitForTelegramDeadLetterAsync(
+        FoundationApiFactory factory,
+        TimeSpan? timeoutDuration = null
+    )
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeoutDuration ?? TimeSpan.FromSeconds(15));
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+            await using var command = new NpgsqlCommand(
+                "SELECT body, exception_type, exception_message FROM vinx_wolverine_worker.wolverine_dead_letters ORDER BY id DESC LIMIT 1",
+                administrator
+            );
+            await using var reader = await command.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                return new TelegramDeadLetterRow(
+                    reader.GetFieldValue<byte[]>(0),
+                    reader.GetString(1),
+                    reader.GetString(2)
+                );
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert.Fail("Worker did not persist a Telegram dead letter.");
+        throw new UnreachableException();
+    }
+
+    private static async Task PublishTelegramEnvelopeAsync(
+        FoundationApiFactory factory,
+        Guid inboundId,
+        string? secretHeader = null
+    )
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var bus = scope.ServiceProvider.GetRequiredService<IMessageBus>();
+        if (secretHeader is null)
+        {
+            await bus.PublishAsync(new InboundTelegramTextReceived(inboundId));
+            return;
+        }
+
+        await bus.PublishAsync(
+            new InboundTelegramTextReceived(inboundId),
+            new DeliveryOptions().WithHeader("diagnostic", secretHeader)
+        );
+    }
+
+    private static async Task WaitForTelegramQueueCountAsync(
+        FoundationApiFactory factory,
+        long expectedCount
+    )
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        long lastCount = -1;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+            await using var command = new NpgsqlCommand(
+                "SELECT count(*) FROM vinx_wolverine_queues.wolverine_queue_telegram_inbound",
+                administrator
+            );
+            lastCount = (long)(await command.ExecuteScalarAsync())!;
+            if (lastCount == expectedCount)
+            {
+                return;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert.Fail(
+            $"Telegram inbound queue did not reach {expectedCount} rows; last count was {lastCount}."
+        );
+    }
+
+    private static async Task<long> CountTelegramDeadLettersAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM vinx_wolverine_worker.wolverine_dead_letters",
+            administrator
+        );
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static async Task<IReadOnlyList<string>> WaitForReceiptDecisionsAsync(
+        IReadOnlyList<string> logPaths,
+        int queueReceiptCount = 0,
+        int replayCount = 0,
+        int notAdmittedCount = 0,
+        int notFoundCount = 0
+    )
+    {
+        var expectedTotal = queueReceiptCount + replayCount + notAdmittedCount + notFoundCount;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        string[] receiptLogs = [];
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            receiptLogs = logPaths
+                .Where(File.Exists)
+                .SelectMany(File.ReadAllLines)
+                .Where(line => line.Contains("telegram_inbound_receipt", StringComparison.Ordinal))
+                .ToArray();
+            if (
+                receiptLogs.Length == expectedTotal
+                && receiptLogs.Count(line => line.Contains("completed queue_receipt", StringComparison.Ordinal)) == queueReceiptCount
+                && receiptLogs.Count(line => line.Contains("noop replay", StringComparison.Ordinal)) == replayCount
+                && receiptLogs.Count(line => line.Contains("noop not_admitted", StringComparison.Ordinal)) == notAdmittedCount
+                && receiptLogs.Count(line => line.Contains("noop not_found", StringComparison.Ordinal)) == notFoundCount
+            )
+            {
+                return receiptLogs;
+            }
+
+            await Task.Delay(100);
+        }
+
+        Assert.Fail(
+            $"Worker receipt decisions did not settle at queue_receipt={queueReceiptCount}, replay={replayCount}, not_admitted={notAdmittedCount}, not_found={notFoundCount}; observed: {string.Join(" | ", receiptLogs)}"
+        );
+        throw new UnreachableException();
+    }
+
+    private static async Task<string> ReplaceCompletionFunctionWithUnexpectedFailureAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var readDefinition = new NpgsqlCommand(
+            "SELECT pg_get_functiondef('notifications.complete_inbound_telegram_text(uuid)'::regprocedure)",
+            administrator
+        );
+        var originalFunction = (string)(await readDefinition.ExecuteScalarAsync())!;
+        await using var replace = new NpgsqlCommand(
+            """
+            CREATE SEQUENCE notifications.telegram_worker_attempt_counter_test;
+            GRANT USAGE, SELECT, UPDATE ON SEQUENCE
+                notifications.telegram_worker_attempt_counter_test
+                TO vinx_notifications_owner;
+
+            CREATE OR REPLACE FUNCTION notifications.complete_inbound_telegram_text(
+                p_inbound_id uuid)
+            RETURNS TABLE (status text, transitioned boolean)
+            LANGUAGE plpgsql SECURITY DEFINER
+            SET search_path TO pg_catalog, notifications, pg_temp
+            AS $function$
+            BEGIN
+                PERFORM nextval('notifications.telegram_worker_attempt_counter_test');
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0001',
+                    MESSAGE = 'telegram-unexpected-secret';
+            END;
+            $function$;
+            """,
+            administrator
+        );
+        await replace.ExecuteNonQueryAsync();
+        return originalFunction;
+    }
+
+    private static async Task<AttemptSequenceState> ReadAttemptCountAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT last_value, is_called FROM notifications.telegram_worker_attempt_counter_test",
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return new AttemptSequenceState(reader.GetInt64(0), reader.GetBoolean(1));
+    }
+
+    private static async Task<string> ReplaceCompletionFunctionWithTransientFailureAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var readDefinition = new NpgsqlCommand(
+            "SELECT pg_get_functiondef('notifications.complete_inbound_telegram_text(uuid)'::regprocedure)",
+            administrator
+        );
+        var originalFunction = (string)(await readDefinition.ExecuteScalarAsync())!;
+        await using var replace = new NpgsqlCommand(
+            """
+            CREATE SEQUENCE notifications.telegram_worker_attempt_counter_test;
+            CREATE SEQUENCE notifications.telegram_worker_attempt_1_test MINVALUE 0 START WITH 0;
+            CREATE SEQUENCE notifications.telegram_worker_attempt_2_test MINVALUE 0 START WITH 0;
+            CREATE SEQUENCE notifications.telegram_worker_attempt_3_test MINVALUE 0 START WITH 0;
+            CREATE SEQUENCE notifications.telegram_worker_attempt_4_test MINVALUE 0 START WITH 0;
+            GRANT USAGE, SELECT, UPDATE ON SEQUENCE
+                notifications.telegram_worker_attempt_counter_test,
+                notifications.telegram_worker_attempt_1_test,
+                notifications.telegram_worker_attempt_2_test,
+                notifications.telegram_worker_attempt_3_test,
+                notifications.telegram_worker_attempt_4_test
+                TO vinx_notifications_owner;
+
+            CREATE OR REPLACE FUNCTION notifications.complete_inbound_telegram_text(
+                p_inbound_id uuid)
+            RETURNS TABLE (status text, transitioned boolean)
+            LANGUAGE plpgsql SECURITY DEFINER
+            SET search_path TO pg_catalog, notifications, pg_temp
+            AS $function$
+            DECLARE
+                v_attempt bigint;
+                v_epoch_milliseconds bigint;
+            BEGIN
+                v_attempt := nextval('notifications.telegram_worker_attempt_counter_test');
+                v_epoch_milliseconds := floor(
+                    extract(epoch FROM clock_timestamp()) * 1000
+                )::bigint;
+                CASE v_attempt
+                    WHEN 1 THEN
+                        PERFORM setval(
+                            'notifications.telegram_worker_attempt_1_test',
+                            v_epoch_milliseconds,
+                            true);
+                    WHEN 2 THEN
+                        PERFORM setval(
+                            'notifications.telegram_worker_attempt_2_test',
+                            v_epoch_milliseconds,
+                            true);
+                    WHEN 3 THEN
+                        PERFORM setval(
+                            'notifications.telegram_worker_attempt_3_test',
+                            v_epoch_milliseconds,
+                            true);
+                    WHEN 4 THEN
+                        PERFORM setval(
+                            'notifications.telegram_worker_attempt_4_test',
+                            v_epoch_milliseconds,
+                            true);
+                    ELSE
+                        RAISE EXCEPTION 'unexpected extra Telegram receipt attempt';
+                END CASE;
+
+                RAISE EXCEPTION USING
+                    ERRCODE = '08006',
+                    MESSAGE = 'telegram-transient-secret';
+            END;
+            $function$;
+            """,
+            administrator
+        );
+        await replace.ExecuteNonQueryAsync();
+        return originalFunction;
+    }
+
+    private static async Task<IReadOnlyList<DateTimeOffset>> ReadAttemptTimestampsAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                (SELECT last_value FROM notifications.telegram_worker_attempt_1_test),
+                (SELECT last_value FROM notifications.telegram_worker_attempt_2_test),
+                (SELECT last_value FROM notifications.telegram_worker_attempt_3_test),
+                (SELECT last_value FROM notifications.telegram_worker_attempt_4_test)
+            """,
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return Enumerable.Range(0, 4)
+            .Select(index => DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(index)))
+            .ToArray();
+    }
+
+    private static async Task RestoreCompletionFunctionAsync(
+        FoundationApiFactory factory,
+        string originalFunction
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var restore = new NpgsqlCommand(
+            $"""
+            {originalFunction};
+            DROP SEQUENCE IF EXISTS
+                notifications.telegram_worker_attempt_counter_test,
+                notifications.telegram_worker_attempt_1_test,
+                notifications.telegram_worker_attempt_2_test,
+                notifications.telegram_worker_attempt_3_test,
+                notifications.telegram_worker_attempt_4_test;
+            """,
+            administrator
+        );
+        await restore.ExecuteNonQueryAsync();
+    }
+
+    private static void AssertTelegramDeadLetterIsRedacted(
+        TelegramDeadLetterRow deadLetter,
+        params string[] sensitiveValues
+    )
+    {
+        var bodyText = Encoding.UTF8.GetString(deadLetter.Body);
+        var envelope = EnvelopeSerializer.Deserialize(deadLetter.Body);
+        Assert.Empty(envelope.Headers);
+        Assert.NotNull(envelope.Data);
+        using var payload = JsonDocument.Parse(envelope.Data!);
+        Assert.Equal(Guid.Empty, payload.RootElement.GetProperty("inboundMessageId").GetGuid());
+        foreach (var sensitiveValue in sensitiveValues)
+        {
+            Assert.DoesNotContain(sensitiveValue, bodyText, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(
+                sensitiveValue,
+                deadLetter.ExceptionMessage,
+                StringComparison.OrdinalIgnoreCase
+            );
+        }
+    }
+
     private sealed record TelegramInboundReceipt(string Status, bool Transitioned);
+    private sealed record AttemptSequenceState(long LastValue, bool IsCalled);
+    private sealed record TelegramDeadLetterRow(
+        byte[] Body,
+        string ExceptionType,
+        string ExceptionMessage
+    );
 }
