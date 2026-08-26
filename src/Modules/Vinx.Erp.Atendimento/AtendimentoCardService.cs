@@ -637,14 +637,27 @@ public sealed class AtendimentoCardService(
                         );
                     }
 
-                    await database.Database.ExecuteSqlInterpolatedAsync(
+                    var insertedRows = await database.Database.ExecuteSqlInterpolatedAsync(
                         $"""
                         INSERT INTO service_desk.atendimento_card_watchers
                             (id, company_id, card_id, membership_id, created_by_user_id, request_id)
                         VALUES ({Guid.NewGuid()}, {command.CompanyId}, {cardId}, {command.MemberMembershipId}, {actor.UserId}, {command.RequestId})
+                        ON CONFLICT (company_id, card_id, membership_id) DO NOTHING
                         """,
                         cancellationToken
                     );
+                    if (insertedRows == 0)
+                    {
+                        // Corrida com gêmea vencedora: repete como NoChange.
+                        var raced = await FindCardAsync(
+                            command.CompanyId,
+                            cardId,
+                            cancellationToken
+                        );
+                        return raced is null
+                            ? Mutation.ResourceNotFound()
+                            : Mutation.Succeeded(raced, AtendimentoCardOperationState.NoChange);
+                    }
                     var addActor = await ResolveActorMembershipIdAsync(
                         actor,
                         command.CompanyId,
@@ -738,7 +751,7 @@ public sealed class AtendimentoCardService(
                 return current is null
                     ? Mutation.ResourceNotFound()
                     : Mutation.Succeeded(current, AtendimentoCardOperationState.Success);
-        },
+            },
             cancellationToken
         );
 
