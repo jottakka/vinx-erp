@@ -23,14 +23,21 @@ public sealed class ConfirmApprovalService(
     AuditAppender auditAppender,
     AuthorizationTelemetry telemetry,
     CapabilityEvaluator capabilityEvaluator,
-    ILogger<ConfirmApprovalService> logger)
+    ILogger<ConfirmApprovalService> logger,
+    ApprovalCapabilityPolicy? approvalPolicy = null)
 {
-    private const string ConfirmCommandName = "ai.approvals.confirm";
-    private const string VetoCommandName = "ai.approvals.veto";
     private const string Operation = "approval_confirmation";
     private const string Module = "foundation";
-    private static readonly CapabilityRequirement RequiredCapability =
-        new(KnownCapabilities.AiWritesConfirm, CapabilityScope.Company);
+
+    // Costura aditiva: Legacy preserva o contrato do módulo AI byte a byte.
+    private readonly ApprovalCapabilityPolicy policy = approvalPolicy ?? ApprovalCapabilityPolicy.Legacy;
+
+    private CapabilityRequirement RequiredCapability =>
+        new(policy.CapabilityName, CapabilityScope.Company);
+
+    private string ConfirmCommandName => policy.ConfirmCommandName;
+
+    private string VetoCommandName => policy.VetoCommandName;
 
     public async Task<AuthorizationResult<ConfirmApprovalResult>> ConfirmAsync(
         ActorContext actor,
@@ -132,7 +139,7 @@ public sealed class ConfirmApprovalService(
                             actor.UserId,
                             AuditScope.Company,
                             command.CompanyId,
-                            AuditSource.Ai,
+                            policy.AuditSource,
                             ConfirmCommandName,
                             "approval",
                             approval.Id,
@@ -278,7 +285,7 @@ public sealed class ConfirmApprovalService(
                         actor.UserId,
                         AuditScope.Company,
                         command.CompanyId,
-                        AuditSource.Ai,
+                        policy.AuditSource,
                         VetoCommandName,
                         "approval",
                         command.ApprovalId,
@@ -462,7 +469,7 @@ public sealed class ConfirmApprovalService(
                 actor.UserId,
                 AuditScope.Company,
                 companyId,
-                AuditSource.Ai,
+                policy.AuditSource,
                 denial.ToStableCode(),
                 "approval",
                 null,
@@ -517,7 +524,7 @@ public sealed class ConfirmApprovalService(
                 actor.UserId,
                 AuditScope.Company,
                 companyId,
-                AuditSource.Ai,
+                policy.AuditSource,
                 denial.ToStableCode(),
                 "approval",
                 null,

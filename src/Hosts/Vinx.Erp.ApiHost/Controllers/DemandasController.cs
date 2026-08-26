@@ -22,7 +22,10 @@ namespace Vinx.Erp.ApiHost.Controllers;
 [EnableRateLimiting(ApiConstants.ProtectedRateLimitPolicy)]
 [Route("demandas")]
 [Produces("application/json")]
-public sealed class DemandasController(DemandasService service) : ControllerBase
+public sealed class DemandasController(
+    DemandasService service,
+    DemandasApprovalsService approvals
+) : ControllerBase
 {
     [HttpGet("board")]
     [ProducesResponseType(typeof(IReadOnlyList<DemandBoardCardResponse>), StatusCodes.Status200OK)]
@@ -276,6 +279,41 @@ public sealed class DemandasController(DemandasService service) : ControllerBase
             actor,
             id,
             new(model.CompanyId, model.RequestId, model.ExpectedVersion, model.IsActive),
+            cancellationToken
+        );
+        return ToResult(result);
+    }
+
+    /// <summary>Decisão do estágio awaiting_approval consumindo Foundation Approvals.</summary>
+    [HttpPost("demands/{id:guid}/approval/approve")]
+    [BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true)]
+    [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
+    [ProducesResponseType(typeof(DemandResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Approve(Guid id, [FromBody] PauseAutomationRequest model, CancellationToken cancellationToken)
+    {
+        var actor = HttpContext.GetRequiredActorContext();
+        var result = await approvals.DecideAsync(
+            actor,
+            id,
+            approve: true,
+            new DemandasApprovalsService.DecisionCommand(model.CompanyId, model.RequestId, model.ExpectedVersion),
+            cancellationToken
+        );
+        return ToResult(result);
+    }
+
+    [HttpPost("demands/{id:guid}/approval/reject")]
+    [BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true)]
+    [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
+    [ProducesResponseType(typeof(DemandResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Reject(Guid id, [FromBody] PauseAutomationRequest model, CancellationToken cancellationToken)
+    {
+        var actor = HttpContext.GetRequiredActorContext();
+        var result = await approvals.DecideAsync(
+            actor,
+            id,
+            approve: false,
+            new DemandasApprovalsService.DecisionCommand(model.CompanyId, model.RequestId, model.ExpectedVersion),
             cancellationToken
         );
         return ToResult(result);

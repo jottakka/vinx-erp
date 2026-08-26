@@ -345,6 +345,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("overdue_since");
 
+                    b.Property<Guid?>("PendingApprovalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pending_approval_id");
+
+                    b.Property<Guid?>("PendingProposalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pending_proposal_id");
+
                     b.Property<string>("Priority")
                         .IsRequired()
                         .HasMaxLength(12)

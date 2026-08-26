@@ -2,7 +2,7 @@
 
 ## Ownership
 
-O módulo `Vinx.Erp.Demandas` possui o fluxo operacional interno de demandas (o "kanban automatizado" adotado do legado 0055/0056, com vocabulário honesto). Foundation fornece transação, RLS, auditoria, catálogo de capabilities, idempotência e o serviço de intents de notificação. **Fatias pendentes: aprovações (consumindo os serviços públicos do Foundation) e worker de varredura temporal — ver "Slices pending".**
+O módulo `Vinx.Erp.Demandas` possui o fluxo operacional interno de demandas (o "kanban automatizado" adotado do legado 0055/0056, com vocabulário honesto). Foundation fornece transação, RLS, auditoria, catálogo de capabilities, idempotência e o serviço de intents de notificação. Aprovação CONSUME os serviços públicos do Foundation via costura parametrizada (`ApprovalCapabilityPolicy.ForModule`) — alçada vive no Foundation, nada clonado aqui. **Fatia pendente: worker de varredura temporal.**
 
 ## Company scope
 
@@ -27,7 +27,7 @@ Gatilhos: cada etapa tem exatamente um gatilho (`explicit_completion`, `checklis
 
 Notificações via intents post-commit (flush terminal-only): `assigned`/`reassigned` → novo responsável (+criador), `participant_added` → adicionado, `stage_advanced` → responsável + supervisor + observadores dedup; chaves `demanda.<demandId:N>.<cycle:N>.<kind>` e deep link `/demandas?demand=<id>`. Pré-requisito de template in-app: catálogo precisa ter templates aprovados `demanda.<kind>` antes de ativar eventos no ambiente; falha de intent registra Warning e nunca desfaz a transição.
 
-**Approvals & worker slices pending**: decisão do estágio `awaiting_approval` ainda não consome Foundation Approvals; gatilhos por tempo decorrido, flag `overdue_since` e intents `awaiting_approval`/`overdue` chegam nas fatias seguintes. Enquanto isso, entrar/sair de `awaiting_approval` funciona como avanço estrutural ordinário.
+**Approvals implemented**: entrar em `awaiting_approval` prepara a proposta durável (falha de preparo bloqueia o avanço); `POST /demands/{id}/approval/approve|reject` confirmam/vetam com elegibilidade servidor-resolvida (supervisor vigente ou assign; o autor da entrega NÃO decide). Confirm claimed/replay encerra; veto reinicia em execution com ciclo novo. Intents: `awaiting_approval`. **Worker slice pending**: gatilhos de tempo, `overdue_since`, intent `overdue`; enquanto isso, pausar afeta apenas o comportamento futuro do worker.
 
 ## Deletion strategy
 
@@ -41,5 +41,4 @@ Fora desta fatia: designer de configuração de rotinas na web, migração de da
 
 ## Slices pending
 
-- **approvals**: consumo dos serviços públicos `PrepareApprovalService`/`ConfirmApprovalService` com elegibilidade resolvida no servidor; intents `awaiting_approval`.
 - **worker**: varredura Wolverine por gatilhos de tempo (avança DUE primeiro, depois marca overdue), idempotência por `(demanda, etapa, chave-gatilho)`, intents `overdue`.

@@ -207,6 +207,7 @@ builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddScoped<PaguaiDraftService>();
 builder.Services.AddScoped<AtendimentoCardService>();
 builder.Services.AddScoped<DemandasNotificationComposer>();
+builder.Services.AddScoped<DemandasApprovalsService>();
 builder.Services.AddScoped<DemandasService>();
 // Superfície do agente: options validadas on-start, gates e provider decididos
 // na composição; sem provider configurado o runner falha fechado.

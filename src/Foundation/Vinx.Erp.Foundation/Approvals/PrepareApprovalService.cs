@@ -25,14 +25,21 @@ public sealed class PrepareApprovalService(
     AuditAppender auditAppender,
     AuthorizationTelemetry telemetry,
     CapabilityEvaluator capabilityEvaluator,
-    ILogger<PrepareApprovalService> logger)
+    ILogger<PrepareApprovalService> logger,
+    ApprovalCapabilityPolicy? approvalPolicy = null)
 {
-    private const string CommandName = "ai.approvals.prepare";
-    private const string ExpireCommandName = "ai.approvals.expire";
     private const string Operation = "approval_preparation";
     private const string Module = "foundation";
-    private static readonly CapabilityRequirement RequiredCapability =
-        new(KnownCapabilities.AiWritesConfirm, CapabilityScope.Company);
+
+    // Costura aditiva: Legacy preserva o contrato do módulo AI byte a byte.
+    private readonly ApprovalCapabilityPolicy policy = approvalPolicy ?? ApprovalCapabilityPolicy.Legacy;
+
+    private CapabilityRequirement RequiredCapability =>
+        new(policy.CapabilityName, CapabilityScope.Company);
+
+    private string CommandName => policy.PrepareCommandName;
+
+    private string ExpireCommandName => policy.ExpireCommandName;
 
     public async Task<AuthorizationResult<PrepareApprovalResult>> PrepareAsync(
         ActorContext actor,
@@ -140,7 +147,7 @@ public sealed class PrepareApprovalService(
                         actor.UserId,
                         AuditScope.Company,
                         command.CompanyId,
-                        AuditSource.Ai,
+                        policy.AuditSource,
                         CommandName,
                         "approval",
                         approvalId,
@@ -243,7 +250,7 @@ public sealed class PrepareApprovalService(
                 actor.UserId,
                 AuditScope.Company,
                 companyId,
-                AuditSource.Ai,
+                policy.AuditSource,
                 ExpireCommandName,
                 "approval",
                 expiredId,
@@ -277,7 +284,7 @@ public sealed class PrepareApprovalService(
                 actor.UserId,
                 AuditScope.Company,
                 companyId,
-                AuditSource.Ai,
+                policy.AuditSource,
                 denial.ToStableCode(),
                 "approval",
                 null,
