@@ -9,6 +9,101 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class AtendimentoCardSchemaTests
 {
     [Fact]
+    public async Task Card_cancellation_constraint_accepts_each_complete_state_and_rejects_every_incomplete_combination()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var seeded = await SeedCardsAsync(fixture);
+        var cancelledAt = DateTimeOffset.UtcNow;
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        foreach (var accepted in new[]
+        {
+            new CancellationCardCase("novo", null, null, null, true),
+            new CancellationCardCase("em_andamento", null, null, null, true),
+            new CancellationCardCase("concluido", null, null, null, true),
+            new CancellationCardCase(
+                "cancelado",
+                cancelledAt,
+                seeded.ActorId,
+                "Motivo válido.",
+                true
+            ),
+            new CancellationCardCase("backlog", null, null, null, false),
+            new CancellationCardCase("cancelado", null, seeded.ActorId, "Motivo válido.", false),
+            new CancellationCardCase("cancelado", cancelledAt, null, "Motivo válido.", false),
+            new CancellationCardCase("cancelado", cancelledAt, seeded.ActorId, null, false),
+            new CancellationCardCase("cancelado", cancelledAt, seeded.ActorId, "   ", false),
+        })
+        {
+            var insert = InsertCardAsync(administrator, seeded, accepted);
+            if (accepted.Accepted)
+            {
+                await insert;
+                continue;
+            }
+
+            var exception = await Assert.ThrowsAsync<PostgresException>(() => insert);
+            Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+        }
+
+        foreach (var column in new[] { "novo", "em_andamento", "concluido" })
+        {
+            foreach (var incomplete in new[]
+            {
+                new CancellationCardCase(column, cancelledAt, null, null, false),
+                new CancellationCardCase(column, null, seeded.ActorId, null, false),
+                new CancellationCardCase(column, null, null, "Não permitido.", false),
+            })
+            {
+                var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+                    InsertCardAsync(administrator, seeded, incomplete)
+                );
+                Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task History_constraints_accept_cancelled_from_and_to_values_and_reject_unknown_values()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var seeded = await SeedCardsAsync(fixture);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        var columns = new[] { "novo", "em_andamento", "concluido", "cancelado" };
+        foreach (var fromColumn in columns)
+        {
+            foreach (var toColumn in columns)
+            {
+                await InsertHistoryAsync(administrator, seeded, fromColumn, toColumn);
+            }
+        }
+
+        foreach (var invalid in new[]
+        {
+            (FromColumn: "desconhecido", ToColumn: "novo"),
+            (FromColumn: "novo", ToColumn: "desconhecido"),
+        })
+        {
+            var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+                InsertHistoryAsync(administrator, seeded, invalid.FromColumn, invalid.ToColumn)
+            );
+            Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+        }
+
+        await using var count = new NpgsqlCommand(
+            "SELECT count(*) FROM service_desk.atendimento_card_history WHERE card_id = @card_id",
+            administrator
+        );
+        count.Parameters.AddWithValue("card_id", seeded.CardAId);
+        Assert.Equal(16L, await count.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public async Task Runtime_rls_reads_only_cards_for_the_transaction_company_and_never_without_context()
     {
         await using var fixture = new FoundationPostgresFixture();
@@ -289,7 +384,70 @@ public sealed class AtendimentoCardSchemaTests
         );
     }
 
+    private static async Task InsertCardAsync(
+        NpgsqlConnection administrator,
+        SeededCards seeded,
+        CancellationCardCase card
+    )
+    {
+        await using var insert = new NpgsqlCommand(
+            """
+            INSERT INTO service_desk.atendimento_cards
+                (id, company_id, title, description, column_name, cancelled_at, cancelled_by_user_id, cancellation_reason, created_by_user_id, updated_by_user_id, request_id)
+            VALUES
+                (@id, @company_id, 'Matriz de cancelamento', 'Validação de banco.', @column_name, @cancelled_at, @cancelled_by_user_id, @cancellation_reason, @actor_id, @actor_id, @request_id)
+            """,
+            administrator
+        );
+        insert.Parameters.AddWithValue("id", Guid.NewGuid());
+        insert.Parameters.AddWithValue("company_id", seeded.CompanyAId);
+        insert.Parameters.AddWithValue("column_name", card.Column);
+        insert.Parameters.AddWithValue("cancelled_at", (object?)card.CancelledAt ?? DBNull.Value);
+        insert.Parameters.AddWithValue(
+            "cancelled_by_user_id",
+            (object?)card.CancelledByUserId ?? DBNull.Value
+        );
+        insert.Parameters.AddWithValue("cancellation_reason", (object?)card.Reason ?? DBNull.Value);
+        insert.Parameters.AddWithValue("actor_id", seeded.ActorId);
+        insert.Parameters.AddWithValue("request_id", Guid.NewGuid());
+        await insert.ExecuteNonQueryAsync();
+    }
+
+    private static async Task InsertHistoryAsync(
+        NpgsqlConnection administrator,
+        SeededCards seeded,
+        string fromColumn,
+        string toColumn
+    )
+    {
+        await using var insert = new NpgsqlCommand(
+            """
+            INSERT INTO service_desk.atendimento_card_history
+                (id, company_id, card_id, from_column, to_column, actor_user_id, request_id)
+            VALUES
+                (@id, @company_id, @card_id, @from_column, @to_column, @actor_id, @request_id)
+            """,
+            administrator
+        );
+        insert.Parameters.AddWithValue("id", Guid.NewGuid());
+        insert.Parameters.AddWithValue("company_id", seeded.CompanyAId);
+        insert.Parameters.AddWithValue("card_id", seeded.CardAId);
+        insert.Parameters.AddWithValue("from_column", fromColumn);
+        insert.Parameters.AddWithValue("to_column", toColumn);
+        insert.Parameters.AddWithValue("actor_id", seeded.ActorId);
+        insert.Parameters.AddWithValue("request_id", Guid.NewGuid());
+        await insert.ExecuteNonQueryAsync();
+    }
+
     private sealed record AssignmentOption(Guid MembershipId, string DisplayName);
+
+    private sealed record CancellationCardCase(
+        string Column,
+        DateTimeOffset? CancelledAt,
+        Guid? CancelledByUserId,
+        string? Reason,
+        bool Accepted
+    );
 
     private sealed record SeededCards(
         Guid CompanyAId,

@@ -13,6 +13,8 @@ public sealed class AtendimentoCardMigrationTests
         "20260816012000_AddPlatformOrganizationProvisioning";
     private const string BeforeAtendimentoCancellation =
         "20260826112330_AddPaguaiRequestInvoiceFile";
+    private const string AtendimentoCancellationMigration =
+        "20260826122247_AddAtendimentoCancellationParticipantsAndAttachment";
 
     private static readonly (Guid Id, string Name)[] ExpectedCapabilities =
     [
@@ -231,5 +233,251 @@ public sealed class AtendimentoCardMigrationTests
         Assert.Equal("Perfil preservado", profile.DisplayName);
     }
 
+    [Theory]
+    [InlineData("participant")]
+    [InlineData("attachment")]
+    [InlineData("cancelled_card")]
+    [InlineData("cancel_history")]
+    public async Task Downgrade_fails_closed_with_new_atendimento_references_without_losing_data(
+        string retainedReference
+    )
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var seeded = await SeedCancellationDowngradeDataAsync(fixture);
+
+        switch (retainedReference)
+        {
+            case "participant":
+                await InsertParticipantAsync(fixture, seeded);
+                break;
+            case "attachment":
+                await AttachFileAsync(fixture, seeded);
+                break;
+            case "cancelled_card":
+                await CancelCardAsync(fixture, seeded);
+                break;
+            case "cancel_history":
+                await InsertCancellationHistoryAsync(fixture, seeded);
+                break;
+            default:
+                throw new InvalidOperationException($"Unexpected retained reference: {retainedReference}.");
+        }
+
+        await using (var migrator = fixture.CreateMigratorDbContext())
+        {
+            var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
+                await migrator.Database.MigrateAsync(BeforeAtendimentoCancellation)
+            );
+            Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+        }
+
+        await using var verify = await fixture.OpenAdministratorConnectionAsync();
+        await using var preserved = new NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM "__EFMigrationsHistory"
+                    WHERE migration_id = @migration_id),
+                EXISTS (
+                    SELECT 1
+                    FROM service_desk.atendimento_cards
+                    WHERE id = @card_id),
+                EXISTS (
+                    SELECT 1
+                    FROM service_desk.atendimento_card_participants
+                    WHERE company_id = @company_id
+                      AND card_id = @card_id
+                      AND membership_id = @membership_id),
+                EXISTS (
+                    SELECT 1
+                    FROM service_desk.atendimento_cards
+                    WHERE id = @card_id
+                      AND attachment_file_id = @file_id),
+                EXISTS (
+                    SELECT 1
+                    FROM service_desk.atendimento_cards
+                    WHERE id = @card_id
+                      AND column_name = 'cancelado'
+                      AND cancelled_at IS NOT NULL
+                      AND cancelled_by_user_id = @actor_id
+                      AND cancellation_reason = 'Motivo de downgrade.'),
+                EXISTS (
+                    SELECT 1
+                    FROM service_desk.atendimento_card_history
+                    WHERE id = @history_id
+                      AND from_column = 'novo'
+                      AND to_column = 'cancelado')
+            """,
+            verify
+        );
+        preserved.Parameters.AddWithValue("migration_id", AtendimentoCancellationMigration);
+        preserved.Parameters.AddWithValue("card_id", seeded.CardId);
+        preserved.Parameters.AddWithValue("company_id", seeded.CompanyId);
+        preserved.Parameters.AddWithValue("membership_id", seeded.MembershipId);
+        preserved.Parameters.AddWithValue("file_id", seeded.FileId);
+        preserved.Parameters.AddWithValue("actor_id", seeded.ActorId);
+        preserved.Parameters.AddWithValue("history_id", seeded.HistoryId);
+        await using var reader = await preserved.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.Equal(retainedReference == "participant", reader.GetBoolean(2));
+        Assert.Equal(retainedReference == "attachment", reader.GetBoolean(3));
+        Assert.Equal(retainedReference == "cancelled_card", reader.GetBoolean(4));
+        Assert.Equal(retainedReference == "cancel_history", reader.GetBoolean(5));
+    }
+
+    private static async Task<CancellationDowngradeSeed> SeedCancellationDowngradeDataAsync(
+        FoundationPostgresFixture fixture
+    )
+    {
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var group = new Group(Guid.NewGuid(), "Grupo de downgrade", actorId, requestId);
+        var company = new Company(
+            Guid.NewGuid(),
+            group.Id,
+            "Empresa de downgrade",
+            actorId,
+            requestId
+        );
+        var actor = new User(actorId, "Ator de downgrade", "downgrade-actor@example.test");
+        var membership = new Membership(
+            Guid.NewGuid(),
+            company.Id,
+            actor.Id,
+            actor.Id,
+            Guid.NewGuid()
+        );
+        administrator.AddRange(actor, group, company, membership);
+        await administrator.SaveChangesAsync();
+
+        var cardId = Guid.NewGuid();
+        await administrator.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            INSERT INTO service_desk.atendimento_cards
+                (id, company_id, title, description, column_name, created_by_user_id, updated_by_user_id, request_id)
+            VALUES
+                ({cardId}, {company.Id}, 'Cartão de downgrade', 'Preserva estado antes da reversão.', 'novo', {actor.Id}, {actor.Id}, {Guid.NewGuid()})
+            """
+        );
+
+        return new CancellationDowngradeSeed(
+            company.Id,
+            actor.Id,
+            membership.Id,
+            cardId,
+            Guid.NewGuid(),
+            Guid.NewGuid()
+        );
+    }
+
+    private static async Task InsertParticipantAsync(
+        FoundationPostgresFixture fixture,
+        CancellationDowngradeSeed seeded
+    )
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var insert = new NpgsqlCommand(
+            """
+            INSERT INTO service_desk.atendimento_card_participants (company_id, card_id, membership_id)
+            VALUES (@company_id, @card_id, @membership_id)
+            """,
+            administrator
+        );
+        insert.Parameters.AddWithValue("company_id", seeded.CompanyId);
+        insert.Parameters.AddWithValue("card_id", seeded.CardId);
+        insert.Parameters.AddWithValue("membership_id", seeded.MembershipId);
+        await insert.ExecuteNonQueryAsync();
+    }
+
+    private static async Task AttachFileAsync(
+        FoundationPostgresFixture fixture,
+        CancellationDowngradeSeed seeded
+    )
+    {
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var file = new FileRecord(
+            seeded.FileId,
+            seeded.CompanyId,
+            seeded.MembershipId,
+            "atendimento.pdf",
+            ".pdf",
+            42,
+            "application/pdf",
+            Convert.ToHexString(Guid.NewGuid().ToByteArray()).PadLeft(64, 'a'),
+            "service_desk_attachment",
+            "web",
+            DateTimeOffset.UtcNow.AddDays(1),
+            seeded.ActorId,
+            Guid.NewGuid()
+        );
+        file.MarkVerified(seeded.ActorId, Guid.NewGuid());
+        file.MarkConfirmed(seeded.ActorId, Guid.NewGuid());
+        administrator.Files.Add(file);
+        await administrator.SaveChangesAsync();
+        await administrator.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE service_desk.atendimento_cards SET attachment_file_id = {seeded.FileId} WHERE id = {seeded.CardId}"
+        );
+    }
+
+    private static async Task CancelCardAsync(
+        FoundationPostgresFixture fixture,
+        CancellationDowngradeSeed seeded
+    )
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var update = new NpgsqlCommand(
+            """
+            UPDATE service_desk.atendimento_cards
+            SET column_name = 'cancelado',
+                cancelled_at = clock_timestamp(),
+                cancelled_by_user_id = @actor_id,
+                cancellation_reason = 'Motivo de downgrade.'
+            WHERE id = @card_id
+            """,
+            administrator
+        );
+        update.Parameters.AddWithValue("actor_id", seeded.ActorId);
+        update.Parameters.AddWithValue("card_id", seeded.CardId);
+        Assert.Equal(1, await update.ExecuteNonQueryAsync());
+    }
+
+    private static async Task InsertCancellationHistoryAsync(
+        FoundationPostgresFixture fixture,
+        CancellationDowngradeSeed seeded
+    )
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var insert = new NpgsqlCommand(
+            """
+            INSERT INTO service_desk.atendimento_card_history
+                (id, company_id, card_id, from_column, to_column, actor_user_id, request_id)
+            VALUES
+                (@history_id, @company_id, @card_id, 'novo', 'cancelado', @actor_id, @request_id)
+            """,
+            administrator
+        );
+        insert.Parameters.AddWithValue("history_id", seeded.HistoryId);
+        insert.Parameters.AddWithValue("company_id", seeded.CompanyId);
+        insert.Parameters.AddWithValue("card_id", seeded.CardId);
+        insert.Parameters.AddWithValue("actor_id", seeded.ActorId);
+        insert.Parameters.AddWithValue("request_id", Guid.NewGuid());
+        await insert.ExecuteNonQueryAsync();
+    }
+
     private sealed record ActorProfile(Guid UserId, string DisplayName);
+
+    private sealed record CancellationDowngradeSeed(
+        Guid CompanyId,
+        Guid ActorId,
+        Guid MembershipId,
+        Guid CardId,
+        Guid FileId,
+        Guid HistoryId
+    );
 }

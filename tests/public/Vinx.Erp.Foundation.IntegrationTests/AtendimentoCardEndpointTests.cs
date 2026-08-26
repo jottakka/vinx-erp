@@ -1148,6 +1148,18 @@ public sealed class AtendimentoCardEndpointTests
     }
 
     [Fact]
+    public Task Concurrent_cancel_vs_move_has_one_winner_and_leaves_a_terminal_card_immutable() =>
+        AssertConcurrentCancellationRaceAsync(CancellationRaceCompetitor.Move);
+
+    [Fact]
+    public Task Concurrent_cancel_vs_assign_has_one_winner_and_leaves_a_terminal_card_immutable() =>
+        AssertConcurrentCancellationRaceAsync(CancellationRaceCompetitor.Assign);
+
+    [Fact]
+    public Task Concurrent_cancel_vs_cancel_has_one_winner_and_leaves_a_terminal_card_immutable() =>
+        AssertConcurrentCancellationRaceAsync(CancellationRaceCompetitor.Cancel);
+
+    [Fact]
     public async Task Failed_success_audit_rolls_back_card_and_idempotency_record()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -1440,6 +1452,189 @@ public sealed class AtendimentoCardEndpointTests
             : type.ValueKind == JsonValueKind.Array
                 && type.EnumerateArray().Any(value => value.GetString() == expectedType));
 
+    private static async Task AssertConcurrentCancellationRaceAsync(
+        CancellationRaceCompetitor competitor
+    )
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var createClient = factory.CreateClient();
+        var card = await CreateCardAsync(createClient, scenario.CompanyId);
+        using var cancellationClient = factory.CreateClient();
+        using var competingClient = factory.CreateClient();
+        var cancellationRequestId = Guid.NewGuid();
+        var competingRequestId = Guid.NewGuid();
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var cancellation = SendCancellationAsync(cancellationClient, cancellationRequestId);
+        var competing = SendCompetingMutationAsync(
+            competingClient,
+            competitor,
+            competingRequestId,
+            card.Version
+        );
+        start.SetResult();
+        var responses = await Task.WhenAll(cancellation, competing);
+        CardResponse winner;
+        IntegrityConflictResponse loser;
+        try
+        {
+            var success = Assert.Single(responses, response => response.StatusCode == HttpStatusCode.OK);
+            var conflict = Assert.Single(
+                responses,
+                response => response.StatusCode == HttpStatusCode.Conflict
+            );
+            winner = (await success.Content.ReadFromJsonAsync<CardResponse>())!;
+            loser = (await conflict.Content.ReadFromJsonAsync<IntegrityConflictResponse>())!;
+        }
+        finally
+        {
+            foreach (var response in responses)
+            {
+                response.Dispose();
+            }
+        }
+
+        Assert.Equal("integrity_conflict", loser.Code);
+        Assert.NotNull(loser.Current);
+        Assert.Equal(winner.Id, loser.Current!.Id);
+        Assert.Equal(winner.Column, loser.Current.Column);
+        Assert.Equal(winner.Version, loser.Current.Version);
+        Assert.Equal(card.Version + 1, winner.Version);
+
+        var cancellationWon = winner.Column == "cancelado";
+        var terminalRequestId = cancellationWon ? cancellationRequestId : Guid.NewGuid();
+        CardResponse terminal;
+        if (cancellationWon)
+        {
+            terminal = winner;
+        }
+        else
+        {
+            using var terminalResponse = await cancellationClient.PostAsJsonAsync(
+                $"/atendimento/cards/{card.Id}/cancel",
+                new CancelCardRequest(
+                    scenario.CompanyId,
+                    terminalRequestId,
+                    winner.Version,
+                    "Cancelamento após o conflito."
+                )
+            );
+            Assert.Equal(HttpStatusCode.OK, terminalResponse.StatusCode);
+            terminal = (await terminalResponse.Content.ReadFromJsonAsync<CardResponse>())!;
+        }
+
+        Assert.Equal("cancelado", terminal.Column);
+        using (var afterTerminal = await SendCompetingMutationAsync(
+            competingClient,
+            competitor,
+            Guid.NewGuid(),
+            terminal.Version
+        ))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, afterTerminal.StatusCode);
+            var conflict = await afterTerminal.Content.ReadFromJsonAsync<IntegrityConflictResponse>();
+            Assert.Equal("integrity_conflict", conflict?.Code);
+            Assert.Equal("cancelado", conflict?.Current?.Column);
+            Assert.Equal(terminal.Version, conflict?.Current?.Version);
+        }
+
+        var initialHistoryCount = cancellationWon || competitor == CancellationRaceCompetitor.Move
+            ? 1L
+            : 0L;
+        var expectedSuccesses = cancellationWon ? 1 : 2;
+        var expectedHistoryCount = initialHistoryCount + (cancellationWon ? 0 : 1);
+        var racedAndTerminalRequestIds = cancellationWon
+            ? new[] { cancellationRequestId, competingRequestId }
+            : new[] { cancellationRequestId, competingRequestId, terminalRequestId };
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(
+            expectedSuccesses,
+            await administrator.IdempotencyRecords.CountAsync(record =>
+                record.CompanyId == scenario.CompanyId
+                && racedAndTerminalRequestIds.Contains(record.RequestId)
+            )
+        );
+        Assert.Equal(
+            expectedHistoryCount,
+            await administrator.Database.SqlQuery<long>(
+                $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_card_history WHERE card_id = {card.Id}"
+            ).SingleAsync()
+        );
+        var successfulActions = competitor switch
+        {
+            CancellationRaceCompetitor.Move =>
+                new[] { "service_desk.ticket.cancel", "service_desk.ticket.move" },
+            CancellationRaceCompetitor.Assign =>
+                new[] { "service_desk.ticket.cancel", "service_desk.ticket.assign" },
+            CancellationRaceCompetitor.Cancel => new[] { "service_desk.ticket.cancel" },
+            _ => throw new ArgumentOutOfRangeException(nameof(competitor), competitor, null),
+        };
+        Assert.Equal(
+            expectedSuccesses,
+            await administrator.AuditEvents.CountAsync(audit =>
+                audit.ResourceId == card.Id
+                && audit.Outcome == AuditOutcome.Success
+                && successfulActions.Contains(audit.Action)
+            )
+        );
+
+        async Task<HttpResponseMessage> SendCancellationAsync(HttpClient client, Guid requestId)
+        {
+            await start.Task;
+            return await client.PostAsJsonAsync(
+                $"/atendimento/cards/{card.Id}/cancel",
+                new CancelCardRequest(
+                    scenario.CompanyId,
+                    requestId,
+                    card.Version,
+                    "Cancelamento concorrente."
+                )
+            );
+        }
+
+        async Task<HttpResponseMessage> SendCompetingMutationAsync(
+            HttpClient client,
+            CancellationRaceCompetitor operation,
+            Guid requestId,
+            long expectedVersion
+        )
+        {
+            await start.Task;
+            return operation switch
+            {
+                CancellationRaceCompetitor.Move => await client.PostAsJsonAsync(
+                    $"/atendimento/cards/{card.Id}/move",
+                    new MoveCardRequest(
+                        scenario.CompanyId,
+                        requestId,
+                        expectedVersion,
+                        "em_andamento"
+                    )
+                ),
+                CancellationRaceCompetitor.Assign => await client.PostAsJsonAsync(
+                    $"/atendimento/cards/{card.Id}/assign",
+                    new AssignCardRequest(
+                        scenario.CompanyId,
+                        requestId,
+                        expectedVersion,
+                        scenario.AssigneeMembershipId
+                    )
+                ),
+                CancellationRaceCompetitor.Cancel => await client.PostAsJsonAsync(
+                    $"/atendimento/cards/{card.Id}/cancel",
+                    new CancelCardRequest(
+                        scenario.CompanyId,
+                        requestId,
+                        expectedVersion,
+                        "Cancelamento concorrente alternativo."
+                    )
+                ),
+                _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
+            };
+        }
+    }
+
     private static async Task<CardResponse> CreateCardAsync(HttpClient client, Guid companyId)
     {
         using var response = await client.PostAsJsonAsync(
@@ -1696,6 +1891,13 @@ public sealed class AtendimentoCardEndpointTests
         Guid? CancelledByUserId,
         string? CancellationReason
     );
+
+    private enum CancellationRaceCompetitor
+    {
+        Move,
+        Assign,
+        Cancel,
+    }
 
     private sealed class BrowserSessionProviderHandler : HttpMessageHandler
     {

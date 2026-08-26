@@ -110,6 +110,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
         protected override void Down(MigrationBuilder migrationBuilder) =>
             migrationBuilder.Sql(
                 """
+                -- The migrator owns these tables, but FORCE RLS hides every row without a
+                -- company context. Temporarily restore the owner's migration visibility so
+                -- the fail-closed check sees references from every company. The migration
+                -- transaction rolls this back on refusal and restores FORCE before a safe Down.
+                ALTER TABLE service_desk.atendimento_cards NO FORCE ROW LEVEL SECURITY;
+                ALTER TABLE service_desk.atendimento_card_history NO FORCE ROW LEVEL SECURITY;
+                ALTER TABLE service_desk.atendimento_card_participants NO FORCE ROW LEVEL SECURITY;
+
                 DO $block$
                 BEGIN
                     IF EXISTS (SELECT 1 FROM service_desk.atendimento_card_participants)
@@ -128,6 +136,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     END IF;
                 END;
                 $block$;
+
+                ALTER TABLE service_desk.atendimento_cards FORCE ROW LEVEL SECURITY;
+                ALTER TABLE service_desk.atendimento_card_history FORCE ROW LEVEL SECURITY;
+                ALTER TABLE service_desk.atendimento_card_participants FORCE ROW LEVEL SECURITY;
 
                 SET ROLE vinx_authorization_owner;
                 REVOKE ALL ON FUNCTION foundation.current_company_membership_options()
