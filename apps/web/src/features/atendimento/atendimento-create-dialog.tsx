@@ -237,6 +237,7 @@ export function AtendimentoCreateDialog({
           <Stack direction={{ md: "row", xs: "column" }} spacing={2}>
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <TextField
+                autoFocus
                 fullWidth
                 label="Título"
                 disabled={phase !== "idle"}

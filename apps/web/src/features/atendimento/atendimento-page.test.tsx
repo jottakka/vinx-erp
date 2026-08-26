@@ -249,6 +249,26 @@ describe("AtendimentoPage", () => {
     );
   });
 
+  it("moves focus from Novo atendimento into the create dialog", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Novo atendimento" }),
+      ).toBeEnabled(),
+    );
+    const createButton = screen.getByRole("button", {
+      name: "Novo atendimento",
+    });
+    await user.click(createButton);
+
+    expect(await screen.findByLabelText("Título")).toHaveFocus();
+    expect(createButton).not.toHaveFocus();
+  });
+
   it("keeps the create dialog data after a real client creation failure", async () => {
     const user = userEvent.setup();
     const attachmentFileId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
