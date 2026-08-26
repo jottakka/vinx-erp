@@ -211,6 +211,38 @@ public sealed class TelegramInboundWorkerTests
         Assert.Equal(Guid.Empty, payload.RootElement.GetProperty("inboundMessageId").GetGuid());
     }
 
+    [Fact]
+    public async Task Registered_dead_letter_interceptor_replaces_untrusted_telegram_exception_content()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        );
+        using var client = worker.CreateClient();
+        var secret = "telegram-provider-id-secret";
+        var envelope = new Envelope(new InboundTelegramTextReceived(Guid.NewGuid()));
+        var interceptor = worker
+            .Services.GetRequiredService<IEnumerable<IDeadLetterInterceptor>>()
+            .Single();
+
+        var persistedException = await interceptor.BeforeStoreAsync(
+            envelope,
+            new WorkerHostTypes.InboundTelegramDeadLetterException("untrusted", secret),
+            CancellationToken.None
+        );
+
+        var telegramException = Assert.IsType<WorkerHostTypes.InboundTelegramDeadLetterException>(
+            persistedException
+        );
+        Assert.Equal(
+            WorkerHostTypes.InboundTelegramDeadLetterException.UnexpectedExceptionType,
+            telegramException.ExceptionType
+        );
+        Assert.Equal("Inbound Telegram receipt failed unexpectedly.", telegramException.Message);
+        Assert.DoesNotContain(secret, telegramException.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, telegramException.ToString(), StringComparison.Ordinal);
+    }
+
     private static async Task<string> AdmitAsync(
         string connectionString,
         Guid inboundId,

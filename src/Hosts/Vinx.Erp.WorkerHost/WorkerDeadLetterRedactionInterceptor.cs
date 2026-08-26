@@ -20,9 +20,9 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
     )
     {
         RedactEnvelope(envelope);
-        if (exception is InboundTelegramDeadLetterException)
+        if (exception is InboundTelegramDeadLetterException telegramException)
         {
-            return ValueTask.FromResult<Exception?>(exception);
+            return ValueTask.FromResult<Exception?>(RedactTelegramException(telegramException));
         }
 
         return ValueTask.FromResult<Exception?>(
@@ -32,6 +32,29 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
             )
         );
     }
+
+    private static InboundTelegramDeadLetterException RedactTelegramException(
+        InboundTelegramDeadLetterException exception
+    ) =>
+        exception.ExceptionType switch
+        {
+            InboundTelegramDeadLetterException.InvalidExceptionType => new(
+                InboundTelegramDeadLetterException.InvalidExceptionType,
+                "Inbound Telegram receipt rejected the envelope."
+            ),
+            InboundTelegramDeadLetterException.RetryExhaustedExceptionType => new(
+                InboundTelegramDeadLetterException.RetryExhaustedExceptionType,
+                "Inbound Telegram receipt exhausted transient retries."
+            ),
+            InboundTelegramDeadLetterException.UnexpectedExceptionType => new(
+                InboundTelegramDeadLetterException.UnexpectedExceptionType,
+                "Inbound Telegram receipt failed unexpectedly."
+            ),
+            _ => new(
+                InboundTelegramDeadLetterException.UnexpectedExceptionType,
+                "Inbound Telegram receipt failed unexpectedly."
+            ),
+        };
 
     /// <summary>
     /// Redige por tipo de mensagem: o corpo vira o registro vazio do próprio
