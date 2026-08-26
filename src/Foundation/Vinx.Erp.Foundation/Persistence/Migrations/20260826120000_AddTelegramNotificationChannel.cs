@@ -28,8 +28,8 @@ public partial class AddTelegramNotificationChannel : Migration
                     telegram_text IS NULL
                     OR (channel = 'telegram'
                         AND is_approved
-                        AND btrim(telegram_text, E' \t\n\v\f\r') <> ''
-                        AND telegram_text = btrim(telegram_text, E' \t\n\v\f\r')
+                        AND btrim(telegram_text, E' \t\n\013\f\r') <> ''
+                        AND telegram_text = btrim(telegram_text, E' \t\n\013\f\r')
                         AND char_length(telegram_text) BETWEEN 1 AND 4096));
             ALTER TABLE notifications.notification_intents
                 DROP CONSTRAINT notification_intents_channel_check,
@@ -110,8 +110,8 @@ public partial class AddTelegramNotificationChannel : Migration
                         AND template.is_approved
                         AND (p_channel <> 'telegram'
                             OR (template.telegram_text IS NOT NULL
-                                AND btrim(template.telegram_text, E' \t\n\v\f\r') <> ''
-                                AND template.telegram_text = btrim(template.telegram_text, E' \t\n\v\f\r')
+                                AND btrim(template.telegram_text, E' \t\n\013\f\r') <> ''
+                                AND template.telegram_text = btrim(template.telegram_text, E' \t\n\013\f\r')
                                 AND char_length(template.telegram_text) BETWEEN 1 AND 4096)))
                 THEN
                     RAISE EXCEPTION 'notification template is not approved' USING ERRCODE = '22023';
