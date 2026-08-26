@@ -77,6 +77,7 @@ describe("application routes", () => {
     ["/atendimento", "Atendimento"],
     ["/kanban", "Kanban"],
     ["/pessoas", "Pessoas"],
+    ["/permissoes", "Permissões"],
   ])("protects and renders %s", async (path, heading) => {
     const router = renderRoute(path, await signedInGateway());
 

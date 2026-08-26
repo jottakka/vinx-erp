@@ -42,6 +42,7 @@ public static class AuthorizationErrorCodeExtensions
             AuthorizationErrorCode.ProposalUnavailable => "proposal_unavailable",
             AuthorizationErrorCode.ProposalConflict => "proposal_conflict",
             AuthorizationErrorCode.PlatformOperatorUnavailable => "platform_operator_unavailable",
+            AuthorizationErrorCode.LastAdminGuard => "last_admin_guard",
             _ => throw new ArgumentOutOfRangeException(
                 nameof(errorCode),
                 errorCode,
@@ -63,6 +64,7 @@ public static class AuthorizationErrorCodeExtensions
             AuthorizationErrorCode.ProposalConflict => StatusCodes.Status409Conflict,
             AuthorizationErrorCode.PlatformOperatorUnavailable =>
                 StatusCodes.Status503ServiceUnavailable,
+            AuthorizationErrorCode.LastAdminGuard => StatusCodes.Status409Conflict,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(errorCode),
                 errorCode,

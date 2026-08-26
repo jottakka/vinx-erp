@@ -7,10 +7,10 @@ using Vinx.Erp.Foundation.Identity;
 
 namespace Vinx.Erp.Foundation.Platform;
 
-/// <summary>Envia o convite inicial pelo Admin API sem reter token, e-mail ou corpo do provedor.</summary>
-public sealed class SupabaseAdminOwnerInvitationClient
+/// <summary>Envia o convite pelo Admin API sem reter token, e-mail ou corpo do provedor.</summary>
+public sealed class SupabaseAdminInvitationClient
 {
-    public const string HttpClientName = "supabase-owner-invitation";
+    public const string HttpClientName = "supabase-invitation";
     private const int MaximumResponseBytes = 32 * 1024;
 
     private readonly HttpClient _httpClient;
@@ -19,7 +19,7 @@ public sealed class SupabaseAdminOwnerInvitationClient
     private readonly string _serviceRoleKey;
     private readonly string _inviteRedirectUrl;
 
-    public SupabaseAdminOwnerInvitationClient(
+    public SupabaseAdminInvitationClient(
         HttpClient httpClient,
         SupabaseAuthOptions authentication,
         SupabaseAdminOptions administration
@@ -41,18 +41,18 @@ public sealed class SupabaseAdminOwnerInvitationClient
             || string.IsNullOrWhiteSpace(_inviteRedirectUrl)
         )
         {
-            throw new ArgumentException("Supabase owner invitation options must be configured.");
+            throw new ArgumentException("Supabase invitation options must be configured.");
         }
     }
 
-    public async Task<SupabaseOwnerInvitationResult> InviteAsync(
-        string ownerEmail,
+    public async Task<SupabaseInvitationResult> InviteAsync(
+        string inviteeEmail,
         CancellationToken cancellationToken
     )
     {
-        if (string.IsNullOrWhiteSpace(ownerEmail))
+        if (string.IsNullOrWhiteSpace(inviteeEmail))
         {
-            return SupabaseOwnerInvitationResult.Rejected();
+            return SupabaseInvitationResult.Rejected();
         }
 
         var endpoint = new Uri($"{_issuer.TrimEnd('/')}/invite", UriKind.Absolute);
@@ -63,7 +63,7 @@ public sealed class SupabaseAdminOwnerInvitationClient
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
         {
             Content = new StringContent(
-                JsonSerializer.Serialize(new SupabaseOwnerInvitationRequest(ownerEmail)),
+                JsonSerializer.Serialize(new SupabaseInvitationRequest(inviteeEmail)),
                 Encoding.UTF8,
                 "application/json"
             ),
@@ -85,40 +85,40 @@ public sealed class SupabaseAdminOwnerInvitationClient
                         is HttpStatusCode.BadRequest
                             or HttpStatusCode.Conflict
                             or HttpStatusCode.UnprocessableEntity
-                    ? SupabaseOwnerInvitationResult.Rejected()
-                    : SupabaseOwnerInvitationResult.Ambiguous();
+                    ? SupabaseInvitationResult.Rejected()
+                    : SupabaseInvitationResult.Ambiguous();
             }
 
             var payload = await ReadResponseAsync(response, cancellationToken);
             if (payload is null)
             {
-                return SupabaseOwnerInvitationResult.Ambiguous();
+                return SupabaseInvitationResult.Ambiguous();
             }
 
             using var document = JsonDocument.Parse(payload);
-            return TryGetInvitedSubject(document.RootElement, ownerEmail, out var subject)
-                ? SupabaseOwnerInvitationResult.Succeeded(subject)
-                : SupabaseOwnerInvitationResult.Ambiguous();
+            return TryGetInvitedSubject(document.RootElement, inviteeEmail, out var subject)
+                ? SupabaseInvitationResult.Succeeded(subject)
+                : SupabaseInvitationResult.Ambiguous();
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return SupabaseOwnerInvitationResult.Ambiguous();
+            return SupabaseInvitationResult.Ambiguous();
         }
         catch (HttpRequestException)
         {
-            return SupabaseOwnerInvitationResult.Ambiguous();
+            return SupabaseInvitationResult.Ambiguous();
         }
         catch (IOException)
         {
-            return SupabaseOwnerInvitationResult.Ambiguous();
+            return SupabaseInvitationResult.Ambiguous();
         }
         catch (JsonException)
         {
-            return SupabaseOwnerInvitationResult.Ambiguous();
+            return SupabaseInvitationResult.Ambiguous();
         }
     }
 
-    private bool TryGetInvitedSubject(JsonElement user, string ownerEmail, out Guid subject)
+    private bool TryGetInvitedSubject(JsonElement user, string inviteeEmail, out Guid subject)
     {
         subject = Guid.Empty;
         if (
@@ -129,7 +129,7 @@ public sealed class SupabaseAdminOwnerInvitationClient
             || !TryGetRequiredString(user, "aud", out var audience)
             || !string.Equals(audience, _audience, StringComparison.Ordinal)
             || !TryGetRequiredString(user, "email", out var returnedEmail)
-            || !string.Equals(returnedEmail, ownerEmail, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(returnedEmail, inviteeEmail, StringComparison.OrdinalIgnoreCase)
             || !HasFalseBoolean(user, "is_anonymous")
             || !IsMissingOrNull(user, "banned_until")
             || !IsMissingOrNull(user, "deleted_at")
@@ -188,29 +188,29 @@ public sealed class SupabaseAdminOwnerInvitationClient
     private static bool IsMissingOrNull(JsonElement element, string name) =>
         !element.TryGetProperty(name, out var property) || property.ValueKind is JsonValueKind.Null;
 
-    private sealed record SupabaseOwnerInvitationRequest(
+    private sealed record SupabaseInvitationRequest(
         [property: JsonPropertyName("email")] string Email
     );
 }
 
-public enum SupabaseOwnerInvitationResultKind
+public enum SupabaseInvitationResultKind
 {
     Succeeded,
     Rejected,
     Ambiguous,
 }
 
-public sealed record SupabaseOwnerInvitationResult(
-    SupabaseOwnerInvitationResultKind Kind,
+public sealed record SupabaseInvitationResult(
+    SupabaseInvitationResultKind Kind,
     Guid? Subject
 )
 {
-    public static SupabaseOwnerInvitationResult Succeeded(Guid subject) =>
-        new(SupabaseOwnerInvitationResultKind.Succeeded, subject);
+    public static SupabaseInvitationResult Succeeded(Guid subject) =>
+        new(SupabaseInvitationResultKind.Succeeded, subject);
 
-    public static SupabaseOwnerInvitationResult Rejected() =>
-        new(SupabaseOwnerInvitationResultKind.Rejected, null);
+    public static SupabaseInvitationResult Rejected() =>
+        new(SupabaseInvitationResultKind.Rejected, null);
 
-    public static SupabaseOwnerInvitationResult Ambiguous() =>
-        new(SupabaseOwnerInvitationResultKind.Ambiguous, null);
+    public static SupabaseInvitationResult Ambiguous() =>
+        new(SupabaseInvitationResultKind.Ambiguous, null);
 }

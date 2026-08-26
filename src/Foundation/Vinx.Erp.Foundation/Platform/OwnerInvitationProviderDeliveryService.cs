@@ -70,22 +70,22 @@ public sealed class OwnerInvitationProviderDeliveryService(
             throw new OwnerInvitationIngressPermanentException();
         }
 
-        var provider = new SupabaseAdminOwnerInvitationClient(
-            httpClientFactory.CreateClient(SupabaseAdminOwnerInvitationClient.HttpClientName),
+        var provider = new SupabaseAdminInvitationClient(
+            httpClientFactory.CreateClient(SupabaseAdminInvitationClient.HttpClientName),
             authentication,
             administration
         );
         var providerResult = await provider.InviteAsync(claim.OwnerEmail, cancellationToken);
         var finalization = providerResult.Kind switch
         {
-            SupabaseOwnerInvitationResultKind.Succeeded
+            SupabaseInvitationResultKind.Succeeded
                 when providerResult.Subject is Guid subject => (
                 "success",
                 authentication.NormalizedIssuer,
                 (Guid?)subject,
                 (string?)null
             ),
-            SupabaseOwnerInvitationResultKind.Rejected => (
+            SupabaseInvitationResultKind.Rejected => (
                 "failed",
                 (string?)null,
                 (Guid?)null,

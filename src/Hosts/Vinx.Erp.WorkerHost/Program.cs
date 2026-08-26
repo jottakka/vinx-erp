@@ -9,6 +9,7 @@ using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
+using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Email;
@@ -126,6 +127,8 @@ builder.Services.AddDbContext<FoundationDbContext>(
 );
 builder.Services.AddScoped<OwnerInvitationDeliveryIngressService>();
 builder.Services.AddScoped<OwnerInvitationProviderDeliveryService>();
+builder.Services.AddScoped<MemberInvitationDeliveryIngressService>();
+builder.Services.AddScoped<MemberInvitationProviderDeliveryService>();
 builder.Services.AddSingleton<NotificationDeliveryMetrics>();
 builder.Services.AddScoped<NotificationProviderResolver>();
 builder.Services.AddScoped<INotificationProvider, InAppNotificationProvider>();
@@ -310,7 +313,7 @@ builder
     );
 builder
     .Services.AddHttpClient(
-        SupabaseAdminOwnerInvitationClient.HttpClientName,
+        SupabaseAdminInvitationClient.HttpClientName,
         client => client.Timeout = TimeSpan.FromSeconds(10)
     )
     .ConfigurePrimaryHttpMessageHandler(() =>
@@ -330,6 +333,7 @@ builder.Host.UseWolverine(options =>
     options.UseEntityFrameworkCoreTransactions();
     options.Discovery.DisableConventionalDiscovery(true);
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();
+    options.Discovery.IncludeType<MemberInvitationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<NotificationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppImageReceivedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppTextCorrelationExpiredHandler>();
@@ -343,6 +347,7 @@ builder.Host.UseWolverine(options =>
             transport.TransportSchemaName("vinx_wolverine_queues")
         );
     options.ListenToPostgresqlQueue("owner-invitation-delivery").UseDurableInbox();
+    options.ListenToPostgresqlQueue("member-invitation-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("notification-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound-documents").UseDurableInbox();

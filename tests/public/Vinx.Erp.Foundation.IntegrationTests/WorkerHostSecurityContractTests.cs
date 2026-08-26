@@ -767,7 +767,7 @@ public sealed class WorkerHostSecurityContractTests
             }
             builder.ConfigureTestServices(services =>
                 services
-                    .AddHttpClient(SupabaseAdminOwnerInvitationClient.HttpClientName)
+                    .AddHttpClient(SupabaseAdminInvitationClient.HttpClientName)
                     .ConfigurePrimaryHttpMessageHandler(() => new SupabaseInviteHandler())
             );
         }

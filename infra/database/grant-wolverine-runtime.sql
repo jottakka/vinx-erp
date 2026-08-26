@@ -41,6 +41,8 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA vinx_wolverine_worker TO vinx_wor
 GRANT SELECT, INSERT, UPDATE, DELETE
     ON TABLE vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery,
         vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery_scheduled,
+        vinx_wolverine_queues.wolverine_queue_member_invitation_delivery,
+        vinx_wolverine_queues.wolverine_queue_member_invitation_delivery_scheduled,
         vinx_wolverine_queues.wolverine_queue_notification_delivery,
         vinx_wolverine_queues.wolverine_queue_notification_delivery_scheduled,
         vinx_wolverine_queues.wolverine_queue_whatsapp_inbound,
