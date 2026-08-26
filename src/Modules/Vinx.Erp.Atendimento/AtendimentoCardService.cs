@@ -556,32 +556,66 @@ public sealed class AtendimentoCardService(
             payloadHash: Hash(new WatcherCommandPayload(cardId, command, isAdd)),
             async () =>
             {
-                if (
-                    !await IsActiveMembershipAsync(
-                        command.CompanyId,
-                        command.MemberMembershipId,
-                        cancellationToken
-                    )
-                )
-                {
-                    return Mutation.ResourceNotFound();
-                }
-
-                var before = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
-                if (before is null)
-                {
-                    return Mutation.ResourceNotFound();
-                }
-
-                var membershipId = await ResolveActorMembershipIdAsync(
-                    actor,
-                    command.CompanyId,
+                // Repetição idempotente antecipada: sem DML, sem bump de versão.
+                var alreadyWatcher = await database.AtendimentoCardWatchers.AnyAsync(
+                    watcher =>
+                        watcher.CompanyId == command.CompanyId
+                        && watcher.CardId == cardId
+                        && watcher.MembershipId == command.MemberMembershipId,
                     cancellationToken
                 );
                 int affected;
-                if (isAdd)
+                Guid? membershipId;
+                if (!alreadyWatcher)
                 {
-                    affected = await database.Database.ExecuteSqlInterpolatedAsync(
+                    var memberActive = await IsActiveMembershipAsync(
+                        command.CompanyId,
+                        command.MemberMembershipId,
+                        cancellationToken
+                    );
+                    if (!memberActive)
+                    {
+                        return Mutation.ResourceNotFound();
+                    }
+
+                    var unchangedBefore = await FindCardAsync(
+                        command.CompanyId,
+                        cardId,
+                        cancellationToken
+                    );
+                    if (unchangedBefore is null)
+                    {
+                        return Mutation.ResourceNotFound();
+                    }
+
+                    // Bump otimista ANTES do DML do observador: versão divergente
+                    // devolve conflito com estado atual e desfaz o restante.
+                    var updatedCard = await UpdateCardAsync(
+                        cardId,
+                        command.CompanyId,
+                        command.ExpectedVersion,
+                        card =>
+                        {
+                            card.RequestId = command.RequestId;
+                        },
+                        cancellationToken
+                    );
+                    if (updatedCard is null)
+                    {
+                        return await ReadCurrentAfterMutationMissAsync(
+                            command.CompanyId,
+                            cardId,
+                            cancellationToken
+                        );
+                    }
+
+                    membershipId = await ResolveActorMembershipIdAsync(
+                        actor,
+                        command.CompanyId,
+                        cancellationToken
+                    );
+                    affected = 1;
+                    await database.Database.ExecuteSqlInterpolatedAsync(
                         $"""
                         INSERT INTO service_desk.atendimento_card_watchers
                             (id, company_id, card_id, membership_id, created_by_user_id, request_id)
@@ -590,36 +624,34 @@ public sealed class AtendimentoCardService(
                         """,
                         cancellationToken
                     );
-                    if (affected > 0)
+                    await AppendCardEventAsync(
+                        command.CompanyId,
+                        cardId,
+                        membershipId,
+                        "watcher_added",
+                        new { watcherMembershipId = command.MemberMembershipId },
+                        cancellationToken
+                    );
+                    var recipientUserId = await ResolveMembershipUserIdAsync(
+                        command.CompanyId,
+                        command.MemberMembershipId,
+                        cancellationToken
+                    );
+                    if (recipientUserId is not null)
                     {
-                        await AppendCardEventAsync(
-                            command.CompanyId,
-                            cardId,
-                            membershipId,
-                            "watcher_added",
-                            new { watcherMembershipId = command.MemberMembershipId },
-                            cancellationToken
+                        pending.Add(
+                            new PendingIntent(
+                                command.CompanyId,
+                                cardId,
+                                WatcherAddedTemplateKey,
+                                recipientUserId.Value
+                            )
                         );
-                        var recipientUserId = await ResolveMembershipUserIdAsync(
-                            command.CompanyId,
-                            command.MemberMembershipId,
-                            cancellationToken
-                        );
-                        if (recipientUserId is not null)
-                        {
-                            pending.Add(
-                                new PendingIntent(
-                                    command.CompanyId,
-                                    cardId,
-                                    WatcherAddedTemplateKey,
-                                    recipientUserId.Value
-                                )
-                            );
-                        }
                     }
                 }
                 else
                 {
+                    membershipId = null;
                     affected = await database.Database.ExecuteSqlInterpolatedAsync(
                         $"""
                         DELETE FROM service_desk.atendimento_card_watchers
@@ -629,24 +661,58 @@ public sealed class AtendimentoCardService(
                         """,
                         cancellationToken
                     );
-                    if (affected > 0)
-                    {
-                        await AppendCardEventAsync(
-                            command.CompanyId,
-                            cardId,
-                            membershipId,
-                            "watcher_removed",
-                            new { watcherMembershipId = command.MemberMembershipId },
-                            cancellationToken
-                        );
-                    }
+                }
+
+                if (isAdd && alreadyWatcher)
+                {
+                    var currentNoChange = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
+                    return currentNoChange is null
+                        ? Mutation.ResourceNotFound()
+                        : Mutation.Succeeded(currentNoChange, AtendimentoCardOperationState.NoChange);
                 }
 
                 if (affected == 0)
                 {
-                    // Repetição idempotente: nada muda e a versão permanece.
-                    return Mutation.Succeeded(before, AtendimentoCardOperationState.NoChange);
+                    // Remoção de vínculo inexistente é repetição idempotente.
+                    var currentNone = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
+                    return currentNone is null
+                        ? Mutation.ResourceNotFound()
+                        : Mutation.Succeeded(currentNone, AtendimentoCardOperationState.NoChange);
                 }
+
+                // Caminho da remoção efetiva precisa do bump otimista e do evento.
+                var bumpedForRemove = await UpdateCardAsync(
+                    cardId,
+                    command.CompanyId,
+                    command.ExpectedVersion,
+                    card =>
+                    {
+                        card.RequestId = command.RequestId;
+                    },
+                    cancellationToken
+                );
+                if (bumpedForRemove is null)
+                {
+                    return await ReadCurrentAfterMutationMissAsync(
+                        command.CompanyId,
+                        cardId,
+                        cancellationToken
+                    );
+                }
+
+                var removalActor = await ResolveActorMembershipIdAsync(
+                    actor,
+                    command.CompanyId,
+                    cancellationToken
+                );
+                await AppendCardEventAsync(
+                    command.CompanyId,
+                    cardId,
+                    removalActor,
+                    "watcher_removed",
+                    new { watcherMembershipId = command.MemberMembershipId },
+                    cancellationToken
+                );
 
                 var current = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
                 return current is null
