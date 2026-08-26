@@ -11,6 +11,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AttachmentUploader } from "../../shared/ui/attachment-field";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanySelect } from "../../shared/ui/company-select";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
@@ -33,6 +34,25 @@ const createCapability = "paguai.draft.create";
 type PaguaiDraftClient = ReturnType<typeof createPaguaiDraftClient>;
 
 function message(error: PaguaiDraftError) {
+  if (typeof error === "object") {
+    return (
+      (
+        {
+          proof_file_not_found:
+            "O comprovante informado não foi encontrado nesta empresa.",
+          proof_file_denied:
+            "Este comprovante não pertence à sua sessão ou empresa.",
+          proof_file_not_ready:
+            "O comprovante ainda está em análise de segurança. Tente novamente.",
+          proof_file_bound:
+            "Este comprovante já está vinculado a outra solicitação.",
+          proof_version_conflict:
+            "Outra alteração salvou antes de você. Recarregue e tente novamente.",
+        } as const
+      )[error.code] ?? "Não foi possível concluir a operação."
+    );
+  }
+
   return (
     {
       400: "Revise os campos obrigatórios.",
@@ -51,8 +71,10 @@ function message(error: PaguaiDraftError) {
 
 export function PaguaiPage({
   draftClient = client,
+  proofUploader,
 }: {
   draftClient?: PaguaiDraftClient;
+  proofUploader?: AttachmentUploader;
 }) {
   const { bootstrap } = useSession();
   const companies = useMemo(
@@ -72,7 +94,6 @@ export function PaguaiPage({
   const [viewOpen, setViewOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [proofFileId, setProofFileId] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "submitting">(
     "idle",
   );
@@ -80,7 +101,7 @@ export function PaguaiPage({
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const companyIdRef = useRef(companyId);
 
-  const proofUploader = useMemo(() => createPaguaiProofUploader(), []);
+  const proofUploaderInstance = useMemo(() => createPaguaiProofUploader(), []);
 
   useEffect(() => {
     companyIdRef.current = companyId;
@@ -141,26 +162,30 @@ export function PaguaiPage({
     [selectedCompany],
   );
 
-  const uploaderAdapter = useMemo(
-    () => (file: File, signal: AbortSignal) =>
-      proofUploader.upload({ companyId, file, signal }).then((result) =>
-        result.ok
-          ? {
-              ok: true as const,
-              fileId: result.proof.fileId,
-              fileName: result.proof.fileName,
-              mimeType: result.proof.mimeType,
-              sizeBytes: result.proof.sizeBytes,
-            }
-          : {
-              ok: false as const,
-              error: {
-                kind: result.error.kind,
-                message: "Falha ao anexar.",
-              },
-            },
-      ),
-    [companyId, proofUploader],
+  const uploaderAdapter: AttachmentUploader = useMemo(
+    () =>
+      proofUploader ??
+      ((file: File, signal: AbortSignal) =>
+        proofUploaderInstance
+          .upload({ companyId, file, signal })
+          .then((result) =>
+            result.ok
+              ? {
+                  ok: true as const,
+                  fileId: result.proof.fileId,
+                  fileName: result.proof.fileName,
+                  mimeType: result.proof.mimeType,
+                  sizeBytes: result.proof.sizeBytes,
+                }
+              : {
+                  ok: false as const,
+                  error: {
+                    kind: result.error.kind,
+                    message: "Falha ao anexar.",
+                  },
+                },
+          )),
+    [companyId, proofUploader, proofUploaderInstance],
   );
 
   async function submit(values: {
@@ -185,6 +210,7 @@ export function PaguaiPage({
       dueDate: values.dueDate,
       beneficiaryDisplayName: values.beneficiaryDisplayName,
       proofRequirement: values.proofRequirement,
+      proofFileId: values.proofFileId,
     });
     if (companyIdRef.current !== companyId) return;
     setStatus("idle");
@@ -198,7 +224,6 @@ export function PaguaiPage({
       ...current.filter((draft) => draft.id !== result.value.id),
     ]);
     setSelected(result.value);
-    setProofFileId(values.proofFileId);
     setCreateError(null);
     setCreateOpen(false);
     setRequestId(crypto.randomUUID());
@@ -209,7 +234,6 @@ export function PaguaiPage({
       if (companyIdRef.current !== companyId) return;
       if (result.ok) {
         setSelected(result.value);
-        setProofFileId(null);
         setViewOpen(true);
       } else {
         setError(result.error);
@@ -316,7 +340,6 @@ export function PaguaiPage({
         draft={selected}
         onClose={() => setViewOpen(false)}
         open={viewOpen}
-        proofFileId={proofFileId}
       />
     </CompanyProvider>
   );
@@ -327,13 +350,11 @@ function DraftViewDialog({
   draft,
   onClose,
   open,
-  proofFileId,
 }: {
   companyName: string;
   draft: PaguaiDraft | null;
   onClose: () => void;
   open: boolean;
-  proofFileId: string | null;
 }) {
   return (
     <EntityDialog
@@ -363,8 +384,8 @@ function DraftViewDialog({
           <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             <AttachFileOutlinedIcon color="action" fontSize="small" />
             <Typography>
-              {proofFileId
-                ? "Comprovante anexado nesta sessão."
+              {draft.proofFileId
+                ? `Comprovante anexado (${draft.proofFileName ?? draft.proofFileId}).`
                 : "Nenhum comprovante anexado."}
             </Typography>
           </Stack>

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createPaguaiDraftClient,
-  type PaguaiDraft,
-} from "./paguai-draft-client";
+import { createPaguaiDraftClient } from "./paguai-draft-client";
 
 const companyId = "11111111-1111-4111-8111-111111111111";
 const requestId = "22222222-2222-4222-8222-222222222222";
@@ -133,10 +130,7 @@ describe("Paguai draft client", () => {
       proofFileId,
     });
 
-    expect(result).toEqual({
-      ok: true,
-      value: proofDraft satisfies PaguaiDraft,
-    });
+    expect(result).toEqual({ ok: true, value: proofDraft });
     expect(JSON.parse(String(calls[1][1].body)).proofFileId).toBe(proofFileId);
   });
 

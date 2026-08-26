@@ -24,8 +24,12 @@ const draftSchema = z
     beneficiaryDisplayName: z.string().trim().min(1).max(200),
     proofRequirement: z.enum(["optional", "required"]),
     state: z.literal("rascunho"),
-    version: z.literal(1),
+    version: z.number().int().min(1),
     createdAt: z.string().datetime({ offset: true }),
+    proofFileId: z.uuid().nullish(),
+    proofFileName: z.string().trim().min(1).max(255).nullish(),
+    proofFileMimeType: z.string().trim().min(1).max(100).nullish(),
+    proofFileSizeBytes: z.number().int().min(0).nullish(),
   })
   .strict();
 const errorSchema = z.object({ code: z.string() }).strict();
@@ -45,7 +49,7 @@ export type CreatePaguaiDraftInput = Pick<
   | "dueDate"
   | "beneficiaryDisplayName"
   | "proofRequirement"
->;
+> & { proofFileId?: string | null };
 export type PaguaiDraftError =
   | 400
   | 401
@@ -54,6 +58,7 @@ export type PaguaiDraftError =
   | 409
   | 429
   | 503
+  | { status: 400 | 403 | 409; code: string }
   | "network"
   | "protocol";
 export type PaguaiResult<T> =
@@ -78,8 +83,20 @@ async function readError(response: Response): Promise<PaguaiDraftError> {
   if ([401, 429].includes(response.status)) return response.status as 401 | 429;
   if ([400, 403, 404, 409, 503].includes(response.status)) {
     try {
-      if (errorSchema.safeParse(await response.json()).success)
-        return response.status as PaguaiDraftError;
+      const parsed = errorSchema.safeParse(await response.json());
+      // Códigos tipados de comprovante chegam à página como objeto; os
+      // demais códigos documentados mantêm o canal numérico legado.
+      if (
+        parsed.success &&
+        response.status !== 503 &&
+        parsed.data.code.startsWith("proof_")
+      )
+        return {
+          status: response.status as 400 | 403 | 409,
+          code: parsed.data.code,
+        };
+      if (parsed.success) return response.status as PaguaiDraftError;
+      return "protocol";
     } catch {
       return "protocol";
     }
