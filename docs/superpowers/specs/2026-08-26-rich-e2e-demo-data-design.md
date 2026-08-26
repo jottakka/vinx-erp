@@ -2,10 +2,10 @@
 
 ## Status
 
-Desenho aprovado para uma futura fatia vertical de dados de demonstração. Esta
-entrega registra somente a especificação; não altera seed, banco, host, UI ou
-testes executáveis. A implementação começa apenas depois da revisão deste
-documento pelo responsável.
+Proposta pronta para revisão. Esta entrega registra somente a especificação;
+não altera seed, banco, host, UI ou testes executáveis. A implementação não
+está aprovada e só poderá começar depois que o responsável revisar e aprovar
+este documento.
 
 ## Objetivo e valor
 
