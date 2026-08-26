@@ -1737,7 +1737,7 @@ public sealed class AtendimentoCardEndpointTests
             // A segunda tentativa de cancelamento pode perder a corrida pela
             // leitura terminal (terminal_state) ou pela concorrência otimista
             // (integrity_conflict); ambas são 409 sem sobrescrever o vencedor.
-            Assert.Contains(loser.Code, ["integrity_conflict", "terminal_state"]);
+            Assert.Contains(loser.Code, new[] { "integrity_conflict", "terminal_state" });
         }
         else
         {
