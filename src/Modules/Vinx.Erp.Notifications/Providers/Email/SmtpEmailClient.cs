@@ -27,11 +27,11 @@ public sealed class SmtpEmailClient(EmailProviderOptions options, ILogger logger
         using var mime = BuildMime(message);
         using var client = new SmtpClient();
 
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
+
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
-
             await client.ConnectAsync(
                 options.Host,
                 options.Port,
@@ -39,16 +39,15 @@ public sealed class SmtpEmailClient(EmailProviderOptions options, ILogger logger
                 timeout.Token
             );
             await client.AuthenticateAsync(options.Username, options.Password, timeout.Token);
+            // Confirmou o 250 queued: entrega aceita pelo servidor. Daqui em
+            // diante nenhuma falha pode virar retry (risco de duplicação).
             await client.SendAsync(mime, timeout.Token);
-            await client.DisconnectAsync(true, CancellationToken.None);
-
-            return new NotificationProviderResult(NotificationProviderResultKind.Delivered);
         }
         catch (OperationCanceledException)
             when (!cancellationToken.IsCancellationRequested)
         {
-            // Timeout do transporte: resultado incerto no provider vira
-            // ambíguo terminal, sem retry cego.
+            // Timeout do transporte antes da confirmação: resultado incerto no
+            // provider vira ambíguo terminal, sem retry cego.
             logger.LogWarning(
                 "SMTP email send {Operation} {Result} {Reason}",
                 "smtp_email_send",
@@ -71,8 +70,8 @@ public sealed class SmtpEmailClient(EmailProviderOptions options, ILogger logger
         catch (Exception exception)
             when (IsTransientFailure(exception))
         {
-            // Falha transitiva de infraestrutura (conexão recusada, DNS, rede):
-            // delega o retry finito ao worker.
+            // Falha transitiva de infraestrutura antes da confirmação (conexão
+            // recusada, DNS, rede, 4xx temporário): delega o retry finito.
             throw new NotificationProviderTransientException(
                 "SMTP email transport reported a transient failure."
             );
@@ -89,6 +88,35 @@ public sealed class SmtpEmailClient(EmailProviderOptions options, ILogger logger
             );
             return new NotificationProviderResult(NotificationProviderResultKind.Rejected);
         }
+
+        // Após a confirmação do envio, a desconexão é apenas limpeza: falha aqui
+        // não pode reenfileirar a mensagem já entregue. Tratamos como ambíguo
+        // terminal (entrega confirmada, estado da sessão incerto).
+        try
+        {
+            await client.DisconnectAsync(true, timeout.Token);
+        }
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                "SMTP email send {Operation} {Result} {Reason}",
+                "smtp_email_send",
+                "ambiguous",
+                "smtp_disconnect_timeout"
+            );
+        }
+        catch (Exception)
+        {
+            logger.LogWarning(
+                "SMTP email send {Operation} {Result} {Reason}",
+                "smtp_email_send",
+                "ambiguous",
+                "smtp_disconnect_failure"
+            );
+        }
+
+        return new NotificationProviderResult(NotificationProviderResultKind.Delivered);
     }
 
     private MimeMessage BuildMime(EmailMessage message)
@@ -104,12 +132,26 @@ public sealed class SmtpEmailClient(EmailProviderOptions options, ILogger logger
     }
 
     /// <summary>
-    /// Falhas de transporte (IO, socket, DNS, TLS handshake) são transitivas;
-    /// autenticação e validação de conteúdo não estão nesta lista.
+    /// Falhas de transporte (IO, socket, DNS) e respostas SMTP temporárias (4xx)
+    /// são transitivas; autenticação, conteúdo inválido e 5xx definitivo não
+    /// estão nesta lista.
     /// </summary>
-    private static bool IsTransientFailure(Exception exception) =>
-        exception is System.Net.Sockets.SocketException or IOException
-            or System.Net.Http.HttpRequestException;
+    private static bool IsTransientFailure(Exception exception)
+    {
+        if (
+            exception is System.Net.Sockets.SocketException
+                or IOException
+                or System.Net.Http.HttpRequestException
+                or MailKit.ServiceNotConnectedException
+        )
+        {
+            return true;
+        }
+
+        // Resposta SMTP temporária (4xx) é transitiva; 5xx definitivo não.
+        return exception is SmtpCommandException command
+            && (int)command.StatusCode is >= 400 and < 500;
+    }
 }
 
 /// <summary>

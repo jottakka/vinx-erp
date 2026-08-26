@@ -44,13 +44,18 @@ public sealed class EmailNotificationProvider(
         }
 
         var target = await ReadTargetAsync(request, cancellationToken);
-        if (target is null)
+        if (
+            target is null
+            || !EmailAddressPolicy.IsAllowedEmail(target.Email)
+        )
         {
+            // Sem destino válido, ou com endereço fora da política, o provider
+            // falha fechado: rejeição definitiva sem chamada externa.
             logger.LogWarning(
                 "SMTP email delivery {Operation} {Result} {Reason}",
                 "smtp_email_delivery",
                 "rejected",
-                "delivery_target_missing"
+                target is null ? "delivery_target_missing" : "delivery_target_invalid"
             );
             return new NotificationProviderResult(NotificationProviderResultKind.Rejected);
         }
