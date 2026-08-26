@@ -15,6 +15,7 @@ import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
+  useRef,
   useState,
 } from "react";
 import type { AgentMessage } from "./agent-contract";
@@ -98,6 +99,7 @@ export function AgentConversation() {
     status,
   } = useAgentConversation();
   const [draft, setDraft] = useState("");
+  const attachmentInput = useRef<HTMLInputElement>(null);
   const thinking = status === "thinking";
   const emptyConversationNotice = access.available
     ? "Cada envio é uma consulta independente ao agente da empresa ativa; turnos anteriores não são relembrados."
@@ -228,37 +230,29 @@ export function AgentConversation() {
             value={draft}
             disabled={!access.available}
           />
-          <Box
-            component="label"
-            sx={{
-              alignItems: "center",
-              color:
-                thinking || !access.available || !attachmentSelectionAvailable
-                  ? "action.disabled"
-                  : "action.active",
-              cursor:
-                thinking || !access.available || !attachmentSelectionAvailable
-                  ? "default"
-                  : "pointer",
-              display: "inline-flex",
-              justifyContent: "center",
-              p: 1,
-            }}
+          <IconButton
+            aria-label="Anexar arquivo"
+            disabled={
+              thinking || !access.available || !attachmentSelectionAvailable
+            }
+            onClick={() => attachmentInput.current?.click()}
             title="Anexar arquivo"
+            type="button"
           >
             <AttachFileOutlinedIcon />
-            <input
-              accept="application/pdf,image/jpeg,image/png"
-              aria-label="Anexar documentos ao agente"
-              disabled={
-                thinking || !access.available || !attachmentSelectionAvailable
-              }
-              multiple
-              onChange={selectFiles}
-              style={{ display: "none" }}
-              type="file"
-            />
-          </Box>
+          </IconButton>
+          <input
+            accept="application/pdf,image/jpeg,image/png"
+            aria-label="Anexar documentos ao agente"
+            disabled={
+              thinking || !access.available || !attachmentSelectionAvailable
+            }
+            multiple
+            onChange={selectFiles}
+            ref={attachmentInput}
+            style={{ display: "none" }}
+            type="file"
+          />
           <Button
             disabled={
               !access.available ||

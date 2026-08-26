@@ -589,8 +589,8 @@ describe("agent workspace", () => {
     );
     expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
     const picker = dock.getByLabelText("Anexar documentos ao agente");
+    expect(dock.getByRole("button", { name: "Anexar arquivo" })).toBeDisabled();
     expect(picker).toBeDisabled();
-    expect(picker.closest("label")).not.toHaveAttribute("role");
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const composer = dock.getByLabelText("Mensagem para o agente");
     const blockedMessage = "tentativa sem empresa";
@@ -653,8 +653,8 @@ describe("agent workspace", () => {
     );
     expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
     const picker = dock.getByLabelText("Anexar documentos ao agente");
+    expect(dock.getByRole("button", { name: "Anexar arquivo" })).toBeDisabled();
     expect(picker).toBeDisabled();
-    expect(picker.closest("label")).not.toHaveAttribute("role");
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const composer = dock.getByLabelText("Mensagem para o agente");
     const blockedMessage = "tentativa sem capability";
@@ -703,7 +703,7 @@ describe("agent workspace", () => {
     expect(runCalls(fetchSpy)).toHaveLength(1);
   });
 
-  it("keeps the attachment chooser as a native label without a button role", async () => {
+  it("keeps the authorized attachment button focusable and opens its chooser", async () => {
     const user = userEvent.setup();
     await renderAgentWorkspace();
     await user.click(
@@ -713,10 +713,16 @@ describe("agent workspace", () => {
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
     const picker = dock.getByLabelText("Anexar documentos ao agente");
+    const openChooser = vi.spyOn(picker, "click");
+    const attachmentButton = dock.getByRole("button", {
+      name: "Anexar arquivo",
+    });
 
     expect(picker).toBeEnabled();
-    expect(picker.closest("label")).not.toHaveAttribute("role");
-    expect(dock.queryByRole("button", { name: "Anexar arquivo" })).toBeNull();
+    expect(attachmentButton).toBeEnabled();
+    expect(attachmentButton).not.toHaveAttribute("tabindex", "-1");
+    await user.click(attachmentButton);
+    expect(openChooser).toHaveBeenCalledOnce();
   });
 
   it("aborts and discards a pending reply when the workspace unmounts", async () => {
