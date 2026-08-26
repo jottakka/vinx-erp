@@ -44,17 +44,30 @@ digest_of() {
 dest_parent=$(dirname "$1")
 dest_name=$(basename "$1")
 mkdir -p "$dest_parent"
-dest_abs="$(cd "$dest_parent" && pwd)/$dest_name"
+dest_abs="$(cd "$dest_parent" && pwd -P)/$dest_name"
 
 if repo_root=$(git rev-parse --show-toplevel 2>/dev/null); then
-  [[ "$dest_abs" == "$repo_root"/* ]] &&
-    fail "diretório de saída não pode ficar dentro da árvore do repositório: $dest_abs"
+  repo_root_phys=$(cd "$repo_root" && pwd -P)
+  case "$dest_abs" in
+    "$repo_root_phys"|"$repo_root_phys"/*)
+      fail "diretório de saída não pode ficar dentro da árvore do repositório: $dest_abs"
+      ;;
+  esac
 fi
 [[ -e "$dest_abs" ]] && fail "destino já existe (bundles são imutáveis): $dest_abs"
 
 TMP_DIR=$(mktemp -d)
 cleanup_all() { rm -rf "$TMP_DIR"; }
+discard_partial_bundle() {
+  if [[ -d "${dest_abs:-}" && "${BUNDLE_OPENED:-0}" == 1 ]]; then
+    rm -rf "$dest_abs"
+    echo "erro: captura interrompida; bundle parcial descartado (evitar capturas mistas)" >&2
+    exit 1
+  fi
+}
+set -o errtrace
 trap cleanup_all EXIT
+trap discard_partial_bundle ERR
 
 psql_conn() { psql "$LEGACY_SNAPSHOT_CONN" -X -v ON_ERROR_STOP=1 "$@"; }
 
@@ -62,18 +75,13 @@ main() {
   mkdir -m 0700 "$dest_abs"
   mkdir "$dest_abs/sql" "$dest_abs/json" "$dest_abs/commands"
   chmod 700 "$dest_abs/sql" "$dest_abs/json" "$dest_abs/commands"
+  BUNDLE_OPENED=1
 
-  # SQL ordenado de contagem por tabela com identificadores citados.
-  local counts_sql
-  counts_sql=$(psql_conn -qAt -v schema="$SCHEMA" \
-    -c "SELECT COALESCE(string_agg(format('SELECT %L AS t, count(*)::bigint AS n FROM %I.%I', c.relname, :'schema', c.relname), E'\nUNION ALL\n' ORDER BY c.relname), 'SELECT NULL::text, NULL::bigint WHERE false') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = :'schema' AND c.relkind = 'r';")
-
-  [[ "$counts_sql" != *"WHERE false"* ]] || fail "nenhuma tabela visível no schema '$SCHEMA'; verifique o papel somente-leitura"
-  [[ -n "$counts_sql" ]] || fail "nenhuma tabela visível no schema '$SCHEMA'"
 
   # Sessão única REPEATABLE READ READ ONLY grava todos os agregados ordenados.
   {
     echo "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;"
+    echo "SELECT set_config('vinx.snapshot.schema', :'schema', true);"
     cat <<CONSISTENT_SQL
 \\o "$dest_abs/json/server.json"
 SELECT json_build_object('current_database', current_database(), 'server_version', current_setting('server_version'))::text;
@@ -122,7 +130,26 @@ SELECT CASE
 END;
 
 \\o "$dest_abs/json/row_counts.json"
-SELECT COALESCE((SELECT json_object_agg(t, n ORDER BY t) FROM ($counts_sql) q WHERE t IS NOT NULL), '{}'::json)::text;
+-- Descoberta e contagens na MESMA transação repeatable read (função temporária,
+-- escrita permitida apenas no namespace temp durante sessão READ ONLY).
+CREATE TEMP FUNCTION vinx_snapshot_count_rows(p_table name) RETURNS bigint
+LANGUAGE plpgsql AS $fn$
+DECLARE n bigint;
+BEGIN
+  EXECUTE format('SELECT count(*)::bigint FROM %I.%I',
+                 current_setting('vinx.snapshot.schema'), p_table) INTO n;
+  RETURN n;
+END
+$fn$;
+SELECT COALESCE(
+         json_object_agg(t, n ORDER BY t),
+         '{}'::json)::text AS row_counts
+FROM (
+  SELECT c.relname AS t, vinx_snapshot_count_rows(c.relname) AS n
+  FROM pg_class c JOIN pg_namespace cn ON cn.oid = c.relnamespace
+  WHERE cn.nspname = current_setting('vinx.snapshot.schema') AND c.relkind = 'r'
+) q WHERE t IS NOT NULL;
+DROP FUNCTION vinx_snapshot_count_rows(name);
 COMMIT;
 CONSISTENT_SQL
   } | psql_conn -qAt -v schema="$SCHEMA" -f -
@@ -188,10 +215,10 @@ AUTHREST
   chmod 700 "$dest_abs/commands/auth-export-rest.sh"
 }
 
-if ! main "$@"; then
-  rm -rf "$dest_abs"
-  fail "captura interrompida; bundle parcial descartado (evitar capturas mistas)"
-fi
+BUNDLE_OPENED=0
+main
+
+unset BUNDLE_OPENED
 
 # Metadados ficam FORA do manifesto (timestamp varia entre execuções).
 now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
