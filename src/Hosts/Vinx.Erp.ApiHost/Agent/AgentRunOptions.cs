@@ -78,7 +78,29 @@ public sealed class AgentRunOptions
         {
             throw new InvalidOperationException("Agent provider must have an approved host list.");
         }
+
+        if (!HasExactApprovedHost(Endpoint, ApprovedHosts))
+        {
+            throw new InvalidOperationException("Agent provider endpoint must match an approved host exactly.");
+        }
     }
+
+    internal static bool HasExactApprovedHost(Uri? endpoint, IReadOnlyList<string> approvedHosts)
+    {
+        ArgumentNullException.ThrowIfNull(approvedHosts);
+
+        if (endpoint is null || !endpoint.IsAbsoluteUri)
+        {
+            return false;
+        }
+
+        var endpointHost = NormalizeHost(endpoint.DnsSafeHost);
+        return endpointHost.Length > 0 && approvedHosts.Any(host =>
+            string.Equals(endpointHost, NormalizeHost(host), StringComparison.Ordinal));
+    }
+
+    private static string NormalizeHost(string host) =>
+        host.Trim().TrimEnd('.').ToLowerInvariant();
 }
 
 /// <summary>Configuração server-side do perfil OpenAI-compatible usado somente por OCR.</summary>
@@ -104,6 +126,7 @@ public sealed class AgentRunVisionOptions
             || AllowedClassifications.Any(string.IsNullOrWhiteSpace)
             || ApprovedHosts.Count == 0
             || ApprovedHosts.Any(string.IsNullOrWhiteSpace)
+            || !AgentRunOptions.HasExactApprovedHost(Endpoint, ApprovedHosts)
             || new OpenAiCompatibleOptions.Validator().ValidateForRuntimeCredential(null, ToProviderOptions()).Failed)
         {
             throw new InvalidOperationException("Agent document vision configuration is invalid.");

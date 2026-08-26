@@ -61,9 +61,9 @@ public sealed class AgentRunCompositionTests
     {
         var configuration = CreateConfiguration(
             ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
-            ("AgentRun:Endpoint", "https://api.example.com/v1/"),
+            ("AgentRun:Endpoint", "https://API.EXAMPLE.COM/v1/"),
             ("AgentRun:Model", "approved-model"),
-            ("AgentRun:ApprovedHosts:0", "api.example.com"));
+            ("AgentRun:ApprovedHosts:0", " api.example.com. "));
 
         var services = CreateBaseServices();
         services.AddAgentRunSurface(configuration, ReadDedicatedCredential);
@@ -72,6 +72,19 @@ public sealed class AgentRunCompositionTests
         Assert.IsType<ChatClientAgentModel>(provider.GetRequiredService<IAgentModel>());
         Assert.NotNull(provider.GetRequiredService<AgentRunner>());
         Assert.NotNull(provider.GetRequiredService<AgentOutputGate>());
+    }
+
+    [Fact]
+    public void Text_runtime_profile_rejects_a_parent_allowlist_entry()
+    {
+        var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "https://api.opencode.ai/zen/go/v1/"),
+            ("AgentRun:Model", "approved-model"),
+            ("AgentRun:ApprovedHosts:0", "opencode.ai"));
+
+        Assert.Throws<InvalidOperationException>(
+            () => CreateBaseServices().AddAgentRunSurface(configuration, ReadDedicatedCredential));
     }
 
     [Fact]
@@ -118,9 +131,9 @@ public sealed class AgentRunCompositionTests
     {
         var configuration = CreateConfiguration(
             ("AgentRun:Vision:Provider", AgentRunOptions.OpenAiCompatibleProvider),
-            ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
+            ("AgentRun:Vision:Endpoint", "https://VISION.EXAMPLE.COM/v1/"),
             ("AgentRun:Vision:Model", "approved-vision-model"),
-            ("AgentRun:Vision:ApprovedHosts:0", "vision.example.com"),
+            ("AgentRun:Vision:ApprovedHosts:0", " vision.example.com. "),
             ("AgentRun:Vision:Timeout", TimeSpan.FromSeconds(20).ToString()),
             ("AgentRun:Vision:AllowedClassifications:0", "fiscal"));
         var services = CreateBaseServices();
@@ -133,6 +146,20 @@ public sealed class AgentRunCompositionTests
         var source = Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(IAuthorizedDocumentSource));
         Assert.Equal(ServiceLifetime.Scoped, source.Lifetime);
+    }
+
+    [Fact]
+    public void Vision_runtime_profile_rejects_a_parent_allowlist_entry()
+    {
+        var configuration = CreateConfiguration(
+            ("AgentRun:Vision:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Vision:Endpoint", "https://vision.opencode.ai/zen/go/v1/"),
+            ("AgentRun:Vision:Model", "approved-vision-model"),
+            ("AgentRun:Vision:ApprovedHosts:0", "opencode.ai"),
+            ("AgentRun:Vision:AllowedClassifications:0", "fiscal"));
+
+        Assert.Throws<InvalidOperationException>(
+            () => CreateBaseServices().AddAgentRunSurface(configuration, ReadDedicatedCredential));
     }
 
     [Theory]

@@ -16,8 +16,8 @@ namespace Vinx.Erp.ApiHost.Agent;
 /// validadas on-start, gates determinísticos e a seleção de provider decidida
 /// SOMENTE aqui — o request nunca escolhe endpoint, modelo ou chave. Sem
 /// provider configurado nenhum model é registrado e o runner falha fechado
-/// com provider_not_configured. A chave vem exclusivamente do cofre de
-/// configuração e nunca é logada, ecoada em validação ou devolvida.
+/// com provider_not_configured. A chave vem exclusivamente do resolvedor do
+/// ambiente do processo e nunca é logada, ecoada em validação ou devolvida.
 /// </summary>
 internal static class AgentRunServiceCollectionExtensions
 {
@@ -73,8 +73,8 @@ internal static class AgentRunServiceCollectionExtensions
                     client.Timeout = agentRun.Timeout;
                 })
                 .ConfigurePrimaryHttpMessageHandler(() => OpenAiCompatibleTransport.Create(providerProfile));
-            // A chave trafega somente da configuração para a credencial do
-            // client aprovado; nenhum header, log ou mensagem a ecoa.
+            // A chave entra somente pelo resolvedor do ambiente do processo
+            // na credencial do client aprovado; nenhum header, log ou mensagem a ecoa.
             services.AddScoped<IAgentModel>(serviceProvider => new ChatClientAgentModel(
                 CreateProviderChatClient(
                     agentRun,
@@ -124,7 +124,7 @@ internal static class AgentRunServiceCollectionExtensions
 
     // Sem provider nenhuma outra configuração é exigida (fail-closed em
     // provider_not_configured); com provider, endpoint/model aprovados e chave
-    // no cofre são obrigatórios. A validação delega à options da fatia do núcleo.
+    // no ambiente do processo são obrigatórios. A validação delega à options da fatia do núcleo.
     private static bool IsValidConfiguration(AgentRunOptions options, Func<string, string?> readEnvironment)
     {
         try
