@@ -13,8 +13,9 @@ namespace Vinx.Erp.ApiHost.Permissions;
 
 /// <summary>
 /// Superfície do diretório de permissões: leitura de membros com papéis e
-/// capabilities, papéis com grants, e mutações de atribuição (assign/unassign
-/// com bloqueio de último administrador) e cópia de permissões entre membresias.
+/// capabilities, papéis com grants, mutações de atribuição (assign/unassign
+/// com bloqueio de último administrador), cópia de permissões entre membresias
+/// e convite de membro com reserva pendente de entrega.
 /// Nenhuma resposta é cacheável; mutações exigem antiforgery cookie + strict JSON.
 /// </summary>
 internal static class PermissionsEndpoints
@@ -214,6 +215,83 @@ internal static class PermissionsEndpoints
             .Produces<AuthorizationErrorResponse>(StatusCodes.Status409Conflict)
             .Produces(StatusCodes.Status429TooManyRequests)
             .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable);
+
+        foundation
+            .MapPost(
+                "/companies/{companyId:guid}/invitations",
+                async (
+                    Guid companyId,
+                    HttpRequest request,
+                    HttpContext httpContext,
+                    MemberInvitationService service,
+                    CancellationToken cancellationToken
+                ) =>
+                {
+                    using var document = await TryReadJsonDocumentAsync(request, cancellationToken);
+                    if (
+                        document is null
+                        || !PermissionsHttpContract.TryParseInvite(
+                            document.RootElement,
+                            out var requestId,
+                            out var displayName,
+                            out var email)
+                    )
+                        return InvalidRequest();
+
+                    var result = await service.InviteAsync(
+                        httpContext.GetRequiredActorContext(),
+                        new InviteMemberCommand(requestId, companyId, displayName, email),
+                        cancellationToken
+                    );
+                    return result.State switch
+                    {
+                        MemberInvitationWriteState.Created => Results.Json(
+                            new MemberInvitationCreatedResponse(
+                                result.MembershipId!.Value,
+                                result.InvitationId!.Value,
+                                "pending_delivery"
+                            ),
+                            statusCode: StatusCodes.Status201Created
+                        ),
+                        MemberInvitationWriteState.Replay => Results.Ok(
+                            new MemberInvitationCreatedResponse(
+                                result.MembershipId!.Value,
+                                result.InvitationId!.Value,
+                                "pending_delivery"
+                            )
+                        ),
+                        MemberInvitationWriteState.IdempotencyConflict => Results.Json(
+                            new AuthorizationErrorResponse("idempotency_conflict"),
+                            statusCode: StatusCodes.Status409Conflict
+                        ),
+                        MemberInvitationWriteState.Conflict => Results.Json(
+                            new AuthorizationErrorResponse("member_conflict"),
+                            statusCode: StatusCodes.Status409Conflict
+                        ),
+                        MemberInvitationWriteState.Forbidden => Results.Json(
+                            new AuthorizationErrorResponse("capability_denied"),
+                            statusCode: StatusCodes.Status403Forbidden
+                        ),
+                        MemberInvitationWriteState.Invalid => InvalidRequest(),
+                        _ => Results.Json(
+                            new AuthorizationErrorResponse("member_invitation_unavailable"),
+                            statusCode: StatusCodes.Status503ServiceUnavailable
+                        ),
+                    };
+                }
+            )
+            .WithName("CompanyMemberInvitationCreate")
+            .WithMetadata(new JsonRequestBodyContract(typeof(InviteMemberCommand)))
+            .WithMetadata(new BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true))
+            .WithMetadata(new BrowserBffNoStoreEndpointMetadata())
+            .Produces<MemberInvitationCreatedResponse>(StatusCodes.Status201Created)
+            .Produces<MemberInvitationCreatedResponse>(StatusCodes.Status200OK)
+            .Produces<AuthorizationErrorResponse>(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
+            .Produces<AuthorizationErrorResponse>(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status429TooManyRequests)
+            .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable);
         return foundation;
     }
 
@@ -284,6 +362,8 @@ internal static class PermissionsEndpoints
             ["requestId", "membershipId", "roleId"];
         private static readonly HashSet<string> CopyFields =
             ["requestId", "sourceMembershipId", "targetMembershipId"];
+        private static readonly HashSet<string> InviteFields =
+            ["requestId", "displayName", "email"];
 
         public static bool TryParseAssignment(
             System.Text.Json.JsonElement body,
@@ -324,6 +404,29 @@ internal static class PermissionsEndpoints
                 || !values["targetMembershipId"].TryGetGuid(out targetMembershipId)
             )
                 return false;
+            return true;
+        }
+
+        public static bool TryParseInvite(
+            System.Text.Json.JsonElement body,
+            out Guid requestId,
+            out string displayName,
+            out string email
+        )
+        {
+            requestId = default;
+            displayName = string.Empty;
+            email = string.Empty;
+            if (!StrictJsonFieldSet.TryReadExact(body, InviteFields, out var values))
+                return false;
+            if (
+                !values["requestId"].TryGetGuid(out requestId)
+                || values["displayName"].ValueKind is not System.Text.Json.JsonValueKind.String
+                || values["email"].ValueKind is not System.Text.Json.JsonValueKind.String
+            )
+                return false;
+            displayName = values["displayName"].GetString()!;
+            email = values["email"].GetString()!;
             return true;
         }
     }
