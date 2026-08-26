@@ -8,7 +8,7 @@ using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
 
-public sealed class TelegramNotificationIntentTests
+public sealed partial class TelegramNotificationIntentTests
 {
     [Fact]
     public async Task Eligible_telegram_event_creates_telegram_and_in_app_intents_with_opaque_messages()
@@ -368,18 +368,10 @@ public sealed class TelegramNotificationIntentTests
     }
 
     [Fact]
-    public async Task Telegram_preference_for_another_user_and_inactive_membership_are_denied()
+    public async Task Telegram_inactive_membership_is_denied_without_rows_or_messages()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var seed = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(factory);
-
-        var anotherUser = await TelegramNotificationSeed.SetPreferenceViaServiceAsync(
-            factory,
-            factory.ActorUserId,
-            seed.CompanyId,
-            optedIn: true
-        );
-        Assert.Equal(NotificationPreferenceState.Forbidden, anotherUser.State);
 
         await TelegramNotificationSeed.RevokeMembershipAsync(
             factory,
