@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -620,8 +621,10 @@ describe("AtendimentoPage", () => {
     const confirm = screen.getByRole("button", {
       name: "Confirmar atribuição",
     });
-    fireEvent.click(confirm);
-    fireEvent.click(confirm);
+    act(() => {
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
 
     expect(assign).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Atribuindo…" })).toBeDisabled();
@@ -668,6 +671,150 @@ describe("AtendimentoPage", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
     expect(screen.getByRole("heading", { name: "Cancelados" })).toBeVisible();
+  });
+
+  it("retries assignment with the current version after an integrity conflict", async () => {
+    const user = userEvent.setup();
+    const current = { ...alfaCard, version: 2 };
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    vi.spyOn(atendimentoClient, "assignmentOptions").mockResolvedValue([
+      {
+        displayName: "Maria Silva",
+        membershipId: "88888888-8888-4888-8888-888888888888",
+      },
+    ]);
+    const assign = vi
+      .spyOn(atendimentoClient, "assign")
+      .mockResolvedValueOnce({ code: "integrity_conflict", current, ok: false })
+      .mockResolvedValueOnce({ card: current, ok: true });
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Atribuir responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("combobox", { name: "Responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Maria Silva" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar atribuição" }),
+    );
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar atribuição" }),
+    );
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(2));
+
+    expect(assign.mock.calls[1]?.[1]).toMatchObject({
+      id: alfaCard.id,
+      version: 2,
+    });
+  });
+
+  it("retries cancellation with the current version after an integrity conflict", async () => {
+    const user = userEvent.setup();
+    const current = { ...alfaCard, version: 2 };
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    const cancel = vi
+      .spyOn(atendimentoClient, "cancel")
+      .mockResolvedValueOnce({ code: "integrity_conflict", current, ok: false })
+      .mockResolvedValueOnce({
+        card: { ...current, column: "cancelado" },
+        ok: true,
+      });
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Cancelar atendimento" }),
+    );
+    await user.type(
+      screen.getByLabelText("Motivo do cancelamento"),
+      "Duplicado",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar cancelamento" }),
+    );
+    await waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar cancelamento" }),
+    );
+    await waitFor(() => expect(cancel).toHaveBeenCalledTimes(2));
+
+    expect(cancel.mock.calls[1]?.[1]).toMatchObject({
+      id: alfaCard.id,
+      version: 2,
+    });
+  });
+
+  it("suppresses a duplicate cancellation confirmation while the first request is pending", async () => {
+    const user = userEvent.setup();
+    const result =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.cancel>>>();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    const cancel = vi
+      .spyOn(atendimentoClient, "cancel")
+      .mockReturnValue(result.promise);
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Cancelar atendimento" }),
+    );
+    await user.type(
+      screen.getByLabelText("Motivo do cancelamento"),
+      "Duplicado",
+    );
+    const confirm = screen.getByRole("button", {
+      name: "Confirmar cancelamento",
+    });
+    act(() => {
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+    result.resolve({ card: { ...alfaCard, column: "cancelado" }, ok: true });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps a created Beta card out of an Alfa-filtered board", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
+    vi.spyOn(atendimentoClient, "create").mockResolvedValue({
+      card: betaCard,
+      ok: true,
+    } as Awaited<ReturnType<typeof atendimentoClient.create>>);
+
+    renderPage();
+    await waitFor(() =>
+      expect(atendimentoClient.list).toHaveBeenCalledTimes(2),
+    );
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Alfa" }));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Novo atendimento" }));
+    await user.click(
+      screen.getByRole("combobox", { name: "Empresa do atendimento" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Empresa Beta" }),
+    );
+    await user.type(screen.getByLabelText("Título"), betaCard.title);
+    await user.type(screen.getByLabelText("Descrição"), betaCard.description);
+    await user.click(screen.getByRole("button", { name: "Criar cartão" }));
+
+    await waitFor(() =>
+      expect(atendimentoClient.create).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.queryByText(betaCard.title)).not.toBeInTheDocument();
   });
 
   it("blocks a cancellation reason longer than 500 characters", async () => {

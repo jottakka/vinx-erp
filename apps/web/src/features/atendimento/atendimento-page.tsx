@@ -129,6 +129,7 @@ export function AtendimentoPage({
   const assignmentEpoch = useRef(0);
   const assignmentAbort = useRef<AbortController | null>(null);
   const assigningRef = useRef(false);
+  const cancellingRef = useRef(false);
 
   const createCompanies = useMemo(
     () =>
@@ -150,6 +151,12 @@ export function AtendimentoPage({
       ? companies.filter((company) => selected.includes(company.companyId))
       : companies;
   }, [companies, selectedCompanyIds]);
+  const visibleCards = useMemo(() => {
+    const requestedCompanyIds = new Set(
+      requestedCompanies.map((company) => company.companyId),
+    );
+    return cards.filter((card) => requestedCompanyIds.has(card.companyId));
+  }, [cards, requestedCompanies]);
 
   const permissions = useMemo(
     () =>
@@ -303,19 +310,29 @@ export function AtendimentoPage({
 
   async function cancel(card: AtendimentoCard) {
     const reason = cancellationReason.trim();
-    if (!reason || reason.length > 500 || cancelling) return;
+    if (!reason || reason.length > 500 || cancelling || cancellingRef.current)
+      return;
+    cancellingRef.current = true;
     setCancelling(true);
-    const result = await atendimentoClient.cancel(card.companyId, card, reason);
-    if (!result.ok) {
+    try {
+      const result = await atendimentoClient.cancel(
+        card.companyId,
+        card,
+        reason,
+      );
+      if (!result.ok) {
+        recover(result.code, result.current);
+        return;
+      }
+      setCards((current) =>
+        current.map((item) => (item.id === card.id ? result.card : item)),
+      );
+      setCancellingCard(null);
+      setCancellationReason("");
+    } finally {
+      cancellingRef.current = false;
       setCancelling(false);
-      return recover(result.code, result.current);
     }
-    setCards((current) =>
-      current.map((item) => (item.id === card.id ? result.card : item)),
-    );
-    setCancellingCard(null);
-    setCancellationReason("");
-    setCancelling(false);
   }
 
   function recover(code: string, current?: AtendimentoCard) {
@@ -323,6 +340,10 @@ export function AtendimentoPage({
       setCards((cards) =>
         cards.map((card) => (card.id === current.id ? current : card)),
       );
+    if (current) {
+      setAssigningCard((card) => (card?.id === current.id ? current : card));
+      setCancellingCard((card) => (card?.id === current.id ? current : card));
+    }
     setError(messageFor(code));
   }
 
@@ -478,7 +499,7 @@ export function AtendimentoPage({
                 {column.label}
               </Typography>
               <Stack spacing={1.25}>
-                {cards
+                {visibleCards
                   .filter((card) => card.column === column.id)
                   .map((card) => (
                     <Card
@@ -605,8 +626,8 @@ export function AtendimentoPage({
                       </CardActions>
                     </Card>
                   ))}
-                {cards.filter((card) => card.column === column.id).length ===
-                0 ? (
+                {visibleCards.filter((card) => card.column === column.id)
+                  .length === 0 ? (
                   <Typography color="text.secondary" variant="body2">
                     Nenhum cartão nesta coluna.
                   </Typography>

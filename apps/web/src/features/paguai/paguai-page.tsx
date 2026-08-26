@@ -41,7 +41,7 @@ function message(error: PaguaiDraftError) {
       401: "Sua sessão expirou.",
       403: "Você não tem acesso a esta empresa.",
       404: "Solicitação não encontrada.",
-      409: "Esta solicitação já foi enviada com outros dados. Tente novamente com os mesmos dados.",
+      409: "Esta solicitação entrou em conflito com dados já enviados. Revise os dados e crie uma nova solicitação.",
       429: "Muitas tentativas. Aguarde antes de tentar novamente.",
       503: "Paguai está indisponível. Tente novamente com os mesmos dados.",
       network:
@@ -307,6 +307,7 @@ export function PaguaiPage({
       }
       setCreateRecoveryRequired(false);
       setCreateError(message(result.error));
+      if (result.error === 409) createAttemptRef.current = null;
       return;
     }
     setDrafts((current) =>

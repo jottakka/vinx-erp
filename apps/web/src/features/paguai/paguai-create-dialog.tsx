@@ -121,6 +121,7 @@ export function PaguaiCreateDialog({
       setAmountError("Informe um valor válido em reais (ex.: 1.250,00).");
       return;
     }
+    setAmountError(null);
     const readyInvoice = attachments.find((item) => item.state === "ready");
     onSubmit({
       amount,

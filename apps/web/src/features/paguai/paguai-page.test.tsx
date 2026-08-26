@@ -485,6 +485,34 @@ describe("PaguaiPage", () => {
     );
   });
 
+  it("rotates the request ID after a definitive 409 so an unchanged retry is a new attempt", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn(async (_input: CreatePaguaiDraftInput) => ({
+      error: 409 as const,
+      ok: false as const,
+    }));
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPage(draftClient);
+    await openCreate(user);
+    await fillForm(user);
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+
+    expect(create.mock.calls[1]?.[0]?.requestId).not.toBe(
+      create.mock.calls[0]?.[0]?.requestId,
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent(
+      "Tente novamente com os mesmos dados.",
+    );
+  });
+
   it("keeps an ambiguous create authoritative until its exact request resolves the existing draft", async () => {
     const user = userEvent.setup();
     let createCalls = 0;

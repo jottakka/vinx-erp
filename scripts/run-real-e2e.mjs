@@ -18,6 +18,14 @@ const SHARED_READY_KEYS = [
   "E2E_DB_PASSWORD_FILE",
   "E2E_SHARED_READY",
 ];
+const HOST_FAILURE_CATEGORIES = new Set([
+  "fixture_start_failed",
+  "seed_failed",
+  "host_start_failed",
+  "readback_failed",
+  "credential_export_failed",
+  "cleanup_failed",
+]);
 
 class LauncherError extends Error {
   constructor(category) {
@@ -185,6 +193,11 @@ function waitForSharedReadiness(stream, timeoutMs) {
     };
     const onClose = () => finish(new LauncherError("host_exit"));
     const onLine = (line) => {
+      if (lines.length === 0 && !line.startsWith("E2E_API_ORIGIN_MARIA=")) {
+        if (line.startsWith("E2E_"))
+          finish(new LauncherError("invalid_host_readiness"));
+        return;
+      }
       const expectedKey = SHARED_READY_KEYS[lines.length];
       if (!expectedKey || !line.startsWith(`${expectedKey}=`)) {
         finish(new LauncherError("invalid_host_readiness"));
@@ -206,6 +219,37 @@ function waitForSharedReadiness(stream, timeoutMs) {
 
     reader.once("close", onClose);
     reader.on("line", onLine);
+  });
+}
+
+function waitForHostFailure(stream) {
+  return new Promise((resolve) => {
+    const reader = createInterface({ crlfDelay: Infinity, input: stream });
+    let failure;
+    reader.on("line", (line) => {
+      const match = /^E2E_HOST_FAILED=([a-z_]+)$/.exec(line);
+      if (match && HOST_FAILURE_CATEGORIES.has(match[1]))
+        failure ??= {
+          error: new LauncherError(`host_${match[1]}`),
+          kind: "failure",
+        };
+    });
+    reader.once("close", () => resolve(failure));
+  });
+}
+
+async function hostOutcomeWithDiagnostic(outcome, diagnostic) {
+  const event = await outcome;
+  if (event.kind !== "failure" || event.error.category !== "host_exit")
+    return event;
+  return (await diagnostic) ?? event;
+}
+
+function readyEventWithHostOutcome(operation, category, hostOutcome) {
+  return readyEvent(operation, category).catch(async (error) => {
+    if (error instanceof LauncherError && error.category === "host_exit")
+      return hostOutcome;
+    throw error;
   });
 }
 
@@ -316,12 +360,13 @@ function startSupervised(command, args, options, categories, deps) {
   }
 }
 
-function confirmSpawn(supervisor, requireStdout = false) {
+function confirmSpawn(supervisor, requireStdout = false, requireStderr = false) {
   const { child } = supervisor;
   if (
     !Number.isInteger(child?.pid) ||
     child.pid <= 0 ||
-    (requireStdout && !child.stdout)
+    (requireStdout && !child.stdout) ||
+    (requireStderr && !child.stderr)
   ) {
     throw new LauncherError(supervisor.spawnCategory);
   }
@@ -389,7 +434,7 @@ function startHost(request, deps) {
       cwd: deps.repositoryRoot,
       detached: deps.platform !== "win32",
       env: deps.environment,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     },
     {
       exit: "host_exit",
@@ -428,24 +473,30 @@ function startVite(apiOrigin, port, deps) {
 
 async function runSingleSupervised(profile, deps, signals, children) {
   children.host = startHost({ mode: "single", profile }, deps);
+  const hostFailure = waitForHostFailure(children.host.child.stderr);
+  const hostOutcome = hostOutcomeWithDiagnostic(
+    children.host.outcome,
+    hostFailure,
+  );
   let event = await Promise.race([
     children.host.spawned.then(() => ({ kind: "spawned" })),
     signals.outcome,
   ]);
   let signal = failureOrSignal(event);
   if (signal) return signal;
-  confirmSpawn(children.host, true);
+  confirmSpawn(children.host, true, true);
 
   event = await Promise.race([
-    readyEvent(
+    readyEventWithHostOutcome(
       () =>
         waitForHostOrigin(
           children.host.child.stdout,
           deps.readinessTimeoutMs,
         ),
       "host_readiness_timeout",
+      hostOutcome,
     ),
-    children.host.outcome,
+    hostOutcome,
     signals.outcome,
   ]);
   signal = failureOrSignal(event);
@@ -455,7 +506,7 @@ async function runSingleSupervised(profile, deps, signals, children) {
   children.vite = startVite(apiOrigin, WEB_PORT, deps);
   event = await Promise.race([
     children.vite.spawned.then(() => ({ kind: "spawned" })),
-    children.host.outcome,
+    hostOutcome,
     signals.outcome,
   ]);
   signal = failureOrSignal(event);
@@ -474,7 +525,7 @@ async function runSingleSupervised(profile, deps, signals, children) {
           ),
         "vite_readiness_timeout",
       ),
-      children.host.outcome,
+      hostOutcome,
       children.vite.outcome,
       signals.outcome,
     ]);
@@ -483,12 +534,12 @@ async function runSingleSupervised(profile, deps, signals, children) {
   }
   signal = failureOrSignal(event);
   if (signal) return signal;
-  if (children.host.finished) throw children.host.error;
+  if (children.host.finished) failureOrSignal(await hostOutcome);
   if (children.vite.finished) throw children.vite.error;
 
   deps.publishReady({ apiOrigin, browserUrl: BROWSER_URL, profile });
   event = await Promise.race([
-    children.host.outcome,
+    hostOutcome,
     children.vite.outcome,
     signals.outcome,
   ]);
@@ -498,20 +549,26 @@ async function runSingleSupervised(profile, deps, signals, children) {
 
 async function runSharedSupervised(deps, signals, children) {
   children.host = startHost({ mode: "shared" }, deps);
+  const hostFailure = waitForHostFailure(children.host.child.stderr);
+  const hostOutcome = hostOutcomeWithDiagnostic(
+    children.host.outcome,
+    hostFailure,
+  );
   let event = await Promise.race([
     children.host.spawned.then(() => ({ kind: "spawned" })),
     signals.outcome,
   ]);
   let signal = failureOrSignal(event);
   if (signal) return signal;
-  confirmSpawn(children.host, true);
+  confirmSpawn(children.host, true, true);
 
   event = await Promise.race([
-    readyEvent(
+    readyEventWithHostOutcome(
       () => waitForSharedReadiness(children.host.child.stdout, deps.readinessTimeoutMs),
       "host_readiness_timeout",
+      hostOutcome,
     ),
-    children.host.outcome,
+    hostOutcome,
     signals.outcome,
   ]);
   signal = failureOrSignal(event);
@@ -521,7 +578,7 @@ async function runSharedSupervised(deps, signals, children) {
   children.mariaVite = startVite(readiness.mariaApiOrigin, WEB_PORTS.maria, deps);
   event = await Promise.race([
     children.mariaVite.spawned.then(() => ({ kind: "spawned" })),
-    children.host.outcome,
+    hostOutcome,
     signals.outcome,
   ]);
   signal = failureOrSignal(event);
@@ -531,7 +588,7 @@ async function runSharedSupervised(deps, signals, children) {
   children.claraVite = startVite(readiness.claraApiOrigin, WEB_PORTS.clara, deps);
   event = await Promise.race([
     children.claraVite.spawned.then(() => ({ kind: "spawned" })),
-    children.host.outcome,
+    hostOutcome,
     children.mariaVite.outcome,
     signals.outcome,
   ]);
@@ -558,7 +615,7 @@ async function runSharedSupervised(deps, signals, children) {
           ]),
         "vite_readiness_timeout",
       ),
-      children.host.outcome,
+      hostOutcome,
       children.mariaVite.outcome,
       children.claraVite.outcome,
       signals.outcome,
@@ -568,7 +625,7 @@ async function runSharedSupervised(deps, signals, children) {
   }
   signal = failureOrSignal(event);
   if (signal) return signal;
-  if (children.host.finished) throw children.host.error;
+  if (children.host.finished) failureOrSignal(await hostOutcome);
   if (children.mariaVite.finished) throw children.mariaVite.error;
   if (children.claraVite.finished) throw children.claraVite.error;
 
@@ -583,7 +640,7 @@ async function runSharedSupervised(deps, signals, children) {
     databasePasswordFilePath: readiness.databasePasswordFilePath,
   });
   event = await Promise.race([
-    children.host.outcome,
+    hostOutcome,
     children.mariaVite.outcome,
     children.claraVite.outcome,
     signals.outcome,
@@ -619,10 +676,7 @@ async function stopChild(supervisor, signal, deps) {
       throw new LauncherError("child_cleanup_failed");
     }
   };
-  if (supervisor.finished) {
-    requireCleanExit(false);
-    return;
-  }
+  if (supervisor.finished) return;
   const send = (nextSignal) => {
     try {
       deps.killProcessGroup(supervisor.child, nextSignal, deps.platform);

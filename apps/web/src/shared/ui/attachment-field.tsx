@@ -70,6 +70,13 @@ export function AttachmentField({
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const localKeySequence = useRef(0);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  function emit(nextValue: readonly AttachmentFieldValue[]) {
+    valueRef.current = nextValue;
+    onChange?.(nextValue);
+  }
 
   function nextLocalKey() {
     localKeySequence.current += 1;
@@ -95,8 +102,8 @@ export function AttachmentField({
       sizeBytes: file.size,
       state: "uploading" as const,
     }));
-    onChange?.([
-      ...value.filter((item) => item.state !== "uploading"),
+    emit([
+      ...valueRef.current.filter((item) => item.state !== "uploading"),
       ...pending.map((item) => ({
         fileId: item.fileId,
         fileName: item.fileName,
@@ -115,10 +122,15 @@ export function AttachmentField({
       }),
     );
 
-    onChange?.([
-      ...value.filter((item) => item.state !== "uploading"),
-      ...results.map(({ entry, result }) =>
-        result.ok
+    const resultsByLocalKey = new Map(
+      results.map(({ entry, result }) => [entry.localKey, { entry, result }]),
+    );
+    emit(
+      valueRef.current.map((item) => {
+        const completed = resultsByLocalKey.get(item.localKey);
+        if (!completed) return item;
+        const { entry, result } = completed;
+        return result.ok
           ? {
               fileId: result.fileId,
               fileName: result.fileName,
@@ -134,15 +146,15 @@ export function AttachmentField({
               mimeType: entry.mimeType,
               sizeBytes: entry.sizeBytes,
               state: "failed" as const,
-            },
-      ),
-    ]);
+            };
+      }),
+    );
     setUploading(false);
   }
 
   function remove(entry: AttachmentFieldValue) {
     if (disabled) return;
-    onChange?.(value.filter((item) => item.localKey !== entry.localKey));
+    emit(valueRef.current.filter((item) => item.localKey !== entry.localKey));
   }
 
   return (

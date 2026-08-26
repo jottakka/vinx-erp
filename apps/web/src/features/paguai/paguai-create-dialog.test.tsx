@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
+import type { AttachmentUploader } from "../../shared/ui/attachment-field";
 import { PaguaiCreateDialog } from "./paguai-create-dialog";
 
 describe("PaguaiCreateDialog", () => {
@@ -171,6 +172,120 @@ describe("PaguaiCreateDialog", () => {
         invoiceFileId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       }),
     );
+  });
+
+  it("does not submit a file removed while its upload is still pending", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    let completeUpload: (
+      value: Awaited<ReturnType<AttachmentUploader>>,
+    ) => void = () => {
+      throw new Error("Upload was not requested.");
+    };
+    const pendingUpload = new Promise<Awaited<ReturnType<AttachmentUploader>>>(
+      (resolve) => {
+        completeUpload = resolve;
+      },
+    );
+    render(
+      <VinxThemeProvider>
+        <PaguaiCreateDialog
+          company={{
+            companyId: "11111111-1111-4111-8111-111111111111",
+            companyName: "Alfa",
+          }}
+          onClose={() => undefined}
+          onSubmit={onSubmit}
+          open
+          uploader={() => pendingUpload}
+        />
+      </VinxThemeProvider>,
+    );
+
+    await user.upload(
+      screen.getByLabelText(
+        "Fatura ou documento da solicitação: anexar arquivo",
+      ),
+      new File(["fatura"], "removida.pdf", { type: "application/pdf" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Remover removida.pdf" }),
+    );
+    completeUpload({
+      fileId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      fileName: "removida.pdf",
+      mimeType: "application/pdf",
+      ok: true,
+      sizeBytes: 6,
+    });
+    await Promise.resolve();
+
+    expect(screen.queryByText("removida.pdf")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Título"), "Nova solicitação");
+    await user.type(screen.getByLabelText("Descrição"), "Descrição");
+    await user.type(screen.getByLabelText("Valor (R$)"), "1.250,00");
+    const dueDate = document.querySelector('input[name="dueDate"]');
+    if (!dueDate) throw new Error("Expected due date input");
+    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+    await user.type(screen.getByLabelText("Quem receberá"), "Fornecedor");
+    await user.click(
+      screen.getByRole("combobox", { name: "Comprovante de pagamento" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Obrigatório" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ invoiceFileId: null }),
+    );
+  });
+
+  it("clears an amount format error after a corrected valid resubmission", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <VinxThemeProvider>
+        <PaguaiCreateDialog
+          company={{
+            companyId: "11111111-1111-4111-8111-111111111111",
+            companyName: "Alfa",
+          }}
+          onClose={() => undefined}
+          onSubmit={onSubmit}
+          open
+        />
+      </VinxThemeProvider>,
+    );
+
+    await user.type(screen.getByLabelText("Título"), "Nova solicitação");
+    await user.type(screen.getByLabelText("Descrição"), "Descrição");
+    await user.type(screen.getByLabelText("Valor (R$)"), "1.2,34");
+    const dueDate = document.querySelector('input[name="dueDate"]');
+    if (!dueDate) throw new Error("Expected due date input");
+    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+    await user.type(screen.getByLabelText("Quem receberá"), "Fornecedor");
+    await user.click(
+      screen.getByRole("combobox", { name: "Comprovante de pagamento" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Obrigatório" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    expect(
+      screen.getByText("Informe um valor válido em reais (ex.: 1.250,00)."),
+    ).toBeVisible();
+
+    await user.clear(screen.getByLabelText("Valor (R$)"));
+    await user.type(screen.getByLabelText("Valor (R$)"), "1.250,00");
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: "1250.00" }),
+    );
+    expect(
+      screen.queryByText("Informe um valor válido em reais (ex.: 1.250,00)."),
+    ).not.toBeInTheDocument();
   });
 
   it("freezes every field and attachment action while the create request is pending", async () => {

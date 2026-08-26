@@ -211,6 +211,7 @@ function attachmentFile(name: string, bytes = new Uint8Array([1])): File {
 function attachmentFetch(
   fileIds: readonly string[],
   blockedAntiforgery?: { at: number; response: Promise<Response> },
+  fileIdsByName?: Readonly<Record<string, string>>,
 ) {
   let antiforgeryCalls = 0;
   let intended = 0;
@@ -223,7 +224,8 @@ function attachmentFetch(
       return antiforgeryTokenResponse();
     }
     if (path === intentionPath) {
-      const id = fileIds[intended++];
+      const body = JSON.parse(init?.body as string) as { fileName: string };
+      const id = fileIdsByName?.[body.fileName] ?? fileIds[intended++];
       return new Response(
         JSON.stringify({
           fileId: id,
@@ -1033,7 +1035,14 @@ describe("agent workspace", () => {
       "55555555-5555-4555-8555-555555555555",
       "66666666-6666-4666-8666-666666666666",
     ];
-    vi.stubGlobal("fetch", attachmentFetch(fileIds));
+    vi.stubGlobal(
+      "fetch",
+      attachmentFetch(fileIds, undefined, {
+        "primeiro.pdf": fileIds[0],
+        "segundo.pdf": fileIds[1],
+        "terceiro.pdf": fileIds[2],
+      }),
+    );
     const user = userEvent.setup();
     const { router } = await renderAgentWorkspace();
     const dock = await openDockAndSelectCompany(user);

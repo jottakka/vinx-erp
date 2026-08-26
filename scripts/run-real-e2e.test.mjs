@@ -122,6 +122,7 @@ function createFakeChild(label, pid) {
   const child = new EventEmitter();
   child.label = label;
   child.pid = pid;
+  child.stderr = new PassThrough();
   child.stdout = new PassThrough();
   child.exitCode = null;
   child.signalCode = null;
@@ -129,6 +130,7 @@ function createFakeChild(label, pid) {
     if (child.exitCode !== null || child.signalCode !== null) return;
     child.exitCode = code;
     child.signalCode = signal;
+    child.stderr.end();
     child.stdout.end();
     child.emit("exit", code, signal);
   };
@@ -243,7 +245,7 @@ function sharedReadinessLines() {
 }
 
 function createSharedHarness(overrides = {}) {
-  const { onReady, ...dependencyOverrides } = overrides;
+  const { onHostSpawn, onReady, ...dependencyOverrides } = overrides;
   const host = createFakeChild("host", 101);
   const mariaVite = createFakeChild("vite-maria", 202);
   const claraVite = createFakeChild("vite-clara", 303);
@@ -270,7 +272,8 @@ function createSharedHarness(overrides = {}) {
       queueMicrotask(() => {
         child.emit("spawn");
         if (child === host) {
-          host.stdout.write(`${sharedReadinessLines().join("\n")}\n`);
+          (onHostSpawn ?? (() =>
+            host.stdout.write(`${sharedReadinessLines().join("\n")}\n`)))();
         }
       });
       return child;
@@ -457,6 +460,96 @@ test("parseSharedReadiness accepts exactly one complete ordered shared block", (
   });
 });
 
+test("shared launcher ignores host build preamble before its contiguous readiness block", async () => {
+  const harness = createSharedHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.write("Determining projects to restore...\n");
+      harness.host.stdout.write("Build succeeded.\n");
+      harness.host.stdout.write(`${sharedReadinessLines().join("\n")}\n`);
+    },
+  });
+
+  assert.equal(await runLauncher(harness.deps), 0);
+  assert.equal(harness.spawns.length, 3);
+});
+
+test("launcher preserves a typed host failure while the process exits shortly after it", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stderr.write("E2E_HOST_FAILED=seed_failed\n");
+      setImmediate(() => harness.host.finish(1));
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_seed_failed$/,
+  );
+  assert.deepEqual(harness.output, []);
+  assert.equal(
+    harness.events.some((event) => event.startsWith("kill:host:")),
+    false,
+  );
+});
+
+test("launcher reconciles stdout closure before a typed host failure", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.end();
+      setImmediate(() => {
+        harness.host.stderr.write("E2E_HOST_FAILED=seed_failed\n");
+        setImmediate(() => harness.host.finish(1));
+      });
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_seed_failed$/,
+  );
+  assert.equal(
+    harness.events.some((event) => event.startsWith("kill:host:")),
+    false,
+  );
+});
+
+test("launcher ignores arbitrary host stderr and retains a generic failure", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stderr.write("sensitive host exception details\n");
+      harness.host.finish(1);
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_exit$/,
+  );
+  assert.deepEqual(harness.output, []);
+  assert.equal(
+    harness.events.some((event) => event.startsWith("kill:host:")),
+    false,
+  );
+});
+
+test("launcher reconciles a typed host failure after readiness", async () => {
+  const harness = createHarness({
+    onReady: () => {
+      harness.host.stderr.write("E2E_HOST_FAILED=seed_failed\n");
+      setImmediate(() => harness.host.finish(1));
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_seed_failed$/,
+  );
+  assert.equal(
+    harness.events.some((event) => event.startsWith("kill:host:")),
+    false,
+  );
+});
+
 test("parseSharedReadiness rejects duplicate, incomplete, out-of-order, and unsafe blocks", () => {
   const complete = sharedReadinessLines();
   const duplicate = [...complete];
@@ -553,14 +646,14 @@ test("shared host cleanup exit is reported as child_cleanup_failed", async () =>
   );
 });
 
-test("shared launcher rejects an already-exited host even with exit code zero", async () => {
+test("shared launcher preserves an already-exited host as the primary failure", async () => {
   const harness = createSharedHarness({
     onReady: () => harness.host.finish(0),
   });
 
   await assert.rejects(
     runLauncher(harness.deps),
-    /^Error: E2E launcher failed: child_cleanup_failed$/,
+    /^Error: E2E launcher failed: host_exit$/,
   );
 });
 
@@ -597,14 +690,14 @@ test("shared launcher rejects a SIGKILL host exit with no exit code", async () =
   );
 });
 
-test("shared cleanup failure takes precedence over a preceding host exit", async () => {
+test("shared launcher preserves a host exit that follows readiness", async () => {
   const harness = createSharedHarness({
     onReady: () => harness.host.finish(1),
   });
 
   await assert.rejects(
     runLauncher(harness.deps),
-    /^Error: E2E launcher failed: child_cleanup_failed$/,
+    /^Error: E2E launcher failed: host_exit$/,
   );
 });
 
@@ -866,7 +959,9 @@ test("runLauncher escalates a child that ignores graceful shutdown", async () =>
     shutdownTimeoutMs: 5,
     killProcessGroup: (child, signal) => {
       harness.events.push(`kill:${child.label}:${signal}`);
-      if (child !== harness.vite || signal === "SIGKILL") {
+      if (child === harness.host) {
+        setTimeout(() => child.finish(0), 1);
+      } else if (signal === "SIGKILL") {
         setTimeout(() => child.finish(null, signal), 1);
       }
     },
@@ -905,7 +1000,7 @@ test("runLauncher starts exact child commands and shuts Vite down before host", 
       cwd: "/repo",
       detached: true,
       env: { KEEP_ME: "yes" },
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     },
   });
   assert.deepEqual(harness.spawns[1], {
