@@ -8,6 +8,7 @@ using Npgsql;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
+using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Configurations;
@@ -19,10 +20,23 @@ public sealed class PaguaiDraftService(
     FoundationDbContext database,
     CapabilityEvaluator capabilityEvaluator,
     AuditAppender auditAppender,
+    FileStorage fileStorage,
     ILogger<PaguaiDraftService> logger
 )
 {
     private const string CreateCommandName = "paguai.draft.create";
+    private const string ReplaceProofCommandName = "paguai.draft.replace_proof";
+    private const string ProofFileUniqueIndexName = "uq_paguai_requests_proof_file";
+
+    /// <summary>Vida útil do link de leitura do comprovante; nunca persistido em payload.</summary>
+    private static readonly TimeSpan ProofLinkLifetime = TimeSpan.FromMinutes(5);
+
+    /// <summary>Metadata mínima aceitável para vincular um comprovante: confirmado após quarentena/scan.</summary>
+    private const string RequiredFileState = FileRecord.ConfirmedState;
+
+    /// <summary>Classificação gravada pelo uploader web do comprovante (fronteira pública de arquivos).</summary>
+    public const string ProofClassification = "paguai_request_proof";
+
     private static readonly CapabilityRequirement ReadCapability = new(
         KnownCapabilities.PaguaiDraftRead,
         CapabilityScope.Company
@@ -78,6 +92,27 @@ public sealed class PaguaiDraftService(
                 return DeserializeReplay(existing.ResultJson);
             }
 
+            if (
+                command.ProofFileId is { } proofFileId
+                && await ValidateBindableProofAsync(
+                    membership!,
+                    command.CompanyId,
+                    proofFileId,
+                    excludeDraftId: null,
+                    cancellationToken
+                ) is { } rejection
+            )
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await AuditedFailureAsync(
+                    actor,
+                    command.CompanyId,
+                    ProofReason(rejection),
+                    rejection,
+                    cancellationToken
+                );
+            }
+
             var request = new PaguaiRequest
             {
                 Id = Guid.NewGuid(),
@@ -91,13 +126,18 @@ public sealed class PaguaiDraftService(
                 DueDate = command.DueDate,
                 BeneficiaryDisplayName = command.BeneficiaryDisplayName,
                 ProofRequirement = command.ProofRequirement,
+                ProofFileId = command.ProofFileId,
                 SourceInboundMessageId = command.SourceInboundMessageId,
                 State = "rascunho",
                 Version = 1,
             };
             database.PaguaiRequests.Add(request);
             await database.SaveChangesAsync(cancellationToken);
-            var draft = ToDraft(request);
+            var proofMetadata = await LoadProofMetadataAsync(
+                [request.ProofFileId],
+                cancellationToken
+            );
+            var draft = ToDraft(request, proofMetadata);
             database.IdempotencyRecords.Add(
                 new IdempotencyRecord(
                     Guid.NewGuid(),
@@ -128,6 +168,20 @@ public sealed class PaguaiDraftService(
             await database.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new PaguaiDraftResult(PaguaiDraftState.Created, draft);
+        }
+        catch (DbUpdateException exception)
+            when (IsUniqueViolation(exception, ProofFileUniqueIndexName))
+        {
+            // Defesa dupla contra corrida de vínculo: o índice parcial único
+            // rejeita no storage e a resposta fica tipada, não indisponível.
+            database.ChangeTracker.Clear();
+            return await AuditedFailureAsync(
+                actor,
+                command.CompanyId,
+                ProofReason(PaguaiDraftState.ProofFileBound),
+                PaguaiDraftState.ProofFileBound,
+                cancellationToken
+            );
         }
         catch (DbUpdateException exception) when (IsUniqueViolation(exception))
         {
@@ -346,10 +400,20 @@ public sealed class PaguaiDraftService(
             }
 
             var request = await FindRequestAsync(companyId, actor.UserId, id, cancellationToken);
+            PaguaiDraft? draft = null;
+            if (request is not null)
+            {
+                var proofs = await LoadProofMetadataAsync(
+                    [request.ProofFileId],
+                    cancellationToken
+                );
+                draft = ToDraft(request, proofs);
+            }
+
             await transaction.CommitAsync(cancellationToken);
             return request is null
                 ? PaguaiDraftResult.Of(PaguaiDraftState.NotFound)
-                : new PaguaiDraftResult(PaguaiDraftState.Created, ToDraft(request));
+                : new PaguaiDraftResult(PaguaiDraftState.Created, draft);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -364,6 +428,314 @@ public sealed class PaguaiDraftService(
             return PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
         }
     }
+
+    /// <summary>
+    /// Troca o comprovante do próprio rascunho com verificação otimista: CAS em
+    /// <c>version</c>, validação pela fronteira de arquivos e auditoria da
+    /// substituição no MESMO commit do rebind. Corrida de duplo vínculo é
+    /// rejeitada também pelo índice parcial único em storage.
+    /// </summary>
+    public async Task<PaguaiDraftResult> ReplaceProofAsync(
+        ActorContext actor,
+        ReplaceDraftProofCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            command.CompanyId == Guid.Empty
+            || command.DraftId == Guid.Empty
+            || command.ProofFileId == Guid.Empty
+            || command.ExpectedVersion < 1
+        )
+        {
+            return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
+        }
+
+        try
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                cancellationToken
+            );
+            await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+            var membership = await FindMembershipAsync(actor, command.CompanyId, cancellationToken);
+            if (
+                membership is null
+                || !await capabilityEvaluator.HasGrantAsync(
+                    command.CompanyId,
+                    membership.Id,
+                    CreateCapability,
+                    cancellationToken
+                )
+            )
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await AuditedDenialAsync(actor, command.CompanyId, cancellationToken);
+            }
+
+            var current = await database.PaguaiRequests.AsNoTracking().SingleOrDefaultAsync(
+                request =>
+                    request.CompanyId == command.CompanyId
+                    && request.RequesterUserId == actor.UserId
+                    && request.Id == command.DraftId,
+                cancellationToken
+            );
+            if (current is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return PaguaiDraftResult.Of(PaguaiDraftState.NotFound);
+            }
+
+            if (current.Version != command.ExpectedVersion)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await AuditedFailureAsync(
+                    actor,
+                    command.CompanyId,
+                    ProofReason(PaguaiDraftState.VersionConflict),
+                    PaguaiDraftState.VersionConflict,
+                    cancellationToken
+                );
+            }
+
+            if (
+                await ValidateBindableProofAsync(
+                    membership,
+                    command.CompanyId,
+                    command.ProofFileId,
+                    excludeDraftId: command.DraftId,
+                    cancellationToken
+                ) is { } rejection
+            )
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await AuditedFailureAsync(
+                    actor,
+                    command.CompanyId,
+                    ProofReason(rejection),
+                    rejection,
+                    cancellationToken
+                );
+            }
+
+            var swapped = await database.PaguaiRequests
+                .Where(request => request.Id == command.DraftId && request.Version == current.Version)
+                .ExecuteUpdateAsync(
+                    setter =>
+                        setter
+                            .SetProperty(request => request.ProofFileId, command.ProofFileId)
+                            .SetProperty(
+                                request => request.Version,
+                                current.Version + 1
+                            ),
+                    cancellationToken
+                );
+            if (swapped != 1)
+            {
+                // Outra troca venceu a corrida: a versão esperada já não vale.
+                await transaction.RollbackAsync(cancellationToken);
+                return await AuditedFailureAsync(
+                    actor,
+                    command.CompanyId,
+                    ProofReason(PaguaiDraftState.VersionConflict),
+                    PaguaiDraftState.VersionConflict,
+                    cancellationToken
+                );
+            }
+
+            var proofs = await LoadProofMetadataAsync([command.ProofFileId], cancellationToken);
+            var refreshed = await database.PaguaiRequests.AsNoTracking().SingleAsync(
+                request => request.Id == command.DraftId,
+                cancellationToken
+            );
+            await auditAppender.AppendAsync(
+                new AuditEventData(
+                    actor.UserId,
+                    AuditScope.Company,
+                    command.CompanyId,
+                    AuditSource.Web,
+                    ReplaceProofCommandName,
+                    "paguai_request",
+                    command.DraftId,
+                    AuditOutcome.Success,
+                    actor.CorrelationId,
+                    null,
+                    "{}"
+                ),
+                cancellationToken
+            );
+            await database.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new PaguaiDraftResult(PaguaiDraftState.Created, ToDraft(refreshed, proofs));
+        }
+        catch (DbUpdateException exception)
+            when (IsUniqueViolation(exception, ProofFileUniqueIndexName))
+        {
+            database.ChangeTracker.Clear();
+            return await AuditedFailureAsync(
+                actor,
+                command.CompanyId,
+                ProofReason(PaguaiDraftState.ProofFileBound),
+                PaguaiDraftState.ProofFileBound,
+                cancellationToken
+            );
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            database.ChangeTracker.Clear();
+            logger.LogError(
+                exception,
+                "Paguai draft {Operation} {Module} {Result} {Reason}",
+                "replace_proof",
+                "paguai",
+                "unavailable",
+                "database_or_audit_unavailable"
+            );
+            return PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
+        }
+    }
+
+    /// <summary>
+    /// Emite URL assinada de curta duração para o comprovante vinculado sob
+    /// capability e RLS frescos; a URL nunca entra em payloads de lista/detalhe.
+    /// </summary>
+    public async Task<PaguaiProofLinkResult> OpenProofLinkAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid draftId,
+        CancellationToken cancellationToken
+    )
+    {
+        if (companyId == Guid.Empty || draftId == Guid.Empty)
+        {
+            return PaguaiProofLinkResult.Of(PaguaiDraftState.NotFound);
+        }
+
+        try
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                cancellationToken
+            );
+            await ApplyContextAsync(actor, companyId, cancellationToken);
+            var membership = await FindMembershipAsync(actor, companyId, cancellationToken);
+            if (
+                membership is null
+                || !await capabilityEvaluator.HasGrantAsync(
+                    companyId,
+                    membership.Id,
+                    ReadCapability,
+                    cancellationToken
+                )
+            )
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return PaguaiProofLinkResult.Of(PaguaiDraftState.NotFound);
+            }
+
+            var request = await FindRequestAsync(companyId, actor.UserId, draftId, cancellationToken);
+            if (request?.ProofFileId is not { } proofFileId)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return PaguaiProofLinkResult.Of(PaguaiDraftState.NotFound);
+            }
+
+            var file = await database.Files.AsNoTracking().SingleOrDefaultAsync(
+                candidate => candidate.Id == proofFileId,
+                cancellationToken
+            );
+            if (file is null || file.CompanyId != companyId)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return PaguaiProofLinkResult.Of(PaguaiDraftState.ProofFileNotFound);
+            }
+
+            if (!string.Equals(file.ProcessingState, RequiredFileState, StringComparison.Ordinal))
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return PaguaiProofLinkResult.Of(PaguaiDraftState.ProofFileNotReady);
+            }
+
+            var signed = await fileStorage.CreateSignedDownloadUrlAsync(
+                file.ProviderKey,
+                ProofLinkLifetime,
+                cancellationToken
+            );
+            await transaction.CommitAsync(cancellationToken);
+            return new PaguaiProofLinkResult(
+                PaguaiDraftState.Created,
+                new PaguaiProofLink(signed.Url, signed.ExpiresAt)
+            );
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "Paguai proof {Operation} {Module} {Result} {Reason}",
+                "open_link",
+                "paguai",
+                "unavailable",
+                "database_or_storage_unavailable"
+            );
+            return PaguaiProofLinkResult.Of(PaguaiDraftState.Unavailable);
+        }
+    }
+
+    /// <summary>
+    /// Validação de vínculo pela fronteira pública de arquivos Foundation:
+    /// existência, mesma empresa e mesmo autor de upload, estado confirmado
+    /// pós-quarentena/scan e ainda não vinculado a outro rascunho.
+    /// </summary>
+    private async Task<PaguaiDraftState?> ValidateBindableProofAsync(
+        Membership uploader,
+        Guid companyId,
+        Guid proofFileId,
+        Guid? excludeDraftId,
+        CancellationToken cancellationToken
+    )
+    {
+        var file = await database.Files.AsNoTracking().SingleOrDefaultAsync(
+            candidate => candidate.Id == proofFileId,
+            cancellationToken
+        );
+        if (file is null)
+        {
+            return PaguaiDraftState.ProofFileNotFound;
+        }
+
+        if (file.CompanyId != companyId || file.UploaderMembershipId != uploader.Id)
+        {
+            return PaguaiDraftState.ProofFileDenied;
+        }
+
+        if (!string.Equals(file.ProcessingState, RequiredFileState, StringComparison.Ordinal))
+        {
+            return PaguaiDraftState.ProofFileNotReady;
+        }
+
+        var boundElsewhere = await database.PaguaiRequests.AsNoTracking().AnyAsync(
+            request => request.ProofFileId == proofFileId && request.Id != excludeDraftId,
+            cancellationToken
+        );
+        return boundElsewhere ? PaguaiDraftState.ProofFileBound : null;
+    }
+
+    private static string ProofReason(PaguaiDraftState state) =>
+        state switch
+        {
+            PaguaiDraftState.ProofFileNotFound => "proof_file_not_found",
+            PaguaiDraftState.ProofFileDenied => "proof_file_denied",
+            PaguaiDraftState.ProofFileNotReady => "proof_file_not_ready",
+            PaguaiDraftState.ProofFileBound => "proof_file_bound",
+            PaguaiDraftState.VersionConflict => "proof_version_conflict",
+            _ => "invalid_request",
+        };
 
     private async Task<PaguaiDraftResult> ReconcileReplayAsync(
         ActorContext actor,
@@ -543,11 +915,67 @@ public sealed class PaguaiDraftService(
             .OrderByDescending(request => request.CreatedAt)
             .ThenByDescending(request => request.Id)
             .ToListAsync(cancellationToken);
-        return [.. requests.Select(ToDraft)];
+        var proofs = await LoadProofMetadataAsync(
+            requests.Select(request => request.ProofFileId),
+            cancellationToken
+        );
+        return [.. requests.Select(request => ToDraft(request, proofs))];
     }
 
-    private static PaguaiDraft ToDraft(PaguaiRequest request) =>
-        new(
+    /// <summary>Nomes de arquivo são metadados seguros; conteúdo e chaves de provider não saem daqui.</summary>
+    private async Task<Dictionary<Guid, (string FileName, string MimeType, long SizeBytes)>>
+        LoadProofMetadataAsync(
+            IEnumerable<Guid?> proofFileIds,
+            CancellationToken cancellationToken
+        )
+    {
+        List<Guid> fileIds =
+        [
+            .. proofFileIds.Where(fileId => fileId.HasValue).Select(fileId => fileId!.Value).Distinct(),
+        ];
+        if (fileIds.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = await database
+            .Files.AsNoTracking()
+            .Where(file => fileIds.Contains(file.Id))
+            .Select(file => new
+            {
+                file.Id,
+                file.OriginalFileName,
+                file.MimeType,
+                file.SizeBytes,
+            })
+            .ToListAsync(cancellationToken);
+        return rows.ToDictionary(
+            row => row.Id,
+            row => (row.OriginalFileName, row.MimeType, row.SizeBytes)
+        );
+    }
+
+    private static PaguaiDraft ToDraft(
+        PaguaiRequest request,
+        IReadOnlyDictionary<Guid, (string FileName, string MimeType, long SizeBytes)>? proofs =
+            null
+    )
+    {
+        string? proofFileName = null;
+        string? proofFileMimeType = null;
+        long? proofFileSizeBytes = null;
+        if (
+            proofs is not null
+            && request.ProofFileId is { } proofFileId
+            && proofs.TryGetValue(proofFileId, out var metadata)
+        )
+        {
+            proofFileName = metadata.FileName;
+            proofFileMimeType = metadata.MimeType;
+            proofFileSizeBytes = metadata.SizeBytes;
+        }
+
+        return new PaguaiDraft(
             request.Id,
             request.CompanyId,
             request.RequestId,
@@ -560,8 +988,13 @@ public sealed class PaguaiDraftService(
             request.ProofRequirement,
             request.State,
             request.Version,
-            request.CreatedAt
+            request.CreatedAt,
+            request.ProofFileId,
+            proofFileName,
+            proofFileMimeType,
+            proofFileSizeBytes
         );
+    }
 
     private static PaguaiDraftResult DeserializeReplay(string resultJson)
     {
@@ -627,7 +1060,10 @@ public sealed class PaguaiDraftService(
         DateTimeOffset CreatedAt
     );
 
-    private static bool IsUniqueViolation(DbUpdateException exception)
+    private static bool IsUniqueViolation(
+        DbUpdateException exception,
+        string constraintName
+    )
     {
         if (exception.InnerException is not PostgresException postgresException)
         {
@@ -637,15 +1073,20 @@ public sealed class PaguaiDraftService(
         return postgresException.SqlState == PostgresErrorCodes.UniqueViolation
             && string.Equals(
                 postgresException.ConstraintName,
-                IdempotencyRecordConfiguration.KeyIndexDatabaseName,
+                constraintName,
                 StringComparison.Ordinal
             );
     }
 
+    private static bool IsUniqueViolation(DbUpdateException exception) =>
+        IsUniqueViolation(exception, IdempotencyRecordConfiguration.KeyIndexDatabaseName);
+
     private static string ComputePayloadHash(CreateDraftCommand command)
     {
-        var canonical = JsonSerializer.Serialize(
-            new
+        // Sem comprovante o canônico fica byte-idêntico ao corte anterior,
+        // preservando replay de recibos existentes.
+        object canonical = command.ProofFileId is { } proofFileId
+            ? new
             {
                 companyId = command.CompanyId,
                 requestId = command.RequestId,
@@ -656,9 +1097,21 @@ public sealed class PaguaiDraftService(
                 dueDate = command.DueDate,
                 beneficiaryDisplayName = command.BeneficiaryDisplayName,
                 proofRequirement = command.ProofRequirement,
+                proofFileId,
             }
-        );
-        return HashCanonicalPayload(canonical);
+            : new
+            {
+                companyId = command.CompanyId,
+                requestId = command.RequestId,
+                title = command.Title,
+                description = command.Description,
+                amount = command.Amount,
+                currency = command.Currency,
+                dueDate = command.DueDate,
+                beneficiaryDisplayName = command.BeneficiaryDisplayName,
+                proofRequirement = command.ProofRequirement,
+            };
+        return HashCanonicalPayload(JsonSerializer.Serialize(canonical));
     }
 
     private static string ComputeLegacyPayloadHash(CreateDraftCommand command)

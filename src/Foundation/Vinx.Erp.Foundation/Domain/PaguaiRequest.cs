@@ -27,6 +27,9 @@ public sealed class PaguaiRequest
 
     public string ProofRequirement { get; set; } = string.Empty;
 
+    /// <summary>Comprovante vinculado (foundation.files), um por rascunho; troca versionada audita a substituição.</summary>
+    public Guid? ProofFileId { get; set; }
+
     /// <summary>Documento inbound que originou o rascunho; único por documento.</summary>
     public Guid? SourceInboundMessageId { get; set; }
 
