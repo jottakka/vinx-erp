@@ -20,6 +20,10 @@ row_counts, storage), `commands/auth-export.*` (executa o responsável) e
 Saída recusada dentro do repositório; diretório criado 0700; qualquer falha
 descarta o bundle parcial (nada de capturas mistas).
 
+Segredos nunca vão para argv: a connection string chega só por ambiente e vira
+um `pgpass` temporário 0600; chaves de serviço viram arquivos de cabeçalho 0600;
+ambos são removidos ao sair (`lib-db.sh`).
+
 ## profile-tables.sh — agregados para as ledgers
 
 ```bash

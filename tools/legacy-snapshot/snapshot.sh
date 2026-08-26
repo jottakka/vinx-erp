@@ -22,6 +22,9 @@
 #     qualquer falha descarta o diretório inteiro.
 
 set -euo pipefail
+set -o errtrace
+# shellcheck source=lib-db.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib-db.sh"
 
 fail() { echo "erro: $*" >&2; exit 1; }
 
@@ -57,7 +60,10 @@ fi
 [[ -e "$dest_abs" ]] && fail "destino já existe (bundles são imutáveis): $dest_abs"
 
 TMP_DIR=$(mktemp -d)
-cleanup_all() { rm -rf "$TMP_DIR"; }
+cleanup_all() {
+  db_teardown_secrets
+  rm -rf "$TMP_DIR"
+}
 discard_partial_bundle() {
   if [[ -d "${dest_abs:-}" && "${BUNDLE_OPENED:-0}" == 1 ]]; then
     rm -rf "$dest_abs"
@@ -69,7 +75,8 @@ set -o errtrace
 trap cleanup_all EXIT
 trap discard_partial_bundle ERR
 
-psql_conn() { psql "$LEGACY_SNAPSHOT_CONN" -X -v ON_ERROR_STOP=1 "$@"; }
+db_setup   # converte a connection string em pgpass 0600; nunca em argv
+psql_conn() { db_psql "$@"; }
 
 main() {
   mkdir -m 0700 "$dest_abs"
@@ -155,7 +162,7 @@ CONSISTENT_SQL
   } | psql_conn -qAt -v schema="$SCHEMA" -f -
 
   # Dump único do schema: DDL, políticas, funções, triggers, extensões.
-  pg_dump "$LEGACY_SNAPSHOT_CONN" --schema-only --no-owner --no-privileges \
+  db_pg_dump --schema-only --no-owner --no-privileges \
     --schema="$SCHEMA" --file "$dest_abs/sql/schema.sql"
   chmod 600 "$dest_abs/sql/schema.sql"
 
@@ -163,12 +170,13 @@ CONSISTENT_SQL
   if [[ -n "${LEGACY_SNAPSHOT_STORAGE_URL:-}" ]]; then
     : "${LEGACY_SNAPSHOT_SERVICE_KEY:?LEGACY_SNAPSHOT_SERVICE_KEY é obrigatória com LEGACY_SNAPSHOT_STORAGE_URL}"
     base_url=${LEGACY_SNAPSHOT_STORAGE_URL%/}
-    curl -sS -f -H "Authorization: Bearer $LEGACY_SNAPSHOT_SERVICE_KEY" \
+    auth_header=$(db_bearer_header_file "$LEGACY_SNAPSHOT_SERVICE_KEY")
+    curl -sS -f --header @"$auth_header" \
       -o "$dest_abs/json/storage_buckets.json" "$base_url/bucket"
     local bucket
     while IFS= read -r bucket; do
       [[ "$bucket" =~ ^[A-Za-z0-9._-]+$ ]] || fail "nome de bucket inesperado: $bucket"
-      curl -sS -f -H "Authorization: Bearer $LEGACY_SNAPSHOT_SERVICE_KEY" \
+      curl -sS -f --header @"$auth_header" \
         -H 'Content-Type: application/json' \
         -d '{"prefix":"","limit":10000,"offset":0,"sortBy":{"column":"name","order":"asc"}}' \
         -o "$dest_abs/json/storage_objects_${bucket}.json" \

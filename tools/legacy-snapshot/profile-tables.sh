@@ -25,6 +25,8 @@
 
 set -euo pipefail
 set -o errtrace
+# shellcheck source=lib-db.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib-db.sh"
 
 fail() { echo "erro: $*" >&2; exit 2; }
 
@@ -50,7 +52,10 @@ fi
 [[ -e "$dest_abs" ]] && fail "destino já existe: $dest_abs"
 
 TMP_DIR=$(mktemp -d)
-cleanup_all() { rm -rf "$TMP_DIR"; }
+cleanup_all() {
+  db_teardown_secrets
+  rm -rf "$TMP_DIR"
+}
 discard_partial_bundle() {
   [[ -d "${dest_abs:-}" && "${BUNDLE_OPENED:-0}" == 1 ]] || return 0
   rm -rf "$dest_abs"
@@ -59,7 +64,9 @@ discard_partial_bundle() {
 trap cleanup_all EXIT
 trap discard_partial_bundle ERR
 
-psql_conn() { psql "$LEGACY_SNAPSHOT_CONN" -X -v ON_ERROR_STOP=1 "$@"; }
+TMPDIR_SET="${TMPDIR:-/tmp}"
+db_setup   # converte a connection string em pgpass 0600; nunca em argv
+psql_conn() { db_psql "$@"; }
 
 # Átomos citados no servidor; voltam prontos para colar como identificadores/literais.
 q_ident() { psql_conn -qAt -v a="$1" -c "SELECT format('%I', :'a');"; }
