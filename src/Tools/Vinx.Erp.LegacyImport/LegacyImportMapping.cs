@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Vinx.Erp.LegacyImport;
 
@@ -10,7 +11,10 @@ namespace Vinx.Erp.LegacyImport;
 /// </summary>
 internal static class LegacyImportMappingFile
 {
-    public sealed record Parsed(string SourceBatchId, IReadOnlyList<CompanyMapping> Companies);
+    public sealed record Parsed(
+        string SourceBatchId,
+        string SourceSchema,
+        IReadOnlyList<CompanyMapping> Companies);
 
     public static Parsed Load(string path)
     {
@@ -33,6 +37,15 @@ internal static class LegacyImportMappingFile
             throw new FormatException("mapping: companies deve ser uma lista não vazia");
         }
 
+        var sourceSchema = root.TryGetProperty("sourceSchema", out var schemaProperty)
+            && schemaProperty.ValueKind == JsonValueKind.String
+            ? schemaProperty.GetString()
+            : null;
+        if (sourceSchema is not null && !Regex.IsMatch(sourceSchema, "^[a-z_][a-z_0-9]*$"))
+        {
+            throw new FormatException("mapping: sourceSchema inválido (use [a-z_][a-z_0-9]*)");
+        }
+
         var companies = new List<CompanyMapping>();
         foreach (var entry in companiesProperty.EnumerateArray())
         {
@@ -42,7 +55,7 @@ internal static class LegacyImportMappingFile
                 TargetCompanyId: Guid.Parse(RequiredString(entry, "targetCompanyId"))));
         }
 
-        return new Parsed(sourceBatchId!, companies);
+        return new Parsed(sourceBatchId!, sourceSchema ?? "legacy", companies);
     }
 
     private static string RequiredString(JsonElement element, string name) =>

@@ -13,13 +13,16 @@ namespace Vinx.Erp.LegacyImport;
 public sealed class LegacyImporter
 {
     private const string TableKey = "customers";
+
+    private static string ClientTable(string sourceSchema) => $"\"{sourceSchema}\".cliente";
     private static readonly string[] ExpectedClienteColumns =
         ["id", "empresa_id", "codigo", "nome", "email", "ativo"];
 
     public sealed record Options(
         string ConnectionString,
         string SourceBatchId,
-        IReadOnlyList<CompanyMapping> Companies)
+        IReadOnlyList<CompanyMapping> Companies,
+        string SourceSchema = "legacy")
     {
         /// <summary>
         /// Ponto de injeção para provas de versão de mapeamento divergente
@@ -78,9 +81,10 @@ public sealed class LegacyImporter
             await using var command = new NpgsqlCommand(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'legacy' AND table_name = 'cliente'
+                WHERE table_schema = @source_schema AND table_name = 'cliente'
                 """,
                 connection);
+            command.Parameters.AddWithValue("@source_schema", options.SourceSchema);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -93,7 +97,7 @@ public sealed class LegacyImporter
         {
             problems.Add(new ImportValidationProblem(
                 "missing_legacy_columns",
-                $"colunas ausentes em legacy.cliente: {string.Join(", ", missingColumns)}"));
+                $"colunas ausentes em {options.SourceSchema}.cliente: {string.Join(", ", missingColumns)}"));
         }
 
         // Empresas presentes no legado sem linha no mapa bloqueiam a importação.
@@ -101,7 +105,7 @@ public sealed class LegacyImporter
         var legacyEmpresas = new List<string>();
         {
             await using var command = new NpgsqlCommand(
-                "SELECT DISTINCT empresa_id::text FROM legacy.cliente ORDER BY 1",
+                $"SELECT DISTINCT empresa_id::text FROM {ClientTable(options.SourceSchema)} ORDER BY 1",
                 connection);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
@@ -123,7 +127,7 @@ public sealed class LegacyImporter
             cancellationToken.ThrowIfCancellationRequested();
             // Sem transação de escrita: apenas leitura das linhas para validar presença.
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-            var rowCount = await CountClientRowsAsync(connection, transaction, mapping.LegacyEmpresaId, cancellationToken);
+            var rowCount = await CountClientRowsAsync(connection, transaction, options.SourceSchema, mapping.LegacyEmpresaId, cancellationToken);
             await transaction.RollbackAsync(cancellationToken);
             results.Add(new CompanyResult(mapping.CompanyKey, CompanyImportOutcome.Validated, rowCount));
         }
@@ -159,7 +163,7 @@ public sealed class LegacyImporter
         await GuardAgainstDivergentMappingVersionAsync(
             connection, transaction, options.SourceBatchId, mapping.CompanyKey, mappingVersion, cancellationToken);
 
-        var rows = await ReadClientRowsAsync(connection, transaction, mapping.LegacyEmpresaId, cancellationToken);
+        var rows = await ReadClientRowsAsync(connection, transaction, options.SourceSchema, mapping.LegacyEmpresaId, cancellationToken);
         var payloadSha256 = ComputeDigest(rows);
         var stagedRows = await StageCustomersAsync(
             connection, transaction, mapping, rows, cancellationToken);
@@ -208,14 +212,14 @@ public sealed class LegacyImporter
     private sealed record ClientRow(string IdText, string? Code, string Name, string? Email, bool Active);
 
     private static async Task<List<ClientRow>> ReadClientRowsAsync(
-        NpgsqlConnection connection, NpgsqlTransaction transaction, Guid empresaId, CancellationToken cancellationToken)
+        NpgsqlConnection connection, NpgsqlTransaction transaction, string sourceSchema, Guid empresaId, CancellationToken cancellationToken)
     {
         var rows = new List<ClientRow>();
         await using var command = new NpgsqlCommand(
             """
             SELECT id::text, codigo, nome, email, ativo
-            FROM legacy.cliente WHERE empresa_id = @empresa_id ORDER BY id
-            """,
+            FROM {0} WHERE empresa_id = @empresa_id ORDER BY id
+            """.Replace("{0}", ClientTable(sourceSchema)),
             connection, transaction);
         command.Parameters.AddWithValue("@empresa_id", empresaId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -233,10 +237,10 @@ public sealed class LegacyImporter
     }
 
     private static async Task<int> CountClientRowsAsync(
-        NpgsqlConnection connection, NpgsqlTransaction transaction, Guid empresaId, CancellationToken cancellationToken)
+        NpgsqlConnection connection, NpgsqlTransaction transaction, string sourceSchema, Guid empresaId, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            "SELECT count(*) FROM legacy.cliente WHERE empresa_id = @empresa_id",
+            $"SELECT count(*) FROM {ClientTable(sourceSchema)} WHERE empresa_id = @empresa_id",
             connection, transaction);
         command.Parameters.AddWithValue("@empresa_id", empresaId);
         return (int)(long)(await command.ExecuteScalarAsync(cancellationToken))!;

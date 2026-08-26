@@ -39,3 +39,6 @@ LEGACY_SNAPSHOT_CONN='postgresql://leitura:***@host:5432/postgres' \
 Somente agregações: contagens/tamanhos, taxa de nulos, TOP 100 valores
 distintos por coluna configurada (alimenta a ledger de status) e min/max de
 datas. A SQL gerada é gravada junto à saída para auditoria.
+
+Nota: o importador lê o schema declarado em `sourceSchema` (padrão `legacy`);
+para ensaio em espelho com nome diferente, renomeie ou declare o campo.

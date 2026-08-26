@@ -76,7 +76,7 @@ public static class LegacyImportCommand
             {
                 var validation = await importer.DryRunAsync(
                     new LegacyImporter.Options(
-                        connectionString!, mapping.SourceBatchId, mapping.Companies),
+                        connectionString!, mapping.SourceBatchId, mapping.Companies, mapping.SourceSchema),
                     CancellationToken.None);
                 WriteSummary(DryRunMode, validation.Problems.Count == 0, mapping.SourceBatchId, validation.Companies, validation.Problems);
                 return validation.Valid ? 0 : 1;
@@ -91,7 +91,8 @@ public static class LegacyImportCommand
             }
 
             var result = await importer.ApplyAsync(
-                new LegacyImporter.Options(connectionString, mapping.SourceBatchId, mapping.Companies),
+                new LegacyImporter.Options(
+                    connectionString!, mapping.SourceBatchId, mapping.Companies, mapping.SourceSchema),
                 CancellationToken.None);
             WriteSummary(ApplyMode, result.Succeeded, mapping.SourceBatchId, result.Companies, []);
             return result.Succeeded ? 0 : 1;

@@ -35,7 +35,11 @@ Nada é simulado nesta fase; cada item abaixo precisa ser liberado pelo dono:
 - Célula vazia nas ledgers = bloqueio de importação (fail-closed no importador).
 - Arquivos migram em tarefa própria, via quarentena — fora do escopo desta fase.
 
-## Contrato do importador (`Vinx.Erp.LegacyImport`)
+## Contrato do importador (`Vinx.Erp.LegacyImport`)## Contrato do importador (`Vinx.Erp.LegacyImport`)
+
+O schema de origem é declarado no mapeamento (`sourceSchema`, padrão `legacy`):
+em ensaios contra um espelho do legado com outro nome de schema, renomeie o
+espelho ou declare o campo; nada mais muda.
 
 - Modo padrão é **dry-run**: valida mapeamentos e colunas sem escrever nada,
   inclusive receipts. Escritas só com `--apply`.
