@@ -6,12 +6,14 @@ import { AgentConversation } from "./agent-conversation";
 import { useAgentConversation } from "./agent-conversation-provider";
 
 export function AgentPage() {
-  const { companyName, openDock } = useAgentConversation();
+  const { access, companyName, openDock } = useAgentConversation();
   const location = useLocation();
   const navigate = useNavigate();
-  const description = companyName
-    ? "Converse com o agente na empresa selecionada."
-    : "Escolha uma empresa para usar o agente.";
+  const description = access.available
+    ? "Envie perguntas sobre a empresa selecionada."
+    : companyName
+      ? "Escolha outra empresa para continuar."
+      : "Escolha uma empresa antes de enviar uma pergunta.";
   function backToContext() {
     openDock();
 
@@ -27,12 +29,13 @@ export function AgentPage() {
     <Stack spacing={3}>
       <PageHeader
         description={description}
-        eyebrow="Conversa com o agente"
+        eyebrow="Assistente"
         title="Agente"
       />
-      {companyName ? (
+      {access.available ? (
         <Alert role="note" severity="info" variant="outlined">
-          O agente usa somente dados autorizados da empresa selecionada.
+          Os envios são reais, vinculados à empresa indicada e, quando
+          disponível, processados pelo provedor de IA configurado.
         </Alert>
       ) : null}
       <Card variant="outlined">

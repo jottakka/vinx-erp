@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { hasCompanyCapability } from "../auth/company-capabilities";
 import type { AuthorizedCompanyMembership } from "../auth/session-contract";
 import { useSession } from "../auth/session-provider";
 import {
@@ -16,55 +17,60 @@ import {
 } from "./agent-attachments-client";
 import {
   type AgentRunFailureKind,
+  type AgentRunReasonCode,
   type AgentRunSendResult,
   createAgentRunClient,
-  isKnownAgentReasonCode,
 } from "./agent-client";
 import type { AgentMessage, AgentStatus } from "./agent-contract";
 
 /**
- * Conecta o workspace do agente ao POST /agent/runs real. Cada envio é uma
- * consulta independente (o runner não mantém turnos anteriores) contra a
- * empresa explicitamente selecionada; a conversa é abortada e limpa quando a
- * empresa muda. Nenhum resultado tardio sobrevive a reset/unmount/troca.
+ * Conecta o workspace do agente ao POST /agent/runs para a empresa escolhida.
+ * A conversa é cancelada e limpa quando a empresa, o usuário ou o vínculo muda.
+ * Resultados tardios não são exibidos após reset, desmontagem ou troca.
  */
 export function agentReplyText(result: AgentRunSendResult): string {
   if (!result.ok) {
-    return failureText(result.failure.kind, result.failure.code);
+    return failureText(result.failure.kind);
   }
   const { status, reasonCode, text } = result.run;
   switch (status) {
     case "result":
-      return text ?? withReason("Resposta concluída sem conteúdo.", reasonCode);
+      return text ?? "Resposta concluída sem conteúdo.";
     case "needs_clarification":
       if (reasonCode === "document_context_unavailable") {
-        return withReason(
-          "Não foi possível usar o anexo. Remova-o ou verifique-o antes de tentar novamente.",
-          reasonCode,
-        );
+        return "Não foi possível usar o anexo. Remova-o ou verifique-o antes de tentar novamente.";
       }
-      return (
-        text ??
-        withReason("O agente pede esclarecimento para continuar.", reasonCode)
-      );
+      return text ?? "O agente pede esclarecimento para continuar.";
     case "denied":
-      return (
-        text ?? withReason("A execução foi negada por política.", reasonCode)
-      );
+      return text ?? deniedText(reasonCode);
     case "requires_confirmation":
       // Estado opaco v1: nenhuma ação, proposta ou botão de confirmação.
       return "A ação proposta exige confirmação explícita. Nenhuma ação foi executada.";
     case "validation_error":
-      return withReason("A mensagem foi rejeitada pela validação.", reasonCode);
+      return "A mensagem foi rejeitada pela validação.";
     case "conflict":
-      return withReason(
-        "Conflito de execução: a requisição já foi processada com outro conteúdo.",
-        reasonCode,
-      );
+      return "Conflito de execução: a requisição já foi processada com outro conteúdo.";
   }
 }
 
-function failureText(kind: AgentRunFailureKind, code?: string): string {
+const companyRequiredMessage = "Selecione uma empresa para usar o assistente.";
+const capabilityDeniedMessage =
+  "O assistente não está disponível para o seu perfil nesta empresa. Solicite acesso ao administrador da empresa.";
+
+function deniedText(reasonCode: AgentRunReasonCode | null): string {
+  switch (reasonCode) {
+    case "capability_denied":
+      return capabilityDeniedMessage;
+    case "company_required":
+      return companyRequiredMessage;
+    case "company_not_authorized":
+      return "Você não tem acesso ao assistente nesta empresa. Selecione outra empresa ou solicite acesso ao administrador.";
+    default:
+      return "Não foi possível executar esta solicitação por uma regra de acesso.";
+  }
+}
+
+function failureText(kind: AgentRunFailureKind): string {
   switch (kind) {
     case "antiforgery":
       return "Sessão inválida para envio. Autentique-se novamente.";
@@ -73,10 +79,7 @@ function failureText(kind: AgentRunFailureKind, code?: string): string {
     case "rate_limited":
       return "Muitas execuções em sequência. Aguarde antes de enviar novamente.";
     case "unavailable":
-      // O código do envelope 503/504 já é allow-listed pelo schema do client.
-      return code
-        ? `O agente está indisponível agora. (${code})`
-        : "O agente está indisponível agora.";
+      return "O assistente está temporariamente indisponível. Tente novamente mais tarde.";
     case "timeout":
       return "A execução do agente excedeu o tempo limite.";
     case "network":
@@ -88,10 +91,6 @@ function failureText(kind: AgentRunFailureKind, code?: string): string {
   }
 }
 
-function withReason(text: string, reasonCode: string | null): string {
-  return isKnownAgentReasonCode(reasonCode) ? `${text} (${reasonCode})` : text;
-}
-
 function replySources(result: AgentRunSendResult) {
   return result.ok && result.run.sources
     ? result.run.sources.map((source) => ({ label: source.reference }))
@@ -99,6 +98,7 @@ function replySources(result: AgentRunSendResult) {
 }
 
 type AgentConversationContextValue = {
+  access: AgentAccess;
   authorizedCompanies: readonly AuthorizedCompanyMembership[];
   attachments: readonly AgentConversationAttachment[];
   attachmentSelectionAvailable: boolean;
@@ -117,6 +117,19 @@ type AgentConversationContextValue = {
   status: AgentStatus;
 };
 
+export type AgentAccess =
+  | { available: true; message: null }
+  | { available: false; message: string };
+
+function resolveAgentAccess(
+  company: AuthorizedCompanyMembership | null,
+): AgentAccess {
+  if (!company) return { available: false, message: companyRequiredMessage };
+  return hasCompanyCapability(company, "ai.read")
+    ? { available: true, message: null }
+    : { available: false, message: capabilityDeniedMessage };
+}
+
 export type AgentConversationAttachment = {
   errorStage?: AgentAttachmentUploadStage;
   fileId?: string;
@@ -132,6 +145,7 @@ export type AgentConversationAttachment = {
  * produção): nenhum dado de demonstração é exposto e os controles não operam.
  */
 const inertValue: AgentConversationContextValue = {
+  access: { available: false, message: companyRequiredMessage },
   authorizedCompanies: [],
   attachments: [],
   attachmentSelectionAvailable: false,
@@ -251,9 +265,8 @@ function ScopedAgentConversationProvider({
   onCompanyChange: (companyId: string) => void;
 }) {
   const companyId = company?.companyId ?? null;
-  const attachmentSelectionAvailable = Boolean(
-    companyId && company?.companyName,
-  );
+  const access = resolveAgentAccess(company);
+  const attachmentSelectionAvailable = access.available;
 
   const [messages, setMessages] = useState<readonly AgentMessage[]>([]);
   const [attachments, setAttachments] = useState<
@@ -420,6 +433,9 @@ function ScopedAgentConversationProvider({
 
   const sendMessage = useCallback(
     (text: string) => {
+      if (!access.available) {
+        return;
+      }
       const normalized = text.trim();
       const selectedAttachments = attachmentSnapshot.current;
       const attachmentIds = selectedAttachments.flatMap((attachment) =>
@@ -500,11 +516,12 @@ function ScopedAgentConversationProvider({
           }
         });
     },
-    [companyId, replaceAttachments],
+    [access.available, companyId, replaceAttachments],
   );
 
   const value = useMemo(
     () => ({
+      access,
       authorizedCompanies,
       attachments,
       attachmentSelectionAvailable,
@@ -528,6 +545,7 @@ function ScopedAgentConversationProvider({
       company,
       onCompanyChange,
       dockOpen,
+      access,
       messages,
       openDock,
       attachmentSelectionLimitReached,

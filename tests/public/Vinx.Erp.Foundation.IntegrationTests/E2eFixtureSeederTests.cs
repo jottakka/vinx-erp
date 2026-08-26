@@ -78,13 +78,13 @@ public sealed class E2eFixtureSeederTests
         using var beforeSecondSeed = await ReadDatasetSummaryAsync(fixture);
         var root = beforeSecondSeed.RootElement;
         Assert.Equal(
-            [1L, 3L, 4L, 4L, 5L, 3L, 3L, 5L, 5L, 17L, 5L, 4L, 5L, 4L, 1L, 0L, 3L],
+            [1L, 3L, 4L, 4L, 5L, 3L, 3L, 5L, 5L, 18L, 5L, 4L, 5L, 4L, 1L, 0L, 3L],
             root.GetProperty("counts").EnumerateArray().Select(value => value.GetInt64()));
         Assert.Equal("Alfa,Beta", root.GetProperty("maria_companies").GetString());
         Assert.Equal(
             "Alfa/Atendimento agent=foundation.employees.create|service_desk.ticket.assign|" +
             "service_desk.ticket.create|service_desk.ticket.move|service_desk.ticket.read_queue;" +
-            "Alfa/Operations=foundation.employees.create|paguai.draft.create|paguai.draft.read|" +
+            "Alfa/Operations=ai.read|foundation.employees.create|paguai.draft.create|paguai.draft.read|" +
             "service_desk.ticket.assign|service_desk.ticket.create|service_desk.ticket.move|" +
             "service_desk.ticket.read_queue;Beta/Finance operator=paguai.draft.create|" +
             "paguai.draft.read;Beta/Reader=paguai.draft.read|service_desk.ticket.read_queue;" +
@@ -132,7 +132,8 @@ public sealed class E2eFixtureSeederTests
             "d3000000-0000-4000-8000-000000000014/f4000000-0000-4000-8000-000000000039," +
             "d3000000-0000-4000-8000-000000000015/f4000000-0000-4000-8000-000000000040," +
             "d3000000-0000-4000-8000-000000000016/f4000000-0000-4000-8000-000000000041," +
-            "d3000000-0000-4000-8000-000000000017/f4000000-0000-4000-8000-000000000042;" +
+            "d3000000-0000-4000-8000-000000000017/f4000000-0000-4000-8000-000000000042," +
+            "d3000000-0000-4000-8000-000000000018/f4000000-0000-4000-8000-000000000065;" +
             "employees=e1000000-0000-4000-8000-000000000001/f4000000-0000-4000-8000-000000000043," +
             "e1000000-0000-4000-8000-000000000002/f4000000-0000-4000-8000-000000000044," +
             "e1000000-0000-4000-8000-000000000003/f4000000-0000-4000-8000-000000000045," +

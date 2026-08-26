@@ -19,8 +19,13 @@ import { useAgentConversation } from "./agent-conversation-provider";
 export const AGENT_DOCK_WIDTH = 380;
 
 function DockContent() {
-  const { closeDock, companyName, resetConversation, selectedCompanyId } =
-    useAgentConversation();
+  const {
+    access,
+    closeDock,
+    companyName,
+    resetConversation,
+    selectedCompanyId,
+  } = useAgentConversation();
   const navigate = useNavigate();
 
   return (
@@ -43,9 +48,9 @@ function DockContent() {
             />
           ) : null}
           <Typography color="text.secondary" variant="caption">
-            {companyName
-              ? "Empresa selecionada · uma empresa por envio"
-              : "Escolha uma empresa para começar"}
+            {access.available
+              ? "Empresa selecionada"
+              : "Assistente indisponível"}
           </Typography>
         </Stack>
         <IconButton
@@ -55,7 +60,7 @@ function DockContent() {
           <RestartAltOutlinedIcon />
         </IconButton>
         <IconButton
-          aria-label="Abrir página dedicada do agente"
+          aria-label="Abrir agente em tela inteira"
           onClick={() => {
             closeDock();
             navigate(agentPath);

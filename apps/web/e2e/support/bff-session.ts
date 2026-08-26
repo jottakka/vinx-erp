@@ -8,7 +8,10 @@ export const testCredentials = {
 const snapshot = {
   companies: [
     {
-      capabilities: [{ name: "prototype.view", scopes: ["Company"] }],
+      capabilities: [
+        { name: "prototype.view", scopes: ["Company"] },
+        { name: "ai.read", scopes: ["Company"] },
+      ],
       companyId: "33333333-3333-4333-8333-333333333333",
       companyName: "Alfa",
       membershipId: "22222222-2222-4222-8222-222222222222",
@@ -27,6 +30,24 @@ const snapshot = {
     id: "11111111-1111-4111-8111-111111111111",
   },
 } as const;
+
+type BffSessionOptions = {
+  agentReadCapability: boolean;
+};
+
+function sessionSnapshot({ agentReadCapability }: BffSessionOptions) {
+  if (agentReadCapability) return snapshot;
+
+  return {
+    ...snapshot,
+    companies: snapshot.companies.map((company) => ({
+      ...company,
+      capabilities: company.capabilities.filter(
+        (capability) => capability.name !== "ai.read",
+      ),
+    })),
+  };
+}
 
 export async function installBffSession(page: Page) {
   let authenticated = false;
@@ -79,6 +100,26 @@ export async function installBffSession(page: Page) {
     }
 
     await route.fallback();
+  });
+}
+
+/**
+ * Substitui somente a resposta do bootstrap depois que o cenário já autenticou
+ * a sessão. Assim, testes podem simular a projeção de capability sem alterar
+ * a rota de login, antiforgery ou qualquer autorização server-side.
+ */
+export async function installBootstrapAgentReadOverride(
+  page: Page,
+  options: BffSessionOptions,
+) {
+  const overriddenSnapshot = sessionSnapshot(options);
+
+  await page.route("**/foundation/bootstrap", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(overriddenSnapshot),
+      contentType: "application/json",
+      status: 200,
+    });
   });
 }
 

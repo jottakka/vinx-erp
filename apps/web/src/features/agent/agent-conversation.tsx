@@ -15,6 +15,7 @@ import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
+  useRef,
   useState,
 } from "react";
 import { CompanySelect } from "../../shared/ui/company-select";
@@ -88,6 +89,7 @@ function attachmentFailureText(
 
 export function AgentConversation() {
   const {
+    access,
     attachments,
     authorizedCompanies,
     attachmentSelectionAvailable,
@@ -102,10 +104,11 @@ export function AgentConversation() {
     status,
   } = useAgentConversation();
   const [draft, setDraft] = useState("");
+  const attachmentInput = useRef<HTMLInputElement>(null);
   const thinking = status === "thinking";
-  const emptyConversationNotice = companyName
-    ? "Faça uma pergunta para começar."
-    : "Escolha uma empresa para começar.";
+  const emptyConversationNotice = access.available
+    ? "Faça uma pergunta sobre a empresa selecionada."
+    : access.message;
 
   function submitFromInput() {
     sendMessage(draft);
@@ -164,7 +167,11 @@ export function AgentConversation() {
           py: 0.5,
         }}
       >
-        {messages.length ? (
+        {!access.available ? (
+          <Alert id="agent-access-message" role="status" severity="warning">
+            {access.message}
+          </Alert>
+        ) : messages.length ? (
           messages.map((message) => (
             <MessageBubble key={message.id} message={message} />
           ))
@@ -180,12 +187,12 @@ export function AgentConversation() {
           </Stack>
         ) : null}
       </Box>
-      <Stack component="form" onSubmit={submit} spacing={1}>
-        {companyName && !attachmentSelectionAvailable ? (
-          <Alert severity="info">
-            Selecione uma empresa para anexar documentos ao agente.
-          </Alert>
-        ) : null}
+      <Stack
+        aria-describedby={access.available ? undefined : "agent-access-message"}
+        component="form"
+        onSubmit={submit}
+        spacing={1}
+      >
         {attachmentSelectionLimitReached ? (
           <Alert severity="error">
             Você pode selecionar no máximo três anexos.
@@ -231,7 +238,7 @@ export function AgentConversation() {
         ) : null}
         <Stack direction="row" spacing={1} sx={{ alignItems: "flex-end" }}>
           <TextField
-            disabled={!selectedCompanyId || thinking}
+            disabled={!access.available || !selectedCompanyId || thinking}
             fullWidth
             label="Mensagem para o agente"
             maxRows={3}
@@ -243,23 +250,30 @@ export function AgentConversation() {
           />
           <IconButton
             aria-label="Anexar arquivo"
-            component="label"
-            disabled={thinking || !attachmentSelectionAvailable}
+            disabled={
+              thinking || !access.available || !attachmentSelectionAvailable
+            }
+            onClick={() => attachmentInput.current?.click()}
             title="Anexar arquivo"
+            type="button"
           >
             <AttachFileOutlinedIcon />
-            <input
-              accept="application/pdf,image/jpeg,image/png"
-              aria-label="Anexar documentos ao agente"
-              disabled={thinking || !attachmentSelectionAvailable}
-              multiple
-              onChange={selectFiles}
-              style={{ display: "none" }}
-              type="file"
-            />
           </IconButton>
+          <input
+            accept="application/pdf,image/jpeg,image/png"
+            aria-label="Anexar documentos ao agente"
+            disabled={
+              thinking || !access.available || !attachmentSelectionAvailable
+            }
+            multiple
+            onChange={selectFiles}
+            ref={attachmentInput}
+            style={{ display: "none" }}
+            type="file"
+          />
           <Button
             disabled={
+              !access.available ||
               !selectedCompanyId ||
               !draft.trim() ||
               thinking ||

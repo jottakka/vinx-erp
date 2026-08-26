@@ -1,6 +1,10 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
-import { installBffSession, signIn } from "./support/bff-session";
+import {
+  installBffSession,
+  installBootstrapAgentReadOverride,
+  signIn,
+} from "./support/bff-session";
 
 test.beforeEach(async ({ page }) => {
   await installBffSession(page);
@@ -352,4 +356,47 @@ test("Scenario: agent chat uploads, removes, and sends the remaining attachment 
   expect(storagePuts).toBe(2);
   expect(confirmationIds).toEqual(fileIds);
   expect(runBody?.attachments).toEqual([fileIds[1]]);
+});
+
+test("Scenario: agent access blocks chat without ai.read", async ({ page }) => {
+  await enterHome(page);
+
+  let runRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/agent/runs")) runRequests += 1;
+  });
+
+  await installBootstrapAgentReadOverride(page, { agentReadCapability: false });
+  await page.reload();
+
+  await page
+    .getByRole("button", {
+      name: "Abrir painel do agente — indisponível para este perfil",
+    })
+    .click();
+  const dock = page.getByRole("complementary", { name: "Painel do agente" });
+  await expect(dock).toBeVisible();
+  await expect(dock.getByText("Alfa · Assistente indisponível")).toBeVisible();
+  await expect(dock.getByRole("status")).toContainText(
+    "O assistente não está disponível para o seu perfil nesta empresa.",
+  );
+  await expect(dock.getByLabel("Mensagem para o agente")).toBeDisabled();
+  await expect(dock.getByLabel("Anexar documentos ao agente")).toBeDisabled();
+  await expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+  await expect(dock).not.toContainText("capability_denied");
+
+  await page.setViewportSize({ height: 844, width: 320 });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    )
+    .toBe(true);
+
+  const agentScan = await new AxeBuilder({ page })
+    .include("#vinx-agent-dock")
+    .analyze();
+  expect(agentScan.violations).toEqual([]);
+  expect(runRequests).toBe(0);
 });

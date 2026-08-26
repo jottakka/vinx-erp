@@ -1,18 +1,26 @@
 import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
-import { IconButton } from "@mui/material";
+import { IconButton, Tooltip } from "@mui/material";
 import { useAgentConversation } from "./agent-conversation-provider";
 
 export function AgentTrigger() {
-  const { dockOpen, openDock } = useAgentConversation();
+  const { access, dockOpen, openDock } = useAgentConversation();
+  const unavailable = !access.available;
+  const label = unavailable
+    ? "Abrir painel do agente — indisponível para este perfil"
+    : "Abrir painel do agente";
 
   return (
-    <IconButton
-      aria-controls={dockOpen ? "vinx-agent-dock" : undefined}
-      aria-expanded={dockOpen}
-      aria-label="Abrir painel do agente"
-      onClick={openDock}
+    <Tooltip
+      title={unavailable ? "Assistente indisponível para este perfil" : ""}
     >
-      <SmartToyOutlinedIcon />
-    </IconButton>
+      <IconButton
+        aria-controls={dockOpen ? "vinx-agent-dock" : undefined}
+        aria-expanded={dockOpen}
+        aria-label={label}
+        onClick={openDock}
+      >
+        <SmartToyOutlinedIcon />
+      </IconButton>
+    </Tooltip>
   );
 }
