@@ -439,10 +439,10 @@ describe("PaguaiPage", () => {
     );
   });
 
-  it("reuses a failed attempt only for the exact payload and rotates it after an edit or a new dialog", async () => {
+  it("reuses a definitive failed attempt only for the exact payload and rotates it after an edit or a new dialog", async () => {
     const user = userEvent.setup();
     const create = vi.fn(async (_input: CreatePaguaiDraftInput) => ({
-      error: "network" as const,
+      error: 400 as const,
       ok: false as const,
     }));
     const draftClient = {
@@ -483,6 +483,123 @@ describe("PaguaiPage", () => {
     expect(create.mock.calls[3]?.[0]?.requestId).not.toBe(
       create.mock.calls[2]?.[0]?.requestId,
     );
+  });
+
+  it("keeps an ambiguous create authoritative until its exact request resolves the existing draft", async () => {
+    const user = userEvent.setup();
+    let createCalls = 0;
+    const create = vi.fn(async (input: CreatePaguaiDraftInput) => {
+      createCalls += 1;
+      if (createCalls === 1)
+        return { error: "network" as const, ok: false as const };
+      return {
+        ok: true as const,
+        value: {
+          ...draft,
+          description: input.description,
+          requestId: input.requestId,
+          title: input.title,
+        },
+      };
+    });
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPage(draftClient);
+    await openCreate(user);
+    await fillForm(user);
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const originalPayload = create.mock.calls[0]?.[0];
+    if (!originalPayload) throw new Error("Expected original create payload");
+
+    const recovery = screen.getByRole("status");
+    expect(recovery).toHaveTextContent(
+      "Não foi possível confirmar o resultado da solicitação.",
+    );
+    expect(recovery).toHaveTextContent(
+      "Verifique e reenvie a mesma solicitação.",
+    );
+    const title = screen.getByRole("textbox", { name: "Título" });
+    expect(title).toBeDisabled();
+    expect(
+      screen.getByRole("combobox", { name: "Comprovante de pagamento" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByLabelText(
+        "Fatura ou documento da solicitação: anexar arquivo",
+      ),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", {
+        hidden: true,
+        name: "Nova solicitação",
+      }),
+    ).toBeDisabled();
+
+    await user.type(title, " não pode editar");
+    expect(title).toHaveValue("Novo papel");
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Verificar e reenviar solicitação",
+      }),
+    );
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(create.mock.calls[1]?.[0]).toEqual(originalPayload);
+    expect(
+      new Set(create.mock.calls.map(([payload]) => payload.requestId)),
+    ).toEqual(new Set([originalPayload.requestId]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Novo papel" }),
+    ).toBeVisible();
+  });
+
+  it("keeps the recovery lock and accessible retry action after repeated network results", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn(async (_input: CreatePaguaiDraftInput) => ({
+      error: "network" as const,
+      ok: false as const,
+    }));
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPage(draftClient);
+    await openCreate(user);
+    await fillForm(user);
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const originalPayload = create.mock.calls[0]?.[0];
+    if (!originalPayload) throw new Error("Expected original create payload");
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Verificar e reenviar solicitação",
+      }),
+    );
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Não foi possível confirmar o resultado da solicitação.",
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Verificar e reenviar solicitação",
+      }),
+    ).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "Título" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    expect(create.mock.calls[1]?.[0]).toEqual(originalPayload);
   });
 
   it("does not let a late create response close or populate a changed user membership scope", async () => {

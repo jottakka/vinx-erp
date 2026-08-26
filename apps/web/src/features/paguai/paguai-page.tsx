@@ -149,6 +149,7 @@ export function PaguaiPage({
   const [viewOpen, setViewOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [createRecoveryRequired, setCreateRecoveryRequired] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "submitting">(
     "idle",
   );
@@ -205,6 +206,7 @@ export function PaguaiPage({
     createAttemptRef.current = null;
     detailRequestRef.current += 1;
     setCreateError(null);
+    setCreateRecoveryRequired(false);
     setCreateOpen(false);
     setCreateDialogInstance((current) => current + 1);
     setError(null);
@@ -282,6 +284,45 @@ export function PaguaiPage({
         );
   }, [createCompany, invoiceUploader]);
 
+  async function createAttempt(attempt: PaguaiCreateAttempt) {
+    const scopeGeneration = scopeGenerationRef.current;
+    setStatus("submitting");
+    setError(null);
+    const result = await draftClient.create({
+      ...attempt.payload,
+      requestId: attempt.requestId,
+    });
+    if (
+      scopeGeneration !== scopeGenerationRef.current ||
+      createAttemptRef.current !== attempt
+    )
+      return;
+    setStatus("idle");
+    if (!result.ok) {
+      setError(result.error);
+      if (result.error === "network") {
+        setCreateError(null);
+        setCreateRecoveryRequired(true);
+        return;
+      }
+      setCreateRecoveryRequired(false);
+      setCreateError(message(result.error));
+      return;
+    }
+    setDrafts((current) =>
+      [
+        ...current.filter((draft) => draft.id !== result.value.id),
+        result.value,
+      ].sort(sortDrafts),
+    );
+    setSelected(result.value);
+    setCreateError(null);
+    setCreateRecoveryRequired(false);
+    createAttemptRef.current = null;
+    setCreateDialogInstance((current) => current + 1);
+    setCreateOpen(false);
+  }
+
   async function submit(values: {
     amount: string;
     beneficiaryDisplayName: string;
@@ -291,7 +332,8 @@ export function PaguaiPage({
     proofRequirement: "optional" | "required";
     title: string;
   }) {
-    if (!createCompany || status === "submitting") return;
+    if (!createCompany || status === "submitting" || createRecoveryRequired)
+      return;
     const payload: PaguaiCreatePayload = {
       amount: values.amount,
       beneficiaryDisplayName: values.beneficiaryDisplayName,
@@ -309,35 +351,13 @@ export function PaguaiPage({
         ? currentAttempt
         : { payload, requestId: crypto.randomUUID() };
     createAttemptRef.current = attempt;
-    const scopeGeneration = scopeGenerationRef.current;
-    setStatus("submitting");
-    setError(null);
-    const result = await draftClient.create({
-      ...payload,
-      requestId: attempt.requestId,
-    });
-    if (
-      scopeGeneration !== scopeGenerationRef.current ||
-      createAttemptRef.current !== attempt
-    )
-      return;
-    setStatus("idle");
-    if (!result.ok) {
-      setError(result.error);
-      setCreateError(message(result.error));
-      return;
-    }
-    setDrafts((current) =>
-      [
-        ...current.filter((draft) => draft.id !== result.value.id),
-        result.value,
-      ].sort(sortDrafts),
-    );
-    setSelected(result.value);
-    setCreateError(null);
-    createAttemptRef.current = null;
-    setCreateDialogInstance((current) => current + 1);
-    setCreateOpen(false);
+    await createAttempt(attempt);
+  }
+
+  function retryCreateAttempt() {
+    const attempt = createAttemptRef.current;
+    if (!attempt || !createRecoveryRequired || status === "submitting") return;
+    void createAttempt(attempt);
   }
 
   function openView(draft: PaguaiDraft) {
@@ -364,7 +384,9 @@ export function PaguaiPage({
           actions={
             permissions.canCreate ? (
               <Button
+                disabled={status === "submitting" || createRecoveryRequired}
                 onClick={() => {
+                  if (createRecoveryRequired) return;
                   setCreateError(null);
                   setCreateOpen(true);
                 }}
@@ -384,7 +406,7 @@ export function PaguaiPage({
           <>
             <AuthorizedCompanyFilter
               companies={companies}
-              disabled={status === "submitting"}
+              disabled={status === "submitting" || createRecoveryRequired}
               label="Empresa"
               onChange={setSelectedCompanyIds}
               selectedCompanyIds={selectedCompanyIds}
@@ -480,15 +502,19 @@ export function PaguaiPage({
         }
         errorMessage={createError}
         onClose={() => {
+          if (createRecoveryRequired) return;
           createAttemptRef.current = null;
           setCreateError(null);
+          setCreateRecoveryRequired(false);
           setError(null);
           setCreateOpen(false);
           setCreateDialogInstance((current) => current + 1);
         }}
         key={createDialogInstance}
+        onRetry={retryCreateAttempt}
         onSubmit={(values) => void submit(values)}
         open={createOpen}
+        recoveryRequired={createRecoveryRequired}
         submitting={status === "submitting"}
         uploader={uploaderAdapter}
       />

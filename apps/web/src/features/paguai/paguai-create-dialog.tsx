@@ -54,6 +54,7 @@ type PaguaiFormValues = z.output<typeof paguaiCreateSchema>;
 type PaguaiCreateDialogProps = {
   company: { companyId: string; companyName: string } | null;
   onClose: () => void;
+  onRetry?: () => void;
   onSubmit: (values: {
     amount: string;
     beneficiaryDisplayName: string;
@@ -66,6 +67,7 @@ type PaguaiCreateDialogProps = {
   open: boolean;
   uploader?: AttachmentUploader;
   errorMessage?: string | null;
+  recoveryRequired?: boolean;
   submitting?: boolean;
 };
 
@@ -73,8 +75,10 @@ export function PaguaiCreateDialog({
   company,
   errorMessage,
   onClose,
+  onRetry,
   onSubmit,
   open,
+  recoveryRequired = false,
   submitting = false,
   uploader,
 }: PaguaiCreateDialogProps) {
@@ -100,8 +104,10 @@ export function PaguaiCreateDialog({
   const failedAttachmentMessage = hasFailedAttachment
     ? "O anexo selecionado não foi enviado. Remova-o e selecione o arquivo novamente antes de criar a solicitação."
     : null;
+  const locked = submitting || recoveryRequired;
 
   function close() {
+    if (locked) return;
     form.reset();
     setAttachments([]);
     setAmountError(null);
@@ -109,7 +115,7 @@ export function PaguaiCreateDialog({
   }
 
   function submit(values: PaguaiFormValues) {
-    if (hasFailedAttachment) return;
+    if (hasFailedAttachment || locked) return;
     const amount = amountFromReais(values.amountReais);
     if (amount === null) {
       setAmountError("Informe um valor válido em reais (ex.: 1.250,00).");
@@ -132,7 +138,7 @@ export function PaguaiCreateDialog({
       fullWidth
       maxWidth="sm"
       onClose={(_event, _reason) => {
-        if (!submitting) close();
+        if (!locked) close();
       }}
       open={open}
     >
@@ -154,7 +160,7 @@ export function PaguaiCreateDialog({
           sx={{ pt: 1 }}
         >
           <TextField
-            disabled={submitting}
+            disabled={locked}
             error={Boolean(form.formState.errors.title)}
             helperText={form.formState.errors.title?.message}
             label="Título"
@@ -162,7 +168,7 @@ export function PaguaiCreateDialog({
             {...form.register("title")}
           />
           <TextField
-            disabled={submitting}
+            disabled={locked}
             error={
               Boolean(form.formState.errors.amountReais) || Boolean(amountError)
             }
@@ -176,7 +182,7 @@ export function PaguaiCreateDialog({
             {...form.register("amountReais")}
           />
           <TextField
-            disabled={submitting}
+            disabled={locked}
             error={Boolean(form.formState.errors.dueDate)}
             helperText={form.formState.errors.dueDate?.message}
             label="Pagar até"
@@ -187,7 +193,7 @@ export function PaguaiCreateDialog({
             {...form.register("dueDate")}
           />
           <TextField
-            disabled={submitting}
+            disabled={locked}
             error={Boolean(form.formState.errors.beneficiaryDisplayName)}
             helperText={
               form.formState.errors.beneficiaryDisplayName?.message ??
@@ -202,7 +208,7 @@ export function PaguaiCreateDialog({
             name="proofRequirement"
             render={({ field: { ref, ...field }, fieldState }) => (
               <TextField
-                disabled={submitting}
+                disabled={locked}
                 error={Boolean(fieldState.error)}
                 helperText={
                   fieldState.error?.message ??
@@ -223,7 +229,7 @@ export function PaguaiCreateDialog({
           />
           <AttachmentField
             accept="application/pdf,image/jpeg,image/png"
-            disabled={submitting}
+            disabled={locked}
             label="Fatura ou documento da solicitação"
             onChange={setAttachments}
             uploader={
@@ -244,7 +250,7 @@ export function PaguaiCreateDialog({
             </Alert>
           ) : null}
           <TextField
-            disabled={submitting}
+            disabled={locked}
             error={Boolean(form.formState.errors.description)}
             helperText={form.formState.errors.description?.message}
             label="Descrição"
@@ -253,7 +259,13 @@ export function PaguaiCreateDialog({
             slotProps={{ htmlInput: { maxLength: 4000 } }}
             {...form.register("description")}
           />
-          {errorMessage ? (
+          {recoveryRequired ? (
+            <Alert aria-live="polite" role="status" severity="warning">
+              Não foi possível confirmar o resultado da solicitação. Para evitar
+              duplicidade, os dados permanecem bloqueados. Verifique e reenvie a
+              mesma solicitação.
+            </Alert>
+          ) : errorMessage ? (
             <Alert role="alert" severity="error">
               {errorMessage}
             </Alert>
@@ -261,21 +273,27 @@ export function PaguaiCreateDialog({
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button disabled={submitting} onClick={close}>
+        <Button disabled={locked} onClick={close}>
           Cancelar
         </Button>
-        <Button
-          disabled={isUploading || hasFailedAttachment || submitting}
-          form="paguai-create-form"
-          type="submit"
-          variant="contained"
-        >
-          {isUploading
-            ? "Anexando…"
-            : submitting
-              ? "Criando…"
-              : "Criar rascunho"}
-        </Button>
+        {recoveryRequired ? (
+          <Button disabled={submitting} onClick={onRetry} variant="contained">
+            {submitting ? "Verificando…" : "Verificar e reenviar solicitação"}
+          </Button>
+        ) : (
+          <Button
+            disabled={isUploading || hasFailedAttachment || submitting}
+            form="paguai-create-form"
+            type="submit"
+            variant="contained"
+          >
+            {isUploading
+              ? "Anexando…"
+              : submitting
+                ? "Criando…"
+                : "Criar rascunho"}
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );
