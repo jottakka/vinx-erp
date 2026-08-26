@@ -41,6 +41,7 @@ public sealed class AtendimentoCardService(
     )
     {
         var normalized = NormalizeCreateCommand(command);
+        var now = DateTimeOffset.UtcNow;
         return ExecuteAsync(
             actor,
             normalized.CompanyId,
@@ -68,7 +69,7 @@ public sealed class AtendimentoCardService(
                     return Mutation.ResourceNotFound();
                 }
 
-                var card = await InsertCardAsync(actor, normalized, cancellationToken);
+                var card = await InsertCardAsync(actor, normalized, now, cancellationToken);
                 return Mutation.Succeeded(card, AtendimentoCardOperationState.Created);
             },
             cancellationToken
@@ -269,7 +270,8 @@ public sealed class AtendimentoCardService(
                 );
             }
 
-            var cards = await QueryCardsAsync(companyId, cancellationToken);
+            var now = DateTimeOffset.UtcNow;
+            var cards = await QueryCardsAsync(companyId, now, cancellationToken);
             await AppendAuditAsync(
                 actor,
                 companyId,
@@ -426,7 +428,10 @@ public sealed class AtendimentoCardService(
                 }
 
                 LogInformation("replayed", "idempotency_match");
-                return new(AtendimentoCardOperationState.Replay, NormalizeResponse(replay));
+                return new(
+                    AtendimentoCardOperationState.Replay,
+                    NormalizeResponse(replay, DateTimeOffset.UtcNow)
+                );
             }
 
             var result = await mutation();
@@ -596,7 +601,10 @@ public sealed class AtendimentoCardService(
             }
 
             LogInformation("replayed", "concurrent_idempotency_match");
-            return new(AtendimentoCardOperationState.Replay, NormalizeResponse(replay));
+            return new(
+                AtendimentoCardOperationState.Replay,
+                NormalizeResponse(replay, DateTimeOffset.UtcNow)
+            );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -785,6 +793,7 @@ public sealed class AtendimentoCardService(
 
     private async Task<List<AtendimentoCardResponse>> QueryCardsAsync(
         Guid companyId,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     )
     {
@@ -792,9 +801,10 @@ public sealed class AtendimentoCardService(
             .AtendimentoCards.AsNoTracking()
             .Include(card => card.Participants)
             .Where(card => card.CompanyId == companyId)
-            .OrderBy(card => card.CreatedAt)
+            .OrderByDescending(card => card.CreatedAt)
+            .ThenByDescending(card => card.Id)
             .ToListAsync(cancellationToken);
-        return [.. cards.Select(ToResponse)];
+        return [.. cards.Select(card => ToResponse(card, now))];
     }
 
     private async Task<AtendimentoCardResponse?> FindCardAsync(
@@ -810,16 +820,16 @@ public sealed class AtendimentoCardService(
                 card => card.CompanyId == companyId && card.Id == cardId,
                 cancellationToken
             );
-        return card is null ? null : ToResponse(card);
+        return card is null ? null : ToResponse(card, DateTimeOffset.UtcNow);
     }
 
     private async Task<AtendimentoCardResponse> InsertCardAsync(
         ActorContext actor,
         CreateAtendimentoCardCommand command,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     )
     {
-        var now = DateTimeOffset.UtcNow;
         var card = new AtendimentoCard
         {
             Id = Guid.NewGuid(),
@@ -827,6 +837,9 @@ public sealed class AtendimentoCardService(
             Title = command.Title.Trim(),
             Description = command.Description.Trim(),
             Column = "novo",
+            Priority = command.Priority!,
+            Channel = command.Channel!,
+            SlaDueAt = command.SlaDueAt,
             AttachmentFileId = command.AttachmentFileId,
             CreatedByUserId = actor.UserId,
             UpdatedByUserId = actor.UserId,
@@ -848,7 +861,7 @@ public sealed class AtendimentoCardService(
         }
         database.AtendimentoCards.Add(card);
         await database.SaveChangesAsync(cancellationToken);
-        return ToResponse(card);
+        return ToResponse(card, now);
     }
 
     private async Task<AtendimentoCardResponse?> UpdateAssigneeAsync(
@@ -950,10 +963,10 @@ public sealed class AtendimentoCardService(
             return null;
         }
 
-        return ToResponse(card);
+        return ToResponse(card, DateTimeOffset.UtcNow);
     }
 
-    private static AtendimentoCardResponse ToResponse(AtendimentoCard card) =>
+    private static AtendimentoCardResponse ToResponse(AtendimentoCard card, DateTimeOffset now) =>
         new(
             card.Id,
             card.CompanyId,
@@ -964,6 +977,12 @@ public sealed class AtendimentoCardService(
             card.AssigneeMembershipId
         )
         {
+            Priority = card.Priority,
+            Channel = card.Channel,
+            SlaDueAt = card.SlaDueAt,
+            IsOverdue = IsOverdue(card.SlaDueAt, card.Column, now),
+            CreatedAt = card.CreatedAt,
+            UpdatedAt = card.UpdatedAt,
             AttachmentFileId = card.AttachmentFileId,
             ParticipantMembershipIds =
             [
@@ -1002,6 +1021,8 @@ public sealed class AtendimentoCardService(
     private static bool IsValid(CreateAtendimentoCardCommand command) =>
         command.Title?.Trim().Length is > 0 and <= 200
         && command.Description?.Trim().Length is > 0 and <= 4000
+        && command.Priority is (AtendimentoPriority.Critical or AtendimentoPriority.High or AtendimentoPriority.Medium or AtendimentoPriority.Low)
+        && command.Channel is (AtendimentoChannel.WhatsApp or AtendimentoChannel.Email or AtendimentoChannel.Web or AtendimentoChannel.Manual)
         && command.AttachmentFileId != Guid.Empty
         && command.ParticipantMembershipIds?.All(id => id != Guid.Empty) is not false;
 
@@ -1020,6 +1041,8 @@ public sealed class AtendimentoCardService(
     ) =>
         command with
         {
+            Priority = command.Priority ?? AtendimentoPriority.Medium,
+            Channel = command.Channel ?? AtendimentoChannel.Manual,
             ParticipantMembershipIds =
             [
                 .. (command.ParticipantMembershipIds ?? [])
@@ -1028,8 +1051,17 @@ public sealed class AtendimentoCardService(
             ],
         };
 
-    private static AtendimentoCardResponse NormalizeResponse(AtendimentoCardResponse response) =>
-        response with { ParticipantMembershipIds = response.ParticipantMembershipIds ?? [] };
+    private static AtendimentoCardResponse NormalizeResponse(
+        AtendimentoCardResponse response,
+        DateTimeOffset now
+    ) =>
+        response with
+        {
+            Priority = response.Priority ?? AtendimentoPriority.Medium,
+            Channel = response.Channel ?? AtendimentoChannel.Manual,
+            ParticipantMembershipIds = response.ParticipantMembershipIds ?? [],
+            IsOverdue = IsOverdue(response.SlaDueAt, response.Column, now),
+        };
 
     private static bool IsCancelled(AtendimentoCardResponse card) =>
         string.Equals(card.Column, "cancelado", StringComparison.Ordinal);
@@ -1037,10 +1069,19 @@ public sealed class AtendimentoCardService(
     private static bool IsCancelled(AtendimentoCard card) =>
         string.Equals(card.Column, "cancelado", StringComparison.Ordinal);
 
+    private static bool IsOverdue(DateTimeOffset? slaDueAt, string column, DateTimeOffset now) =>
+        slaDueAt is not null
+        && slaDueAt < now
+        && column is not "concluido" and not "cancelado";
+
     private static string CommandScope(string action, Guid cardId) => $"{action}:{cardId:N}";
 
     private static string HashCreate(CreateAtendimentoCardCommand command) =>
-        command.AttachmentFileId is null && command.ParticipantMembershipIds!.Count == 0
+        command.AttachmentFileId is null
+        && command.ParticipantMembershipIds!.Count == 0
+        && command.Priority == AtendimentoPriority.Medium
+        && command.Channel == AtendimentoChannel.Manual
+        && command.SlaDueAt is null
             ? Hash(
                 new LegacyCreateAtendimentoCardPayload(
                     command.CompanyId,

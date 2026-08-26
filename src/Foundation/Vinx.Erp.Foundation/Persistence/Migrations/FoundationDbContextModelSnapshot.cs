@@ -131,6 +131,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("cancelled_by_user_id");
 
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(12)
+                        .HasColumnType("character varying(12)")
+                        .HasDefaultValue("manual")
+                        .HasColumnName("channel");
+
                     b.Property<string>("Column")
                         .IsRequired()
                         .HasMaxLength(30)
@@ -168,6 +176,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("character varying(4000)")
                         .HasColumnName("description");
 
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("media")
+                        .HasColumnName("priority");
+
                     b.Property<Guid>("RequestId")
                         .HasColumnType("uuid")
                         .HasColumnName("request_id");
@@ -176,6 +192,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .IsConcurrencyToken()
                         .HasColumnType("bigint")
                         .HasColumnName("row_version");
+
+                    b.Property<DateTimeOffset?>("SlaDueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sla_due_at");
 
                     b.Property<string>("Title")
                         .IsRequired()
@@ -202,6 +222,11 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.HasIndex("CompanyId", "AttachmentFileId")
                         .HasDatabaseName("ix_atendimento_cards_company_id_attachment_file_id");
+
+                    b.HasIndex("CompanyId", "CreatedAt", "Id")
+                        .HasDatabaseName("ix_atendimento_cards_company_id_created_at_id_live")
+                        .IsDescending(false, true, true)
+                        .HasFilter("deleted_at IS NULL");
 
                     b.ToTable("atendimento_cards", "service_desk");
                 });

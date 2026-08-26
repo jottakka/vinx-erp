@@ -20,6 +20,171 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class AtendimentoCardEndpointTests
 {
     [Fact]
+    public async Task Create_with_operational_metadata_persists_and_lists_fields()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var slaDueAt = DateTimeOffset.UtcNow.AddHours(2);
+        var request = new CreateCardRequest(
+            scenario.CompanyId,
+            Guid.NewGuid(),
+            "Metadados operacionais",
+            "Prioridade, canal e prazo são persistidos."
+        )
+        {
+            Priority = "alta",
+            Channel = "web",
+            SlaDueAt = slaDueAt,
+        };
+
+        using var createdResponse = await client.PostAsJsonAsync("/atendimento/cards", request);
+        Assert.Equal(HttpStatusCode.Created, createdResponse.StatusCode);
+        var created = await createdResponse.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.NotNull(created);
+        Assert.Equal("alta", created.Priority);
+        Assert.Equal("web", created.Channel);
+        Assert.Equal(slaDueAt, created.SlaDueAt);
+        Assert.False(created.IsOverdue);
+        Assert.NotNull(created.CreatedAt);
+        Assert.NotNull(created.UpdatedAt);
+
+        using var queueResponse = await client.GetAsync(
+            $"/atendimento/cards?companyId={scenario.CompanyId}"
+        );
+        queueResponse.EnsureSuccessStatusCode();
+        var queued = await queueResponse.Content.ReadFromJsonAsync<List<CardResponse>>();
+        var listed = Assert.Single(queued!, card => card.Id == created.Id);
+        Assert.Equal(created.Priority, listed.Priority);
+        Assert.Equal(created.Channel, listed.Channel);
+        Assert.Equal(created.SlaDueAt, listed.SlaDueAt);
+        Assert.Equal(created.CreatedAt, listed.CreatedAt);
+        Assert.Equal(created.UpdatedAt, listed.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task Legacy_create_defaults_and_receipt_replay_remain_compatible()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = new CreateCardRequest(
+            scenario.CompanyId,
+            Guid.NewGuid(),
+            "Defaults compatíveis",
+            "O contrato antigo continua estável."
+        );
+
+        using var createdResponse = await client.PostAsJsonAsync("/atendimento/cards", request);
+        Assert.Equal(HttpStatusCode.Created, createdResponse.StatusCode);
+        var created = await createdResponse.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.NotNull(created);
+        Assert.Equal("media", created.Priority);
+        Assert.Equal("manual", created.Channel);
+        Assert.Null(created.SlaDueAt);
+
+        using var replayResponse = await client.PostAsJsonAsync("/atendimento/cards", request);
+        Assert.Equal(HttpStatusCode.OK, replayResponse.StatusCode);
+        var replayed = await replayResponse.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.Equal(created.Id, replayed?.Id);
+        Assert.Equal("media", replayed?.Priority);
+        Assert.Equal("manual", replayed?.Channel);
+        Assert.Null(replayed?.SlaDueAt);
+
+        using var changedMetadata = await client.PostAsJsonAsync(
+            "/atendimento/cards",
+            request with { Priority = "alta" }
+        );
+        Assert.Equal(HttpStatusCode.Conflict, changedMetadata.StatusCode);
+        Assert.Equal(
+            "idempotency_conflict",
+            (await changedMetadata.Content.ReadFromJsonAsync<ErrorResponse>())?.Code
+        );
+    }
+
+    [Fact]
+    public async Task Overdue_is_derived_without_changing_terminal_state()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = new CreateCardRequest(
+            scenario.CompanyId,
+            Guid.NewGuid(),
+            "Prazo vencido",
+            "O atraso é derivado no servidor."
+        )
+        {
+            Priority = "critica",
+            Channel = "whatsapp",
+            SlaDueAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        };
+        using var createResponse = await client.PostAsJsonAsync("/atendimento/cards", request);
+        createResponse.EnsureSuccessStatusCode();
+        var created = (await createResponse.Content.ReadFromJsonAsync<CardResponse>())!;
+        Assert.True(created.IsOverdue);
+
+        var move = new MoveCardRequest(
+            scenario.CompanyId,
+            Guid.NewGuid(),
+            created.Version,
+            "concluido"
+        );
+        using var completedResponse = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/move",
+            move
+        );
+        completedResponse.EnsureSuccessStatusCode();
+        var completed = await completedResponse.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.Equal("concluido", completed?.Column);
+        Assert.False(completed?.IsOverdue);
+
+        var cancellation = new CancelCardRequest(
+            scenario.CompanyId,
+            Guid.NewGuid(),
+            completed!.Version,
+            "Prazo encerrado."
+        );
+        using var cancelledResponse = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/cancel",
+            cancellation
+        );
+        cancelledResponse.EnsureSuccessStatusCode();
+        var cancelled = await cancelledResponse.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.Equal("cancelado", cancelled?.Column);
+        Assert.False(cancelled?.IsOverdue);
+    }
+
+    [Fact]
+    public async Task Queue_order_is_created_desc_then_id_desc()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var first = await CreateCardAsync(client, scenario.CompanyId);
+        var second = await CreateCardAsync(client, scenario.CompanyId);
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var stamp = DateTimeOffset.UtcNow.AddMinutes(-5);
+            await administrator.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE service_desk.atendimento_cards SET created_at = {stamp} WHERE id IN ({first.Id}, {second.Id})"
+            );
+        }
+
+        using var queueResponse = await client.GetAsync(
+            $"/atendimento/cards?companyId={scenario.CompanyId}"
+        );
+        queueResponse.EnsureSuccessStatusCode();
+        var cards = await queueResponse.Content.ReadFromJsonAsync<List<CardResponse>>();
+        var matching = cards!.Where(card => card.Id == first.Id || card.Id == second.Id).ToList();
+        Assert.Equal(
+            new[] { first.Id, second.Id }.OrderByDescending(id => id),
+            matching.Select(card => card.Id)
+        );
+    }
+
+    [Fact]
     public async Task Creating_a_card_returns_created_and_replays_the_same_request_without_duplication()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -173,6 +338,12 @@ public sealed class AtendimentoCardEndpointTests
         Assert.Equal(HttpStatusCode.OK, legacyReplay.StatusCode);
         var replayed = await legacyReplay.Content.ReadFromJsonAsync<CardResponse>();
         Assert.Equal(legacyCardId, replayed?.Id);
+        Assert.Equal("media", replayed?.Priority);
+        Assert.Equal("manual", replayed?.Channel);
+        Assert.Null(replayed?.SlaDueAt);
+        Assert.Null(replayed?.CreatedAt);
+        Assert.Null(replayed?.UpdatedAt);
+        Assert.False(replayed?.IsOverdue);
         Assert.Null(replayed?.AttachmentFileId);
         Assert.Empty(replayed?.ParticipantMembershipIds!);
 
@@ -2084,6 +2255,21 @@ public sealed class AtendimentoCardEndpointTests
         [System.Text.Json.Serialization.JsonIgnore(
             Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         )]
+        public string? Priority { get; init; }
+
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        )]
+        public string? Channel { get; init; }
+
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        )]
+        public DateTimeOffset? SlaDueAt { get; init; }
+
+        [System.Text.Json.Serialization.JsonIgnore(
+            Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        )]
         public Guid? AttachmentFileId { get; init; }
 
         [System.Text.Json.Serialization.JsonIgnore(
@@ -2130,6 +2316,12 @@ public sealed class AtendimentoCardEndpointTests
         string Column,
         long Version,
         Guid? AssigneeMembershipId,
+        string? Priority = null,
+        string? Channel = null,
+        DateTimeOffset? SlaDueAt = null,
+        bool IsOverdue = false,
+        DateTimeOffset? CreatedAt = null,
+        DateTimeOffset? UpdatedAt = null,
         Guid? AttachmentFileId = null,
         IReadOnlyList<Guid>? ParticipantMembershipIds = null
     );

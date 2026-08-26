@@ -17,6 +17,10 @@ public sealed class AtendimentoCardMigrationTests
         "20260826151000_AddAtendimentoCancellationParticipantsAndAttachment";
     private const string BeforeServiceDeskTicketCancel =
         "20260826151000_AddAtendimentoCancellationParticipantsAndAttachment";
+    private const string BeforeAtendimentoOperationalMetadata =
+        "20260826153000_BindPaguaiInboundCandidateToCompanyContext";
+    private const string AtendimentoOperationalMetadataMigration =
+        "20260826225942_AddAtendimentoOperationalMetadata";
 
     private static readonly (Guid Id, string Name)[] ExpectedCapabilities =
     [
@@ -29,6 +33,59 @@ public sealed class AtendimentoCardMigrationTests
         (KnownCapabilities.ServiceDeskTicketMoveId, KnownCapabilities.ServiceDeskTicketMove),
         (KnownCapabilities.ServiceDeskTicketCancelId, KnownCapabilities.ServiceDeskTicketCancel),
     ];
+
+    [Fact]
+    public async Task Operational_metadata_migration_adds_defaults_checks_and_fail_closed_down()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var seeded = await SeedCancellationDowngradeDataAsync(fixture);
+
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var update = new NpgsqlCommand(
+            """
+            UPDATE service_desk.atendimento_cards
+            SET priority = 'alta', channel = 'web', sla_due_at = clock_timestamp()
+            WHERE id = @card_id
+            """,
+            administrator
+        ))
+        {
+            update.Parameters.AddWithValue("card_id", seeded.CardId);
+            Assert.Equal(1, await update.ExecuteNonQueryAsync());
+        }
+
+        await using (var migrator = fixture.CreateMigratorDbContext())
+        {
+            var applied = await migrator.Database.GetAppliedMigrationsAsync();
+            Assert.Contains(AtendimentoOperationalMetadataMigration, applied);
+            var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
+                await migrator.Database.MigrateAsync(BeforeAtendimentoOperationalMetadata)
+            );
+            Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+        }
+
+        await using var verify = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (SELECT 1 FROM "__EFMigrationsHistory" WHERE migration_id = @migration_id),
+                priority, channel, sla_due_at IS NOT NULL
+            FROM service_desk.atendimento_cards
+            WHERE id = @card_id
+            """,
+            verify
+        );
+        command.Parameters.AddWithValue("migration_id", AtendimentoOperationalMetadataMigration);
+        command.Parameters.AddWithValue("card_id", seeded.CardId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.Equal("alta", reader.GetString(1));
+        Assert.Equal("web", reader.GetString(2));
+        Assert.True(reader.GetBoolean(3));
+    }
 
     [Fact]
     public async Task Migration_preserves_legacy_id_for_a_known_name_and_downgrade_leaves_it_intact()
