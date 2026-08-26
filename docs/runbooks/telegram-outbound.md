@@ -37,7 +37,9 @@ somente outbound e não registra webhook nem processa mensagens recebidas.
 
 - O worker envia exclusivamente `chat_id` e `text` por `sendMessage`. A URL
   tokenizada é construída só no instante da chamada; o client não segue
-  redirects e remove a telemetria HTTP padrão para evitar exposição do token.
+  redirects e usa `.RemoveAllLoggers()` para remover os loggers padrão do
+  `HttpClient` nomeado. Isso não desativa telemetria ou instrumentação externa
+  autorizada.
 - Estados: `pending_delivery → pending_provider → provider_in_flight →
   delivered|provider_failed|provider_ambiguous`. `429` e `5xx` liberam a
   tentativa para o retry finito do worker (1s/5s/30s); `408`, timeout,
