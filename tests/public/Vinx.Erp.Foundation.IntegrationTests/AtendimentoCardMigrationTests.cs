@@ -15,6 +15,8 @@ public sealed class AtendimentoCardMigrationTests
         "20260826150000_AddPaguaiRequestInvoiceFile";
     private const string AtendimentoCancellationMigration =
         "20260826151000_AddAtendimentoCancellationParticipantsAndAttachment";
+    private const string BeforeServiceDeskTicketCancel =
+        "20260826151000_AddAtendimentoCancellationParticipantsAndAttachment";
 
     private static readonly (Guid Id, string Name)[] ExpectedCapabilities =
     [
@@ -25,6 +27,7 @@ public sealed class AtendimentoCardMigrationTests
         (KnownCapabilities.ServiceDeskTicketCreateId, KnownCapabilities.ServiceDeskTicketCreate),
         (KnownCapabilities.ServiceDeskTicketAssignId, KnownCapabilities.ServiceDeskTicketAssign),
         (KnownCapabilities.ServiceDeskTicketMoveId, KnownCapabilities.ServiceDeskTicketMove),
+        (KnownCapabilities.ServiceDeskTicketCancelId, KnownCapabilities.ServiceDeskTicketCancel),
     ];
 
     [Fact]
@@ -159,6 +162,80 @@ public sealed class AtendimentoCardMigrationTests
         );
 
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
+    }
+
+    [Fact]
+    public async Task Cancel_capability_seed_preserves_a_legacy_id_and_downgrade_removes_only_the_canonical_row()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(BeforeServiceDeskTicketCancel);
+        var legacyId = Guid.NewGuid();
+
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (
+            var insert = new NpgsqlCommand(
+                "INSERT INTO foundation.capabilities (id, name, created_at) VALUES (@id, @name, clock_timestamp())",
+                administrator
+            )
+        )
+        {
+            insert.Parameters.AddWithValue("id", legacyId);
+            insert.Parameters.AddWithValue("name", KnownCapabilities.ServiceDeskTicketCancel);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        await migrator.Database.MigrateAsync();
+
+        await using (var verify = await fixture.OpenAdministratorConnectionAsync())
+        await using (
+            var select = new NpgsqlCommand(
+                "SELECT id FROM foundation.capabilities WHERE name = @name",
+                verify
+            )
+        )
+        {
+            select.Parameters.AddWithValue("name", KnownCapabilities.ServiceDeskTicketCancel);
+            Assert.Equal(legacyId, await select.ExecuteScalarAsync());
+        }
+
+        await migrator.Database.MigrateAsync(BeforeServiceDeskTicketCancel);
+
+        await using var afterDowngrade = await fixture.OpenAdministratorConnectionAsync();
+        await using var preserved = new NpgsqlCommand(
+            "SELECT id FROM foundation.capabilities WHERE name = @name",
+            afterDowngrade
+        );
+        preserved.Parameters.AddWithValue("name", KnownCapabilities.ServiceDeskTicketCancel);
+        Assert.Equal(legacyId, await preserved.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task Cancel_capability_seed_fails_closed_when_the_canonical_id_is_owned_by_another_name()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(BeforeServiceDeskTicketCancel);
+
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (
+            var insert = new NpgsqlCommand(
+                "INSERT INTO foundation.capabilities (id, name, created_at) VALUES (@id, 'legacy.cancel', clock_timestamp())",
+                administrator
+            )
+        )
+        {
+            insert.Parameters.AddWithValue("id", KnownCapabilities.ServiceDeskTicketCancelId);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
+            await migrator.Database.MigrateAsync()
+        );
+
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, exception.SqlState);
     }
 
     [Fact]

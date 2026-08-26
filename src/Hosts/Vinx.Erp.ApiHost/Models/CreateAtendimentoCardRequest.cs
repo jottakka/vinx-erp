@@ -6,6 +6,8 @@ namespace Vinx.Erp.ApiHost.Models;
 
 public sealed class CreateAtendimentoCardRequest : IValidatableObject
 {
+    public const int MaxParticipants = 25;
+
     [Required]
     [NonEmptyGuid]
     public Guid CompanyId { get; init; }
@@ -42,6 +44,14 @@ public sealed class CreateAtendimentoCardRequest : IValidatableObject
         {
             yield return new ValidationResult(
                 "Participant membership IDs must be non-empty UUIDs.",
+                [nameof(ParticipantMembershipIds)]
+            );
+        }
+
+        if (ParticipantMembershipIds is { Count: > MaxParticipants })
+        {
+            yield return new ValidationResult(
+                $"Participant membership IDs must contain at most {MaxParticipants} entries.",
                 [nameof(ParticipantMembershipIds)]
             );
         }

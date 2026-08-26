@@ -192,7 +192,7 @@ public sealed class AtendimentoCardService(
             actor,
             normalized.CompanyId,
             normalized.RequestId,
-            KnownCapabilities.ServiceDeskTicketMove,
+            KnownCapabilities.ServiceDeskTicketCancel,
             CancelAction,
             CommandScope(CancelAction, cardId),
             IsValid(normalized),
@@ -207,7 +207,7 @@ public sealed class AtendimentoCardService(
 
                 if (IsCancelled(before))
                 {
-                    return Mutation.IntegrityConflict(before);
+                    return Mutation.Terminal(before);
                 }
 
                 var updated = await CancelCardAsync(actor, cardId, normalized, cancellationToken);
@@ -442,7 +442,11 @@ public sealed class AtendimentoCardService(
                 );
             }
 
-            if (result.State is AtendimentoCardOperationState.IntegrityConflict)
+            if (
+                result.State
+                is AtendimentoCardOperationState.IntegrityConflict
+                    or AtendimentoCardOperationState.TerminalState
+            )
             {
                 await transaction.RollbackAsync(cancellationToken);
                 var audited = await AuditDeniedResultAsync(
@@ -452,8 +456,8 @@ public sealed class AtendimentoCardService(
                     result.State,
                     cancellationToken
                 );
-                return audited.State == AtendimentoCardOperationState.IntegrityConflict
-                    ? new(AtendimentoCardOperationState.IntegrityConflict, Current: result.Current)
+                return audited.State == result.State
+                    ? new(result.State, Current: result.Current)
                     : audited;
             }
 
@@ -1060,6 +1064,7 @@ public sealed class AtendimentoCardService(
             AtendimentoCardOperationState.ResourceNotFound => "resource_not_found",
             AtendimentoCardOperationState.IdempotencyConflict => "idempotency_conflict",
             AtendimentoCardOperationState.IntegrityConflict => "integrity_conflict",
+            AtendimentoCardOperationState.TerminalState => "terminal_state",
             _ => "atendimento_unavailable",
         };
 
@@ -1109,5 +1114,8 @@ public sealed class AtendimentoCardService(
 
         public static Mutation IntegrityConflict(AtendimentoCardResponse current) =>
             new(AtendimentoCardOperationState.IntegrityConflict, Current: current);
+
+        public static Mutation Terminal(AtendimentoCardResponse current) =>
+            new(AtendimentoCardOperationState.TerminalState, Current: current);
     }
 }

@@ -35,6 +35,12 @@ public sealed class AtendimentoCardEndpointTests
         using var first = await client.PostAsJsonAsync("/atendimento/cards", request);
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.NotNull(first.Headers.Location);
+        Assert.Contains(
+            $"/atendimento/cards?companyId={scenario.CompanyId}",
+            first.Headers.Location.ToString(),
+            StringComparison.Ordinal
+        );
         var created = await first.Content.ReadFromJsonAsync<CardResponse>();
         Assert.NotNull(created);
         Assert.Equal(scenario.CompanyId, created.CompanyId);
@@ -566,6 +572,68 @@ public sealed class AtendimentoCardEndpointTests
     }
 
     [Fact]
+    public async Task Create_rejects_more_than_twenty_five_participants_at_the_model_level()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var oversizedRequestId = Guid.NewGuid();
+        var boundedRequestId = Guid.NewGuid();
+
+        using var oversized = await client.PostAsJsonAsync(
+            "/atendimento/cards",
+            new CreateCardRequest(
+                scenario.CompanyId,
+                oversizedRequestId,
+                "Acesso bloqueado",
+                "Usuário não consegue entrar no portal."
+            )
+            {
+                ParticipantMembershipIds = Enumerable
+                    .Range(0, 26)
+                    .Select(_ => Guid.NewGuid())
+                    .ToArray(),
+            }
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, oversized.StatusCode);
+        Assert.Equal(
+            "invalid_request",
+            (await oversized.Content.ReadFromJsonAsync<ErrorResponse>())?.Code
+        );
+
+        using var bounded = await client.PostAsJsonAsync(
+            "/atendimento/cards",
+            new CreateCardRequest(
+                scenario.CompanyId,
+                boundedRequestId,
+                "Acesso bloqueado",
+                "Usuário não consegue entrar no portal."
+            )
+            {
+                ParticipantMembershipIds = Enumerable
+                    .Range(0, 25)
+                    .Select(_ => Guid.NewGuid())
+                    .ToArray(),
+            }
+        );
+
+        Assert.NotEqual(HttpStatusCode.BadRequest, bounded.StatusCode);
+        Assert.Equal(
+            "resource_not_found",
+            (await bounded.Content.ReadFromJsonAsync<ErrorResponse>())?.Code
+        );
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.False(
+            await administrator.IdempotencyRecords.AnyAsync(record =>
+                record.CompanyId == scenario.CompanyId
+                && (record.RequestId == oversizedRequestId || record.RequestId == boundedRequestId)
+            )
+        );
+    }
+
+    [Fact]
     public async Task Queue_never_exposes_a_card_from_an_unselected_or_inaccessible_company()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -644,6 +712,42 @@ public sealed class AtendimentoCardEndpointTests
             && candidate.Reason == "capability_denied"
         );
         Assert.Equal("service_desk.ticket.move", audit.Action);
+    }
+
+    [Fact]
+    public async Task Missing_cancel_capability_is_denied_even_with_move_and_audited_under_the_cancel_action()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(
+            factory,
+            KnownCapabilities.ServiceDeskTicketReadQueue,
+            KnownCapabilities.ServiceDeskTicketCreate,
+            KnownCapabilities.ServiceDeskTicketAssign,
+            KnownCapabilities.ServiceDeskTicketMove
+        );
+        using var client = factory.CreateClient();
+        var created = await CreateCardAsync(client, scenario.CompanyId);
+
+        using var denied = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/cancel",
+            new CancelCardRequest(
+                scenario.CompanyId,
+                Guid.NewGuid(),
+                created.Version,
+                "Cancelamento não autorizado."
+            )
+        );
+
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        var error = await denied.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.Equal("capability_denied", error?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var audit = await administrator.AuditEvents.SingleAsync(candidate =>
+            candidate.Action == "service_desk.ticket.cancel"
+            && candidate.Outcome == AuditOutcome.Denied
+            && candidate.Reason == "capability_denied"
+        );
+        Assert.Equal("service_desk.ticket.cancel", audit.Action);
     }
 
     [Fact]
@@ -849,7 +953,7 @@ public sealed class AtendimentoCardEndpointTests
         );
         Assert.Equal(HttpStatusCode.Conflict, distinct.StatusCode);
         var conflict = await distinct.Content.ReadFromJsonAsync<IntegrityConflictResponse>();
-        Assert.Equal("integrity_conflict", conflict?.Code);
+        Assert.Equal("terminal_state", conflict?.Code);
         Assert.Equal("cancelado", conflict?.Current?.Column);
 
         using var move = await client.PostAsJsonAsync(
@@ -1628,7 +1732,17 @@ public sealed class AtendimentoCardEndpointTests
             }
         }
 
-        Assert.Equal("integrity_conflict", loser.Code);
+        if (competitor == CancellationRaceCompetitor.Cancel)
+        {
+            // A segunda tentativa de cancelamento pode perder a corrida pela
+            // leitura terminal (terminal_state) ou pela concorrência otimista
+            // (integrity_conflict); ambas são 409 sem sobrescrever o vencedor.
+            Assert.Contains(loser.Code, ["integrity_conflict", "terminal_state"]);
+        }
+        else
+        {
+            Assert.Equal("integrity_conflict", loser.Code);
+        }
         Assert.NotNull(loser.Current);
         Assert.Equal(winner.Id, loser.Current!.Id);
         Assert.Equal(winner.Column, loser.Current.Column);
@@ -1667,7 +1781,12 @@ public sealed class AtendimentoCardEndpointTests
         {
             Assert.Equal(HttpStatusCode.Conflict, afterTerminal.StatusCode);
             var conflict = await afterTerminal.Content.ReadFromJsonAsync<IntegrityConflictResponse>();
-            Assert.Equal("integrity_conflict", conflict?.Code);
+            Assert.Equal(
+                competitor == CancellationRaceCompetitor.Cancel
+                    ? "terminal_state"
+                    : "integrity_conflict",
+                conflict?.Code
+            );
             Assert.Equal("cancelado", conflict?.Current?.Column);
             Assert.Equal(terminal.Version, conflict?.Current?.Version);
         }
@@ -1863,6 +1982,7 @@ public sealed class AtendimentoCardEndpointTests
                     KnownCapabilities.ServiceDeskTicketCreate,
                     KnownCapabilities.ServiceDeskTicketAssign,
                     KnownCapabilities.ServiceDeskTicketMove,
+                    KnownCapabilities.ServiceDeskTicketCancel,
                 ]
                 : grantedCapabilities;
         var capabilities = await administrator

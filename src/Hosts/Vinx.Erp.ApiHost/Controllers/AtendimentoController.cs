@@ -109,6 +109,7 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
     [ProducesResponseType(typeof(AtendimentoCardResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(AtendimentoCardResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -135,6 +136,7 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(typeof(AtendimentoCardResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -162,6 +164,7 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(typeof(AtendimentoCardResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -194,6 +197,7 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(typeof(AtendimentoCardResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -224,8 +228,9 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
     private IActionResult ToCommandResult(AtendimentoCardOperationResult result) =>
         result.State switch
         {
-            AtendimentoCardOperationState.Created => StatusCode(
-                StatusCodes.Status201Created,
+            AtendimentoCardOperationState.Created => CreatedAtAction(
+                nameof(Queue),
+                new { companyId = result.Card!.CompanyId },
                 result.Card
             ),
             AtendimentoCardOperationState.Replay or AtendimentoCardOperationState.Success => Ok(
@@ -254,6 +259,10 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
             AtendimentoCardOperationState.IntegrityConflict => StatusCode(
                 StatusCodes.Status409Conflict,
                 new AtendimentoCardConflictResponse("integrity_conflict", result.Current)
+            ),
+            AtendimentoCardOperationState.TerminalState => StatusCode(
+                StatusCodes.Status409Conflict,
+                new AtendimentoCardConflictResponse("terminal_state", result.Current)
             ),
             _ => ApiControllerError.Error(
                 "atendimento_unavailable",

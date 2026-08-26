@@ -61,6 +61,7 @@ public enum AtendimentoCardOperationState
     ResourceNotFound,
     IdempotencyConflict,
     IntegrityConflict,
+    TerminalState,
     Unavailable,
 }
 

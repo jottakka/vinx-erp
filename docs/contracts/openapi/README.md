@@ -164,22 +164,29 @@ membership_required|capability_denied`, `429` e `503 atendimento_unavailable`.
 
 `POST /atendimento/cards` exige `service_desk.ticket.create`; o corpo possui
 `companyId`, `requestId`, `title`, `description`, `attachmentFileId` opcional e
-`participantMembershipIds` opcional. O anexo precisa ser confirmado, da mesma
-empresa e da classificação `service_desk_attachment`; participantes precisam ser
-memberships ativas da empresa. Retorna `201`, ou `200` no replay equivalente;
+`participantMembershipIds` opcional com no máximo 25 entradas não vazias. O anexo
+precisa ser confirmado, da mesma empresa e da classificação
+`service_desk_attachment`; participantes precisam ser
+memberships ativas da empresa. Aceita somente `Content-Type: application/json`;
+mídia incorreta devolve `415`. Retorna `201` com `Location` da fila, ou `200` no
+replay equivalente;
 `400 invalid_request`, `401`, `403`, `404 resource_not_found`, `409
 idempotency_conflict`, `429` e `503` são publicados. `POST
 /atendimento/cards/{id}/assign` exige `.assign` e recebe também
 `expectedVersion` e `assigneeMembershipId`. `POST /atendimento/cards/{id}/move`
 exige `.move` e recebe `expectedVersion` e `column` (`novo`, `em_andamento` ou
-`concluido`). `POST /atendimento/cards/{id}/cancel` reutiliza `.move`, recebe
-`expectedVersion` e `reason` aparado de 1 a 500 caracteres, e cria o estado
-terminal `cancelado`. As três retornam `200`, e podem retornar `404
-resource_not_found`, `409 idempotency_conflict|integrity_conflict`, `400`, `401`,
+`concluido`). `POST /atendimento/cards/{id}/cancel` exige a capability dedicada
+`.cancel`, recebe `expectedVersion` e `reason` aparado de 1 a 500 caracteres, e
+cria o estado terminal `cancelado`. As três retornam `200`, e podem retornar
+`404 resource_not_found`, `409
+idempotency_conflict|integrity_conflict|terminal_state`, `400`, `415`, `401`,
 `403`, `429` ou `503`. A resposta do cartão inclui `attachmentFileId` anulável e
-`participantMembershipIds` sempre como array; `integrity_conflict` devolve apenas
-o estado atual já autorizado do cartão, nunca dados de outra empresa. As quatro
-mutações publicam o header
+`participantMembershipIds` sempre como array; `integrity_conflict` e
+`terminal_state` devolvem apenas
+o estado atual já autorizado do cartão, nunca dados de outra empresa;
+`terminal_state` sinaliza o cancelamento de um cartão já cancelado com um novo
+`requestId`, enquanto o replay do mesmo `requestId` devolve o resultado original.
+As quatro mutações publicam o header
 `X-CSRF-TOKEN`: ele é obrigatório quando a operação usa cookie de sessão BFF e
 é obtido em `GET /foundation/identity/browser-session/antiforgery`; clientes
 bearer não precisam de antiforgery. Todas as respostas mantêm
