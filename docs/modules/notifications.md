@@ -78,6 +78,21 @@ bytes brutos antes de qualquer parse e grava eventos insert-only por
 `(message_id, event_type)` sem correlação com o negócio; `read` não é
 confirmação humana. Runbook: `docs/runbooks/whatsapp-outbound.md`.
 
+## Provider Email (SMTP outbound)
+
+`Providers/Email` implementa o canal `email`: options `EmailProviderOptions`
+(all-or-nothing: `SMTP_EMAIL_HOST`, `SMTP_EMAIL_PORT`, `SMTP_EMAIL_USERNAME`,
+`SMTP_EMAIL_PASSWORD`, `SMTP_EMAIL_FROM_ADDRESS`), client SMTP via MailKit que
+apenas classifica o resultado (entrega → Delivered; autenticação/endereço
+recusado → Rejected; falha transitiva de transporte → transitiva delegada ao
+retry do worker; timeout/conexão interrompida → Ambiguous), e provider que lê
+endereço/assunto/corpo aprovados por
+`notifications.get_notification_email_delivery_target` (somente a tentativa em
+curso). O endereço vem do cadastro de identidade (`foundation.users.email`),
+sem tabela de contato própria; o opt-in é por destinatário em
+`notification_preferences` (canal `email`), como o WhatsApp. O template exige
+`email_subject` e `email_body_html` aprovados (CHECK fechado por chave).
+
 ## Inbound admissão e identidade (#272 PR1)
 
 O webhook (mesmo endpoint do W3) lê `messages[]` dos tipos `image`, `document`

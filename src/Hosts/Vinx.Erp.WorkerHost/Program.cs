@@ -11,6 +11,7 @@ using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Notifications;
+using Vinx.Erp.Notifications.Providers.Email;
 using Vinx.Erp.Notifications.Providers.Meta;
 using Vinx.Erp.WorkerHost;
 using Wolverine;
@@ -128,6 +129,7 @@ builder.Services.AddSingleton<NotificationDeliveryMetrics>();
 builder.Services.AddScoped<NotificationProviderResolver>();
 builder.Services.AddScoped<INotificationProvider, InAppNotificationProvider>();
 builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
+builder.Services.AddScoped<INotificationProvider, EmailNotificationProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
 builder.Services.AddScoped<InboundWhatsAppInteractionService>();
 builder.Services.AddScoped<InboundWhatsAppDocumentService>();
@@ -221,6 +223,29 @@ builder
     .ValidateOnStart();
 builder.Services.AddSingleton(serviceProvider =>
     serviceProvider.GetRequiredService<IOptions<MetaWhatsAppOptions>>().Value
+);
+builder
+    .Services.AddOptions<EmailProviderOptions>()
+    .Bind(builder.Configuration)
+    .Validate(
+        options =>
+            // Tudo ou nada no espírito do Meta WhatsApp: sem SMTP o worker sobe
+            // atendendo filas independentes e cada entrega de e-mail falha
+            // fechada; configurado-porém-parcial é erro de deploy.
+            (
+                string.IsNullOrWhiteSpace(options.Host)
+                && string.IsNullOrWhiteSpace(options.Username)
+                && string.IsNullOrWhiteSpace(options.Password)
+                && string.IsNullOrWhiteSpace(options.FromAddress)
+            )
+            || (
+                options.OutboundIsConfigured
+            ),
+        "SMTP email outbound options are invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<EmailProviderOptions>>().Value
 );
 builder
     .Services.AddHttpClient(MetaWhatsAppClient.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))

@@ -59,7 +59,8 @@ internal sealed class NotificationWorkerHostFactory(
     HttpMessageHandler? inboundTextAiHandler = null,
     HttpMessageHandler? inboundVisionAiHandler = null,
     Vinx.Erp.Foundation.Files.FileStorage? testFileStorage = null,
-    Vinx.Erp.Foundation.Files.IMalwareScanner? testMalwareScanner = null
+    Vinx.Erp.Foundation.Files.IMalwareScanner? testMalwareScanner = null,
+    Vinx.Erp.Notifications.Providers.Email.EmailProviderOptions? smtpOptions = null
 )
     : WebApplicationFactory<WorkerProgram>
 {
@@ -124,6 +125,19 @@ internal sealed class NotificationWorkerHostFactory(
                     .AddHttpClient(MetaWhatsAppClient.HttpClientName)
                     .ConfigurePrimaryHttpMessageHandler(() => metaGraphHandler)
             );
+        }
+
+        if (smtpOptions is not null)
+        {
+            // Substitui o singleton de opções SMTP para apontar o provider de
+            // e-mail ao servidor SMTP falso em loopback do teste (sem TLS).
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<
+                    Vinx.Erp.Notifications.Providers.Email.EmailProviderOptions
+                >();
+                services.AddSingleton(smtpOptions);
+            });
         }
 
         if (configureInboundAi)
