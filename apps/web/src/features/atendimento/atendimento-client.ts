@@ -105,10 +105,12 @@ export const atendimentoClient = {
   },
   async assignmentOptions(
     companyId: string,
+    signal?: AbortSignal,
   ): Promise<AtendimentoAssignmentOption[] | null> {
     try {
       const response = await request(
         `/atendimento/assignment-options?companyId=${encodeURIComponent(companyId)}`,
+        { signal },
       );
       return response.ok
         ? ((await response.json()) as AtendimentoAssignmentOption[])

@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
 import type {
   BootstrapSnapshot,
@@ -116,6 +116,9 @@ function deferred<T>() {
 }
 
 afterEach(() => vi.restoreAllMocks());
+beforeEach(() =>
+  vi.spyOn(atendimentoClient, "assignmentOptions").mockResolvedValue([]),
+);
 
 describe("AtendimentoPage", () => {
   it("aggregates every authorized company, labels each card, and renders the four real state columns", async () => {
@@ -137,6 +140,7 @@ describe("AtendimentoPage", () => {
     for (const label of ["Novos", "Em andamento", "Concluídos", "Cancelados"]) {
       expect(screen.getByRole("heading", { name: label })).toBeVisible();
     }
+    expect(document.querySelectorAll("[data-state-tone]")).toHaveLength(4);
   });
 
   it("waits for all authorized company reads before replacing the board", async () => {
@@ -241,6 +245,9 @@ describe("AtendimentoPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "Mover para Em andamento" }),
     );
+    expect(
+      screen.queryByRole("button", { name: "Mover para Cancelados" }),
+    ).not.toBeInTheDocument();
 
     await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
     expect(move.mock.calls[0]?.[1]).toMatchObject({
@@ -317,5 +324,24 @@ describe("AtendimentoPage", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
     expect(screen.getByRole("heading", { name: "Cancelados" })).toBeVisible();
+  });
+
+  it("blocks a cancellation reason longer than 500 characters", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    const cancel = vi.spyOn(atendimentoClient, "cancel");
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Cancelar cartão" }),
+    );
+    await user.type(
+      screen.getByLabelText("Motivo do cancelamento"),
+      "x".repeat(501),
+    );
+    expect(screen.getByText("Use no máximo 500 caracteres.")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Confirmar cancelamento" }),
+    ).toBeDisabled();
+    expect(cancel).not.toHaveBeenCalled();
   });
 });

@@ -19,7 +19,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanySelect } from "../../shared/ui/company-select";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
@@ -34,12 +34,17 @@ import {
 } from "./atendimento-client";
 import { AtendimentoCreateDialog } from "./atendimento-create-dialog";
 
-const columns: readonly { id: AtendimentoColumn; label: string }[] = [
-  { id: "novo", label: "Novos" },
-  { id: "em_andamento", label: "Em andamento" },
-  { id: "concluido", label: "Concluídos" },
-  { id: "cancelado", label: "Cancelados" },
+const columns: readonly {
+  id: AtendimentoColumn;
+  label: string;
+  tone: "info" | "primary" | "success" | "error";
+}[] = [
+  { id: "novo", label: "Novos", tone: "info" },
+  { id: "em_andamento", label: "Em andamento", tone: "primary" },
+  { id: "concluido", label: "Concluídos", tone: "success" },
+  { id: "cancelado", label: "Cancelados", tone: "error" },
 ];
+const workflowColumns = columns.filter((column) => column.id !== "cancelado");
 
 const readCapability = "service_desk.ticket.read_queue";
 const createCapability = "service_desk.ticket.create";
@@ -79,13 +84,19 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   const [assignmentOptions, setAssignmentOptions] = useState<
     readonly AtendimentoAssignmentOption[]
   >([]);
+  const [createOptions, setCreateOptions] = useState<
+    readonly AtendimentoAssignmentOption[]
+  >([]);
   const [assigneeMembershipId, setAssigneeMembershipId] = useState("");
   const [cancellingCard, setCancellingCard] = useState<AtendimentoCard | null>(
     null,
   );
   const [cancellationReason, setCancellationReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<AtendimentoColumn | null>(null);
+  const assignmentEpoch = useRef(0);
+  const assignmentAbort = useRef<AbortController | null>(null);
 
   const selectedCompany = useMemo(
     () => companies.find((company) => company.companyId === companyId),
@@ -141,27 +152,45 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     };
   }, [companies]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    setCreateOptions([]);
+    if (!companyId || !permissions.canCreate) return () => controller.abort();
+    void atendimentoClient
+      .assignmentOptions(companyId, controller.signal)
+      .then((options) => {
+        if (!controller.signal.aborted && options) setCreateOptions(options);
+      });
+    return () => controller.abort();
+  }, [companyId, permissions.canCreate]);
+
   async function createCard(values: {
     title: string;
     description: string;
     attachmentFileId?: string;
+    participantMembershipIds: readonly string[];
   }) {
-    if (!companyId) return;
-    const result = values.attachmentFileId
-      ? await atendimentoClient.create(
-          companyId,
-          values.title,
-          values.description,
-          {
-            attachmentFileId: values.attachmentFileId,
-          },
-        )
-      : await atendimentoClient.create(
-          companyId,
-          values.title,
-          values.description,
-        );
-    if (!result.ok) return setError(messageFor(result.code));
+    if (!companyId || loading) return;
+    const result =
+      values.attachmentFileId || values.participantMembershipIds.length
+        ? await atendimentoClient.create(
+            companyId,
+            values.title,
+            values.description,
+            {
+              attachmentFileId: values.attachmentFileId,
+              participantMembershipIds: values.participantMembershipIds,
+            },
+          )
+        : await atendimentoClient.create(
+            companyId,
+            values.title,
+            values.description,
+          );
+    if (!result.ok) {
+      setError(messageFor(result.code));
+      return;
+    }
     setCards((current) => [...current, result.card]);
   }
 
@@ -190,24 +219,38 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   }
 
   async function openAssignment(card: AtendimentoCard) {
+    assignmentAbort.current?.abort();
+    const controller = new AbortController();
+    assignmentAbort.current = controller;
+    const expectedEpoch = ++assignmentEpoch.current;
     setAssigneeMembershipId("");
     setAssignmentOptions([]);
     setAssigningCard(card);
-    const options = await atendimentoClient.assignmentOptions(card.companyId);
-    if (options) setAssignmentOptions(options);
-    else setError("Não foi possível carregar as pessoas autorizadas.");
+    const options = await atendimentoClient.assignmentOptions(
+      card.companyId,
+      controller.signal,
+    );
+    if (assignmentEpoch.current === expectedEpoch && options)
+      setAssignmentOptions(options);
+    else if (assignmentEpoch.current === expectedEpoch)
+      setError("Não foi possível carregar as pessoas autorizadas.");
   }
 
   async function cancel(card: AtendimentoCard) {
     const reason = cancellationReason.trim();
-    if (!reason) return;
+    if (!reason || reason.length > 500 || cancelling) return;
+    setCancelling(true);
     const result = await atendimentoClient.cancel(card.companyId, card, reason);
-    if (!result.ok) return recover(result.code, result.current);
+    if (!result.ok) {
+      setCancelling(false);
+      return recover(result.code, result.current);
+    }
     setCards((current) =>
       current.map((item) => (item.id === card.id ? result.card : item)),
     );
     setCancellingCard(null);
     setCancellationReason("");
+    setCancelling(false);
   }
 
   function recover(code: string, current?: AtendimentoCard) {
@@ -221,7 +264,8 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
   function handleDrop(column: AtendimentoColumn) {
     if (!draggedCardId) return;
     const card = cards.find((item) => item.id === draggedCardId);
-    if (card && card.column !== column) void move(card, column);
+    if (card && column !== "cancelado" && card.column !== column)
+      void move(card, column);
     setDraggedCardId(null);
     setDropTarget(null);
   }
@@ -244,8 +288,6 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
         ) ?? false
     );
   }
-
-  const selectedCompanyName = selectedCompany?.companyName ?? "Sem empresa";
 
   return (
     <CompanyProvider company={selectedCompany ?? null}>
@@ -304,6 +346,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             <Box
               key={column.id}
               onDragOver={(event) => {
+                if (column.id === "cancelado") return;
                 event.preventDefault();
                 event.stopPropagation();
                 setDropTarget(column.id);
@@ -323,11 +366,13 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                 );
               }}
               onDrop={(event) => {
+                if (column.id === "cancelado") return;
                 event.preventDefault();
                 event.stopPropagation();
                 handleDrop(column.id);
               }}
               sx={{
+                "&[data-state-tone]": {},
                 bgcolor:
                   dropTarget === column.id
                     ? "action.selected"
@@ -347,6 +392,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                     },
                   ),
               }}
+              data-state-tone={column.tone}
             >
               <Typography
                 color="text.secondary"
@@ -420,6 +466,10 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                           sx={{ flexWrap: "wrap", mt: 1 }}
                         >
                           <Chip
+                            color={
+                              columns.find((item) => item.id === card.column)
+                                ?.tone
+                            }
                             label={columnLabel(card.column)}
                             size="small"
                             variant="outlined"
@@ -443,7 +493,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                           Visualizar
                         </Button>
                         {canEditCard(card) && card.column !== "cancelado"
-                          ? columns
+                          ? workflowColumns
                               .filter(
                                 (destination) => destination.id !== card.column,
                               )
@@ -493,23 +543,31 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
       </Stack>
 
       <AtendimentoCreateDialog
+        assignmentOptions={createOptions}
         companyId={companyId}
         onClose={() => setCreateOpen(false)}
         onSubmit={(values) => {
-          setCreateOpen(false);
-          void createCard(values);
+          return createCard(values);
         }}
         open={createOpen}
       />
 
       <ViewCardDialog
         card={viewingCard}
-        companyName={selectedCompanyName}
+        companyName={
+          companies.find(
+            (company) => company.companyId === viewingCard?.companyId,
+          )?.companyName ?? "Empresa autorizada"
+        }
         onClose={() => setViewingCard(null)}
       />
 
       <Dialog
-        onClose={() => setAssigningCard(null)}
+        onClose={() => {
+          assignmentEpoch.current++;
+          assignmentAbort.current?.abort();
+          setAssigningCard(null);
+        }}
         open={Boolean(assigningCard)}
       >
         <DialogTitle>Atribuir responsável</DialogTitle>
@@ -530,7 +588,15 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
           </TextField>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setAssigningCard(null)}>Cancelar</Button>
+          <Button
+            onClick={() => {
+              assignmentEpoch.current++;
+              assignmentAbort.current?.abort();
+              setAssigningCard(null);
+            }}
+          >
+            Cancelar
+          </Button>
           <Button
             disabled={!assigningCard || !assigneeMembershipId}
             onClick={() => assigningCard && void assign(assigningCard)}
@@ -542,7 +608,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
       </Dialog>
 
       <Dialog
-        onClose={() => setCancellingCard(null)}
+        onClose={() => !cancelling && setCancellingCard(null)}
         open={Boolean(cancellingCard)}
       >
         <DialogTitle>Cancelar cartão</DialogTitle>
@@ -552,20 +618,34 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             fullWidth
             label="Motivo do cancelamento"
             multiline
+            error={cancellationReason.trim().length > 500}
+            helperText={
+              cancellationReason.trim().length > 500
+                ? "Use no máximo 500 caracteres."
+                : undefined
+            }
             onChange={(event) => setCancellationReason(event.target.value)}
+            slotProps={{ htmlInput: { maxLength: 501 } }}
             sx={{ mt: 1, minWidth: 320 }}
             value={cancellationReason}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCancellingCard(null)}>Voltar</Button>
+          <Button disabled={cancelling} onClick={() => setCancellingCard(null)}>
+            Voltar
+          </Button>
           <Button
             color="error"
-            disabled={!cancellingCard || !cancellationReason.trim()}
+            disabled={
+              !cancellingCard ||
+              !cancellationReason.trim() ||
+              cancellationReason.trim().length > 500 ||
+              cancelling
+            }
             onClick={() => cancellingCard && void cancel(cancellingCard)}
             variant="contained"
           >
-            Confirmar cancelamento
+            {cancelling ? "Cancelando…" : "Confirmar cancelamento"}
           </Button>
         </DialogActions>
       </Dialog>
