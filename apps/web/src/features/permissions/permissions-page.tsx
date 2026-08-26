@@ -29,6 +29,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useFeedback } from "../../shared/ui/feedback-provider";
 import { PageHeader } from "../../shared/ui/page-header";
+import { normalizeSearchText } from "../../shared/ui/search-text";
 import { hasCompanyCapability } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
@@ -941,16 +942,6 @@ function assignableRoles(
     (role) =>
       !member.roles.some((memberRole) => memberRole.roleId === role.roleId),
   );
-}
-
-// Busca amigável para nomes em pt-BR: remove acentos e compara sem caixa,
-// para que quem busca "andre" encontre "André" e vice-versa.
-function normalizeSearchText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase("pt-BR")
-    .trim();
 }
 
 function isAuthorizationFailure(failure: PermissionsFailure): boolean {

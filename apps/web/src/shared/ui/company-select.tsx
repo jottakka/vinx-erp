@@ -16,7 +16,7 @@ type CompanySelectProps = {
 
 /**
  * Seletor de empresa com monograma colorido, usado nas páginas com escopo por
- * empresa (Paguai, Atendimento/Kanban, Pessoas).
+ * empresa (Paguai, Atendimento, Pessoas).
  */
 export function CompanySelect({
   companies,

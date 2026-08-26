@@ -36,16 +36,18 @@ export const vinxFieldBorder = {
     "color-mix(in srgb, var(--vinx-palette-text-primary) 64%, transparent)",
 } as const;
 
+// Preenchimento de campo: o foco precisa destacar (alpha >= rest), nunca
+// clarear em relação ao repouso — por isso focus > rest em ambos os esquemas.
 export const vinxFieldFill = {
   rest: "color-mix(in srgb, var(--vinx-palette-text-primary) 3%, transparent)",
   hover: "color-mix(in srgb, var(--vinx-palette-text-primary) 5%, transparent)",
-  focus: "color-mix(in srgb, var(--vinx-palette-text-primary) 2%, transparent)",
+  focus: "color-mix(in srgb, var(--vinx-palette-text-primary) 4%, transparent)",
   darkRest:
     "color-mix(in srgb, var(--vinx-palette-text-primary) 4%, transparent)",
   darkHover:
     "color-mix(in srgb, var(--vinx-palette-text-primary) 7%, transparent)",
   darkFocus:
-    "color-mix(in srgb, var(--vinx-palette-text-primary) 3%, transparent)",
+    "color-mix(in srgb, var(--vinx-palette-text-primary) 5%, transparent)",
 } as const;
 
 type AccentSurface = {

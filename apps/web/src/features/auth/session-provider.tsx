@@ -105,6 +105,10 @@ export function SessionProvider({
   const [error, setError] = useState<string | null>(null);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [status, setStatus] = useState<SessionStatus>("pending");
+  // Espelho do bootstrap para callbacks lerem o snapshot vigente sem depender
+  // do estado na closure (mudar a identidade do refreshBootstrap reexecutaria
+  // o efeito de montagem em loop).
+  const bootstrapRef = useRef<BootstrapSnapshot | null>(null);
   const actionPending = useRef(false);
   const generation = useRef(0);
   const bootstrapRequest = useRef<AbortController | null>(null);
@@ -122,6 +126,11 @@ export function SessionProvider({
     },
     [queryClient],
   );
+
+  const publishBootstrap = useCallback((snapshot: BootstrapSnapshot | null) => {
+    bootstrapRef.current = snapshot;
+    setBootstrap(snapshot);
+  }, []);
 
   const loadBootstrap = useCallback(
     async (
@@ -156,12 +165,12 @@ export function SessionProvider({
     ): boolean => {
       if (requestGeneration !== generation.current) return false;
       if (result.ok) {
-        setBootstrap(result.snapshot);
+        publishBootstrap(result.snapshot);
         setError(null);
         setStatus("authenticated");
         return true;
       }
-      setBootstrap(null);
+      publishBootstrap(null);
       if (result.error.kind === "anonymous") {
         setError(null);
         setStatus("anonymous");
@@ -173,20 +182,35 @@ export function SessionProvider({
       }
       return false;
     },
-    [],
+    [publishBootstrap],
   );
 
   const refreshBootstrap = useCallback(async (): Promise<boolean> => {
     if (actionPending.current || logoutRecovery.current) return false;
     supersede(true);
     const requestGeneration = generation.current;
-    setBootstrap(null);
-    setError(null);
-    setStatus("pending");
-    return commitBootstrap(
-      await loadBootstrap(requestGeneration),
-      requestGeneration,
-    );
+    // Com um snapshot autenticado em mãos, o refresh mantém o snapshot atual
+    // visível e o troca atomicamente quando a resposta chega: a janela nula
+    // anterior fechava diálogos digitados à mão e remontava views no meio de
+    // ações (listener 'online' e refreshes programáticos das páginas).
+    const keepVisibleSnapshot = bootstrapRef.current !== null;
+    if (!keepVisibleSnapshot) {
+      setError(null);
+      setStatus("pending");
+    }
+    const result = await loadBootstrap(requestGeneration);
+    if (
+      keepVisibleSnapshot &&
+      requestGeneration === generation.current &&
+      !result.ok &&
+      result.error.kind !== "anonymous"
+    ) {
+      // Falha transitória não derruba a sessão visível; apenas sessão
+      // expirada (anonymous/401) limpa o snapshot para anonymous.
+      if (result.error.kind !== "aborted") setError(bootstrapErrorMessage);
+      return false;
+    }
+    return commitBootstrap(result, requestGeneration);
   }, [commitBootstrap, loadBootstrap, supersede]);
 
   useEffect(() => {
@@ -210,7 +234,7 @@ export function SessionProvider({
       const requestGeneration = generation.current;
       const controller = new AbortController();
       mutationRequest.current = controller;
-      setBootstrap(null);
+      publishBootstrap(null);
       setError(null);
       setStatus("pending");
       try {
@@ -222,7 +246,7 @@ export function SessionProvider({
             requestGeneration !== generation.current
           )
             return false;
-          setBootstrap(snapshot);
+          publishBootstrap(snapshot);
           setStatus("authenticated");
           return true;
         }
@@ -249,7 +273,7 @@ export function SessionProvider({
           !controller.signal.aborted &&
           requestGeneration === generation.current
         ) {
-          setBootstrap(null);
+          publishBootstrap(null);
           setError(signInErrorMessage);
           setStatus("anonymous");
         }
@@ -261,7 +285,14 @@ export function SessionProvider({
         }
       }
     },
-    [browserSessionClient, commitBootstrap, gateway, loadBootstrap, supersede],
+    [
+      browserSessionClient,
+      commitBootstrap,
+      gateway,
+      loadBootstrap,
+      publishBootstrap,
+      supersede,
+    ],
   );
 
   const signOut = useCallback(async (): Promise<boolean> => {
@@ -271,7 +302,7 @@ export function SessionProvider({
     const requestGeneration = generation.current;
     const controller = new AbortController();
     mutationRequest.current = controller;
-    setBootstrap(null);
+    publishBootstrap(null);
     setError(null);
     setIsSigningOut(true);
     setStatus("pending");

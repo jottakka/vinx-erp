@@ -49,6 +49,8 @@ export const lightPalette = {
   },
   warning: {
     light: "#c9972e",
+    // 5.93:1 sobre contrastText #ffffff (Alert/Chip preenchido) e 5.65:1 como
+    // texto sobre background #f7fafc (Chip outlined) — AA com folga em ambos.
     main: "#8a5a00",
     dark: "#5c3c00",
     contrastText: "#ffffff",
@@ -130,6 +132,8 @@ export const darkPalette = {
   },
   warning: {
     light: "#f1c36c",
+    // 7.73:1 sobre contrastText #06121e (Alert/Chip preenchido) e 6.31:1 como
+    // texto sobre paper #12263a (Chip outlined) — AA com folga em ambos.
     main: "#d99a2b",
     dark: "#a96f0d",
     contrastText: "#06121e",

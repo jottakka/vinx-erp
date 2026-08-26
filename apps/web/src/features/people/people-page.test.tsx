@@ -231,6 +231,38 @@ describe("PeoplePage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("matches accented names with an accent-insensitive search", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway({
+      list: vi.fn().mockResolvedValue({
+        items: [
+          {
+            displayName: "André Santos",
+            employeeId: "33333333-3333-4333-8333-333333333333",
+            membershipId: "44444444-4444-4444-8444-444444444444",
+          },
+        ],
+        ok: true,
+      }),
+    });
+    renderPage({ gateway });
+
+    expect(await screen.findByText("André Santos")).toBeVisible();
+
+    await user.type(screen.getByLabelText("Buscar por nome"), "andre");
+    expect(screen.getByText("André Santos")).toBeVisible();
+
+    await user.clear(screen.getByLabelText("Buscar por nome"));
+    await user.type(screen.getByLabelText("Buscar por nome"), "ÁNDR");
+    expect(screen.getByText("André Santos")).toBeVisible();
+
+    await user.clear(screen.getByLabelText("Buscar por nome"));
+    await user.type(screen.getByLabelText("Buscar por nome"), "bruno");
+    expect(
+      screen.getByText("Nenhum funcionário corresponde à busca."),
+    ).toBeVisible();
+  });
+
   it("shows a Portuguese name limit instead of the default Zod message", async () => {
     const user = userEvent.setup();
     renderPage();
@@ -292,10 +324,10 @@ describe("PeoplePage", () => {
       screen.queryByText("44444444-4444-4444-8444-444444444444"),
     ).toBeNull();
     expect(
-      screen.getAllByRole("group", { name: "Empresa Alfa" }),
+      screen.getAllByText("Alfa", { exact: true }),
     ).not.toHaveLength(0);
     expect(
-      screen.getAllByRole("group", { name: "Empresa Beta" }),
+      screen.getAllByText("Beta", { exact: true }),
     ).not.toHaveLength(0);
   });
 
@@ -1084,7 +1116,7 @@ describe("PeoplePage", () => {
       within(dialog).queryByText("44444444-4444-4444-8444-444444444444"),
     ).toBeNull();
     expect(
-      within(dialog).getByRole("group", { name: "Empresa Alfa" }),
+      within(dialog).getByText("Alfa", { exact: true }),
     ).toBeVisible();
   });
 

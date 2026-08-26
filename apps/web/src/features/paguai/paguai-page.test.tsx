@@ -190,7 +190,7 @@ describe("PaguaiPage", () => {
     await openCreate(user);
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeVisible();
-    expect(within(dialog).getByLabelText("Empresa Alfa")).toBeVisible();
+    expect(within(dialog).getByText("Alfa")).toBeVisible();
     expect(dialog.textContent).not.toContain(companyId);
   });
 
@@ -288,8 +288,8 @@ describe("PaguaiPage", () => {
     ).toBeVisible();
     const cards = screen.getAllByRole("heading", { level: 3 });
     expect(cards.map((item) => item.textContent)).toEqual(["Toner", "Papel"]);
-    expect(screen.getByLabelText("Empresa Alfa")).toBeVisible();
-    expect(screen.getByLabelText("Empresa Beta")).toBeVisible();
+    expect(screen.getByText("Alfa")).toBeVisible();
+    expect(screen.getByText("Beta")).toBeVisible();
     expect(screen.getAllByText("Rascunho")).toHaveLength(2);
     expect(
       screen.queryByRole("button", { name: "Nova solicitação" }),

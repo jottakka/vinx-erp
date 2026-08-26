@@ -25,11 +25,13 @@ export function CompanyIdentity(props: CompanyIdentityProps) {
   const { monogram, slot } = resolveCompanyAppearance(id, name);
   const accent = companySurface(slot);
 
+  // Wrapper neutro (span, sem role/aria-label): este componente aninha dentro
+  // de Button/MenuItem, onde div+group seria HTML inválido e narraria o nome
+  // duas vezes; o nome visível no Typography já carrega a informação.
   return (
     <Box
-      aria-label={`Empresa ${name}`}
+      component="span"
       data-company-slot={slot}
-      role="group"
       sx={{ alignItems: "center", display: "inline-flex", gap: 1 }}
     >
       <Box

@@ -22,6 +22,7 @@ import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { CompanySelect } from "../../shared/ui/company-select";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
+import { normalizeSearchText } from "../../shared/ui/search-text";
 import { hasCompanyCapability } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
@@ -460,7 +461,7 @@ function PeoplePageContent({
       </Stack>
     );
 
-  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const normalizedSearch = normalizeSearchText(search);
   const rows = listQueries.flatMap((query, index): DirectoryRow[] => {
     const result = query.data;
     const company = eligibleCompanies.find(
@@ -471,7 +472,7 @@ function PeoplePageContent({
   });
   const visibleRows = rows
     .filter((row) =>
-      row.displayName.trim().toLocaleLowerCase().includes(normalizedSearch),
+      normalizeSearchText(row.displayName).includes(normalizedSearch),
     )
     .sort(
       (left, right) =>
