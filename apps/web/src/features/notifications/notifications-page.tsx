@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { vinxShadow, vinxTint } from "../../app/theme/surface-tokens";
+import { CompanyBadge } from "../../shared/ui/company-badge";
 import { PageHeader } from "../../shared/ui/page-header";
 import { useSession } from "../auth/session-provider";
 import {
@@ -247,10 +248,9 @@ export function NotificationsPage({
                           rowGap: 0.5,
                         }}
                       >
-                        <Chip
-                          aria-label={`Empresa de origem: ${companyName ?? "Empresa"}`}
-                          label={companyName ?? "Empresa"}
-                          size="small"
+                        <CompanyBadge
+                          id={item.companyId}
+                          name={companyName ?? "Empresa"}
                         />
                         {!item.readAt ? (
                           <Chip

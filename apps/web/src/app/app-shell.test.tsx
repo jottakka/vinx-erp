@@ -197,7 +197,7 @@ describe("AppShell", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Rascunhos de solicitações financeiras. O MVP não cria cobrança ou pagamento.",
+        "Rascunhos de solicitações financeiras por empresa. O MVP não cria cobrança ou pagamento.",
       ),
     ).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent(

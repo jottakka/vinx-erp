@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
 import type {
   BootstrapSnapshot,
+  EffectiveCapability,
   MockSessionGateway,
 } from "../auth/session-contract";
 import { SessionProvider } from "../auth/session-provider";
@@ -32,39 +33,68 @@ const betaCard: AtendimentoCard = {
   version: 1,
 };
 
-const snapshot: BootstrapSnapshot = {
-  companies: [
-    {
-      capabilities: [],
-      companyId: alfaCompanyId,
-      companyName: "Alfa",
-      membershipId: "55555555-5555-4555-8555-555555555555",
-    },
-    {
-      capabilities: [],
-      companyId: betaCompanyId,
-      companyName: "Beta",
-      membershipId: "66666666-6666-4666-8666-666666666666",
-    },
-  ],
-  flags: {},
-  platform: { isPlatformOperator: false },
-  user: {
-    displayName: "Ana",
-    id: "77777777-7777-4777-8777-777777777777",
-  },
-};
+const readCapability = {
+  name: "service_desk.ticket.read_queue",
+  scopes: ["Company"],
+} as const;
+const createCapability = {
+  name: "service_desk.ticket.create",
+  scopes: ["Company"],
+} as const;
+const moveCapability = {
+  name: "service_desk.ticket.move",
+  scopes: ["Company"],
+} as const;
+const assignCapability = {
+  name: "service_desk.ticket.assign",
+  scopes: ["Company"],
+} as const;
+const allAtendimentoCapabilities = [
+  readCapability,
+  createCapability,
+  moveCapability,
+  assignCapability,
+];
 
-const gateway: MockSessionGateway = {
-  getBootstrap: async () => snapshot,
-  login: async () => snapshot,
-  logout: async () => {},
-};
+function snapshot(
+  capabilities: readonly EffectiveCapability[] = allAtendimentoCapabilities,
+): BootstrapSnapshot {
+  return {
+    companies: [
+      {
+        capabilities,
+        companyId: alfaCompanyId,
+        companyName: "Alfa",
+        membershipId: "55555555-5555-4555-8555-555555555555",
+      },
+      {
+        capabilities,
+        companyId: betaCompanyId,
+        companyName: "Beta",
+        membershipId: "66666666-6666-4666-8666-666666666666",
+      },
+    ],
+    flags: {},
+    platform: { isPlatformOperator: false },
+    user: {
+      displayName: "Ana",
+      id: "77777777-7777-4777-8777-777777777777",
+    },
+  };
+}
 
-function renderPage() {
+function gatewayFor(getBootstrap = async () => snapshot()): MockSessionGateway {
+  return {
+    getBootstrap,
+    login: async () => snapshot(),
+    logout: async () => {},
+  };
+}
+
+function renderPage(bootstrap = snapshot()) {
   render(
     <VinxThemeProvider>
-      <SessionProvider gateway={gateway}>
+      <SessionProvider gateway={gatewayFor(async () => bootstrap)}>
         <AtendimentoPage />
       </SessionProvider>
     </VinxThemeProvider>,
@@ -113,5 +143,81 @@ describe("AtendimentoPage", () => {
 
     betaCards.resolve([betaCard]);
     expect(await screen.findByText(betaCard.title)).toBeVisible();
+  });
+
+  it("creates a card through the modal and closes it", async () => {
+    const user = userEvent.setup();
+    const created = {
+      ...alfaCard,
+      description: "Descrição do cartão",
+      title: "Novo cartão",
+    };
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
+    const create = vi.spyOn(atendimentoClient, "create").mockResolvedValue({
+      card: created,
+      ok: true,
+    } as Awaited<ReturnType<typeof atendimentoClient.create>>);
+
+    renderPage();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Novo cartão" }),
+    );
+    await user.type(screen.getByLabelText("Título"), "Novo cartão");
+    await user.type(screen.getByLabelText("Descrição"), "Descrição do cartão");
+    await user.click(screen.getByRole("button", { name: "Criar cartão" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create).toHaveBeenCalledWith(
+      alfaCompanyId,
+      "Novo cartão",
+      "Descrição do cartão",
+    );
+    await waitFor(() =>
+      expect(screen.getAllByText("Novo cartão").length).toBeGreaterThanOrEqual(
+        1,
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Novo cartão" })).toBeVisible(),
+    );
+  });
+
+  it("offers only Visualizar and no create button without create permission", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+
+    renderPage(snapshot([readCapability, moveCapability, assignCapability]));
+
+    expect(await screen.findByText(alfaCard.title)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Novo cartão" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Visualizar" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeVisible();
+    expect(within(dialog).getByText(alfaCard.description)).toBeVisible();
+  });
+
+  it("moves a card to another column by calling the move client", async () => {
+    const user = userEvent.setup();
+    const moved = { ...alfaCard, column: "em_andamento" as const };
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    const move = vi.spyOn(atendimentoClient, "move").mockResolvedValue({
+      card: moved,
+      ok: true,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+
+    renderPage();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Mover para Em andamento" }),
+    );
+
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+    expect(move.mock.calls[0]?.[1]).toMatchObject({
+      id: alfaCard.id,
+      column: "novo",
+    });
+    expect(move.mock.calls[0]?.[2]).toBe("em_andamento");
   });
 });

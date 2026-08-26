@@ -1,3 +1,5 @@
+import AttachFileOutlinedIcon from "@mui/icons-material/AttachFileOutlined";
+import SendOutlinedIcon from "@mui/icons-material/SendOutlined";
 import {
   Alert,
   Box,
@@ -9,7 +11,12 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { type ChangeEvent, type FormEvent, useState } from "react";
+import {
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  useState,
+} from "react";
 import type { AgentMessage } from "./agent-contract";
 import { useAgentConversation } from "./agent-conversation-provider";
 
@@ -96,10 +103,27 @@ export function AgentConversation() {
     ? "Cada envio é uma consulta independente ao agente da empresa ativa; turnos anteriores não são relembrados."
     : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar o envio.";
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function submitFromInput() {
     sendMessage(draft);
     setDraft("");
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    submitFromInput();
+  }
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    // Enter envia; Shift+Enter insere uma nova linha. Não envia durante a
+    // composição de IME (ex.: CJK) para não disparar um envio prematuro.
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
+      submitFromInput();
+    }
   }
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -188,21 +212,24 @@ export function AgentConversation() {
             ))}
           </Stack>
         ) : null}
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "flex-end" }}>
           <TextField
             fullWidth
             label="Mensagem para o agente"
             maxRows={3}
             multiline
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleComposerKeyDown}
             size="small"
             value={draft}
           />
-          <Button
+          <IconButton
+            aria-label="Anexar arquivo"
             component="label"
             disabled={thinking || !attachmentSelectionAvailable}
+            title="Anexar arquivo"
           >
-            Anexar
+            <AttachFileOutlinedIcon />
             <input
               accept="application/pdf,image/jpeg,image/png"
               aria-label="Anexar documentos ao agente"
@@ -212,9 +239,10 @@ export function AgentConversation() {
               style={{ display: "none" }}
               type="file"
             />
-          </Button>
+          </IconButton>
           <Button
             disabled={!draft.trim() || thinking || hasBlockingAttachment}
+            startIcon={<SendOutlinedIcon />}
             type="submit"
           >
             Enviar

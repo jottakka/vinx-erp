@@ -309,8 +309,9 @@ function ScopedAgentConversationProvider({
       replaceAttachments([...attachmentSnapshot.current, ...selected]);
 
       const selectionEpoch = attachmentEpoch.current;
-      for (const selection of selected) {
-        const file = files[selected.indexOf(selection)];
+      for (const [index, selection] of selected.entries()) {
+        const file = files[index];
+        if (!file) continue;
         const controller = new AbortController();
         attachmentUploads.current.set(selection.localId, controller);
 
