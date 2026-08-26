@@ -156,14 +156,10 @@ export function AgentConversation() {
               companyName={companyName}
             />
             <Typography color="text.secondary" variant="caption">
-              Uma empresa por envio
+              Uma empresa por envio.
             </Typography>
           </Stack>
-        ) : (
-          <Typography color="text.secondary" variant="caption">
-            Uma empresa por envio. Escolha uma empresa para habilitar o envio.
-          </Typography>
-        )}
+        ) : null}
       </Stack>
       <Box
         aria-label="Mensagens do agente"
@@ -181,7 +177,9 @@ export function AgentConversation() {
           ))
         ) : (
           <Alert role="note" severity="info">
-            {emptyConversationNotice}
+            {companyName
+              ? emptyConversationNotice
+              : "Uma empresa por envio. Selecione uma empresa para iniciar."}
           </Alert>
         )}
         {thinking ? (
@@ -192,7 +190,7 @@ export function AgentConversation() {
         ) : null}
       </Box>
       <Stack component="form" onSubmit={submit} spacing={1}>
-        {!attachmentSelectionAvailable ? (
+        {companyName && !attachmentSelectionAvailable ? (
           <Alert severity="info">
             Selecione uma empresa para anexar documentos ao agente.
           </Alert>

@@ -567,14 +567,14 @@ describe("agent workspace", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Selecione uma empresa para habilitar o envio ao agente.",
+        "Uma empresa por envio. Selecione uma empresa para iniciar.",
       ),
     ).toBeVisible();
     expect(
-      screen.getByText(
-        "Selecione uma empresa para iniciar uma conversa com o agente.",
+      screen.queryByText(
+        "Selecione uma empresa para habilitar o envio ao agente.",
       ),
-    ).toBeVisible();
+    ).toBeNull();
     expect(screen.queryByText(/empresa ativa/i)).toBeNull();
     expect(screen.queryByText(/vinculados à empresa indicada/i)).toBeNull();
   });
@@ -593,8 +593,10 @@ describe("agent workspace", () => {
     const picker = dock.getByLabelText("Anexar documentos ao agente");
 
     expect(
-      dock.getByText("Selecione uma empresa para anexar documentos ao agente."),
-    ).toBeVisible();
+      dock.queryByText(
+        "Selecione uma empresa para anexar documentos ao agente.",
+      ),
+    ).toBeNull();
     expect(
       dock.getByRole("button", { name: "Anexar arquivo" }),
     ).toHaveAttribute("aria-disabled", "true");

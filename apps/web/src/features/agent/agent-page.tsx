@@ -13,9 +13,8 @@ export function AgentPage() {
   const description = companyName
     ? "Cada mensagem é uma consulta independente ao agente da empresa ativa; turnos anteriores não fazem parte do contexto."
     : "Selecione uma empresa para conversar com o agente; turnos anteriores não fazem parte do contexto.";
-  const processingNotice = companyName
-    ? "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado."
-    : "Selecione uma empresa para habilitar o envio ao agente.";
+  const processingNotice =
+    "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado.";
 
   function backToContext() {
     openDock();
@@ -41,9 +40,11 @@ export function AgentPage() {
           companyName={companyName}
         />
       ) : null}
-      <Alert role="note" severity="info" variant="outlined">
-        {processingNotice}
-      </Alert>
+      {companyName ? (
+        <Alert role="note" severity="info" variant="outlined">
+          {processingNotice}
+        </Alert>
+      ) : null}
       <Card variant="outlined">
         <CardContent>
           <Stack sx={{ gap: 2, minHeight: { md: "60dvh" } }}>
