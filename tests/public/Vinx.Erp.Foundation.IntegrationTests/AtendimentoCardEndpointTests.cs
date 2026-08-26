@@ -91,15 +91,40 @@ public sealed class AtendimentoCardEndpointTests
         Assert.Equal("manual", replayed?.Channel);
         Assert.Null(replayed?.SlaDueAt);
 
-        using var changedMetadata = await client.PostAsJsonAsync(
-            "/atendimento/cards",
-            request with { Priority = "alta" }
-        );
-        Assert.Equal(HttpStatusCode.Conflict, changedMetadata.StatusCode);
-        Assert.Equal(
-            "idempotency_conflict",
-            (await changedMetadata.Content.ReadFromJsonAsync<ErrorResponse>())?.Code
-        );
+    }
+
+    [Fact]
+    public async Task Non_default_metadata_replay_is_exact_and_each_hash_field_conflicts_independently()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = new CreateCardRequest(scenario.CompanyId, Guid.NewGuid(), "Hash", "Inclui cada metadado.")
+        {
+            Priority = "alta", Channel = "web", SlaDueAt = DateTimeOffset.UtcNow.AddDays(1),
+        };
+        using var createdResponse = await client.PostAsJsonAsync("/atendimento/cards", request);
+        Assert.Equal(HttpStatusCode.Created, createdResponse.StatusCode);
+        var created = (await createdResponse.Content.ReadFromJsonAsync<CardResponse>())!;
+        using var replayResponse = await client.PostAsJsonAsync("/atendimento/cards", request);
+        Assert.Equal(HttpStatusCode.OK, replayResponse.StatusCode);
+        Assert.Equal(created.Id, (await replayResponse.Content.ReadFromJsonAsync<CardResponse>())?.Id);
+
+        foreach (var changed in new[]
+        {
+            request with { Priority = "baixa" },
+            request with { Channel = "email" },
+            request with { SlaDueAt = request.SlaDueAt!.Value.AddMinutes(1) },
+        })
+        {
+            using var conflict = await client.PostAsJsonAsync("/atendimento/cards", changed);
+            Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        }
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(1, await administrator.IdempotencyRecords.CountAsync(record => record.RequestId == request.RequestId));
+        Assert.Equal(1L, await administrator.Database.SqlQuery<long>($"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_cards WHERE company_id = {scenario.CompanyId}").SingleAsync());
+        Assert.Equal(1, await administrator.AuditEvents.CountAsync(audit => audit.Action == "service_desk.ticket.create" && audit.Outcome == AuditOutcome.Success));
     }
 
     [Fact]

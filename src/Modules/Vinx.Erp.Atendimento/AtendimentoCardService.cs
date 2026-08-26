@@ -72,7 +72,7 @@ public sealed class AtendimentoCardService(
                 var card = await InsertCardAsync(actor, normalized, now, cancellationToken);
                 return Mutation.Succeeded(card, AtendimentoCardOperationState.Created);
             },
-            cancellationToken
+            now, cancellationToken
         );
     }
 
@@ -81,8 +81,10 @@ public sealed class AtendimentoCardService(
         Guid cardId,
         AssignAtendimentoCardCommand command,
         CancellationToken cancellationToken
-    ) =>
-        ExecuteAsync(
+    )
+    {
+        var now = DateTimeOffset.UtcNow;
+        return ExecuteAsync(
             actor,
             command.CompanyId,
             command.RequestId,
@@ -93,7 +95,7 @@ public sealed class AtendimentoCardService(
             Hash(new RoutedCommandPayload<AssignAtendimentoCardCommand>(cardId, command)),
             async () =>
             {
-                var before = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
+                var before = await FindCardAsync(command.CompanyId, cardId, now, cancellationToken);
                 if (before is null)
                 {
                     return Mutation.ResourceNotFound();
@@ -115,28 +117,30 @@ public sealed class AtendimentoCardService(
                     return Mutation.ResourceNotFound();
                 }
 
-                var updated = await UpdateAssigneeAsync(actor, cardId, command, cancellationToken);
+                var updated = await UpdateAssigneeAsync(actor, cardId, command, now, cancellationToken);
                 if (updated is not null)
                 {
                     return Mutation.Succeeded(updated, AtendimentoCardOperationState.Success);
                 }
 
                 return await ReadCurrentAfterMutationMissAsync(
-                    command.CompanyId,
-                    cardId,
+                    command.CompanyId, cardId, now,
                     cancellationToken
                 );
             },
-            cancellationToken
+            now, cancellationToken
         );
+    }
 
     public Task<AtendimentoCardOperationResult> MoveAsync(
         ActorContext actor,
         Guid cardId,
         MoveAtendimentoCardCommand command,
         CancellationToken cancellationToken
-    ) =>
-        ExecuteAsync(
+    )
+    {
+        var now = DateTimeOffset.UtcNow;
+        return ExecuteAsync(
             actor,
             command.CompanyId,
             command.RequestId,
@@ -147,7 +151,7 @@ public sealed class AtendimentoCardService(
             Hash(new RoutedCommandPayload<MoveAtendimentoCardCommand>(cardId, command)),
             async () =>
             {
-                var before = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
+                var before = await FindCardAsync(command.CompanyId, cardId, now, cancellationToken);
                 if (before is null)
                 {
                     return Mutation.ResourceNotFound();
@@ -158,12 +162,11 @@ public sealed class AtendimentoCardService(
                     return Mutation.IntegrityConflict(before);
                 }
 
-                var updated = await MoveCardAsync(actor, before.Id, command, cancellationToken);
+                var updated = await MoveCardAsync(actor, before.Id, command, now, cancellationToken);
                 if (updated is null)
                 {
                     return await ReadCurrentAfterMutationMissAsync(
-                        command.CompanyId,
-                        cardId,
+                    command.CompanyId, cardId, now,
                         cancellationToken
                     );
                 }
@@ -178,8 +181,9 @@ public sealed class AtendimentoCardService(
                 );
                 return Mutation.Succeeded(updated, AtendimentoCardOperationState.Success);
             },
-            cancellationToken
+            now, cancellationToken
         );
+    }
 
     public Task<AtendimentoCardOperationResult> CancelAsync(
         ActorContext actor,
@@ -189,6 +193,7 @@ public sealed class AtendimentoCardService(
     )
     {
         var normalized = command with { Reason = command.Reason?.Trim() ?? string.Empty };
+        var now = DateTimeOffset.UtcNow;
         return ExecuteAsync(
             actor,
             normalized.CompanyId,
@@ -200,7 +205,7 @@ public sealed class AtendimentoCardService(
             Hash(new RoutedCommandPayload<CancelAtendimentoCardCommand>(cardId, normalized)),
             async () =>
             {
-                var before = await FindCardAsync(normalized.CompanyId, cardId, cancellationToken);
+                var before = await FindCardAsync(normalized.CompanyId, cardId, now, cancellationToken);
                 if (before is null)
                 {
                     return Mutation.ResourceNotFound();
@@ -211,12 +216,11 @@ public sealed class AtendimentoCardService(
                     return Mutation.Terminal(before);
                 }
 
-                var updated = await CancelCardAsync(actor, cardId, normalized, cancellationToken);
+                var updated = await CancelCardAsync(actor, cardId, normalized, now, cancellationToken);
                 if (updated is null)
                 {
                     return await ReadCurrentAfterMutationMissAsync(
-                        normalized.CompanyId,
-                        cardId,
+                    normalized.CompanyId, cardId, now,
                         cancellationToken
                     );
                 }
@@ -231,7 +235,7 @@ public sealed class AtendimentoCardService(
                 );
                 return Mutation.Succeeded(updated, AtendimentoCardOperationState.Success);
             },
-            cancellationToken
+            now, cancellationToken
         );
     }
 
@@ -241,6 +245,7 @@ public sealed class AtendimentoCardService(
         CancellationToken cancellationToken
     )
     {
+        var now = DateTimeOffset.UtcNow;
         if (companyId == Guid.Empty)
         {
             return new(AtendimentoCardOperationState.Invalid);
@@ -270,7 +275,6 @@ public sealed class AtendimentoCardService(
                 );
             }
 
-            var now = DateTimeOffset.UtcNow;
             var cards = await QueryCardsAsync(companyId, now, cancellationToken);
             await AppendAuditAsync(
                 actor,
@@ -370,6 +374,7 @@ public sealed class AtendimentoCardService(
         bool valid,
         string payloadHash,
         Func<Task<Mutation>> mutation,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     )
     {
@@ -430,7 +435,7 @@ public sealed class AtendimentoCardService(
                 LogInformation("replayed", "idempotency_match");
                 return new(
                     AtendimentoCardOperationState.Replay,
-                    NormalizeResponse(replay, DateTimeOffset.UtcNow)
+                    NormalizeResponse(replay, now)
                 );
             }
 
@@ -509,7 +514,7 @@ public sealed class AtendimentoCardService(
                 auditAction,
                 idempotencyCommandName,
                 capability,
-                payloadHash,
+                payloadHash, now,
                 cancellationToken
             );
         }
@@ -533,6 +538,7 @@ public sealed class AtendimentoCardService(
         string idempotencyCommandName,
         string capability,
         string payloadHash,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     )
     {
@@ -603,7 +609,7 @@ public sealed class AtendimentoCardService(
             LogInformation("replayed", "concurrent_idempotency_match");
             return new(
                 AtendimentoCardOperationState.Replay,
-                NormalizeResponse(replay, DateTimeOffset.UtcNow)
+                NormalizeResponse(replay, now)
             );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -748,10 +754,11 @@ public sealed class AtendimentoCardService(
     private async Task<Mutation> ReadCurrentAfterMutationMissAsync(
         Guid companyId,
         Guid cardId,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     )
     {
-        var current = await FindCardAsync(companyId, cardId, cancellationToken);
+        var current = await FindCardAsync(companyId, cardId, now, cancellationToken);
         return current is null ? Mutation.ResourceNotFound() : Mutation.IntegrityConflict(current);
     }
 
@@ -810,6 +817,7 @@ public sealed class AtendimentoCardService(
     private async Task<AtendimentoCardResponse?> FindCardAsync(
         Guid companyId,
         Guid cardId,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     )
     {
@@ -820,7 +828,7 @@ public sealed class AtendimentoCardService(
                 card => card.CompanyId == companyId && card.Id == cardId,
                 cancellationToken
             );
-        return card is null ? null : ToResponse(card, DateTimeOffset.UtcNow);
+        return card is null ? null : ToResponse(card, now);
     }
 
     private async Task<AtendimentoCardResponse> InsertCardAsync(
@@ -868,6 +876,7 @@ public sealed class AtendimentoCardService(
         ActorContext actor,
         Guid cardId,
         AssignAtendimentoCardCommand command,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     ) =>
         await UpdateCardAsync(
@@ -878,16 +887,17 @@ public sealed class AtendimentoCardService(
             {
                 card.AssigneeMembershipId = command.AssigneeMembershipId;
                 card.UpdatedByUserId = actor.UserId;
-                card.UpdatedAt = DateTimeOffset.UtcNow;
+                card.UpdatedAt = now;
                 card.RequestId = command.RequestId;
             },
-            cancellationToken
+            now, cancellationToken
         );
 
     private async Task<AtendimentoCardResponse?> MoveCardAsync(
         ActorContext actor,
         Guid cardId,
         MoveAtendimentoCardCommand command,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     ) =>
         await UpdateCardAsync(
@@ -898,16 +908,17 @@ public sealed class AtendimentoCardService(
             {
                 card.Column = command.Column.Trim();
                 card.UpdatedByUserId = actor.UserId;
-                card.UpdatedAt = DateTimeOffset.UtcNow;
+                card.UpdatedAt = now;
                 card.RequestId = command.RequestId;
             },
-            cancellationToken
+            now, cancellationToken
         );
 
     private async Task<AtendimentoCardResponse?> CancelCardAsync(
         ActorContext actor,
         Guid cardId,
         CancelAtendimentoCardCommand command,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     ) =>
         await UpdateCardAsync(
@@ -916,7 +927,6 @@ public sealed class AtendimentoCardService(
             command.ExpectedVersion,
             card =>
             {
-                var now = DateTimeOffset.UtcNow;
                 card.Column = "cancelado";
                 card.CancelledAt = now;
                 card.CancelledByUserId = actor.UserId;
@@ -925,7 +935,7 @@ public sealed class AtendimentoCardService(
                 card.UpdatedAt = now;
                 card.RequestId = command.RequestId;
             },
-            cancellationToken
+            now, cancellationToken
         );
 
     /// <summary>
@@ -937,6 +947,7 @@ public sealed class AtendimentoCardService(
         Guid companyId,
         long expectedVersion,
         Action<AtendimentoCard> apply,
+        DateTimeOffset now,
         CancellationToken cancellationToken
     )
     {
@@ -963,7 +974,7 @@ public sealed class AtendimentoCardService(
             return null;
         }
 
-        return ToResponse(card, DateTimeOffset.UtcNow);
+        return ToResponse(card, now);
     }
 
     private static AtendimentoCardResponse ToResponse(AtendimentoCard card, DateTimeOffset now) =>

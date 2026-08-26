@@ -34,8 +34,11 @@ public sealed class AtendimentoCardMigrationTests
         (KnownCapabilities.ServiceDeskTicketCancelId, KnownCapabilities.ServiceDeskTicketCancel),
     ];
 
-    [Fact]
-    public async Task Operational_metadata_migration_adds_defaults_checks_and_fail_closed_down()
+    [Theory]
+    [InlineData("priority")]
+    [InlineData("channel")]
+    [InlineData("sla_due_at")]
+    public async Task Operational_metadata_migration_fails_closed_for_each_non_default_field(string field)
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
@@ -46,12 +49,15 @@ public sealed class AtendimentoCardMigrationTests
         await using (var update = new NpgsqlCommand(
             """
             UPDATE service_desk.atendimento_cards
-            SET priority = 'alta', channel = 'web', sla_due_at = clock_timestamp()
+            SET priority = CASE WHEN @field = 'priority' THEN 'alta' ELSE priority END,
+                channel = CASE WHEN @field = 'channel' THEN 'web' ELSE channel END,
+                sla_due_at = CASE WHEN @field = 'sla_due_at' THEN clock_timestamp() ELSE sla_due_at END
             WHERE id = @card_id
             """,
             administrator
         ))
         {
+            update.Parameters.AddWithValue("field", field);
             update.Parameters.AddWithValue("card_id", seeded.CardId);
             Assert.Equal(1, await update.ExecuteNonQueryAsync());
         }
@@ -82,9 +88,9 @@ public sealed class AtendimentoCardMigrationTests
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.True(reader.GetBoolean(0));
-        Assert.Equal("alta", reader.GetString(1));
-        Assert.Equal("web", reader.GetString(2));
-        Assert.True(reader.GetBoolean(3));
+        Assert.Equal(field == "priority" ? "alta" : "media", reader.GetString(1));
+        Assert.Equal(field == "channel" ? "web" : "manual", reader.GetString(2));
+        Assert.Equal(field == "sla_due_at", reader.GetBoolean(3));
     }
 
     [Fact]

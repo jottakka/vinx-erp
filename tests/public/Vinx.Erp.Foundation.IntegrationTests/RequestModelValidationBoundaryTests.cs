@@ -63,46 +63,6 @@ public sealed class RequestModelValidationBoundaryTests
             },
             // description ausente.
             new { companyId = scenario.CompanyId, requestId, title = "Sem descrição" },
-            new
-            {
-                companyId = scenario.CompanyId,
-                requestId,
-                title = "T",
-                description = "D",
-                priority = "",
-            },
-            new
-            {
-                companyId = scenario.CompanyId,
-                requestId,
-                title = "T",
-                description = "D",
-                priority = "urgente",
-            },
-            new
-            {
-                companyId = scenario.CompanyId,
-                requestId,
-                title = "T",
-                description = "D",
-                channel = " ",
-            },
-            new
-            {
-                companyId = scenario.CompanyId,
-                requestId,
-                title = "T",
-                description = "D",
-                channel = "telefone",
-            },
-            new
-            {
-                companyId = scenario.CompanyId,
-                requestId,
-                title = "T",
-                description = "D",
-                slaDueAt = "not-a-timestamp",
-            },
         };
 
         foreach (var payload in cases)
@@ -173,6 +133,13 @@ public sealed class RequestModelValidationBoundaryTests
             },
             // description ausente.
             new { companyId = scenario.CompanyId, requestId, title = "Sem descrição" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", priority = "" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", priority = " alta" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", priority = "urgente" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", channel = " " },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", channel = "web " },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", channel = "telefone" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", slaDueAt = "not-a-timestamp" },
         };
 
         foreach (var payload in cases)
