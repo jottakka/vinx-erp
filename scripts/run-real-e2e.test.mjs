@@ -208,7 +208,7 @@ function createHarness(overrides = {}) {
       events.push(`kill:${child.label}:${signal}`);
       setTimeout(() => {
         events.push(`exit:${child.label}`);
-        child.finish(null, signal);
+        child.finish(child === host ? 0 : null, child === host ? null : signal);
       }, 1);
     },
     publishReady: ({ browserUrl, profile }) =>
@@ -283,7 +283,7 @@ function createSharedHarness(overrides = {}) {
       events.push(`kill:${child.label}:${signal}`);
       setTimeout(() => {
         events.push(`exit:${child.label}`);
-        child.finish(null, signal);
+        child.finish(child === host ? 0 : null, child === host ? null : signal);
       }, 1);
     },
     publishReady: (details) => {
@@ -553,6 +553,61 @@ test("shared host cleanup exit is reported as child_cleanup_failed", async () =>
   );
 });
 
+test("shared launcher rejects an already-exited host even with exit code zero", async () => {
+  const harness = createSharedHarness({
+    onReady: () => harness.host.finish(0),
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: child_cleanup_failed$/,
+  );
+});
+
+test("shared launcher accepts only a graceful zero host exit for SIGINT and SIGTERM", async () => {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    const harness = createSharedHarness({
+      onReady: () => harness.signalTarget.emit(signal),
+    });
+
+    assert.equal(await runLauncher(harness.deps), 0);
+    assert.ok(harness.events.includes(`kill:host:${signal}`));
+  }
+});
+
+test("shared launcher rejects a SIGKILL host exit with no exit code", async () => {
+  const harness = createSharedHarness({
+    shutdownTimeoutMs: 5,
+    killProcessGroup: (child, signal) => {
+      harness.events.push(`kill:${child.label}:${signal}`);
+      if (child === harness.host && signal !== "SIGKILL") return;
+      setTimeout(() => {
+        harness.events.push(`exit:${child.label}`);
+        child.finish(
+          null,
+          child === harness.host ? "SIGKILL" : signal,
+        );
+      }, 1);
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: child_cleanup_failed$/,
+  );
+});
+
+test("shared cleanup failure takes precedence over a preceding host exit", async () => {
+  const harness = createSharedHarness({
+    onReady: () => harness.host.finish(1),
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: child_cleanup_failed$/,
+  );
+});
+
 test("runLauncher does not start Vite when the host exits before readiness", async () => {
   const harness = createHarness({
     spawnProcess: (command, args, options) => {
@@ -738,7 +793,10 @@ test("runLauncher keeps signal handlers through cleanup and absorbs repeats", as
   const harness = createHarness({
     killProcessGroup: (child, signal) => {
       harness.events.push(`kill:${child.label}:${signal}`);
-      setTimeout(() => child.finish(null, signal), 10);
+      setTimeout(
+        () => child.finish(child === harness.host ? 0 : null, child === harness.host ? null : signal),
+        10,
+      );
     },
     onReady: () => {
       harness.signalTarget.emit("SIGINT");

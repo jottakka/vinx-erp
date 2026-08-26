@@ -85,8 +85,14 @@ unset vinx_e2e_password_file
 
 No DBeaver, use `E2E_DB_HOST`, `E2E_DB_PORT`, `E2E_DB_DATABASE` e
 `E2E_DB_USER`; cole a senha e não habilite a opção de salvá-la. Esta é uma
-conexão administrativa local para inspeção do estado físico, não prova de RLS
-nem um caminho para alterar diretamente o fixture.
+conexão administrativa `postgres`: ela ignora RLS, validação de domínio,
+idempotência e auditoria da aplicação. Prefira inspeção somente leitura; uma
+escrita direta contamina as duas sessões e não é evidência de autorização.
+Depois de conectar, limpe o clipboard:
+
+```bash
+printf %s '' | pbcopy
+```
 
 ## Dataset
 
@@ -113,7 +119,8 @@ header, token ou senha no browser.
 2. Em `/pessoas`, selecione Alfa e confira Maria e Beatriz. Beta não aparece
    porque o cargo de Maria nessa empresa não concede o diretório de pessoas.
 3. Em `/paguai`, confira os rascunhos da empresa selecionada.
-4. Em `/atendimento` e `/kanban`, confira cards nos estados esperados.
+4. Em `/atendimento`, confira cards nos estados esperados. O alias `/kanban` é
+   intencionalmente ausente.
 5. Em `/notificacoes`, confira itens lidos e não lidos.
 6. Crie uma pessoa de Alfa por Maria, confira a linha em modo somente leitura no
    DBeaver e confirme que Clara continua restrita a Gama; prove também a negação

@@ -126,6 +126,36 @@ public sealed class FoundationApiFactoryLifecycleTests
         Assert.Equal(0, owner.DisposeCallCount);
     }
 
+    [Fact]
+    public async Task Shared_fixture_start_failure_retries_only_pending_cleanup_and_preserves_the_first_failure()
+    {
+        var startupFailure = new InvalidOperationException("startup-failure");
+        var firstCleanupFailure = new IOException("clara-cleanup-failure");
+        var calls = new List<string>();
+        var clara = new RecordingAsyncDisposable(calls, "clara", firstCleanupFailure);
+        var maria = new RecordingAsyncDisposable(calls, "maria");
+        var credential = new RecordingAsyncDisposable(calls, "credential");
+        var fixture = new RecordingAsyncDisposable(calls, "fixture");
+        var sharedHost = SharedE2eFixtureHost.CreateForCleanupTest(
+            clara,
+            maria,
+            credential,
+            fixture);
+
+        var exception = await sharedHost.DisposeAfterStartFailureAsync(startupFailure);
+
+        Assert.Equal(["clara", "maria", "credential", "fixture", "clara"], calls);
+        Assert.Equal(2, clara.DisposeCalls);
+        Assert.Equal(1, maria.DisposeCalls);
+        Assert.Equal(1, credential.DisposeCalls);
+        Assert.Equal(1, fixture.DisposeCalls);
+        var aggregate = Assert.IsType<AggregateException>(exception);
+        Assert.Collection(
+            aggregate.InnerExceptions,
+            actual => Assert.Same(startupFailure, actual),
+            actual => Assert.Same(firstCleanupFailure, actual));
+    }
+
     private static ValueTask FailCleanupAsync(List<string> calls, string cleanupName, Exception exception)
     {
         calls.Add(cleanupName);
@@ -190,5 +220,22 @@ public sealed class FoundationApiFactoryLifecycleTests
         }
 
         public int DisposeCallCount { get; private set; }
+    }
+
+    private sealed class RecordingAsyncDisposable(
+        List<string> calls,
+        string name,
+        Exception? firstFailure = null) : IAsyncDisposable
+    {
+        public int DisposeCalls { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalls += 1;
+            calls.Add(name);
+            return DisposeCalls == 1 && firstFailure is not null
+                ? ValueTask.FromException(firstFailure)
+                : ValueTask.CompletedTask;
+        }
     }
 }

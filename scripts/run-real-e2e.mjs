@@ -608,7 +608,21 @@ function waitForOutcome(supervisor, timeoutMs) {
 }
 
 async function stopChild(supervisor, signal, deps) {
-  if (supervisor?.finished || !Number.isInteger(supervisor?.child?.pid)) return;
+  if (!Number.isInteger(supervisor?.child?.pid)) return;
+  const requireCleanExit = (gracefulShutdownRequested) => {
+    if (
+      supervisor.requireCleanExit &&
+      (!gracefulShutdownRequested ||
+        supervisor.exitCode !== 0 ||
+        supervisor.exitSignal !== null)
+    ) {
+      throw new LauncherError("child_cleanup_failed");
+    }
+  };
+  if (supervisor.finished) {
+    requireCleanExit(false);
+    return;
+  }
   const send = (nextSignal) => {
     try {
       deps.killProcessGroup(supervisor.child, nextSignal, deps.platform);
@@ -619,19 +633,12 @@ async function stopChild(supervisor, signal, deps) {
     }
   };
 
-  const requireCleanExit = () => {
-    if (
-      supervisor.requireCleanExit &&
-      Number.isInteger(supervisor.exitCode) &&
-      supervisor.exitCode !== 0
-    ) {
-      throw new LauncherError("child_cleanup_failed");
-    }
-  };
-
-  if (!send(signal)) return;
+  if (!send(signal)) {
+    requireCleanExit(false);
+    return;
+  }
   if (await waitForOutcome(supervisor, deps.shutdownTimeoutMs)) {
-    requireCleanExit();
+    requireCleanExit(signal !== "SIGKILL");
     return;
   }
   if (signal === "SIGKILL" || !send("SIGKILL")) {
@@ -640,7 +647,7 @@ async function stopChild(supervisor, signal, deps) {
   if (!(await waitForOutcome(supervisor, 5_000))) {
     throw new LauncherError("child_cleanup_failed");
   }
-  requireCleanExit();
+  requireCleanExit(false);
 }
 
 async function stopChildren(children, signal, deps) {

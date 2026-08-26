@@ -22,7 +22,8 @@ Executar uma única sessão compartilhada com `maria,clara`, dois browsers e um
    cargo de Maria não concede o diretório nessa empresa. Cargos/capabilities não
    são conteúdo exibido na página.
 3. `/paguai` — rascunhos pertencem à empresa selecionada.
-4. `/atendimento` e `/kanban` — cards aparecem nos estados esperados.
+4. `/atendimento` — cards aparecem nos estados esperados; o alias `/kanban` é
+   intencionalmente ausente.
 5. `/notificacoes` — itens lidos e não lidos aparecem sem payload bruto.
 6. Criar uma pessoa Alfa por Maria, confirmar a linha no DBeaver em modo
    somente leitura e confirmar que Clara permanece sem acesso a Alfa.

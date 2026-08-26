@@ -15,10 +15,26 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
     private E2eFixtureHost? _claraHost;
     private E2eDatabaseCredentialFile? _credentialFile;
     private E2eDatasetReceipt? _receipt;
+    private IAsyncDisposable? _claraCleanupResource;
+    private IAsyncDisposable? _mariaCleanupResource;
+    private IAsyncDisposable? _credentialCleanupResource;
+    private IAsyncDisposable? _fixtureCleanupResource;
     private Task? _disposeTask;
 
     private SharedE2eFixtureHost()
     {
+    }
+
+    private SharedE2eFixtureHost(
+        IAsyncDisposable claraCleanupResource,
+        IAsyncDisposable mariaCleanupResource,
+        IAsyncDisposable credentialCleanupResource,
+        IAsyncDisposable fixtureCleanupResource)
+    {
+        _claraCleanupResource = claraCleanupResource;
+        _mariaCleanupResource = mariaCleanupResource;
+        _credentialCleanupResource = credentialCleanupResource;
+        _fixtureCleanupResource = fixtureCleanupResource;
     }
 
     public Uri MariaOrigin => RequireMariaHost().Origin;
@@ -41,6 +57,16 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
     internal Task<NpgsqlConnection> OpenAdministratorConnectionAsync() =>
         RequireFixtureOwner().OpenAdministratorConnectionAsync();
 
+    internal static SharedE2eFixtureHost CreateForCleanupTest(
+        IAsyncDisposable claraCleanupResource,
+        IAsyncDisposable mariaCleanupResource,
+        IAsyncDisposable credentialCleanupResource,
+        IAsyncDisposable fixtureCleanupResource) => new(
+        claraCleanupResource,
+        mariaCleanupResource,
+        credentialCleanupResource,
+        fixtureCleanupResource);
+
     public static async Task<SharedE2eFixtureHost> StartAsync(CancellationToken cancellationToken)
     {
         var sharedHost = new SharedE2eFixtureHost();
@@ -48,6 +74,7 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
         try
         {
             sharedHost._fixtureOwner = new FoundationPostgresFixture();
+            sharedHost._fixtureCleanupResource = sharedHost._fixtureOwner;
             await sharedHost._fixtureOwner.StartAsync();
             await sharedHost._fixtureOwner.MigrateAsync();
 
@@ -65,6 +92,7 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
                 mariaContext,
                 mariaLease,
                 cancellationToken);
+            sharedHost._mariaCleanupResource = sharedHost._mariaHost;
 
             var claraLease = sharedHost._fixtureOwner.CreateNonOwningLease();
             var claraContext = FoundationApiFactory.CreateWithPreparedE2eProfile(
@@ -75,6 +103,7 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
                 claraContext,
                 claraLease,
                 cancellationToken);
+            sharedHost._claraCleanupResource = sharedHost._claraHost;
 
             phase = E2eFixtureHostFailurePhase.CredentialExport;
             var administratorSettings = new NpgsqlConnectionStringBuilder(
@@ -87,6 +116,7 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
 
             sharedHost._credentialFile = await E2eDatabaseCredentialFile.CreateAsync(
                 credentialValue);
+            sharedHost._credentialCleanupResource = sharedHost._credentialFile;
             return sharedHost;
         }
         catch (E2eFixtureHostException exception)
@@ -110,42 +140,69 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
     {
         lock (_disposeLock)
         {
-            _disposeTask ??= DisposeWithRetryStateAsync();
-            return new ValueTask(_disposeTask);
-        }
-    }
-
-    private async Task DisposeWithRetryStateAsync()
-    {
-        try
-        {
-            await FixtureCleanup.CompleteAsync(
-                primaryFailure: null,
-                DisposeClaraAsync,
-                DisposeMariaAsync,
-                DisposeCredentialFileAsync,
-                DisposeFixtureOwnerAsync);
-        }
-        catch
-        {
-            lock (_disposeLock)
+            Task disposeTask;
+            if (_disposeTask is null)
             {
-                _disposeTask = null;
+                disposeTask = DisposeCoreAsync();
+                _disposeTask = disposeTask;
+                _ = disposeTask.ContinueWith(
+                    completedTask =>
+                    {
+                        if (!completedTask.IsFaulted && !completedTask.IsCanceled)
+                        {
+                            return;
+                        }
+
+                        lock (_disposeLock)
+                        {
+                            if (ReferenceEquals(_disposeTask, completedTask))
+                            {
+                                _disposeTask = null;
+                            }
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+            else
+            {
+                disposeTask = _disposeTask;
             }
 
-            throw;
+            return new ValueTask(disposeTask);
         }
     }
 
-    private async Task<Exception> DisposeAfterStartFailureAsync(Exception primaryFailure)
+    private async Task DisposeCoreAsync()
+    {
+        await FixtureCleanup.CompleteAsync(
+            primaryFailure: null,
+            DisposeClaraAsync,
+            DisposeMariaAsync,
+            DisposeCredentialFileAsync,
+            DisposeFixtureOwnerAsync);
+    }
+
+    internal async Task<Exception> DisposeAfterStartFailureAsync(Exception primaryFailure)
     {
         try
         {
-            await DisposeAsync();
+            await E2eFixtureHostProcessPolicy.DisposeWithOneRetryAsync(this);
         }
         catch (Exception cleanupFailure)
         {
-            return new AggregateException(primaryFailure, cleanupFailure);
+            var failures = new List<Exception> { primaryFailure };
+            if (cleanupFailure is AggregateException aggregate)
+            {
+                failures.AddRange(aggregate.Flatten().InnerExceptions);
+            }
+            else
+            {
+                failures.Add(cleanupFailure);
+            }
+
+            return new AggregateException(failures);
         }
 
         return primaryFailure;
@@ -153,49 +210,53 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
 
     private async ValueTask DisposeClaraAsync()
     {
-        var claraHost = _claraHost;
-        if (claraHost is null)
+        var cleanupResource = _claraCleanupResource;
+        if (cleanupResource is null)
         {
             return;
         }
 
-        await claraHost.DisposeAsync();
+        await cleanupResource.DisposeAsync();
+        _claraCleanupResource = null;
         _claraHost = null;
     }
 
     private async ValueTask DisposeMariaAsync()
     {
-        var mariaHost = _mariaHost;
-        if (mariaHost is null)
+        var cleanupResource = _mariaCleanupResource;
+        if (cleanupResource is null)
         {
             return;
         }
 
-        await mariaHost.DisposeAsync();
+        await cleanupResource.DisposeAsync();
+        _mariaCleanupResource = null;
         _mariaHost = null;
     }
 
     private async ValueTask DisposeCredentialFileAsync()
     {
-        var credentialFile = _credentialFile;
-        if (credentialFile is null)
+        var cleanupResource = _credentialCleanupResource;
+        if (cleanupResource is null)
         {
             return;
         }
 
-        await credentialFile.DisposeAsync();
+        await cleanupResource.DisposeAsync();
+        _credentialCleanupResource = null;
         _credentialFile = null;
     }
 
     private async ValueTask DisposeFixtureOwnerAsync()
     {
-        var fixtureOwner = _fixtureOwner;
-        if (fixtureOwner is null)
+        var cleanupResource = _fixtureCleanupResource;
+        if (cleanupResource is null)
         {
             return;
         }
 
-        await fixtureOwner.DisposeAsync();
+        await cleanupResource.DisposeAsync();
+        _fixtureCleanupResource = null;
         _fixtureOwner = null;
     }
 
@@ -281,7 +342,7 @@ internal sealed class E2eDatabaseCredentialFile : IAsyncDisposable
 
             try
             {
-                DeleteExact(directory.FullName, filePath);
+                DeleteExact(directory.FullName, filePath, DeleteDirectory);
             }
             catch (Exception cleanupFailure)
             {
@@ -304,15 +365,32 @@ internal sealed class E2eDatabaseCredentialFile : IAsyncDisposable
             throw new PlatformNotSupportedException("Shared E2E credentials require Unix file modes.");
         }
 
-        DeleteExact(_directoryPath, Path);
+        DeleteExact(_directoryPath, Path, DeleteDirectory);
         _disposed = true;
         return ValueTask.CompletedTask;
     }
 
+    internal static void DeleteExactForTest(
+        string directoryPath,
+        string? filePath,
+        Action<string> deleteDirectory)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Shared E2E credentials require Unix file modes.");
+        }
+
+        DeleteExact(directoryPath, filePath, deleteDirectory);
+    }
+
     [UnsupportedOSPlatform("windows")]
-    private static void DeleteExact(string directoryPath, string? filePath)
+    private static void DeleteExact(
+        string directoryPath,
+        string? filePath,
+        Action<string> deleteDirectory)
     {
         ValidatePath(directoryPath, nameof(directoryPath));
+        ArgumentNullException.ThrowIfNull(deleteDirectory);
         if (!Directory.Exists(directoryPath))
         {
             throw new InvalidOperationException("The protected credential directory was missing.");
@@ -329,18 +407,31 @@ internal sealed class E2eDatabaseCredentialFile : IAsyncDisposable
         else
         {
             ValidatePath(filePath, nameof(filePath));
-            if (entries.Length != 1
-                || !string.Equals(entries[0], filePath, StringComparison.Ordinal))
+            if (!string.Equals(
+                System.IO.Path.GetDirectoryName(filePath),
+                directoryPath,
+                StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("The protected credential directory contains an unexpected entry.");
             }
 
-            VerifyRegularFile(filePath);
-            File.Delete(filePath);
+            if (entries.Length == 1 && string.Equals(entries[0], filePath, StringComparison.Ordinal))
+            {
+                VerifyRegularFile(filePath);
+                File.Delete(filePath);
+            }
+            else if (entries.Length != 0)
+            {
+                throw new InvalidOperationException("The protected credential directory contains an unexpected entry.");
+            }
         }
 
-        Directory.Delete(directoryPath, recursive: false);
+        deleteDirectory(directoryPath);
     }
+
+    [UnsupportedOSPlatform("windows")]
+    private static void DeleteDirectory(string directoryPath) =>
+        Directory.Delete(directoryPath, recursive: false);
 
     [UnsupportedOSPlatform("windows")]
     private static void VerifyDirectoryMode(string directoryPath)

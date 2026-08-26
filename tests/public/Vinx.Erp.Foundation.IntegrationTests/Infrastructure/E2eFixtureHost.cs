@@ -337,8 +337,37 @@ public sealed class E2eFixtureHost : IAsyncDisposable
     {
         lock (_disposeLock)
         {
-            _disposeTask ??= DisposeWithRetryStateAsync();
-            return new ValueTask(_disposeTask);
+            Task disposeTask;
+            if (_disposeTask is null)
+            {
+                disposeTask = DisposeCoreAsync();
+                _disposeTask = disposeTask;
+                _ = disposeTask.ContinueWith(
+                    completedTask =>
+                    {
+                        if (!completedTask.IsFaulted && !completedTask.IsCanceled)
+                        {
+                            return;
+                        }
+
+                        lock (_disposeLock)
+                        {
+                            if (ReferenceEquals(_disposeTask, completedTask))
+                            {
+                                _disposeTask = null;
+                            }
+                        }
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+            else
+            {
+                disposeTask = _disposeTask;
+            }
+
+            return new ValueTask(disposeTask);
         }
     }
 
@@ -699,23 +728,6 @@ public sealed class E2eFixtureHost : IAsyncDisposable
         }
 
         return primaryFailure;
-    }
-
-    private async Task DisposeWithRetryStateAsync()
-    {
-        try
-        {
-            await DisposeCoreAsync();
-        }
-        catch
-        {
-            lock (_disposeLock)
-            {
-                _disposeTask = null;
-            }
-
-            throw;
-        }
     }
 
     private async Task DisposeCoreAsync()

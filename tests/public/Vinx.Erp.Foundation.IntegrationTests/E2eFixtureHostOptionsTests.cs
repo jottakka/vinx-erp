@@ -137,6 +137,77 @@ public sealed class E2eFixtureHostOptionsTests
         Assert.False(Directory.Exists(directoryPath));
     }
 
+    [Fact]
+    public async Task Credential_cleanup_retries_an_empty_owned_directory_after_file_deletion()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var credentialFile = await E2eDatabaseCredentialFile.CreateAsync("fixture-credential-value");
+        var filePath = credentialFile.Path;
+        var directoryPath = Path.GetDirectoryName(filePath)
+            ?? throw new InvalidOperationException("The credential directory was missing.");
+        var directoryDeletionAttempts = 0;
+
+        try
+        {
+            Assert.Throws<IOException>(() => E2eDatabaseCredentialFile.DeleteExactForTest(
+                directoryPath,
+                filePath,
+                _ =>
+                {
+                    directoryDeletionAttempts += 1;
+                    throw new IOException("directory-delete-failure");
+                }));
+            Assert.False(File.Exists(filePath));
+            Assert.True(Directory.Exists(directoryPath));
+
+            E2eDatabaseCredentialFile.DeleteExactForTest(
+                directoryPath,
+                filePath,
+                directory => Directory.Delete(directory, recursive: false));
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+
+            if (Directory.Exists(directoryPath))
+            {
+                Directory.Delete(directoryPath, recursive: false);
+            }
+        }
+
+        Assert.Equal(1, directoryDeletionAttempts);
+        Assert.False(Directory.Exists(directoryPath));
+    }
+
+    [Fact]
+    public void Credential_partial_creation_cleanup_removes_an_empty_private_directory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("vinx-e2e-partial-");
+        File.SetUnixFileMode(
+            directory.FullName,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var filePath = Path.Combine(directory.FullName, "postgres-password");
+
+        E2eDatabaseCredentialFile.DeleteExactForTest(
+            directory.FullName,
+            filePath,
+            path => Directory.Delete(path, recursive: false));
+
+        Assert.False(Directory.Exists(directory.FullName));
+    }
+
     [Theory]
     [InlineData(E2eFixtureHostFailurePhase.FixtureStart, "fixture_start_failed")]
     [InlineData(E2eFixtureHostFailurePhase.Seed, "seed_failed")]
