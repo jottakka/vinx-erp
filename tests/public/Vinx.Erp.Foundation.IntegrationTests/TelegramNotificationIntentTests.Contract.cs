@@ -28,6 +28,8 @@ public sealed partial class TelegramNotificationIntentTests
         string? Address
     );
 
+    private sealed record EnqueueIntentResult(string Status, Guid? DeliveryId);
+
     [Fact]
     public async Task Telegram_down_restores_predecessor_contract_and_preserves_legacy_rows()
     {
@@ -785,30 +787,60 @@ public sealed partial class TelegramNotificationIntentTests
         await using var transaction = await runtime.BeginTransactionAsync();
         await SetRuntimeActorContextAsync(runtime, transaction, legacy.RecipientUserId);
 
-        Assert.Equal(
-            "created",
-            await EnqueueIntentAsync(
-                runtime,
-                transaction,
-                legacy.CompanyId,
-                legacy.RecipientUserId,
-                "restored-in-app-event",
-                "in_app",
-                legacy.InAppTemplateKey
-            )
+        var createdInApp = await EnqueueIntentAsync(
+            runtime,
+            transaction,
+            legacy.CompanyId,
+            legacy.RecipientUserId,
+            "restored-in-app-event",
+            "in_app",
+            legacy.InAppTemplateKey
         );
-        Assert.Equal(
-            "created",
-            await EnqueueIntentAsync(
-                runtime,
-                transaction,
-                legacy.CompanyId,
-                legacy.RecipientUserId,
-                "restored-whatsapp-event",
-                "whatsapp",
-                legacy.WhatsAppTemplateKey
-            )
+        Assert.Equal("created", createdInApp.Status);
+        Assert.NotNull(createdInApp.DeliveryId);
+        var replayedInApp = await EnqueueIntentAsync(
+            runtime,
+            transaction,
+            legacy.CompanyId,
+            legacy.RecipientUserId,
+            "restored-in-app-event",
+            "in_app",
+            legacy.InAppTemplateKey
         );
+        Assert.Equal("replay", replayedInApp.Status);
+        Assert.Equal(createdInApp.DeliveryId, replayedInApp.DeliveryId);
+        var createdWhatsApp = await EnqueueIntentAsync(
+            runtime,
+            transaction,
+            legacy.CompanyId,
+            legacy.RecipientUserId,
+            "restored-whatsapp-event",
+            "whatsapp",
+            legacy.WhatsAppTemplateKey
+        );
+        Assert.Equal("created", createdWhatsApp.Status);
+        Assert.NotNull(createdWhatsApp.DeliveryId);
+        await ExecuteNonQueryAsync(
+            runtime,
+            transaction,
+            """
+            SELECT notifications.set_channel_preference(
+                @company_id, @user_id, 'whatsapp', false)
+            """,
+            ("company_id", legacy.CompanyId),
+            ("user_id", legacy.RecipientUserId)
+        );
+        var suppressedWhatsApp = await EnqueueIntentAsync(
+            runtime,
+            transaction,
+            legacy.CompanyId,
+            legacy.RecipientUserId,
+            "restored-whatsapp-suppressed-event",
+            "whatsapp",
+            legacy.WhatsAppTemplateKey
+        );
+        Assert.Equal("suppressed_channel_opt_out", suppressedWhatsApp.Status);
+        Assert.Null(suppressedWhatsApp.DeliveryId);
         await ExecuteNonQueryAsync(
             runtime,
             transaction,
@@ -833,7 +865,7 @@ public sealed partial class TelegramNotificationIntentTests
         await transaction.CommitAsync();
     }
 
-    private static async Task<string> EnqueueIntentAsync(
+    private static async Task<EnqueueIntentResult> EnqueueIntentAsync(
         NpgsqlConnection runtime,
         NpgsqlTransaction transaction,
         Guid companyId,
@@ -860,8 +892,10 @@ public sealed partial class TelegramNotificationIntentTests
         await using var reader = await command.ExecuteReaderAsync();
 
         Assert.True(await reader.ReadAsync());
-        Assert.False(reader.IsDBNull(1));
-        return reader.GetString(0);
+        return new EnqueueIntentResult(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetGuid(1)
+        );
     }
 
     private static async Task AddActiveMembershipAsync(
