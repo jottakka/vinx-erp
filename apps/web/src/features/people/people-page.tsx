@@ -66,7 +66,17 @@ type DirectoryRow = EmployeeDirectoryItem & {
   company: { companyId: string; companyName: string };
 };
 
-export function PeoplePage({
+export function PeoplePage(props: PeoplePageProps): ReactElement {
+  const { bootstrap, isSigningOut } = useSession();
+  const lastUserId = useRef<string | null>(null);
+  if (bootstrap?.user.id) lastUserId.current = bootstrap.user.id;
+  const ownerKey = isSigningOut
+    ? "signed-out"
+    : (bootstrap?.user.id ?? lastUserId.current ?? "anonymous");
+  return <PeoplePageContent key={ownerKey} {...props} />;
+}
+
+function PeoplePageContent({
   gateway = createEmployeeDirectoryClient(),
   createRequestId = () => crypto.randomUUID(),
 }: PeoplePageProps): ReactElement {
@@ -329,6 +339,7 @@ export function PeoplePage({
   });
 
   const resetCreation = () => {
+    operationGeneration.current += 1;
     form.reset();
     setFeedback(null);
     setAttempt(null);
@@ -337,6 +348,7 @@ export function PeoplePage({
   };
   const changeCreateCompany = (companyId: string) => {
     if (companyId !== createCompanyId) {
+      operationGeneration.current += 1;
       form.reset();
       setAttempt(null);
       attemptRef.current = null;

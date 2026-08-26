@@ -979,8 +979,23 @@ describe("PeoplePage", () => {
     async (kind) => {
       const user = userEvent.setup();
       const refresh = deferred<ReturnType<typeof snapshot>>();
+      let listAttempts = 0;
       const gateway = createGateway({
-        list: vi.fn().mockResolvedValue({ error: { kind }, ok: false }),
+        list: vi.fn().mockImplementation(async () => {
+          listAttempts += 1;
+          return listAttempts === 1
+            ? { error: { kind }, ok: false }
+            : {
+                items: [
+                  {
+                    displayName: "Ana",
+                    employeeId: "33333333-3333-4333-8333-333333333333",
+                    membershipId: "44444444-4444-4444-8444-444444444444",
+                  },
+                ],
+                ok: true,
+              };
+        }),
       });
       const getBootstrap = vi
         .fn()
@@ -996,12 +1011,12 @@ describe("PeoplePage", () => {
       expect(gateway.list).toHaveBeenCalledTimes(1);
       await act(async () => refresh.resolve(snapshot(true, "user-2")));
 
-      await screen.findByRole("combobox", { name: "Empresas" });
       await user.click(
-        screen.getByRole("button", { name: "Cadastrar funcionário" }),
+        await screen.findByRole("button", { name: "Cadastrar funcionário" }),
       );
-      expect(screen.getByLabelText("Nome")).toHaveValue("");
-      expect(screen.getByLabelText("E-mail")).toHaveValue("");
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByLabelText("Nome")).toHaveValue("");
+      expect(within(dialog).getByLabelText("E-mail")).toHaveValue("");
       expect(gateway.list).toHaveBeenCalledTimes(2);
       expect(gateway.create).not.toHaveBeenCalled();
     },
@@ -1028,5 +1043,52 @@ describe("PeoplePage", () => {
     expect(
       within(dialog).getByRole("group", { name: "Empresa Alfa" }),
     ).toBeVisible();
+  });
+
+  it("drops a delayed create after closing the dialog", async () => {
+    const user = userEvent.setup();
+    let resolveCreate:
+      | ((result: EmployeeDirectoryCreateResult) => void)
+      | undefined;
+    const gateway = createGateway({
+      create: vi.fn(
+        () =>
+          new Promise<EmployeeDirectoryCreateResult>((resolve) => {
+            resolveCreate = resolve;
+          }),
+      ),
+    });
+    renderPage({ gateway });
+    await screen.findByText("Ana");
+    await fillValidForm(user);
+    await user.click(
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
+    );
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Fechar",
+      }),
+    );
+    resolveCreate?.({ ok: true, state: "created" });
+    await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Cadastrar funcionário" }),
+      ).toBeEnabled(),
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Cadastrar funcionário" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Nome"), "Cadastro atual");
+    await user.type(
+      within(dialog).getByLabelText("E-mail"),
+      "atual@example.test",
+    );
+    resolveCreate?.({ ok: true, state: "created" });
+    await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.queryByText("Funcionário cadastrado.")).toBeNull();
   });
 });

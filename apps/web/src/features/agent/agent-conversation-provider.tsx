@@ -3,7 +3,6 @@ import {
   type ReactNode,
   useCallback,
   useContext,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -177,14 +176,39 @@ export function AgentConversationProvider({
 }) {
   const { bootstrap } = useSession();
   const authorizedCompanies = bootstrap?.companies ?? [];
-  const [selectedCompanyId, setSelectedCompanyId] = useState("");
+  const [selection, setSelection] = useState<{
+    companyId: string;
+    membershipId: string;
+    userId: string;
+  } | null>(null);
   const selectedCompany =
-    authorizedCompanies.find(
-      (company) => company.companyId === selectedCompanyId,
-    ) ?? null;
-  useEffect(() => {
-    if (!selectedCompany) setSelectedCompanyId("");
-  }, [selectedCompany]);
+    selection && bootstrap?.user.id === selection.userId
+      ? (authorizedCompanies.find(
+          (company) =>
+            company.companyId === selection.companyId &&
+            company.membershipId === selection.membershipId,
+        ) ?? null)
+      : null;
+  const selectCompany = useCallback(
+    (companyId: string) => {
+      const company = authorizedCompanies.find(
+        (candidate) => candidate.companyId === companyId,
+      );
+      setSelection(
+        company && bootstrap
+          ? {
+              companyId: company.companyId,
+              membershipId: company.membershipId,
+              userId: bootstrap.user.id,
+            }
+          : null,
+      );
+    },
+    [authorizedCompanies, bootstrap],
+  );
+  useLayoutEffect(() => {
+    if (selection && !selectedCompany) setSelection(null);
+  }, [selectedCompany, selection]);
   const [dockOpen, setDockOpen] = useState(false);
   const openDock = useCallback(() => setDockOpen(true), []);
   const closeDock = useCallback(() => setDockOpen(false), []);
@@ -202,7 +226,7 @@ export function AgentConversationProvider({
       key={scopeKey}
       openDock={openDock}
       authorizedCompanies={authorizedCompanies}
-      onCompanyChange={setSelectedCompanyId}
+      onCompanyChange={selectCompany}
     >
       {children}
     </ScopedAgentConversationProvider>
