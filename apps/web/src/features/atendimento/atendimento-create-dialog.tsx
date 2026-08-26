@@ -30,24 +30,25 @@ import {
 
 export type AtendimentoCreateValues = z.infer<typeof schema>;
 const schema = z.object({
-  channel: z.enum(["whatsapp", "email", "web", "manual"]).default("web"),
+  channel: z.enum(["whatsapp", "email", "web", "manual"]),
   description: z
     .string()
     .trim()
     .min(1, "Informe uma descrição.")
     .max(4000, "A descrição deve ter no máximo 4.000 caracteres."),
-  priority: z.enum(["critica", "alta", "media", "baixa"]).default("media"),
-  slaDueAt: z.string().default(""),
+  priority: z.enum(["critica", "alta", "media", "baixa"]),
+  slaDueAt: z.string(),
   title: z
     .string()
     .trim()
     .min(1, "Informe um título.")
     .max(200, "O título deve ter no máximo 200 caracteres."),
 });
-type Values = z.output<typeof schema> & {
+type Values = Omit<z.output<typeof schema>, "slaDueAt"> & {
   attachmentFileId?: string;
   participantMembershipIds: readonly string[];
   requestId: string;
+  slaDueAt: string | null;
 };
 export type AtendimentoCreateSubmitResult =
   | { ok: true }

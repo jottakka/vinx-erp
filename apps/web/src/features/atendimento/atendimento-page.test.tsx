@@ -159,10 +159,12 @@ describe("AtendimentoPage", () => {
       "MuiChip-colorError",
     );
     expect(screen.getByText("WhatsApp")).toBeVisible();
+    const slaDueAt = alfaCard.slaDueAt;
+    if (slaDueAt === null) throw new Error("Expected SLA deadline");
     const localizedDeadline = new Intl.DateTimeFormat("pt-BR", {
       dateStyle: "short",
       timeStyle: "short",
-    }).format(new Date(alfaCard.slaDueAt));
+    }).format(new Date(slaDueAt));
     expect(screen.getByText(`Prazo: ${localizedDeadline}`)).toBeVisible();
     expect(screen.getByText("Atrasado")).toBeVisible();
     expect(screen.queryByText(alfaCard.id)).not.toBeInTheDocument();
