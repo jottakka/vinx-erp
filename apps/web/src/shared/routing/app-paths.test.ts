@@ -26,6 +26,12 @@ describe("app route catalog", () => {
         path: "/pessoas",
       },
       {
+        group: "modules",
+        label: "Permissões",
+        navigation: true,
+        path: "/permissoes",
+      },
+      {
         group: "support",
         label: "Administração",
         navigation: false,
