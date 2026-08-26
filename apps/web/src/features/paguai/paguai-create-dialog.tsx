@@ -118,7 +118,7 @@ export function PaguaiCreateDialog({
       }}
       open={open}
     >
-      <DialogTitle>Novo rascunho</DialogTitle>
+      <DialogTitle>Nova solicitação</DialogTitle>
       <DialogContent>
         <Stack
           component="form"
@@ -150,14 +150,20 @@ export function PaguaiCreateDialog({
           <TextField
             error={Boolean(form.formState.errors.dueDate)}
             helperText={form.formState.errors.dueDate?.message}
-            label="Vencimento"
-            slotProps={{ htmlInput: { min: "0001-01-01", type: "date" } }}
+            label="Pagar até"
+            slotProps={{
+              htmlInput: { min: "0001-01-01", type: "date" },
+              inputLabel: { shrink: true },
+            }}
             {...form.register("dueDate")}
           />
           <TextField
             error={Boolean(form.formState.errors.beneficiaryDisplayName)}
-            helperText={form.formState.errors.beneficiaryDisplayName?.message}
-            label="Beneficiário (informativo)"
+            helperText={
+              form.formState.errors.beneficiaryDisplayName?.message ??
+              "Nome para referência; não confirma dados bancários."
+            }
+            label="Quem receberá"
             slotProps={{ htmlInput: { maxLength: 200 } }}
             {...form.register("beneficiaryDisplayName")}
           />
@@ -167,9 +173,12 @@ export function PaguaiCreateDialog({
             render={({ field: { ref, ...field }, fieldState }) => (
               <TextField
                 error={Boolean(fieldState.error)}
-                helperText={fieldState.error?.message}
+                helperText={
+                  fieldState.error?.message ??
+                  "Será exigido na confirmação do pagamento."
+                }
                 inputRef={ref}
-                label="Comprovante"
+                label="Comprovante de pagamento"
                 select
                 value={field.value ?? ""}
                 onChange={field.onChange}

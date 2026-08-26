@@ -283,7 +283,7 @@ export function PaguaiPage({
               </Button>
             ) : null
           }
-          description="Solicitações financeiras por empresa. O MVP não cria cobrança ou pagamento."
+          description="Acompanhe solicitações financeiras das empresas autorizadas."
           title="Paguai"
         />
         {!companies.length ? (
@@ -364,7 +364,7 @@ export function PaguaiPage({
                               {formatAmount(draft.amount)}
                             </Typography>
                             <Typography color="text.secondary">
-                              Vencimento: {formatDueDate(draft.dueDate)}
+                              Pagar até: {formatDueDate(draft.dueDate)}
                             </Typography>
                           </Stack>
                         </Stack>
@@ -437,10 +437,8 @@ function DraftViewDialog({
             {draft.version}
           </Typography>
           <Typography>{formatAmount(draft.amount)}</Typography>
-          <Typography>Vencimento: {formatDueDate(draft.dueDate)}</Typography>
-          <Typography>
-            Beneficiário: {draft.beneficiaryDisplayName} (informativo)
-          </Typography>
+          <Typography>Pagar até: {formatDueDate(draft.dueDate)}</Typography>
+          <Typography>Quem receberá: {draft.beneficiaryDisplayName}</Typography>
           <Typography>
             Comprovante de pagamento:{" "}
             {draft.proofRequirement === "required" ? "obrigatório" : "opcional"}

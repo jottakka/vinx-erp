@@ -90,7 +90,7 @@ async function openCreate(user: ReturnType<typeof userEvent.setup>) {
   await user.click(
     await screen.findByRole("button", { name: "Nova solicitação" }),
   );
-  await screen.findByRole("heading", { name: "Novo rascunho" });
+  await screen.findByRole("heading", { name: "Nova solicitação" });
 }
 
 async function fillForm(user: ReturnType<typeof userEvent.setup>) {
@@ -112,10 +112,12 @@ async function fillForm(user: ReturnType<typeof userEvent.setup>) {
   if (!dueDate) throw new Error("due date input missing");
   fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
   await user.type(
-    screen.getByRole("textbox", { name: "Beneficiário (informativo)" }),
+    screen.getByRole("textbox", { name: "Quem receberá" }),
     "Fornecedor Demo",
   );
-  await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
+  await user.click(
+    screen.getByRole("combobox", { name: "Comprovante de pagamento" }),
+  );
   await user.click(await screen.findByRole("option", { name: "Obrigatório" }));
 }
 
@@ -133,10 +135,38 @@ describe("PaguaiPage", () => {
     expect(
       await screen.findByRole("heading", { name: "Papel", level: 3 }),
     ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Acompanhe solicitações financeiras das empresas autorizadas.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/MVP/)).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
 
     await openCreate(user);
     expect(await screen.findByRole("dialog")).toBeVisible();
+  });
+
+  it("keeps the native date label above the browser-rendered date value", async () => {
+    const user = userEvent.setup();
+    const draftClient = {
+      create: async () => ({ ok: true as const, value: draft }),
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPage(draftClient);
+    await openCreate(user);
+
+    expect(
+      screen.getByText("Pagar até", { selector: "label" }),
+    ).toHaveAttribute("data-shrink", "true");
+    expect(
+      screen.getByText("Nome para referência; não confirma dados bancários."),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Será exigido na confirmação do pagamento."),
+    ).toBeVisible();
   });
 
   it("opens the read-only view dialog with the financial fields", async () => {
@@ -160,10 +190,11 @@ describe("PaguaiPage", () => {
     expect(
       within(dialog).getAllByText("R$ 1.250,00").length,
     ).toBeGreaterThanOrEqual(1);
-    expect(within(dialog).getByText("Vencimento: 01/09/2026")).toBeVisible();
+    expect(within(dialog).getByText("Pagar até: 01/09/2026")).toBeVisible();
     expect(
-      within(dialog).getByText(/Beneficiário: Fornecedor Demo/),
+      within(dialog).getByText(/Quem receberá: Fornecedor Demo/),
     ).toBeVisible();
+    expect(within(dialog).queryByText(/\(informativo\)/)).toBeNull();
   });
 
   it("aggregates all authorized companies in deterministic order and identifies each card", async () => {
@@ -379,7 +410,7 @@ describe("PaguaiPage", () => {
     if (!dueDate) throw new Error("due date input missing");
     fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
     await user.type(
-      screen.getByRole("textbox", { name: "Beneficiário (informativo)" }),
+      screen.getByRole("textbox", { name: "Quem receberá" }),
       "Fornecedor Demo",
     );
     await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
@@ -400,7 +431,9 @@ describe("PaguaiPage", () => {
     renderPage(draftClient);
 
     await openCreate(user);
-    await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
+    await user.click(
+      screen.getByRole("combobox", { name: "Comprovante de pagamento" }),
+    );
     await user.click(
       await screen.findByRole("option", { name: "Obrigatório" }),
     );
@@ -442,10 +475,12 @@ describe("PaguaiPage", () => {
     if (!dueDate) throw new Error("due date input missing");
     fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
     await user.type(
-      screen.getByRole("textbox", { name: "Beneficiário (informativo)" }),
+      screen.getByRole("textbox", { name: "Quem receberá" }),
       "Fornecedor Demo",
     );
-    await user.click(screen.getByRole("combobox", { name: "Comprovante" }));
+    await user.click(
+      screen.getByRole("combobox", { name: "Comprovante de pagamento" }),
+    );
     await user.click(
       await screen.findByRole("option", { name: "Obrigatório" }),
     );
