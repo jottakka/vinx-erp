@@ -19,7 +19,6 @@ public static class TelegramWebhookEndpoints
 {
     private const string SecretHeader = "X-Telegram-Bot-Api-Secret-Token";
     private const int MaximumBodyBytes = ApiConstants.MaximumJsonBodyBytes;
-    private static readonly char[] SqlBtrimCharacters = [' ', '\t', '\n', '\v', '\f', '\r'];
 
     /// <summary>
     /// Mapeia o POST público e recebe uma callback que resolve o ingress no
@@ -175,6 +174,6 @@ public static class TelegramWebhookEndpoints
     }
 
     private static bool HasValidText(string text) =>
-        text.Trim(SqlBtrimCharacters).Length > 0
+        !string.IsNullOrWhiteSpace(text)
         && text.EnumerateRunes().Count() <= 4096;
 }

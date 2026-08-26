@@ -132,6 +132,31 @@ public sealed class TelegramWebhookTests
     }
 
     [Fact]
+    public async Task Unicode_whitespace_only_text_is_accepted_without_ingress()
+    {
+        var ingressCalls = 0;
+        await using var application = await CreateApplicationAsync(
+            (_, _, _) =>
+            {
+                ingressCalls++;
+                return Task.CompletedTask;
+            }
+        );
+        using var client = application.GetTestClient();
+
+        using var response = await PostAsync(
+            client,
+            """
+            {"update_id":101,"message":{"message_id":303,"from":{"id":202,"is_bot":false},"chat":{"id":202,"type":"private"},"text":"\u00A0"}}
+            """
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("{\"code\":\"accepted\"}", await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, ingressCalls);
+    }
+
+    [Fact]
     public async Task Unconfigured_webhook_is_unavailable_before_header_or_body_processing()
     {
         await using var application = await CreateApplicationAsync(
