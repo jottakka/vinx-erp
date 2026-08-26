@@ -99,7 +99,13 @@ public sealed class PaguaiDraftService(
                 )
                 {
                     await transaction.RollbackAsync(cancellationToken);
-                    return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
+                    return await AuditedFailureAsync(
+                        actor,
+                        command.CompanyId,
+                        "invoice_file_invalid",
+                        PaguaiDraftState.Invalid,
+                        cancellationToken
+                    );
                 }
             }
 
@@ -158,7 +164,9 @@ public sealed class PaguaiDraftService(
         catch (DbUpdateException exception) when (IsUniqueViolation(exception))
         {
             database.ChangeTracker.Clear();
-            return await ReconcileReplayAsync(actor, command, hash, cancellationToken);
+            return IsSourceDocumentConflict(exception)
+                ? await ReconcileSourceDocumentConflictAsync(actor, command, cancellationToken)
+                : await ReconcileReplayAsync(actor, command, hash, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -221,6 +229,7 @@ public sealed class PaguaiDraftService(
             inboundId.Value = command.InboundMessageId;
             readCommand.Parameters.Add(inboundId);
             bool found = false;
+            var candidateCompanyId = Guid.Empty;
             string candidateState = string.Empty;
             string beneficiary = string.Empty;
             string amountText = string.Empty;
@@ -231,6 +240,7 @@ public sealed class PaguaiDraftService(
                 if (await reader.ReadAsync(cancellationToken))
                 {
                     found = true;
+                    candidateCompanyId = reader.GetGuid(0);
                     candidateState = reader.GetString(1);
                     if (candidateState == "candidate")
                     {
@@ -244,13 +254,16 @@ public sealed class PaguaiDraftService(
 
             if (
                 !found
+                || candidateCompanyId != command.CompanyId
                 || candidateState != "candidate"
                 || beneficiary.Length is < 1 or > 200
                 || !PaguaiAmountRules.TryParseText(amountText, out var amount)
             )
             {
-                // Sem candidato visível/fechado ou gramática reprovada na
-                // fronteira: sem confiança silenciosa em dado persistido.
+                // Sem candidato visível/fechado, candidato de outra empresa
+                // (mesmo que o ator tenha membership lá) ou gramática
+                // reprovada na fronteira: sem confiança silenciosa em dado
+                // persistido e sem copiar dados entre empresas.
                 await transaction.RollbackAsync(cancellationToken);
                 return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
             }
@@ -445,6 +458,71 @@ public sealed class PaguaiDraftService(
         }
     }
 
+    /// <summary>
+    /// Concilia a corrida no documento inbound: o documento já possui um
+    /// rascunho (único por constraint global). Reautoriza, registra a
+    /// negação auditada e responde com o conflito 409 sem expor dados do
+    /// rascunho ocupante — no máximo o seu id, e somente quando visível
+    /// ao próprio ator sob RLS.
+    /// </summary>
+    private async Task<PaguaiDraftResult> ReconcileSourceDocumentConflictAsync(
+        ActorContext actor,
+        CreateDraftCommand command,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                cancellationToken
+            );
+            await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+            var membership = await FindMembershipAsync(actor, command.CompanyId, cancellationToken);
+            if (
+                membership is null
+                || !await capabilityEvaluator.HasGrantAsync(
+                    command.CompanyId,
+                    membership.Id,
+                    CreateCapability,
+                    cancellationToken
+                )
+            )
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await AuditedDenialAsync(actor, command.CompanyId, cancellationToken);
+            }
+
+            var existing = command.SourceInboundMessageId is { } sourceInboundMessageId
+                ? await FindRequestBySourceDocumentAsync(
+                    command.CompanyId,
+                    sourceInboundMessageId,
+                    cancellationToken
+                )
+                : null;
+            await transaction.RollbackAsync(cancellationToken);
+            return await AuditedFailureAsync(
+                actor,
+                command.CompanyId,
+                "source_document_conflict",
+                PaguaiDraftState.IdempotencyConflict,
+                cancellationToken,
+                existing?.Id
+            );
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(
+                exception,
+                "Paguai draft {Operation} {Module} {Result} {Reason}",
+                "reconcile",
+                "paguai",
+                "unavailable",
+                "source_document_reconciliation_failed"
+            );
+            return PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
+        }
+    }
+
     private async Task<PaguaiDraftResult> AuditedDenialAsync(
         ActorContext actor,
         Guid companyId,
@@ -476,7 +554,8 @@ public sealed class PaguaiDraftService(
         Guid companyId,
         string reason,
         PaguaiDraftState state,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Guid? resourceId = null
     )
     {
         try
@@ -493,7 +572,7 @@ public sealed class PaguaiDraftService(
                     AuditSource.Web,
                     reason,
                     "paguai_request",
-                    null,
+                    resourceId,
                     AuditOutcome.Denied,
                     actor.CorrelationId,
                     reason,
@@ -553,6 +632,18 @@ public sealed class PaguaiDraftService(
                 request.CompanyId == companyId
                 && request.RequesterUserId == userId
                 && request.Id == id,
+            cancellationToken
+        );
+
+    private Task<PaguaiRequest?> FindRequestBySourceDocumentAsync(
+        Guid companyId,
+        Guid sourceInboundMessageId,
+        CancellationToken cancellationToken
+    ) =>
+        database.PaguaiRequests.AsNoTracking().SingleOrDefaultAsync(
+            request =>
+                request.CompanyId == companyId
+                && request.SourceInboundMessageId == sourceInboundMessageId,
             cancellationToken
         );
 
@@ -656,6 +747,9 @@ public sealed class PaguaiDraftService(
         DateTimeOffset CreatedAt
     );
 
+    private const string SourceInboundMessageConstraintName =
+        "uq_paguai_requests_source_inbound_message";
+
     private static bool IsUniqueViolation(DbUpdateException exception)
     {
         if (exception.InnerException is not PostgresException postgresException)
@@ -664,12 +758,27 @@ public sealed class PaguaiDraftService(
         }
 
         return postgresException.SqlState == PostgresErrorCodes.UniqueViolation
-            && string.Equals(
-                postgresException.ConstraintName,
-                IdempotencyRecordConfiguration.KeyIndexDatabaseName,
-                StringComparison.Ordinal
+            && (
+                string.Equals(
+                    postgresException.ConstraintName,
+                    IdempotencyRecordConfiguration.KeyIndexDatabaseName,
+                    StringComparison.Ordinal
+                )
+                || string.Equals(
+                    postgresException.ConstraintName,
+                    SourceInboundMessageConstraintName,
+                    StringComparison.Ordinal
+                )
             );
     }
+
+    private static bool IsSourceDocumentConflict(DbUpdateException exception) =>
+        exception.InnerException is PostgresException postgresException
+        && string.Equals(
+            postgresException.ConstraintName,
+            SourceInboundMessageConstraintName,
+            StringComparison.Ordinal
+        );
 
     private static string ComputePayloadHash(CreateDraftCommand command)
     {

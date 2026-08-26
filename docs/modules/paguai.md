@@ -20,11 +20,26 @@ informativo aparado de 1 a 200 caracteres e não é uma identificação autorita
 da solicitação. Quando informado, referencia um arquivo vivo, confirmado, da
 mesma empresa e classificado exatamente como `paguai_request_invoice`; a API
 retorna apenas o UUID, nunca URL, chave de storage ou metadados do arquivo.
+Um UUID vazio é rejeitado na fronteira como `400` antes de qualquer mutação.
 O arquivo integra o hash de idempotência. Replays idênticos são resolvidos antes
 da validação do arquivo para preservar o recibo mesmo depois de retenção ou
 remoção; hashes anteriores, sem `invoiceFileId`, só continuam aceitos quando o
-novo comando também não informa fatura. `proofRequirement` continua sendo a
-regra futura e independente do comprovante de pagamento.
+novo comando também não informa fatura. Referência de fatura inválida
+(ausente, de outra empresa, não confirmada ou classificação errada) nega a
+criação com auditoria `invoice_file_invalid`, sem UUID de arquivo ou metadados.
+`proofRequirement` continua sendo a regra futura e independente do
+comprovante de pagamento.
+
+No caminho `POST /paguai/requests/from-document`,
+`notifications.read_inbound_whatsapp_invoice_candidate` exige, além do
+membership do ator, que o contexto RLS `app.company_id` da transação seja
+exatamente a empresa do candidato; o serviço revalida `company_id` do
+candidato contra a empresa do comando e recusa com `400` sem copiar dados
+entre empresas. O documento inbound aceita um único rascunho
+(`uq_paguai_requests_source_inbound_message`): a corrida entre request ids
+distintos é reconciliada com reautorização, auditoria
+`source_document_conflict` e `409`, sem expor dados do rascunho ocupante
+além do seu id quando visível ao próprio ator.
 
 Este corte não representa documento binário, cobrança ou pagamento. Também não oferece
 edição, remoção, envio, conferência, aprovação, devolução, cancelamento,

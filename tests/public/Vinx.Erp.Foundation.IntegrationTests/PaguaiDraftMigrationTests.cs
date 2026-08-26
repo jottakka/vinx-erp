@@ -10,6 +10,10 @@ public sealed class PaguaiDraftMigrationTests
 {
     private const string BeforePaguaiInvoiceFile = "20260824235249_AddAiReadCapability";
     private const string PaguaiInvoiceFileMigration = "20260826150000_AddPaguaiRequestInvoiceFile";
+    private const string BeforeCandidateCompanyContext =
+        "20260826151000_AddAtendimentoCancellationParticipantsAndAttachment";
+    private const string CandidateCompanyContextMigration =
+        "20260826153000_BindPaguaiInboundCandidateToCompanyContext";
 
     [Fact]
     public async Task Empty_downgrade_removes_the_invoice_file_column_and_preserves_forced_rls()
@@ -96,6 +100,135 @@ public sealed class PaguaiDraftMigrationTests
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
+    }
+
+    [Fact]
+    public async Task Candidate_read_requires_company_context_and_downgrade_restores_the_previous_body()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(CandidateCompanyContextMigration);
+        var seed = await SeedInvoiceCandidateAsync(fixture);
+
+        await using var gated = await fixture.OpenAdministratorConnectionAsync();
+        await using var gatedTransaction = await gated.BeginTransactionAsync();
+        try
+        {
+            await SetLocalContextAsync(gated, "app.user_id", seed.UserId.ToString());
+            await SetLocalContextAsync(gated, "app.company_id", string.Empty);
+            Assert.Equal(0L, await CountReadableCandidatesAsync(gated, seed.InboundMessageId));
+
+            await SetLocalContextAsync(gated, "app.company_id", seed.CompanyId.ToString());
+            Assert.Equal(1L, await CountReadableCandidatesAsync(gated, seed.InboundMessageId));
+        }
+        finally
+        {
+            await gatedTransaction.RollbackAsync();
+        }
+
+        await migrator.Database.MigrateAsync(BeforeCandidateCompanyContext);
+
+        await using var restored = await fixture.OpenAdministratorConnectionAsync();
+        await using var restoredTransaction = await restored.BeginTransactionAsync();
+        try
+        {
+            await SetLocalContextAsync(restored, "app.user_id", seed.UserId.ToString());
+            await SetLocalContextAsync(restored, "app.company_id", string.Empty);
+            Assert.Equal(1L, await CountReadableCandidatesAsync(restored, seed.InboundMessageId));
+        }
+        finally
+        {
+            await restoredTransaction.RollbackAsync();
+        }
+    }
+
+    private static async Task SetLocalContextAsync(
+        NpgsqlConnection connection,
+        string name,
+        string value
+    )
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT set_config(@name, @value, true)",
+            connection
+        );
+        command.Parameters.AddWithValue("name", name);
+        command.Parameters.AddWithValue("value", value);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<long> CountReadableCandidatesAsync(
+        NpgsqlConnection connection,
+        Guid inboundMessageId
+    )
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM notifications.read_inbound_whatsapp_invoice_candidate(@inbound_id)",
+            connection
+        );
+        command.Parameters.AddWithValue("inbound_id", inboundMessageId);
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private sealed record InvoiceCandidateSeed(Guid UserId, Guid CompanyId, Guid InboundMessageId);
+
+    private static async Task<InvoiceCandidateSeed> SeedInvoiceCandidateAsync(
+        FoundationPostgresFixture fixture
+    )
+    {
+        await using var administrator = fixture.CreateAdministratorDbContext();
+        var actor = new User(Guid.NewGuid(), "Ator do candidato", "paguai-candidate@example.test");
+        var requestId = Guid.NewGuid();
+        var group = new Group(Guid.NewGuid(), "Grupo do candidato", actor.Id, requestId);
+        var company = new Company(
+            Guid.NewGuid(),
+            group.Id,
+            "Empresa do candidato",
+            actor.Id,
+            requestId
+        );
+        var membership = new Membership(
+            Guid.NewGuid(),
+            company.Id,
+            actor.Id,
+            actor.Id,
+            requestId
+        );
+        administrator.AddRange(actor, group, company, membership);
+        await administrator.SaveChangesAsync();
+
+        var inboundId = Guid.NewGuid();
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var seed = new NpgsqlCommand(
+            """
+            INSERT INTO notifications.inbound_whatsapp_messages (
+                id, phone_number_id, message_id, wa_id, message_type, media_id, status,
+                resolution_state, resolved_user_id, resolved_company_id, resolved_membership_id, resolved_at)
+            VALUES (@id, '111111111111111', @message_id, '556198132901', 'document', @media_id, 'completed',
+                'admitted', @user_id, @company_id, @membership_id, clock_timestamp());
+            INSERT INTO notifications.inbound_whatsapp_documents (
+                inbound_message_id, company_id, user_id, membership_id, mime_type, size_bytes,
+                checksum, scan_status, scanned_at, provider_key)
+            VALUES (@id, @company_id, @user_id, @membership_id, 'application/pdf', 100,
+                'sha256:' || repeat('a', 64), 'clean', clock_timestamp(), 'quarantine/whatsapp/test');
+            INSERT INTO notifications.inbound_whatsapp_invoice_candidates (
+                inbound_message_id, company_id, user_id, state,
+                beneficiary_name, amount, currency, due_date, document_number, needs_review_reason)
+            VALUES (@id, @company_id, @user_id, 'candidate',
+                'ACME LTDA', '250.00', 'BRL', DATE '2026-09-05', 'NF 123', NULL)
+            """,
+            connection
+        );
+        seed.Parameters.AddWithValue("id", inboundId);
+        seed.Parameters.AddWithValue("message_id", $"wamid.doc.{Guid.NewGuid():N}");
+        seed.Parameters.AddWithValue("media_id", $"media.{Guid.NewGuid():N}");
+        seed.Parameters.AddWithValue("user_id", actor.Id);
+        seed.Parameters.AddWithValue("company_id", company.Id);
+        seed.Parameters.AddWithValue("membership_id", membership.Id);
+        await seed.ExecuteNonQueryAsync();
+
+        return new InvoiceCandidateSeed(actor.Id, company.Id, inboundId);
     }
 
     private static async Task<PaguaiRequest> SeedReferencedInvoiceDraftAsync(

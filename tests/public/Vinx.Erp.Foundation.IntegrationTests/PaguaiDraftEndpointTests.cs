@@ -118,6 +118,55 @@ public sealed class PaguaiDraftEndpointTests
     }
 
     [Fact]
+    public async Task Invalid_invoice_file_reference_is_denied_with_exactly_one_stable_audit_event()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            InvoiceFileId = Guid.NewGuid(),
+        };
+
+        using var response = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+        await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var denial = Assert.Single(
+            await administrator
+                .AuditEvents.Where(auditEvent =>
+                    auditEvent.Action == "invoice_file_invalid"
+                    && auditEvent.RequestedCompanyId == scenario.CompanyId
+                )
+                .ToListAsync()
+        );
+        Assert.Equal("invoice_file_invalid", denial.Reason);
+        Assert.Null(denial.ResourceId);
+        Assert.Equal("{}", denial.MetadataJson);
+        Assert.Equal(factory.ActorUserId, denial.ActorUserId);
+    }
+
+    [Fact]
+    public async Task Draft_creation_rejects_an_empty_invoice_file_id_at_the_boundary()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            InvoiceFileId = Guid.Empty,
+        };
+
+        using var response = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+        await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+    }
+
+    [Fact]
     public async Task Changing_only_the_invoice_file_id_conflicts_for_the_same_request_id()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
