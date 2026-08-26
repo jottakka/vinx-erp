@@ -63,10 +63,10 @@ public sealed class AgentRunCompositionTests
             ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Endpoint", "https://api.example.com/v1/"),
             ("AgentRun:Model", "approved-model"),
-            ("AgentRun:ApiKey", "test-api-key"));
+            ("AgentRun:ApprovedHosts:0", "api.example.com"));
 
         var services = CreateBaseServices();
-        services.AddAgentRunSurface(configuration);
+        services.AddAgentRunSurface(configuration, ReadDedicatedCredential);
 
         using var provider = services.BuildServiceProvider();
         Assert.IsType<ChatClientAgentModel>(provider.GetRequiredService<IAgentModel>());
@@ -87,15 +87,16 @@ public sealed class AgentRunCompositionTests
     }
 
     [Fact]
-    public void Provider_without_api_key_fails_the_composition()
+    public void Provider_without_the_dedicated_process_key_fails_the_composition()
     {
         var configuration = CreateConfiguration(
             ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Endpoint", "https://api.example.com/v1/"),
-            ("AgentRun:Model", "approved-model"));
+            ("AgentRun:Model", "approved-model"),
+            ("AgentRun:ApiKey", "ignored-test-key"));
 
         Assert.Throws<InvalidOperationException>(
-            () => CreateBaseServices().AddAgentRunSurface(configuration));
+            () => CreateBaseServices().AddAgentRunSurface(configuration, _ => null));
     }
 
     [Fact]
@@ -106,8 +107,7 @@ public sealed class AgentRunCompositionTests
         var configuration = CreateConfiguration(
             ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Endpoint", "http://127.0.0.1:9999"),
-            ("AgentRun:Model", "approved-model"),
-            ("AgentRun:ApiKey", "test-api-key"));
+            ("AgentRun:Model", "approved-model"));
 
         Assert.Throws<InvalidOperationException>(
             () => CreateBaseServices().AddAgentRunSurface(configuration));
@@ -120,12 +120,12 @@ public sealed class AgentRunCompositionTests
             ("AgentRun:Vision:Provider", AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
             ("AgentRun:Vision:Model", "approved-vision-model"),
-            ("AgentRun:Vision:ApiKey", "test-vision-api-key"),
+            ("AgentRun:Vision:ApprovedHosts:0", "vision.example.com"),
             ("AgentRun:Vision:Timeout", TimeSpan.FromSeconds(20).ToString()),
             ("AgentRun:Vision:AllowedClassifications:0", "fiscal"));
         var services = CreateBaseServices();
 
-        services.AddAgentRunSurface(configuration);
+        services.AddAgentRunSurface(configuration, ReadDedicatedCredential);
 
         var normalizer = Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(DocumentContextNormalizer));
@@ -161,14 +161,12 @@ public sealed class AgentRunCompositionTests
             ("AgentRun:Vision:Provider", (string?)AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
             ("AgentRun:Vision:Model", "approved-vision-model"),
-            ("AgentRun:Vision:ApiKey", "test-vision-api-key"),
         },
         new[]
         {
             ("AgentRun:Vision:Provider", (string?)"unsupported"),
             ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
             ("AgentRun:Vision:Model", "approved-vision-model"),
-            ("AgentRun:Vision:ApiKey", "test-vision-api-key"),
             ("AgentRun:Vision:AllowedClassifications:0", "fiscal"),
         },
     };
@@ -191,6 +189,9 @@ public sealed class AgentRunCompositionTests
             .AddInMemoryCollection(
                 pairs.Select(pair => new KeyValuePair<string, string?>(pair.Key, pair.Value)))
             .Build();
+
+    private static string? ReadDedicatedCredential(string name) =>
+        name == "VINX_AGENT_PROVIDER_API_KEY" ? "synthetic-test-key" : null;
 
     private sealed class StaticContextResolver(AgentContextResolution resolution) : IAgentContextResolver
     {

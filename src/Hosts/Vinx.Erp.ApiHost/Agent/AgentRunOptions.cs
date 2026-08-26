@@ -13,20 +13,17 @@ public sealed class AgentRunOptions
     /// <summary>Provider OpenAI-compatible genérico.</summary>
     public const string OpenAiCompatibleProvider = "openai_compatible";
 
-    /// <summary>Provider oficial DeepSeek, endpoint aprovado fixo.</summary>
-    public const string DeepSeekProvider = "deepseek";
-
     /// <summary>Provider aprovado; nulo deixa o runner fail-closed.</summary>
     public string? Provider { get; set; }
 
     /// <summary>Endpoint absoluto do provider; obrigatório quando há provider.</summary>
     public Uri? Endpoint { get; set; }
 
-    /// <summary>Chave do provider (somente ambiente); nunca logada nem ecoada.</summary>
-    public string? ApiKey { get; set; }
-
     /// <summary>Modelo aprovado; obrigatório quando há provider.</summary>
     public string? Model { get; set; }
+
+    /// <summary>Hosts exatos aprovados do perfil, definidos somente no servidor.</summary>
+    public IReadOnlyList<string> ApprovedHosts { get; set; } = [];
 
     /// <summary>Latência máxima aceita para a execução; deve ser positiva.</summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
@@ -54,11 +51,10 @@ public sealed class AgentRunOptions
             return;
         }
 
-        if (!string.Equals(Provider, OpenAiCompatibleProvider, StringComparison.Ordinal)
-            && !string.Equals(Provider, DeepSeekProvider, StringComparison.Ordinal))
+        if (!string.Equals(Provider, OpenAiCompatibleProvider, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Agent provider must be '{OpenAiCompatibleProvider}' or '{DeepSeekProvider}'.");
+                $"Agent provider must be '{OpenAiCompatibleProvider}'.");
         }
 
         if (Endpoint is null || !Endpoint.IsAbsoluteUri)
@@ -77,6 +73,11 @@ public sealed class AgentRunOptions
             throw new InvalidOperationException(
                 "Agent model must be a non-empty approved model name when a provider is configured.");
         }
+
+        if (ApprovedHosts.Count == 0 || ApprovedHosts.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new InvalidOperationException("Agent provider must have an approved host list.");
+        }
     }
 }
 
@@ -87,9 +88,9 @@ public sealed class AgentRunVisionOptions
 
     public Uri? Endpoint { get; set; }
 
-    public string? ApiKey { get; set; }
-
     public string? Model { get; set; }
+
+    public IReadOnlyList<string> ApprovedHosts { get; set; } = [];
 
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(45);
 
@@ -101,7 +102,9 @@ public sealed class AgentRunVisionOptions
         if (!string.Equals(Provider, AgentRunOptions.OpenAiCompatibleProvider, StringComparison.Ordinal)
             || AllowedClassifications.Count == 0
             || AllowedClassifications.Any(string.IsNullOrWhiteSpace)
-            || new OpenAiCompatibleOptions.Validator().Validate(null, ToProviderOptions()).Failed)
+            || ApprovedHosts.Count == 0
+            || ApprovedHosts.Any(string.IsNullOrWhiteSpace)
+            || new OpenAiCompatibleOptions.Validator().ValidateForRuntimeCredential(null, ToProviderOptions()).Failed)
         {
             throw new InvalidOperationException("Agent document vision configuration is invalid.");
         }
@@ -110,9 +113,9 @@ public sealed class AgentRunVisionOptions
     internal OpenAiCompatibleOptions ToProviderOptions() => new()
     {
         Endpoint = Endpoint,
-        ApiKey = ApiKey ?? string.Empty,
         Model = Model ?? string.Empty,
         Timeout = Timeout,
+        ApprovedHosts = ApprovedHosts,
         AllowImageInputs = true,
         ModuleTag = "ai/agent-document-vision",
     };

@@ -7,7 +7,6 @@ using Vinx.Erp.AI;
 using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Guardrails;
 using Vinx.Erp.AI.Providers;
-using Vinx.Erp.AI.Providers.DeepSeek;
 using Vinx.Erp.AI.Providers.OpenAiCompatible;
 
 namespace Vinx.Erp.ApiHost.Agent;
@@ -29,17 +28,24 @@ internal static class AgentRunServiceCollectionExtensions
     /// <summary>Registra options, gates, provider client, runner e o serviço de aplicação de POST /agent/runs.</summary>
     public static IServiceCollection AddAgentRunSurface(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration) =>
+        AddAgentRunSurface(services, configuration, Environment.GetEnvironmentVariable);
+
+    internal static IServiceCollection AddAgentRunSurface(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        Func<string, string?> readEnvironment)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(readEnvironment);
 
         // Snapshot da composição: a presença do provider decide o registro na
         // partida; configuração inválida derruba o host aqui mesmo, com a
         // mensagem segura da própria options.
         var agentRun =
             configuration.GetSection(ConfigurationSection).Get<AgentRunOptions>() ?? new AgentRunOptions();
-        if (!IsValidConfiguration(agentRun))
+        if (!IsValidConfiguration(agentRun, readEnvironment))
         {
             throw new InvalidOperationException("Agent run configuration is invalid.");
         }
@@ -47,7 +53,7 @@ internal static class AgentRunServiceCollectionExtensions
         services
             .AddOptions<AgentRunOptions>()
             .Bind(configuration.GetSection(ConfigurationSection))
-            .Validate(IsValidConfiguration, "Agent run configuration is invalid.")
+            .Validate(options => IsValidConfiguration(options, readEnvironment), "Agent run configuration is invalid.")
             .ValidateOnStart();
 
         services.AddScoped<IAgentContextResolver, AgentContextResolver>();
@@ -58,19 +64,21 @@ internal static class AgentRunServiceCollectionExtensions
         if (!string.IsNullOrWhiteSpace(agentRun.Provider))
         {
             selection = new AgentModelSelection(agentRun.Provider, agentRun.Model!);
+            var providerProfile = ToProviderOptions(agentRun);
             services.AddHttpClient(
                 ProviderHttpClientName,
                 client =>
                 {
                     client.BaseAddress = agentRun.Endpoint;
                     client.Timeout = agentRun.Timeout;
-                }
-            );
+                })
+                .ConfigurePrimaryHttpMessageHandler(() => OpenAiCompatibleTransport.Create(providerProfile));
             // A chave trafega somente da configuração para a credencial do
             // client aprovado; nenhum header, log ou mensagem a ecoa.
             services.AddScoped<IAgentModel>(serviceProvider => new ChatClientAgentModel(
                 CreateProviderChatClient(
                     agentRun,
+                    readEnvironment,
                     serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(ProviderHttpClientName),
                     serviceProvider.GetService<ILoggerFactory>())));
         }
@@ -85,12 +93,14 @@ internal static class AgentRunServiceCollectionExtensions
                 {
                     client.BaseAddress = visionProfile.Endpoint;
                     client.Timeout = visionProfile.Timeout;
-                });
+                })
+                .ConfigurePrimaryHttpMessageHandler(() => OpenAiCompatibleTransport.Create(visionProfile));
             services.AddScoped<IAuthorizedDocumentSource, FoundationAuthorizedDocumentSource>();
             services.AddScoped(serviceProvider =>
             {
-                var visionClient = new OpenAiCompatibleChatClient(
+                var visionClient = OpenAiCompatibleChatClient.CreateForServer(
                     visionProfile,
+                    readEnvironment,
                     serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(VisionHttpClientName),
                     serviceProvider.GetService<ILoggerFactory>()?.CreateLogger<OpenAiCompatibleChatClient>());
                 return new DocumentContextNormalizer(
@@ -115,7 +125,7 @@ internal static class AgentRunServiceCollectionExtensions
     // Sem provider nenhuma outra configuração é exigida (fail-closed em
     // provider_not_configured); com provider, endpoint/model aprovados e chave
     // no cofre são obrigatórios. A validação delega à options da fatia do núcleo.
-    private static bool IsValidConfiguration(AgentRunOptions options)
+    private static bool IsValidConfiguration(AgentRunOptions options, Func<string, string?> readEnvironment)
     {
         try
         {
@@ -126,11 +136,13 @@ internal static class AgentRunServiceCollectionExtensions
             return false;
         }
 
-        return string.IsNullOrWhiteSpace(options.Provider) || !string.IsNullOrWhiteSpace(options.ApiKey);
+        return (string.IsNullOrWhiteSpace(options.Provider) && options.Vision is null)
+            || OpenAiCompatibleChatClient.HasServerCredential(readEnvironment);
     }
 
     private static IChatClient CreateProviderChatClient(
         AgentRunOptions options,
+        Func<string, string?> readEnvironment,
         HttpClient httpClient,
         ILoggerFactory? loggerFactory)
     {
@@ -143,30 +155,21 @@ internal static class AgentRunServiceCollectionExtensions
                 ? throw new InvalidOperationException("Agent model must be a non-empty approved model name.")
                 : options.Model;
 
-        return string.Equals(options.Provider, AgentRunOptions.DeepSeekProvider, StringComparison.Ordinal)
-            ? new DeepSeekChatClient(
-                new DeepSeekOptions
-                {
-                    Endpoint = endpoint,
-                    ApiKey = options.ApiKey ?? string.Empty,
-                    Model = model,
-                    Timeout = options.Timeout,
-                    MaxInputCharacters = AgentInputLimits.MainTurnMaxCharacters,
-                },
-                httpClient,
-                loggerFactory?.CreateLogger<DeepSeekChatClient>())
-            : new OpenAiCompatibleChatClient(
-                new OpenAiCompatibleOptions
-                {
-                    Endpoint = endpoint,
-                    ApiKey = options.ApiKey ?? string.Empty,
-                    Model = model,
-                    Timeout = options.Timeout,
-                    MaxInputCharacters = AgentInputLimits.MainTurnMaxCharacters,
-                },
-                httpClient,
-                loggerFactory?.CreateLogger<OpenAiCompatibleChatClient>());
+        return OpenAiCompatibleChatClient.CreateForServer(
+            ToProviderOptions(options),
+            readEnvironment,
+            httpClient,
+            loggerFactory?.CreateLogger<OpenAiCompatibleChatClient>());
     }
+
+    private static OpenAiCompatibleOptions ToProviderOptions(AgentRunOptions options) => new()
+    {
+        Endpoint = options.Endpoint,
+        Model = options.Model ?? string.Empty,
+        Timeout = options.Timeout,
+        MaxInputCharacters = AgentInputLimits.MainTurnMaxCharacters,
+        ApprovedHosts = options.ApprovedHosts,
+    };
 
     // Catálogo fixo: perfis aprovados do catálogo central com a seleção de
     // provider decidida na composição; sem provider a seleção permanece nula e
