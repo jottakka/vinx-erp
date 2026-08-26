@@ -96,8 +96,28 @@ nunca entram no envelope, metadado, log ou métrica.
 Alterar o endereço por `notifications.set_recipient_contact` limpa
 `is_validated`; repetir o mesmo endereço não altera a linha nem gera auditoria
 extra. A validação do chat é externa e controlada por processo administrativo
-até que uma vinculação de uso único seja aprovada. Esta fatia não chama a API
-do Telegram, não recebe webhook e não cria resposta automática.
+até que uma vinculação de uso único seja aprovada.
+
+## Provider Telegram — outbound Bot API (#308)
+
+`Providers/Telegram` entrega o canal `telegram` apenas pelo WorkerHost. O
+provider abre uma transação curta para
+`notifications.get_telegram_notification_delivery_target(deliveryId, attemptId)`;
+a função `SECURITY DEFINER` expõe `address` e `telegram_text` somente para a
+tentativa `provider_in_flight` exata, com contato validado e template aprovado.
+A transação encerra antes do `HttpClient` nomeado `telegram-bot` chamar
+`sendMessage`.
+
+O mapper aceita somente chat ID privado decimal positivo canônico e texto plano
+literal de 1 a 4096 caracteres, serializando apenas `chat_id` e `text`. O
+token aparece apenas no caminho da requisição no instante do envio; o client
+tem timeout de 10 segundos, cookies/redirects desativados e sem logging HTTP
+padronizado. `ok=true` com `result.message_id` positivo confirma o provider;
+`4xx` ordinário, exceto `408`/`429`, ou `ok=false` é rejeição; `408`, timeout,
+transporte incerto e 2xx malformado são ambíguos terminais; `429`/`5xx` são
+transitivos e usam somente o retry finito do worker. Não há retry no adapter,
+webhook, inbound ou resposta automática nesta fatia. Runbook:
+`docs/runbooks/telegram-outbound.md`.
 
 ## Inbound admissão e identidade (#272 PR1)
 
