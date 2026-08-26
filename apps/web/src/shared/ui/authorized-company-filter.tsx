@@ -57,7 +57,9 @@ export function AuthorizedCompanyFilter({
 
   return (
     <FormControl disabled={disabled} fullWidth size="small">
-      <InputLabel id={labelId}>{label}</InputLabel>
+      <InputLabel id={labelId} shrink>
+        {label}
+      </InputLabel>
       <Select
         displayEmpty
         label={label}

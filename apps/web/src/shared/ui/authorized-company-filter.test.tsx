@@ -33,6 +33,9 @@ describe("AuthorizedCompanyFilter", () => {
     renderFilter();
 
     expect(
+      screen.getByText("Empresas autorizadas", { selector: "label" }),
+    ).toHaveAttribute("data-shrink", "true");
+    expect(
       screen.getByRole("combobox", { name: "Empresas autorizadas" }),
     ).toHaveTextContent("Todas as empresas autorizadas");
   });
