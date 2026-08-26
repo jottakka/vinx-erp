@@ -19,7 +19,14 @@ public sealed class LegacyImporter
     public sealed record Options(
         string ConnectionString,
         string SourceBatchId,
-        IReadOnlyList<CompanyMapping> Companies);
+        IReadOnlyList<CompanyMapping> Companies)
+    {
+        /// <summary>
+        /// Ponto de injeção para provas de versão de mapeamento divergente
+        /// (testes/ensaio); produção usa sempre o hash da convenção corrente.
+        /// </summary>
+        public string? MappingVersionHashOverride { get; init; }
+    }
 
     public async Task<ApplyResult> ApplyAsync(Options options, CancellationToken cancellationToken)
     {
@@ -27,6 +34,7 @@ public sealed class LegacyImporter
         await connection.OpenAsync(cancellationToken);
         var results = new List<CompanyResult>();
         var succeeded = true;
+        var mappingVersion = options.MappingVersionHashOverride ?? LegacyImportMappingFile.MappingVersionHash();
 
         foreach (var mapping in Ordered(options.Companies))
         {
@@ -35,7 +43,7 @@ public sealed class LegacyImporter
             try
             {
                 var outcome = await ImportCompanyAsync(
-                    connection, transaction, options, mapping, cancellationToken);
+                    connection, transaction, options, mapping, mappingVersion, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 results.Add(outcome);
                 succeeded &= outcome.Outcome is CompanyImportOutcome.ImportedNew
@@ -128,6 +136,7 @@ public sealed class LegacyImporter
         NpgsqlTransaction transaction,
         Options options,
         CompanyMapping mapping,
+        string mappingVersion,
         CancellationToken cancellationToken)
     {
         // Exclusão concorrente: quem não pega o lock simplesmente pula a empresa.
@@ -145,14 +154,55 @@ public sealed class LegacyImporter
             return new CompanyResult(mapping.CompanyKey, CompanyImportOutcome.ConcurrentSkip, 0);
         }
 
+        // Conflito de VERSÃO de mapeamento sob o mesmo lote é bloqueado ANTES de
+        // qualquer escrita: receipts com hash diferente na mesma chave falham fechado.
+        await GuardAgainstDivergentMappingVersionAsync(
+            connection, transaction, options.SourceBatchId, mapping.CompanyKey, mappingVersion, cancellationToken);
+
         var rows = await ReadClientRowsAsync(connection, transaction, mapping.LegacyEmpresaId, cancellationToken);
         var payloadSha256 = ComputeDigest(rows);
         var stagedRows = await StageCustomersAsync(
             connection, transaction, mapping, rows, cancellationToken);
 
         var receiptOutcome = await WriteReceiptAndClassifyAsync(
-            connection, transaction, options.SourceBatchId, mapping.CompanyKey, payloadSha256, rows.Count, cancellationToken);
+            connection, transaction, options.SourceBatchId, mapping.CompanyKey, payloadSha256, rows.Count, mappingVersion, cancellationToken);
         return new CompanyResult(mapping.CompanyKey, receiptOutcome, stagedRows);
+    }
+
+    /// <summary>
+    /// Verificação prévia: já existe receipt deste lote com OUTRA versão de
+    /// mapeamento ⇒ exceção de conflito reverte a transação inteira da empresa.
+    /// </summary>
+    private static async Task GuardAgainstDivergentMappingVersionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string sourceBatchId,
+        string companyKey,
+        string mappingVersion,
+        CancellationToken cancellationToken)
+    {
+        long divergent;
+        await using (var command = new NpgsqlCommand(
+            """
+            SELECT count(*) FROM legacy_import.import_receipts
+            WHERE company_key = @company_key AND table_key = @table_key
+              AND source_batch_id = @source_batch_id
+              AND mapping_version_hash <> @mapping_version_hash
+            """,
+            connection, transaction))
+        {
+            command.Parameters.AddWithValue("@company_key", companyKey);
+            command.Parameters.AddWithValue("@table_key", TableKey);
+            command.Parameters.AddWithValue("@source_batch_id", sourceBatchId);
+            command.Parameters.AddWithValue("@mapping_version_hash", mappingVersion);
+            divergent = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
+        }
+
+        if (divergent > 0)
+        {
+            throw new LegacyImportConflictException(
+                $"versão de mapeamento alterada sob o mesmo batch para a empresa {companyKey}");
+        }
     }
 
     private sealed record ClientRow(string IdText, string? Code, string Name, string? Email, bool Active);
@@ -246,6 +296,7 @@ public sealed class LegacyImporter
         string companyKey,
         string payloadSha256,
         int rowCount,
+        string mappingVersion,
         CancellationToken cancellationToken)
     {
         long? insertedReceipt;
@@ -262,7 +313,7 @@ public sealed class LegacyImporter
             command.Parameters.AddWithValue("@company_key", companyKey);
             command.Parameters.AddWithValue("@table_key", TableKey);
             command.Parameters.AddWithValue("@source_batch_id", sourceBatchId);
-            command.Parameters.AddWithValue("@mapping_version_hash", LegacyImportMappingFile.MappingVersionHash());
+            command.Parameters.AddWithValue("@mapping_version_hash", mappingVersion);
             command.Parameters.AddWithValue("@payload_sha256", payloadSha256);
             command.Parameters.AddWithValue("@row_count", rowCount);
             var scalar = await command.ExecuteScalarAsync(cancellationToken);
@@ -280,13 +331,15 @@ public sealed class LegacyImporter
             """
             SELECT mapping_version_hash, payload_sha256
             FROM legacy_import.import_receipts
-            WHERE company_key = @company_key AND table_key = @table_key AND source_batch_id = @source_batch_id
+            WHERE company_key = @company_key AND table_key = @table_key
+              AND source_batch_id = @source_batch_id AND mapping_version_hash = @mapping_version_hash
             """,
             connection, transaction))
         {
             command.Parameters.AddWithValue("@company_key", companyKey);
             command.Parameters.AddWithValue("@table_key", TableKey);
             command.Parameters.AddWithValue("@source_batch_id", sourceBatchId);
+            command.Parameters.AddWithValue("@mapping_version_hash", mappingVersion);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))
             {
@@ -298,7 +351,7 @@ public sealed class LegacyImporter
             storedDigest = reader.GetString(1);
         }
 
-        if (storedHash == LegacyImportMappingFile.MappingVersionHash() && storedDigest == payloadSha256)
+        if (storedHash == mappingVersion && storedDigest == payloadSha256)
         {
             return CompanyImportOutcome.ReplayedSkip;
         }

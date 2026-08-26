@@ -74,6 +74,28 @@ public sealed class ImporterCommandTests
             Assert.Equal(customersAfterRun1, await StagedFingerprint(fx));
             Assert.Equal(receiptsAfterRun1, await ReceiptFingerprint(fx));
 
+            // Execução 2-b: hash de mapeamento DIFERENTE sob o mesmo batch —
+            // conflito ANTES de qualquer escrita (nenhum receipt extra é criado).
+            var mappingVersionRun = await new LegacyImporter().ApplyAsync(
+                new LegacyImporter.Options(
+                    fx.ConnectionString,
+                    "rehearsal-1",
+                    [
+                        new CompanyMapping("11111111-aaaa-4111-8111-111111111111",
+                            Guid.Parse("11111111-aaaa-4111-8111-111111111111"),
+                            Guid.Parse("9a000000-0000-4000-8000-000000000001")),
+                        new CompanyMapping("22222222-bbbb-4222-8222-222222222222",
+                            Guid.Parse("22222222-bbbb-4222-8222-222222222222"),
+                            Guid.Parse("9a000000-0000-4000-8000-000000000002")),
+                    ])
+                { MappingVersionHashOverride = new string('a', 64) },
+                CancellationToken.None);
+            Assert.False(mappingVersionRun.Succeeded);
+            Assert.All(mappingVersionRun.Companies,
+                c => Assert.Equal(CompanyImportOutcome.ConflictedRollback, c.Outcome));
+            Assert.Equal(customersAfterRun1, await StagedFingerprint(fx));
+            Assert.Equal(receiptsAfterRun1, await ReceiptFingerprint(fx));
+
             // Execução 3: mesmo batch, payload mutado — conflito fail-closed sem escrita parcial.
             await fx.ExecuteAsync(
                 "UPDATE legacy.cliente SET nome = 'Cliente Sintetico Um ALTERADO' WHERE codigo = 'CLI-0001'");
