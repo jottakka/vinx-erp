@@ -44,6 +44,7 @@ export type AttachmentUploader = (
 
 type AttachmentFieldProps = {
   accept: string;
+  disabled?: boolean;
   label: string;
   multiple?: boolean;
   onChange?: (values: readonly AttachmentFieldValue[]) => void;
@@ -58,6 +59,7 @@ type AttachmentFieldProps = {
  */
 export function AttachmentField({
   accept,
+  disabled = false,
   label,
   multiple = false,
   onChange,
@@ -76,7 +78,7 @@ export function AttachmentField({
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    if (!files.length || uploading) return;
+    if (!files.length || uploading || disabled) return;
     void uploadSequence(files);
   }
 
@@ -138,6 +140,7 @@ export function AttachmentField({
   }
 
   function remove(entry: AttachmentFieldValue) {
+    if (disabled) return;
     onChange?.(value.filter((item) => item.localKey !== entry.localKey));
   }
 
@@ -150,7 +153,7 @@ export function AttachmentField({
           </Typography>
           <Button
             component="label"
-            disabled={uploading}
+            disabled={disabled || uploading}
             size="small"
             startIcon={<AttachFileOutlinedIcon />}
           >
@@ -158,7 +161,7 @@ export function AttachmentField({
             <input
               accept={accept}
               aria-label={`${label}: anexar arquivo`}
-              disabled={uploading}
+              disabled={disabled || uploading}
               id={inputId}
               multiple={multiple}
               onChange={selectFiles}
@@ -186,6 +189,7 @@ export function AttachmentField({
                 ) : null}
                 <IconButton
                   aria-label={`Remover ${entry.fileName}`}
+                  disabled={disabled}
                   onClick={() => remove(entry)}
                   size="small"
                 >

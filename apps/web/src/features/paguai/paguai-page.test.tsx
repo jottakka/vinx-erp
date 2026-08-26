@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -12,7 +13,8 @@ import type {
   BootstrapSnapshot,
   MockSessionGateway,
 } from "../auth/session-contract";
-import { SessionProvider } from "../auth/session-provider";
+import { SessionProvider, useSession } from "../auth/session-provider";
+import type { CreatePaguaiDraftInput } from "./paguai-draft-client";
 import { PaguaiPage } from "./paguai-page";
 
 const companyId = "11111111-1111-4111-8111-111111111111";
@@ -84,6 +86,48 @@ function renderPage(
       </SessionProvider>
     </VinxThemeProvider>,
   );
+}
+
+function RefreshBootstrapButton() {
+  const { bootstrap, refreshBootstrap } = useSession();
+
+  return (
+    <button
+      disabled={!bootstrap}
+      onClick={() => void refreshBootstrap()}
+      type="button"
+    >
+      Atualizar sessão
+    </button>
+  );
+}
+
+function renderPageWithSessionRefresh(
+  draftClient: unknown,
+  sessionGateway: MockSessionGateway,
+) {
+  render(
+    <VinxThemeProvider>
+      <SessionProvider gateway={sessionGateway}>
+        <RefreshBootstrapButton />
+        <PaguaiPage
+          draftClient={
+            draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
+          }
+        />
+      </SessionProvider>
+    </VinxThemeProvider>,
+  );
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  return {
+    promise: new Promise<T>((complete) => {
+      resolve = complete;
+    }),
+    resolve,
+  };
 }
 
 async function openCreate(user: ReturnType<typeof userEvent.setup>) {
@@ -188,8 +232,11 @@ describe("PaguaiPage", () => {
     expect(dialog).toBeVisible();
     expect(within(dialog).getByText("Papel para impressora")).toBeVisible();
     expect(
-      within(dialog).getByText("Estado: Rascunho · versão 1"),
+      within(dialog).getByText(
+        (_content, element) => element?.textContent === "Estado: Rascunho",
+      ),
     ).toBeVisible();
+    expect(within(dialog).queryByText(/versão/i)).toBeNull();
     expect(
       within(dialog).getAllByText("R$ 1.250,00").length,
     ).toBeGreaterThanOrEqual(1);
@@ -390,6 +437,175 @@ describe("PaguaiPage", () => {
         screen.getByRole("button", { name: "Nova solicitação" }),
       ).toBeVisible(),
     );
+  });
+
+  it("reuses a failed attempt only for the exact payload and rotates it after an edit or a new dialog", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn(async (_input: CreatePaguaiDraftInput) => ({
+      error: "network" as const,
+      ok: false as const,
+    }));
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPage(draftClient);
+    await openCreate(user);
+    await fillForm(user);
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const firstPayload = create.mock.calls[0]?.[0];
+
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(create.mock.calls[1]?.[0]).toEqual(firstPayload);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Título" }), {
+      target: { value: "Novo papel editado" },
+    });
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+    expect(create.mock.calls[2]?.[0]).toMatchObject({
+      title: "Novo papel editado",
+    });
+    expect(create.mock.calls[2]?.[0]?.requestId).not.toBe(
+      firstPayload?.requestId,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await openCreate(user);
+    await fillForm(user);
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(4));
+    expect(create.mock.calls[3]?.[0]?.requestId).not.toBe(
+      create.mock.calls[2]?.[0]?.requestId,
+    );
+  });
+
+  it("does not let a late create response close or populate a changed user membership scope", async () => {
+    const user = userEvent.setup();
+    const createResult = deferred<{ ok: true; value: typeof draft }>();
+    const create = vi.fn(
+      (_input: CreatePaguaiDraftInput) => createResult.promise,
+    );
+    let activeBootstrap = bootstrap;
+    const sessionGateway: MockSessionGateway = {
+      getBootstrap: async () => activeBootstrap,
+      login: async () => activeBootstrap,
+      logout: async () => undefined,
+    };
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPageWithSessionRefresh(draftClient, sessionGateway);
+    await openCreate(user);
+    await fillForm(user);
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+
+    activeBootstrap = {
+      ...bootstrap,
+      companies: [
+        {
+          ...bootstrap.companies[0],
+          membershipId: "99999999-9999-4999-8999-999999999999",
+        },
+      ],
+      user: {
+        displayName: "Clara",
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      },
+    };
+    await user.click(
+      screen.getByRole("button", { hidden: true, name: "Atualizar sessão" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await openCreate(user);
+    await user.type(
+      screen.getByRole("textbox", { name: "Título" }),
+      "Solicitação da nova sessão",
+    );
+    await act(async () => {
+      createResult.resolve({ ok: true, value: draft });
+      await createResult.promise;
+    });
+
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Título" })).toHaveValue(
+      "Solicitação da nova sessão",
+    );
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "Papel" }),
+    ).toBeNull();
+  });
+
+  it("does not reopen a removed company draft when its detail response arrives late", async () => {
+    const user = userEvent.setup();
+    const betaDraft = {
+      ...draft,
+      companyId: secondCompanyId,
+      id: "77777777-7777-4777-8777-777777777777",
+      title: "Toner",
+    };
+    const detailResult = deferred<{ ok: true; value: typeof betaDraft }>();
+    let activeBootstrap = bootstrapFor([
+      ...bootstrap.companies,
+      {
+        capabilities: [readCapability, createCapability],
+        companyId: secondCompanyId,
+        companyName: "Beta",
+        membershipId: "88888888-8888-4888-8888-888888888888",
+      },
+    ]);
+    const sessionGateway: MockSessionGateway = {
+      getBootstrap: async () => activeBootstrap,
+      login: async () => activeBootstrap,
+      logout: async () => undefined,
+    };
+    const detail = vi.fn(() => detailResult.promise);
+    const draftClient = {
+      create: async () => ({ ok: true as const, value: draft }),
+      detail,
+      list: async (requestedCompanyId: string) => ({
+        ok: true as const,
+        value:
+          requestedCompanyId === secondCompanyId ? [betaDraft] : ([] as const),
+      }),
+    };
+
+    renderPageWithSessionRefresh(draftClient, sessionGateway);
+    const betaHeading = await screen.findByRole("heading", {
+      level: 3,
+      name: "Toner",
+    });
+    const betaCard = betaHeading.closest(".MuiCard-root");
+    if (!(betaCard instanceof HTMLElement))
+      throw new Error("Expected Beta draft card");
+    await user.click(
+      within(betaCard).getByRole("button", { name: "Visualizar" }),
+    );
+    await waitFor(() =>
+      expect(detail).toHaveBeenCalledWith(secondCompanyId, betaDraft.id),
+    );
+
+    activeBootstrap = bootstrap;
+    await user.click(
+      screen.getByRole("button", { hidden: true, name: "Atualizar sessão" }),
+    );
+    await waitFor(() => expect(screen.queryByText("Toner")).toBeNull());
+    await act(async () => {
+      detailResult.resolve({ ok: true, value: betaDraft });
+      await detailResult.promise;
+    });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("blocks submission without an explicit proof requirement selection", async () => {

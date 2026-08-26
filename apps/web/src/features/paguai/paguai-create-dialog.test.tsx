@@ -129,4 +129,74 @@ describe("PaguaiCreateDialog", () => {
       }),
     );
   });
+
+  it("freezes every field and attachment action while the create request is pending", async () => {
+    const user = userEvent.setup();
+    const uploader = vi.fn(async (file: File) => ({
+      fileId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      fileName: file.name,
+      mimeType: file.type,
+      ok: true as const,
+      sizeBytes: file.size,
+    }));
+    const props = {
+      company: {
+        companyId: "11111111-1111-4111-8111-111111111111",
+        companyName: "Alfa",
+      },
+      onClose: () => undefined,
+      onSubmit: () => undefined,
+      open: true,
+      uploader,
+    };
+    const view = render(
+      <VinxThemeProvider>
+        <PaguaiCreateDialog {...props} />
+      </VinxThemeProvider>,
+    );
+
+    await user.upload(
+      screen.getByLabelText(
+        "Fatura ou documento da solicitação: anexar arquivo",
+      ),
+      new File(["fatura"], "fatura.pdf", { type: "application/pdf" }),
+    );
+    expect(await screen.findByText("Anexado")).toBeVisible();
+
+    view.rerender(
+      <VinxThemeProvider>
+        <PaguaiCreateDialog {...props} submitting />
+      </VinxThemeProvider>,
+    );
+
+    for (const label of [
+      "Título",
+      "Valor (R$)",
+      "Pagar até",
+      "Quem receberá",
+      "Descrição",
+    ])
+      expect(screen.getByLabelText(label)).toBeDisabled();
+    expect(
+      screen.getByRole("combobox", { name: "Comprovante de pagamento" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByLabelText(
+        "Fatura ou documento da solicitação: anexar arquivo",
+      ),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Remover fatura.pdf" }),
+    ).toBeDisabled();
+
+    await user.upload(
+      screen.getByLabelText(
+        "Fatura ou documento da solicitação: anexar arquivo",
+      ),
+      new File(["nova fatura"], "nova-fatura.pdf", {
+        type: "application/pdf",
+      }),
+    );
+    expect(uploader).toHaveBeenCalledTimes(1);
+  });
 });

@@ -154,6 +154,7 @@ export function PaguaiCreateDialog({
           sx={{ pt: 1 }}
         >
           <TextField
+            disabled={submitting}
             error={Boolean(form.formState.errors.title)}
             helperText={form.formState.errors.title?.message}
             label="Título"
@@ -161,6 +162,7 @@ export function PaguaiCreateDialog({
             {...form.register("title")}
           />
           <TextField
+            disabled={submitting}
             error={
               Boolean(form.formState.errors.amountReais) || Boolean(amountError)
             }
@@ -174,6 +176,7 @@ export function PaguaiCreateDialog({
             {...form.register("amountReais")}
           />
           <TextField
+            disabled={submitting}
             error={Boolean(form.formState.errors.dueDate)}
             helperText={form.formState.errors.dueDate?.message}
             label="Pagar até"
@@ -184,6 +187,7 @@ export function PaguaiCreateDialog({
             {...form.register("dueDate")}
           />
           <TextField
+            disabled={submitting}
             error={Boolean(form.formState.errors.beneficiaryDisplayName)}
             helperText={
               form.formState.errors.beneficiaryDisplayName?.message ??
@@ -198,6 +202,7 @@ export function PaguaiCreateDialog({
             name="proofRequirement"
             render={({ field: { ref, ...field }, fieldState }) => (
               <TextField
+                disabled={submitting}
                 error={Boolean(fieldState.error)}
                 helperText={
                   fieldState.error?.message ??
@@ -218,6 +223,7 @@ export function PaguaiCreateDialog({
           />
           <AttachmentField
             accept="application/pdf,image/jpeg,image/png"
+            disabled={submitting}
             label="Fatura ou documento da solicitação"
             onChange={setAttachments}
             uploader={
@@ -238,6 +244,7 @@ export function PaguaiCreateDialog({
             </Alert>
           ) : null}
           <TextField
+            disabled={submitting}
             error={Boolean(form.formState.errors.description)}
             helperText={form.formState.errors.description?.message}
             label="Descrição"

@@ -21,6 +21,7 @@ import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import { PaguaiCreateDialog } from "./paguai-create-dialog";
 import {
+  type CreatePaguaiDraftInput,
   createPaguaiDraftClient,
   type PaguaiDraft,
   type PaguaiDraftError,
@@ -74,6 +75,57 @@ function sortDrafts(left: PaguaiDraft, right: PaguaiDraft) {
   );
 }
 
+type PaguaiCreatePayload = Omit<CreatePaguaiDraftInput, "requestId">;
+type PaguaiCreateAttempt = {
+  payload: PaguaiCreatePayload;
+  requestId: string;
+};
+
+function sameCreatePayload(
+  left: PaguaiCreatePayload,
+  right: PaguaiCreatePayload,
+) {
+  return (
+    left.amount === right.amount &&
+    left.beneficiaryDisplayName === right.beneficiaryDisplayName &&
+    left.companyId === right.companyId &&
+    left.currency === right.currency &&
+    left.description === right.description &&
+    left.dueDate === right.dueDate &&
+    left.invoiceFileId === right.invoiceFileId &&
+    left.proofRequirement === right.proofRequirement &&
+    left.title === right.title
+  );
+}
+
+function scopeKeyFor(
+  bootstrap: ReturnType<typeof useSession>["bootstrap"],
+  selectedCompanyIds: readonly string[],
+  createCompanyId: string | undefined,
+) {
+  return JSON.stringify({
+    companies: (bootstrap?.companies ?? [])
+      .map((company) => ({
+        capabilities: company.capabilities
+          .map(
+            (capability) =>
+              `${capability.name}:${[...capability.scopes].sort().join(",")}`,
+          )
+          .sort(),
+        companyId: company.companyId,
+        membershipId: company.membershipId,
+      }))
+      .sort(
+        (left, right) =>
+          left.companyId.localeCompare(right.companyId) ||
+          left.membershipId.localeCompare(right.membershipId),
+      ),
+    createCompanyId: createCompanyId ?? null,
+    selectedCompanyIds: [...new Set(selectedCompanyIds)].sort(),
+    userId: bootstrap?.user.id ?? null,
+  });
+}
+
 export function PaguaiPage({
   draftClient = client,
 }: {
@@ -104,10 +156,7 @@ export function PaguaiPage({
   const [partialFailures, setPartialFailures] = useState<
     readonly { companyId: string; error: PaguaiDraftError }[]
   >([]);
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [createDialogInstance, setCreateDialogInstance] = useState(0);
-  const companyIdRef = useRef("");
-  const detailRequestRef = useRef(0);
 
   const requestedCompanies = useMemo(() => {
     if (!selectedCompanyIds.length) return companies;
@@ -133,6 +182,14 @@ export function PaguaiPage({
     [createCompany],
   );
   const invoiceUploader = useMemo(() => createPaguaiInvoiceUploader(), []);
+  const scopeKey = useMemo(
+    () => scopeKeyFor(bootstrap, selectedCompanyIds, createCompany?.companyId),
+    [bootstrap, createCompany?.companyId, selectedCompanyIds],
+  );
+  const scopeGenerationRef = useRef(0);
+  const scopeKeyRef = useRef(scopeKey);
+  const createAttemptRef = useRef<PaguaiCreateAttempt | null>(null);
+  const detailRequestRef = useRef(0);
 
   useEffect(() => {
     const validIds = new Set(companies.map((company) => company.companyId));
@@ -140,6 +197,21 @@ export function PaguaiPage({
       current.filter((companyId) => validIds.has(companyId)),
     );
   }, [companies]);
+
+  useEffect(() => {
+    if (scopeKeyRef.current === scopeKey) return;
+    scopeKeyRef.current = scopeKey;
+    scopeGenerationRef.current += 1;
+    createAttemptRef.current = null;
+    detailRequestRef.current += 1;
+    setCreateError(null);
+    setCreateOpen(false);
+    setCreateDialogInstance((current) => current + 1);
+    setError(null);
+    setSelected(null);
+    setStatus((current) => (current === "submitting" ? "idle" : current));
+    setViewOpen(false);
+  }, [scopeKey]);
 
   useEffect(() => {
     if (!requestedCompanies.length) {
@@ -220,23 +292,35 @@ export function PaguaiPage({
     title: string;
   }) {
     if (!createCompany || status === "submitting") return;
-    const companyId = createCompany.companyId;
-    companyIdRef.current = companyId;
+    const payload: PaguaiCreatePayload = {
+      amount: values.amount,
+      beneficiaryDisplayName: values.beneficiaryDisplayName,
+      companyId: createCompany.companyId,
+      currency: "BRL",
+      description: values.description,
+      dueDate: values.dueDate,
+      invoiceFileId: values.invoiceFileId,
+      proofRequirement: values.proofRequirement,
+      title: values.title,
+    };
+    const currentAttempt = createAttemptRef.current;
+    const attempt =
+      currentAttempt && sameCreatePayload(currentAttempt.payload, payload)
+        ? currentAttempt
+        : { payload, requestId: crypto.randomUUID() };
+    createAttemptRef.current = attempt;
+    const scopeGeneration = scopeGenerationRef.current;
     setStatus("submitting");
     setError(null);
     const result = await draftClient.create({
-      companyId,
-      requestId,
-      title: values.title,
-      description: values.description,
-      amount: values.amount,
-      currency: "BRL",
-      dueDate: values.dueDate,
-      beneficiaryDisplayName: values.beneficiaryDisplayName,
-      invoiceFileId: values.invoiceFileId,
-      proofRequirement: values.proofRequirement,
+      ...payload,
+      requestId: attempt.requestId,
     });
-    if (companyIdRef.current !== companyId) return;
+    if (
+      scopeGeneration !== scopeGenerationRef.current ||
+      createAttemptRef.current !== attempt
+    )
+      return;
     setStatus("idle");
     if (!result.ok) {
       setError(result.error);
@@ -251,16 +335,21 @@ export function PaguaiPage({
     );
     setSelected(result.value);
     setCreateError(null);
+    createAttemptRef.current = null;
     setCreateDialogInstance((current) => current + 1);
     setCreateOpen(false);
-    setRequestId(crypto.randomUUID());
   }
 
   function openView(draft: PaguaiDraft) {
     const request = detailRequestRef.current + 1;
+    const scopeGeneration = scopeGenerationRef.current;
     detailRequestRef.current = request;
     void draftClient.detail(draft.companyId, draft.id).then((result) => {
-      if (detailRequestRef.current !== request) return;
+      if (
+        detailRequestRef.current !== request ||
+        scopeGeneration !== scopeGenerationRef.current
+      )
+        return;
       if (result.ok) {
         setSelected(result.value);
         setViewOpen(true);
@@ -275,7 +364,10 @@ export function PaguaiPage({
           actions={
             permissions.canCreate ? (
               <Button
-                onClick={() => setCreateOpen(true)}
+                onClick={() => {
+                  setCreateError(null);
+                  setCreateOpen(true);
+                }}
                 startIcon={<AddOutlinedIcon />}
                 variant="contained"
               >
@@ -388,7 +480,9 @@ export function PaguaiPage({
         }
         errorMessage={createError}
         onClose={() => {
+          createAttemptRef.current = null;
           setCreateError(null);
+          setError(null);
           setCreateOpen(false);
           setCreateDialogInstance((current) => current + 1);
         }}
@@ -440,10 +534,7 @@ function DraftViewDialog({
             {draft.title}
           </Typography>
           <Typography>{draft.description}</Typography>
-          <Typography>
-            Estado: {presentationFor(draft.state).label} · versão{" "}
-            {draft.version}
-          </Typography>
+          <Typography>Estado: {presentationFor(draft.state).label}</Typography>
           <Typography>{formatAmount(draft.amount)}</Typography>
           <Typography>Pagar até: {formatDueDate(draft.dueDate)}</Typography>
           <Typography>Quem receberá: {draft.beneficiaryDisplayName}</Typography>

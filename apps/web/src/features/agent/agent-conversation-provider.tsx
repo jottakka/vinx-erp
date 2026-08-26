@@ -23,11 +23,6 @@ import {
 } from "./agent-client";
 import type { AgentMessage, AgentStatus } from "./agent-contract";
 
-/**
- * Conecta o workspace do agente ao POST /agent/runs para a empresa escolhida.
- * A conversa é cancelada e limpa quando a empresa, o usuário ou o vínculo muda.
- * Resultados tardios não são exibidos após reset, desmontagem ou troca.
- */
 export function agentReplyText(result: AgentRunSendResult): string {
   if (!result.ok) {
     return failureText(result.failure.kind);
@@ -183,6 +178,11 @@ export function isAgentWorkspaceEnabled() {
   return import.meta.env.DEV;
 }
 
+/**
+ * Conecta o workspace do agente ao POST /agent/runs para a empresa escolhida.
+ * A conversa é cancelada e limpa quando a empresa, o usuário ou o vínculo muda.
+ * Resultados tardios não são exibidos após reset, desmontagem ou troca.
+ */
 export function AgentConversationProvider({
   children,
 }: {

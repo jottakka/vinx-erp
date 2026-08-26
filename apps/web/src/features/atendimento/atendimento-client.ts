@@ -121,6 +121,7 @@ export const atendimentoClient = {
   },
   create(
     companyId: string,
+    requestId: string,
     title: string,
     description: string,
     {
@@ -133,7 +134,7 @@ export const atendimentoClient = {
       companyId,
       description,
       participantMembershipIds: [...participantMembershipIds],
-      requestId: crypto.randomUUID(),
+      requestId,
       title,
     });
   },

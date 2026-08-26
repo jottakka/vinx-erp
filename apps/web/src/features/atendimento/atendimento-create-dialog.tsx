@@ -33,6 +33,7 @@ const schema = z.object({
 type Values = z.output<typeof schema> & {
   attachmentFileId?: string;
   participantMembershipIds: readonly string[];
+  requestId: string;
 };
 export type AtendimentoCreateSubmitResult =
   | { ok: true }
@@ -50,6 +51,40 @@ export type AtendimentoAttachmentUploader = ReturnType<
 >;
 const defaultUploader = createAtendimentoAttachmentUploader();
 
+type CreatePayload = {
+  attachmentKey: string | null;
+  companyId: string;
+  description: string;
+  participantMembershipIds: readonly string[];
+  title: string;
+};
+type CreateAttempt = {
+  attachmentFileId?: string;
+  payload: CreatePayload;
+  requestId: string;
+};
+
+function attachmentKey(file: File | null) {
+  return file
+    ? `${file.name}\u0000${file.type}\u0000${file.size}\u0000${file.lastModified}`
+    : null;
+}
+
+function sameCreatePayload(left: CreatePayload, right: CreatePayload) {
+  return (
+    left.attachmentKey === right.attachmentKey &&
+    left.companyId === right.companyId &&
+    left.description === right.description &&
+    left.title === right.title &&
+    left.participantMembershipIds.length ===
+      right.participantMembershipIds.length &&
+    left.participantMembershipIds.every(
+      (membershipId, index) =>
+        membershipId === right.participantMembershipIds[index],
+    )
+  );
+}
+
 /** Reúne um anexo confirmado e participantes nomeados para uma empresa explícita. */
 export function AtendimentoCreateDialog({
   assignmentOptions,
@@ -65,13 +100,23 @@ export function AtendimentoCreateDialog({
   });
   const uploadRef = useRef<AbortController | null>(null);
   const epochRef = useRef(0);
+  const createAttemptRef = useRef<CreateAttempt | null>(null);
   const [attachment, setAttachment] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "attaching" | "creating">("idle");
   const [participantMembershipIds, setParticipantMembershipIds] = useState<
     readonly string[]
   >([]);
+  const titleField = form.register("title");
+  const descriptionField = form.register("description");
+
+  function invalidateAttempt() {
+    createAttemptRef.current = null;
+    setError(null);
+  }
+
   function reset() {
+    createAttemptRef.current = null;
     setAttachment(null);
     setError(null);
     setParticipantMembershipIds([]);
@@ -93,6 +138,7 @@ export function AtendimentoCreateDialog({
     epochRef.current++;
     uploadRef.current?.abort();
     uploadRef.current = null;
+    createAttemptRef.current = null;
     setPhase("idle");
     setAttachment(null);
     setError(null);
@@ -101,11 +147,24 @@ export function AtendimentoCreateDialog({
   }, [companyId, form, open]);
   async function submit(values: AtendimentoCreateValues) {
     if (phase !== "idle") return;
+    const payload: CreatePayload = {
+      attachmentKey: attachmentKey(attachment),
+      companyId,
+      description: values.description,
+      participantMembershipIds: [...new Set(participantMembershipIds)].sort(),
+      title: values.title,
+    };
+    const currentAttempt = createAttemptRef.current;
+    const attempt =
+      currentAttempt && sameCreatePayload(currentAttempt.payload, payload)
+        ? currentAttempt
+        : { payload, requestId: crypto.randomUUID() };
+    createAttemptRef.current = attempt;
     setPhase(attachment ? "attaching" : "creating");
     setError(null);
     const epoch = ++epochRef.current;
-    let attachmentFileId: string | undefined;
-    if (attachment) {
+    let attachmentFileId = attempt.attachmentFileId;
+    if (attachment && !attachmentFileId) {
       const controller = new AbortController();
       uploadRef.current = controller;
       const result = await (providedUploader ?? defaultUploader).upload({
@@ -121,15 +180,20 @@ export function AtendimentoCreateDialog({
         return;
       }
       attachmentFileId = result.attachmentFileId;
+      attempt.attachmentFileId = attachmentFileId;
     }
-    if (epoch !== epochRef.current) return;
+    if (epoch !== epochRef.current || createAttemptRef.current !== attempt)
+      return;
     setPhase("creating");
     const result = await onSubmit({
-      ...values,
       attachmentFileId,
-      participantMembershipIds: [...new Set(participantMembershipIds)].sort(),
+      description: payload.description,
+      participantMembershipIds: payload.participantMembershipIds,
+      requestId: attempt.requestId,
+      title: payload.title,
     });
-    if (epoch !== epochRef.current) return;
+    if (epoch !== epochRef.current || createAttemptRef.current !== attempt)
+      return;
     if (!result.ok) {
       setPhase("idle");
       setError(result.message);
@@ -164,7 +228,11 @@ export function AtendimentoCreateDialog({
             error={Boolean(form.formState.errors.title)}
             helperText={form.formState.errors.title?.message}
             slotProps={{ htmlInput: { maxLength: 200 } }}
-            {...form.register("title")}
+            {...titleField}
+            onChange={(event) => {
+              invalidateAttempt();
+              titleField.onChange(event);
+            }}
           />
           <TextField
             label="Pessoas envolvidas"
@@ -172,11 +240,12 @@ export function AtendimentoCreateDialog({
             select
             slotProps={{ select: { multiple: true } }}
             value={participantMembershipIds}
-            onChange={(event) =>
+            onChange={(event) => {
+              invalidateAttempt();
               setParticipantMembershipIds(
                 event.target.value as unknown as string[],
-              )
-            }
+              );
+            }}
           >
             {assignmentOptions.map((option) => (
               <MenuItem key={option.membershipId} value={option.membershipId}>
@@ -194,9 +263,10 @@ export function AtendimentoCreateDialog({
               accept="application/pdf,image/jpeg,image/png"
               data-testid="atendimento-attachment-picker"
               hidden
-              onChange={(event) =>
-                setAttachment(event.target.files?.[0] ?? null)
-              }
+              onChange={(event) => {
+                invalidateAttempt();
+                setAttachment(event.target.files?.[0] ?? null);
+              }}
               type="file"
             />
           </Button>
@@ -208,7 +278,11 @@ export function AtendimentoCreateDialog({
             minRows={3}
             multiline
             slotProps={{ htmlInput: { maxLength: 4000 } }}
-            {...form.register("description")}
+            {...descriptionField}
+            onChange={(event) => {
+              invalidateAttempt();
+              descriptionField.onChange(event);
+            }}
           />
         </Stack>
       </DialogContent>

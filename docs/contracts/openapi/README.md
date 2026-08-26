@@ -100,23 +100,31 @@ Detalhe de outro solicitante, outra empresa ou sem permissão é sempre
 `404 {"code":"resource_not_found"}`.
 
 `POST /paguai/requests` usa a mesma segurança; para cookie BFF, CSRF exige
-`X-CSRF-TOKEN`. O corpo JSON estrito contém exatamente `companyId`, `requestId`,
-`title`, `description`, `amount`, `currency`, `dueDate`,
-`beneficiaryDisplayName` e `proofRequirement`. `amount` é texto decimal exato
-positivo com no máximo duas casas, entre `0.01` e `9999999999999999.99`, sem
-arredondamento (por exemplo, `"1250.25"`); `currency` é exatamente `BRL`; `dueDate` usa `YYYY-MM-DD`;
+`X-CSRF-TOKEN`. O corpo JSON estrito contém `companyId`, `requestId`, `title`,
+`description`, `amount`, `currency`, `dueDate`, `beneficiaryDisplayName` e
+`proofRequirement`, além de `invoiceFileId` opcional e anulável. Quando
+informado, `invoiceFileId` é UUID de uma fatura ou documento privado, vivo e
+confirmado da mesma empresa, classificado exatamente como
+`paguai_request_invoice`; ele integra o hash de idempotência. `amount` é texto
+decimal exato positivo com no máximo duas casas, entre `0.01` e
+`9999999999999999.99`, sem arredondamento (por exemplo, `"1250.25"`);
+`currency` é exatamente `BRL`; `dueDate` usa `YYYY-MM-DD`;
 `beneficiaryDisplayName` é aparado, não vazio e limitado a 200 caracteres; e
 `proofRequirement` é `optional` ou `required`. Os textos de título e descrição
-continuam limitados a 200 e 4000 caracteres. Aceita somente
+continuam limitados a 200 e 4000 caracteres. UUID inválido ou arquivo
+inexistente, removido, não confirmado, de outra empresa ou de classificação
+incorreta devolve `400 {"code":"invalid_request"}` sem mutação. Aceita somente
 `Content-Type: application/json` e no máximo
 24 KiB de bytes recebidos; mídia incorreta devolve `415` e corpo excedente
 devolve `400 {"code":"invalid_request"}`, ambos antes de qualquer mutação. Retorna `201` e `Location` na primeira criação, `200` no
 replay idêntico, `400`, `401`, `403`, `409 {"code":"idempotency_conflict"}`,
 `429` ou `503 {"code":"paguai_unavailable"}`. A resposta de sucesso contém
 `id`, `companyId`, `requestId`, `title`, `description`, `amount`, `currency`,
-`dueDate`, `beneficiaryDisplayName`, `proofRequirement`, `state`, `version` e
-`createdAt`; `state` é `rascunho` e `version` é `1`. O beneficiário é somente
-texto informativo e nunca entra em logs, auditoria ou métricas.
+`dueDate`, `beneficiaryDisplayName`, `invoiceFileId`, `proofRequirement`,
+`state`, `version` e `createdAt`; `invoiceFileId` permanece UUID ou `null`, sem
+URL, chave de storage, nome, MIME, tamanho, bytes ou outro metadado do arquivo.
+`state` é `rascunho` e `version` é `1`. O beneficiário é somente texto
+informativo e nunca entra em logs, auditoria ou métricas.
 
 O contrato não expõe payload em logs ou auditoria. Todas as respostas privadas
 recebem `Cache-Control: private, no-store` e o header de correlação do host.

@@ -227,8 +227,12 @@ describe("AtendimentoPage", () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create).toHaveBeenCalledWith(
       alfaCompanyId,
+      expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
       "Novo cartão",
       "Descrição do cartão",
+      { attachmentFileId: null, participantMembershipIds: [] },
     );
     await waitFor(() =>
       expect(screen.getAllByText("Novo cartão").length).toBeGreaterThanOrEqual(
@@ -286,6 +290,9 @@ describe("AtendimentoPage", () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create).toHaveBeenCalledWith(
       alfaCompanyId,
+      expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
       "Falha preservada",
       "Tente novamente",
       {
@@ -301,6 +308,47 @@ describe("AtendimentoPage", () => {
       screen.getByText("Não foi possível concluir a ação. Tente novamente."),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "Criar cartão" })).toBeEnabled();
+  });
+
+  it("replays an ambiguous attachment create with one upload and the exact same command", async () => {
+    const user = userEvent.setup();
+    const attachmentFileId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
+    const create = vi
+      .spyOn(atendimentoClient, "create")
+      .mockResolvedValueOnce({
+        code: "atendimento_unavailable",
+        ok: false,
+      } as Awaited<ReturnType<typeof atendimentoClient.create>>)
+      .mockResolvedValueOnce({
+        card: { ...alfaCard, title: "Pedido idempotente" },
+        ok: true,
+      } as Awaited<ReturnType<typeof atendimentoClient.create>>);
+    const uploader: AtendimentoAttachmentUploader = {
+      upload: vi.fn().mockResolvedValue({ attachmentFileId, ok: true }),
+    };
+
+    renderPage(snapshot(), uploader);
+    await user.click(
+      await screen.findByRole("button", { name: "Novo atendimento" }),
+    );
+    await user.type(screen.getByLabelText("Título"), "Pedido idempotente");
+    await user.type(screen.getByLabelText("Descrição"), "Descrição");
+    await user.upload(
+      screen.getByTestId("atendimento-attachment-picker"),
+      new File(["documento"], "evidencia.pdf", { type: "application/pdf" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Criar cartão" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const firstCommand = create.mock.calls[0];
+    expect(firstCommand?.[1]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Criar cartão" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(create.mock.calls[1]).toEqual(firstCommand);
+    expect(uploader.upload).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an optional document visibly selected in the create dialog", async () => {
@@ -400,6 +448,56 @@ describe("AtendimentoPage", () => {
       column: "novo",
     });
     expect(move.mock.calls[0]?.[2]).toBe("em_andamento");
+  });
+
+  it("anchors each card menu to its trigger and preserves Escape close", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    renderPage();
+
+    const statusTrigger = await screen.findByRole("button", {
+      name: "Alterar status",
+    });
+    vi.spyOn(statusTrigger, "getBoundingClientRect").mockReturnValue({
+      bottom: 138,
+      height: 38,
+      left: 240,
+      right: 320,
+      toJSON: () => ({}),
+      top: 100,
+      width: 80,
+      x: 240,
+      y: 100,
+    });
+    await user.click(statusTrigger);
+    const statusMenu = await screen.findByRole("menu");
+    expect(statusMenu.closest(".MuiMenu-paper")).toHaveStyle({
+      left: "240px",
+      top: "138px",
+    });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+
+    const actionsTrigger = screen.getByRole("button", { name: "Mais ações" });
+    vi.spyOn(actionsTrigger, "getBoundingClientRect").mockReturnValue({
+      bottom: 278,
+      height: 28,
+      left: 420,
+      right: 470,
+      toJSON: () => ({}),
+      top: 250,
+      width: 50,
+      x: 420,
+      y: 250,
+    });
+    await user.click(actionsTrigger);
+    const actionsMenu = await screen.findByRole("menu");
+    expect(actionsMenu.closest(".MuiMenu-paper")).toHaveStyle({
+      left: "420px",
+      top: "278px",
+    });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   });
 
   it("uses named same-company assignment options and never exposes membership IDs", async () => {

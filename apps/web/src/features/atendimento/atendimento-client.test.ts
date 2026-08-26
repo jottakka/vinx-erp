@@ -1,7 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type AtendimentoCard, atendimentoClient } from "./atendimento-client";
+import {
+  type AtendimentoCard,
+  type AtendimentoCreateOptions,
+  atendimentoClient,
+} from "./atendimento-client";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
+const requestId = "99999999-9999-4999-8999-999999999999";
+
+function createWithRequestId(
+  companyId: string,
+  stableRequestId: string,
+  title: string,
+  description: string,
+  options?: AtendimentoCreateOptions,
+) {
+  return (
+    atendimentoClient.create as unknown as (
+      companyId: string,
+      requestId: string,
+      title: string,
+      description: string,
+      options?: AtendimentoCreateOptions,
+    ) => ReturnType<typeof atendimentoClient.create>
+  )(companyId, stableRequestId, title, description, options);
+}
 
 const createdCard: AtendimentoCard = {
   attachmentFileId: null,
@@ -51,8 +74,9 @@ describe("atendimento client", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     await expect(
-      atendimentoClient.create(
+      createWithRequestId(
         createdCard.companyId,
+        requestId,
         createdCard.title,
         createdCard.description,
         {
@@ -94,6 +118,7 @@ describe("atendimento client", () => {
         description: createdCard.description,
         attachmentFileId: "33333333-3333-4333-8333-333333333333",
         participantMembershipIds: ["44444444-4444-4444-8444-444444444444"],
+        requestId,
         title: createdCard.title,
       },
     );
@@ -106,8 +131,9 @@ describe("atendimento client", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     await expect(
-      atendimentoClient.create(
+      createWithRequestId(
         createdCard.companyId,
+        requestId,
         createdCard.title,
         createdCard.description,
       ),

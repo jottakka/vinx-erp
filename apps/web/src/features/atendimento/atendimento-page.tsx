@@ -61,6 +61,11 @@ const createCapability = "service_desk.ticket.create";
 const moveCapability = "service_desk.ticket.move";
 const assignCapability = "service_desk.ticket.assign";
 
+type CardMenuState = {
+  anchorEl: HTMLElement;
+  card: AtendimentoCard;
+};
+
 function messageFor(code: string) {
   if (code === "integrity_conflict")
     return "O cartão foi atualizado por outra pessoa. A fila foi sincronizada.";
@@ -96,11 +101,8 @@ export function AtendimentoPage({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [statusMenuCard, setStatusMenuCard] = useState<AtendimentoCard | null>(
-    null,
-  );
-  const [actionsMenuCard, setActionsMenuCard] =
-    useState<AtendimentoCard | null>(null);
+  const [statusMenu, setStatusMenu] = useState<CardMenuState | null>(null);
+  const [actionsMenu, setActionsMenu] = useState<CardMenuState | null>(null);
   const [viewingCard, setViewingCard] = useState<AtendimentoCard | null>(null);
   const [assigningCard, setAssigningCard] = useState<AtendimentoCard | null>(
     null,
@@ -209,6 +211,7 @@ export function AtendimentoPage({
   }, [companyId, permissions.canCreate]);
 
   async function createCard(values: {
+    requestId: string;
     title: string;
     description: string;
     attachmentFileId?: string;
@@ -219,22 +222,16 @@ export function AtendimentoPage({
         message: "Não foi possível criar o atendimento. Tente novamente.",
         ok: false,
       };
-    const result =
-      values.attachmentFileId || values.participantMembershipIds.length
-        ? await atendimentoClient.create(
-            companyId,
-            values.title,
-            values.description,
-            {
-              attachmentFileId: values.attachmentFileId,
-              participantMembershipIds: values.participantMembershipIds,
-            },
-          )
-        : await atendimentoClient.create(
-            companyId,
-            values.title,
-            values.description,
-          );
+    const result = await atendimentoClient.create(
+      companyId,
+      values.requestId,
+      values.title,
+      values.description,
+      {
+        attachmentFileId: values.attachmentFileId ?? null,
+        participantMembershipIds: values.participantMembershipIds,
+      },
+    );
     if (!result.ok) {
       return { message: messageFor(result.code), ok: false };
     }
@@ -571,7 +568,12 @@ export function AtendimentoPage({
                         </Button>
                         {canEditCard(card) && card.column !== "cancelado" ? (
                           <Button
-                            onClick={() => setStatusMenuCard(card)}
+                            onClick={(event) =>
+                              setStatusMenu({
+                                anchorEl: event.currentTarget,
+                                card,
+                              })
+                            }
                             size="small"
                           >
                             Alterar status
@@ -581,7 +583,12 @@ export function AtendimentoPage({
                         card.column !== "cancelado" ? (
                           <IconButton
                             aria-label="Mais ações"
-                            onClick={() => setActionsMenuCard(card)}
+                            onClick={(event) =>
+                              setActionsMenu({
+                                anchorEl: event.currentTarget,
+                                card,
+                              })
+                            }
                             size="small"
                           >
                             <MoreVertOutlinedIcon />
@@ -614,19 +621,21 @@ export function AtendimentoPage({
       />
 
       <Menu
-        anchorEl={statusMenuCard ? document.body : null}
-        onClose={() => setStatusMenuCard(null)}
-        open={Boolean(statusMenuCard)}
+        anchorEl={statusMenu?.anchorEl ?? null}
+        onClose={() => setStatusMenu(null)}
+        open={Boolean(statusMenu)}
       >
-        {statusMenuCard
+        {statusMenu
           ? workflowColumns
-              .filter((destination) => destination.id !== statusMenuCard.column)
+              .filter(
+                (destination) => destination.id !== statusMenu.card.column,
+              )
               .map((destination) => (
                 <MenuItem
                   key={destination.id}
                   onClick={() => {
-                    void move(statusMenuCard, destination.id);
-                    setStatusMenuCard(null);
+                    void move(statusMenu.card, destination.id);
+                    setStatusMenu(null);
                   }}
                 >
                   {destination.label}
@@ -635,25 +644,25 @@ export function AtendimentoPage({
           : null}
       </Menu>
       <Menu
-        anchorEl={actionsMenuCard ? document.body : null}
-        onClose={() => setActionsMenuCard(null)}
-        open={Boolean(actionsMenuCard)}
+        anchorEl={actionsMenu?.anchorEl ?? null}
+        onClose={() => setActionsMenu(null)}
+        open={Boolean(actionsMenu)}
       >
-        {actionsMenuCard && canAssignCard(actionsMenuCard) ? (
+        {actionsMenu && canAssignCard(actionsMenu.card) ? (
           <MenuItem
             onClick={() => {
-              void openAssignment(actionsMenuCard);
-              setActionsMenuCard(null);
+              void openAssignment(actionsMenu.card);
+              setActionsMenu(null);
             }}
           >
             Atribuir responsável
           </MenuItem>
         ) : null}
-        {actionsMenuCard && canEditCard(actionsMenuCard) ? (
+        {actionsMenu && canEditCard(actionsMenu.card) ? (
           <MenuItem
             onClick={() => {
-              setCancellingCard(actionsMenuCard);
-              setActionsMenuCard(null);
+              setCancellingCard(actionsMenu.card);
+              setActionsMenu(null);
             }}
           >
             Cancelar atendimento
