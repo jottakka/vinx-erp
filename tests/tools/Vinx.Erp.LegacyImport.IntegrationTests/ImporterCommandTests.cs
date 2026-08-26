@@ -45,16 +45,16 @@ public sealed class ImporterCommandTests
         {
             // Execução 1: importa tudo.
             int run1;
-            var sink1 = Capture();
-            try
+            string stdout1;
+            string stderr1;
+            using (var io = Capture())
             {
                 run1 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
-                Assert.Contains("imported_new", sink1.Text);
+                (stdout1, stderr1) = (io.Stdout, io.Stderr);
             }
-            finally
-            {
-                sink1.DisposeSink();
-            }
+            Assert.True(
+                run1 == 0 && stdout1.Contains("imported_new"),
+                $"exit={run1} stdout=[{stdout1}] stderr=[{stderr1}]");
             Assert.Equal(0, run1);
             Assert.Equal(5, await fx.ExecuteCountAsync("SELECT count(*) FROM legacy_import.customers"));
             Assert.Equal(2, await fx.ExecuteCountAsync("SELECT count(*) FROM legacy_import.import_receipts"));
@@ -64,15 +64,10 @@ public sealed class ImporterCommandTests
             // Execução 2: replay idêntico — nada muda, reporta skip.
             int run2;
             string summary2;
-            var sink2 = Capture();
-            try
+            using (var io = Capture())
             {
                 run2 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
-                summary2 = sink2.Text;
-            }
-            finally
-            {
-                sink2.DisposeSink();
+                summary2 = io.Stdout;
             }
             Assert.Equal(0, run2);
             Assert.Contains("replayed_skip", summary2);
@@ -83,14 +78,9 @@ public sealed class ImporterCommandTests
             await fx.ExecuteAsync(
                 "UPDATE legacy.cliente SET nome = 'Cliente Sintetico Um ALTERADO' WHERE codigo = 'CLI-0001'");
             int run3;
-            var sink3 = Capture();
-            try
+            using (var io = Capture())
             {
                 run3 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
-            }
-            finally
-            {
-                sink3.DisposeSink();
             }
             Assert.NotEqual(0, run3);
             Assert.Equal(customersAfterRun1, await StagedFingerprint(fx));
@@ -114,19 +104,15 @@ public sealed class ImporterCommandTests
         {
             int exit;
             string summary;
-            var sink = Capture();
-            try
+            string stderr4;
+            using (var io = Capture())
             {
                 // Modo padrão: sem --apply. Nada pode ser escrito, nem receipt.
                 exit = await LegacyImportCommand.RunAsync(["--mapping", mapping]);
-                summary = sink.Text;
-            }
-            finally
-            {
-                sink.DisposeSink();
+                (summary, stderr4) = (io.Stdout, io.Stderr);
             }
 
-            Assert.Equal(0, exit);
+            Assert.True(exit == 0, $"exit={exit} stdout=[{summary}] stderr=[{stderr4}]");
             Assert.Contains("dry_run", summary);
             Assert.True(await fx.StagingMissingAsync());
         }
@@ -139,37 +125,56 @@ public sealed class ImporterCommandTests
     /// <summary>Estado estável do staging para comparações entre execuções.</summary>
     private static Task<string> StagedFingerprint(LegacyImportPostgresFixture fx) =>
         fx.ExecuteScalarAsync<string>("""
-            SELECT coalesce(string_agg(legacy_cliente_id || '|' || legal_name ORDER BY legacy_cliente_id), '')
+            SELECT coalesce(string_agg(legacy_cliente_id::text || '|' || legal_name, E'\n' ORDER BY legacy_cliente_id), '')
             FROM legacy_import.customers
             """);
 
     private static Task<string> ReceiptFingerprint(LegacyImportPostgresFixture fx) =>
         fx.ExecuteScalarAsync<string>("""
-            SELECT coalesce(string_agg(company_key || '|' || mapping_version_hash || '|' || payload_sha256 || '|' || applied_at::text ORDER BY company_key), '')
+            SELECT coalesce(string_agg(company_key || '|' || mapping_version_hash || '|' || payload_sha256 || '|' || applied_at::text, E'\n' ORDER BY company_key), '')
             FROM legacy_import.import_receipts
             """);
 
-    private static ConsoleSink Capture()
+    private static ConsoleCapture Capture()
     {
-        var sink = new ConsoleSink();
-        Console.SetOut(sink);
-        return sink;
+        var capture = new ConsoleCapture();
+        Console.SetOut(capture.BufferOut);
+        Console.SetError(capture.BufferErr);
+        return capture;
     }
 
-    /// <summary>Captura o stdout do CLI durante a execução; restaura no Dispose.</summary>
-    private sealed class ConsoleSink : TextWriter
+    /// <summary>Captura stdout/stderr do CLI durante a execução; restaura no Dispose.</summary>
+    private sealed class ConsoleCapture : TextWriter, IDisposable
     {
-        private readonly StringWriter _buffer = new();
-        private readonly TextWriter _original = Console.Out;
+        private readonly StringWriter _bufferOut = new();
+        private readonly StringWriter _bufferErr = new();
+        private readonly TextWriter _originalOut;
+        private readonly TextWriter _originalErr;
 
-        public override Encoding Encoding => _buffer.Encoding;
+        public ConsoleCapture()
+        {
+            _originalOut = Console.Out;
+            _originalErr = Console.Error;
+        }
 
-        public override void Write(char value) => _buffer.Write(value);
+        public StringWriter BufferOut => _bufferOut;
 
-        public override void Write(string? value) => _buffer.Write(value);
+        public StringWriter BufferErr => _bufferErr;
 
-        public string Text => _buffer.ToString();
+        public string Stdout => _bufferOut.ToString();
 
-        public void DisposeSink() => Console.SetOut(_original);
+        public string Stderr => _bufferErr.ToString();
+
+        public override Encoding Encoding => _bufferOut.Encoding;
+
+        public override void Write(char value) => _bufferOut.Write(value);
+
+        public override void Write(string? value) => _bufferOut.Write(value);
+
+        void IDisposable.Dispose()
+        {
+            Console.SetOut(_originalOut);
+            Console.SetError(_originalErr);
+        }
     }
 }

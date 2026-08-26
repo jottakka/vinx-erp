@@ -9,14 +9,21 @@ namespace Vinx.Erp.LegacyImport.IntegrationTests;
 /// </summary>
 public sealed class LegacyImportPostgresFixture : IAsyncDisposable
 {
+    private const string ConnectionEnvironmentVariable = "LEGACY_IMPORT_CONNECTION";
+
     private readonly PostgreSqlContainer _container =
         new PostgreSqlBuilder("postgres:17.9-alpine").Build();
+
+    private string? _previousConnectionString;
 
     public string ConnectionString => _container.GetConnectionString();
 
     public async Task InitializeAsync()
     {
         await _container.StartAsync();
+        // O CLI lê a conexão do ambiente para nunca expô-la em argumentos de processo.
+        _previousConnectionString = Environment.GetEnvironmentVariable(ConnectionEnvironmentVariable);
+        Environment.SetEnvironmentVariable(ConnectionEnvironmentVariable, ConnectionString);
         await using var connection = new NpgsqlConnection(ConnectionString);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(SyntheticLegacy.SchemaAndSeed, connection);
@@ -52,7 +59,11 @@ public sealed class LegacyImportPostgresFixture : IAsyncDisposable
         await command.ExecuteNonQueryAsync();
     }
 
-    public async ValueTask DisposeAsync() => await _container.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        Environment.SetEnvironmentVariable(ConnectionEnvironmentVariable, _previousConnectionString);
+        await _container.DisposeAsync();
+    }
 }
 
 internal static class SyntheticLegacy

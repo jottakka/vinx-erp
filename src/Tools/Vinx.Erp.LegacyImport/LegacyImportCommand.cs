@@ -1,3 +1,7 @@
+using System.Data.Common;
+using System.Text.Json;
+using Npgsql;
+
 namespace Vinx.Erp.LegacyImport;
 
 /// <summary>
@@ -9,17 +13,134 @@ public sealed class LegacyImportConflictException(string message) : Exception(me
 
 /// <summary>
 /// Ponto de entrada do CLI. Modo padrão é dry-run (sem escrita alguma,
-/// inclusive receipts); escritas exigem --apply.
-/// Uso: [--apply] --mapping &lt;caminho&gt; [--batch &lt;id&gt;] | conexão via LEGACY_IMPORT_CONNECTION.
-/// Saída: uma linha JSON de resumo em stdout; códigos 0 ok, 3 configuração
-/// inválida, 1 falha/conflito fail-closed.
+/// inclusive receipts); escritas exigem <c>--apply</c>.
+///
+/// Uso: [--apply] --mapping &lt;caminho&gt;
+/// Conexão via variável de ambiente LEGACY_IMPORT_CONNECTION.
+/// Saída: uma linha JSON de resumo em stdout.
+/// Códigos de saída: 0 sucesso, 1 falha/conflito fail-closed, 3 configuração inválida.
 /// </summary>
 public static class LegacyImportCommand
 {
-    // Esqueleto RED: toda execução falha até a implementação mínima do GREEN.
-    public static Task<int> RunAsync(string[] arguments)
+    private static readonly string DryRunMode = "dry_run";
+    private static readonly string ApplyMode = "apply";
+
+    public static async Task<int> RunAsync(string[] arguments)
     {
-        Console.Error.WriteLine("legacy-import: não implementado (fase RED)");
-        return Task.FromResult(1);
+        var apply = false;
+        string? mappingPath = null;
+        var index = 0;
+        while (index < arguments.Length)
+        {
+            switch (arguments[index])
+            {
+                case "--apply":
+                    apply = true;
+                    index++;
+                    break;
+                case "--mapping":
+                    if (index + 1 >= arguments.Length || mappingPath is not null)
+                    {
+                        return InvalidUsage();
+                    }
+
+                    mappingPath = arguments[index + 1];
+                    index += 2;
+                    break;
+                default:
+                    return InvalidUsage();
+            }
+        }
+
+        var connectionString = Environment.GetEnvironmentVariable("LEGACY_IMPORT_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString) || mappingPath is null || !File.Exists(mappingPath))
+        {
+            return InvalidUsage();
+        }
+
+        LegacyImportMappingFile.Parsed mapping;
+        try
+        {
+            mapping = LegacyImportMappingFile.Load(mappingPath);
+        }
+        catch (Exception exception) when (exception is FormatException or JsonException or IOException)
+        {
+            await Console.Error.WriteLineAsync($"legacy-import: mapeamento inválido: {exception.Message}");
+            return 3;
+        }
+
+        try
+        {
+            var importer = new LegacyImporter();
+            if (!apply)
+            {
+                var validation = await importer.DryRunAsync(
+                    new LegacyImporter.Options(
+                        connectionString!, mapping.SourceBatchId, mapping.Companies),
+                    CancellationToken.None);
+                WriteSummary(DryRunMode, validation.Problems.Count == 0, mapping.SourceBatchId, validation.Companies, validation.Problems);
+                return validation.Valid ? 0 : 1;
+            }
+
+            // Escritas exigem staging existente conforme convenção DDL do tooling.
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var ddl = new NpgsqlCommand(LegacyImportDdl.EnsureStaging, connection);
+                await ddl.ExecuteNonQueryAsync();
+            }
+
+            var result = await importer.ApplyAsync(
+                new LegacyImporter.Options(connectionString, mapping.SourceBatchId, mapping.Companies),
+                CancellationToken.None);
+            WriteSummary(ApplyMode, result.Succeeded, mapping.SourceBatchId, result.Companies, []);
+            return result.Succeeded ? 0 : 1;
+        }
+        catch (Exception exception) when (exception is NpgsqlException or LegacyImportConflictException or DbException)
+        {
+            // Falha operacional ou conflito fail-closed: motivo no stderr, sem segredos.
+            await Console.Error.WriteLineAsync(
+                $"legacy-import: {exception.GetType().Name}: {exception.Message} @{exception.StackTrace}");
+            return 1;
+        }
+    }
+
+    private static int InvalidUsage()
+    {
+        Console.Error.WriteLine(
+            "uso: LEGACY_IMPORT_CONNECTION=... legacy-import [--apply] --mapping <arquivo.json>");
+        return 3;
+    }
+
+    /// <summary>Resumo processável, uma linha; contém só chaves e contagens.</summary>
+    private static void WriteSummary(
+        string mode,
+        bool succeeded,
+        string sourceBatchId,
+        IReadOnlyList<CompanyResult> companies,
+        IReadOnlyList<ImportValidationProblem> problems)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["mode"] = mode,
+            ["succeeded"] = succeeded,
+            ["source_batch_id"] = sourceBatchId,
+            ["companies"] = companies
+                .Select(c => new Dictionary<string, object?>
+                {
+                    ["company_key"] = c.CompanyKey,
+                    ["outcome"] = c.Outcome.ToLabel(),
+                    ["rows"] = c.Rows,
+                })
+                .ToList(),
+        };
+        if (problems.Count > 0)
+        {
+            payload["problems"] = problems
+                .Select(p => new Dictionary<string, string?> { ["code"] = p.Code, ["detail"] = p.Detail })
+                .ToList();
+        }
+
+        Console.WriteLine(JsonSerializer.Serialize(payload));
     }
 }
