@@ -62,8 +62,13 @@ public sealed class AtendimentoCardService(
         Guid CompanyId,
         Guid CardId,
         string TemplateKey,
+        string Kind,
         Guid RecipientUserId
     );
+
+    private const string AssignedKind = "assigned";
+    private const string MentionedKind = "mentioned";
+    private const string WatcherAddedKind = "watcher_added";
 
     public async Task<AtendimentoCardOperationResult> CreateAsync(
         ActorContext actor,
@@ -88,7 +93,7 @@ public sealed class AtendimentoCardService(
             },
             cancellationToken
         );
-        await FlushPendingNotificationsAsync(actor, pending, cancellationToken);
+        await FlushOnTerminalSuccessAsync(actor, result.State, pending, cancellationToken);
         return result;
     }
 
@@ -150,6 +155,7 @@ public sealed class AtendimentoCardService(
                                 command.CompanyId,
                                 cardId,
                                 AssignedTemplateKey,
+                                AssignedKind,
                                 recipientUserId.Value
                             )
                         );
@@ -176,11 +182,7 @@ public sealed class AtendimentoCardService(
             },
             cancellationToken
         );
-        if (result.State is not (AtendimentoCardOperationState.Success or AtendimentoCardOperationState.Created))
-        {
-            pending.Clear();
-        }
-        await FlushPendingNotificationsAsync(actor, pending, cancellationToken);
+        await FlushOnTerminalSuccessAsync(actor, result.State, pending, cancellationToken);
         return result;
     }
 
@@ -336,7 +338,7 @@ public sealed class AtendimentoCardService(
                 UpdateTicketingFieldsAsync(actor, cardId, command, pending, cancellationToken),
             cancellationToken
         );
-        await FlushPendingNotificationsAsync(actor, pending, cancellationToken);
+        await FlushOnTerminalSuccessAsync(actor, result.State, pending, cancellationToken);
         return result;
     }
 
@@ -348,6 +350,13 @@ public sealed class AtendimentoCardService(
         CancellationToken cancellationToken
     )
     {
+        // Relógio-dependente e avaliado DEPOIS da resolução de replay: um
+        // comando legítimo antigo continua reexecutável como Replay.
+        if (command.SlaDueAt is { } pendingSla && pendingSla <= DateTimeOffset.UtcNow)
+        {
+            return Mutation.Invalid();
+        }
+
         var card = await database.AtendimentoCards.SingleOrDefaultAsync(
             candidate => candidate.CompanyId == command.CompanyId && candidate.Id == cardId,
             cancellationToken
@@ -455,6 +464,19 @@ public sealed class AtendimentoCardService(
             command.CompanyId,
             cancellationToken
         );
+        if (mentionedMembershipIds is { Length: > 0 })
+        {
+            // Menção tem evento próprio, além do fields_updated dos demais campos.
+            await AppendCardEventAsync(
+                command.CompanyId,
+                cardId,
+                membershipId,
+                MentionedKind,
+                new { mentionedMembershipIds },
+                cancellationToken
+            );
+        }
+
         await AppendCardEventAsync(
             command.CompanyId,
             cardId,
@@ -477,7 +499,13 @@ public sealed class AtendimentoCardService(
             ))
             {
                 pending.Add(
-                    new PendingIntent(command.CompanyId, cardId, MentionedTemplateKey, mentioned)
+                    new PendingIntent(
+                        command.CompanyId,
+                        cardId,
+                        MentionedTemplateKey,
+                        MentionedKind,
+                        mentioned
+                    )
                 );
             }
         }
@@ -513,7 +541,7 @@ public sealed class AtendimentoCardService(
             pending,
             cancellationToken
         );
-        await FlushPendingNotificationsAsync(actor, pending, cancellationToken);
+        await FlushOnTerminalSuccessAsync(actor, result.State, pending, cancellationToken);
         return result;
     }
 
@@ -533,7 +561,7 @@ public sealed class AtendimentoCardService(
             pending,
             cancellationToken
         );
-        await FlushPendingNotificationsAsync(actor, pending, cancellationToken);
+        await FlushOnTerminalSuccessAsync(actor, result.State, pending, cancellationToken);
         return result;
     }
 
@@ -556,41 +584,41 @@ public sealed class AtendimentoCardService(
             payloadHash: Hash(new WatcherCommandPayload(cardId, command, isAdd)),
             async () =>
             {
-                // Repetição idempotente antecipada: sem DML, sem bump de versão.
-                var alreadyWatcher = await database.AtendimentoCardWatchers.AnyAsync(
-                    watcher =>
-                        watcher.CompanyId == command.CompanyId
-                        && watcher.CardId == cardId
-                        && watcher.MembershipId == command.MemberMembershipId,
+                var presenceChecked = await IsWatcherPresentAsync(
+                    command.CompanyId,
+                    cardId,
+                    command.MemberMembershipId,
                     cancellationToken
                 );
-                int affected;
-                Guid? membershipId;
-                if (!alreadyWatcher)
+
+                AtendimentoCardResponse? before;
+                if (isAdd)
                 {
-                    var memberActive = await IsActiveMembershipAsync(
-                        command.CompanyId,
-                        command.MemberMembershipId,
-                        cancellationToken
-                    );
-                    if (!memberActive)
+                    if (
+                        !await IsActiveMembershipAsync(
+                            command.CompanyId,
+                            command.MemberMembershipId,
+                            cancellationToken
+                        )
+                    )
                     {
                         return Mutation.ResourceNotFound();
                     }
 
-                    var unchangedBefore = await FindCardAsync(
-                        command.CompanyId,
-                        cardId,
-                        cancellationToken
-                    );
-                    if (unchangedBefore is null)
+                    before = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
+                    if (before is null)
                     {
                         return Mutation.ResourceNotFound();
                     }
 
-                    // Bump otimista ANTES do DML do observador: versão divergente
-                    // devolve conflito com estado atual e desfaz o restante.
-                    var updatedCard = await UpdateCardAsync(
+                    if (presenceChecked)
+                    {
+                        // Repetição de adição: nada acontece e a versão fica.
+                        return Mutation.Succeeded(before, AtendimentoCardOperationState.NoChange);
+                    }
+
+                    // Bump otimista ANTES do DML; divergência devolve estado atual.
+                    var bumpedAdd = await UpdateCardAsync(
                         cardId,
                         command.CompanyId,
                         command.ExpectedVersion,
@@ -600,7 +628,7 @@ public sealed class AtendimentoCardService(
                         },
                         cancellationToken
                     );
-                    if (updatedCard is null)
+                    if (bumpedAdd is null)
                     {
                         return await ReadCurrentAfterMutationMissAsync(
                             command.CompanyId,
@@ -609,25 +637,23 @@ public sealed class AtendimentoCardService(
                         );
                     }
 
-                    membershipId = await ResolveActorMembershipIdAsync(
-                        actor,
-                        command.CompanyId,
-                        cancellationToken
-                    );
-                    affected = 1;
                     await database.Database.ExecuteSqlInterpolatedAsync(
                         $"""
                         INSERT INTO service_desk.atendimento_card_watchers
                             (id, company_id, card_id, membership_id, created_by_user_id, request_id)
                         VALUES ({Guid.NewGuid()}, {command.CompanyId}, {cardId}, {command.MemberMembershipId}, {actor.UserId}, {command.RequestId})
-                        ON CONFLICT (company_id, card_id, membership_id) DO NOTHING
                         """,
+                        cancellationToken
+                    );
+                    var addActor = await ResolveActorMembershipIdAsync(
+                        actor,
+                        command.CompanyId,
                         cancellationToken
                     );
                     await AppendCardEventAsync(
                         command.CompanyId,
                         cardId,
-                        membershipId,
+                        addActor,
                         "watcher_added",
                         new { watcherMembershipId = command.MemberMembershipId },
                         cancellationToken
@@ -644,6 +670,7 @@ public sealed class AtendimentoCardService(
                                 command.CompanyId,
                                 cardId,
                                 WatcherAddedTemplateKey,
+                                WatcherAddedKind,
                                 recipientUserId.Value
                             )
                         );
@@ -651,8 +678,39 @@ public sealed class AtendimentoCardService(
                 }
                 else
                 {
-                    membershipId = null;
-                    affected = await database.Database.ExecuteSqlInterpolatedAsync(
+                    before = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
+                    if (before is null)
+                    {
+                        return Mutation.ResourceNotFound();
+                    }
+
+                    if (!presenceChecked)
+                    {
+                        // Remoção de vínculo inexistente: idempotente, versão fica.
+                        return Mutation.Succeeded(before, AtendimentoCardOperationState.NoChange);
+                    }
+
+                    // Bump otimista ANTES do DELETE, mesma disciplina da adição.
+                    var bumpedRemove = await UpdateCardAsync(
+                        cardId,
+                        command.CompanyId,
+                        command.ExpectedVersion,
+                        card =>
+                        {
+                            card.RequestId = command.RequestId;
+                        },
+                        cancellationToken
+                    );
+                    if (bumpedRemove is null)
+                    {
+                        return await ReadCurrentAfterMutationMissAsync(
+                            command.CompanyId,
+                            cardId,
+                            cancellationToken
+                        );
+                    }
+
+                    await database.Database.ExecuteSqlInterpolatedAsync(
                         $"""
                         DELETE FROM service_desk.atendimento_card_watchers
                         WHERE company_id = {command.CompanyId}
@@ -661,64 +719,26 @@ public sealed class AtendimentoCardService(
                         """,
                         cancellationToken
                     );
-                }
-
-                if (isAdd && alreadyWatcher)
-                {
-                    var currentNoChange = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
-                    return currentNoChange is null
-                        ? Mutation.ResourceNotFound()
-                        : Mutation.Succeeded(currentNoChange, AtendimentoCardOperationState.NoChange);
-                }
-
-                if (affected == 0)
-                {
-                    // Remoção de vínculo inexistente é repetição idempotente.
-                    var currentNone = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
-                    return currentNone is null
-                        ? Mutation.ResourceNotFound()
-                        : Mutation.Succeeded(currentNone, AtendimentoCardOperationState.NoChange);
-                }
-
-                // Caminho da remoção efetiva precisa do bump otimista e do evento.
-                var bumpedForRemove = await UpdateCardAsync(
-                    cardId,
-                    command.CompanyId,
-                    command.ExpectedVersion,
-                    card =>
-                    {
-                        card.RequestId = command.RequestId;
-                    },
-                    cancellationToken
-                );
-                if (bumpedForRemove is null)
-                {
-                    return await ReadCurrentAfterMutationMissAsync(
+                    var removeActor = await ResolveActorMembershipIdAsync(
+                        actor,
+                        command.CompanyId,
+                        cancellationToken
+                    );
+                    await AppendCardEventAsync(
                         command.CompanyId,
                         cardId,
+                        removeActor,
+                        "watcher_removed",
+                        new { watcherMembershipId = command.MemberMembershipId },
                         cancellationToken
                     );
                 }
-
-                var removalActor = await ResolveActorMembershipIdAsync(
-                    actor,
-                    command.CompanyId,
-                    cancellationToken
-                );
-                await AppendCardEventAsync(
-                    command.CompanyId,
-                    cardId,
-                    removalActor,
-                    "watcher_removed",
-                    new { watcherMembershipId = command.MemberMembershipId },
-                    cancellationToken
-                );
 
                 var current = await FindCardAsync(command.CompanyId, cardId, cancellationToken);
                 return current is null
                     ? Mutation.ResourceNotFound()
                     : Mutation.Succeeded(current, AtendimentoCardOperationState.Success);
-            },
+        },
             cancellationToken
         );
 
@@ -1190,7 +1210,11 @@ public sealed class AtendimentoCardService(
             }
 
             var result = await mutation();
-            if (result.State is AtendimentoCardOperationState.ResourceNotFound)
+            if (
+                result.State
+                is AtendimentoCardOperationState.ResourceNotFound
+                    or AtendimentoCardOperationState.Invalid
+            )
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return await AuditDeniedResultAsync(
@@ -1826,6 +1850,20 @@ public sealed class AtendimentoCardService(
             .Distinct()
             .ToListAsync(cancellationToken);
 
+    private Task<bool> IsWatcherPresentAsync(
+        Guid companyId,
+        Guid cardId,
+        Guid membershipId,
+        CancellationToken cancellationToken
+    ) =>
+        database.AtendimentoCardWatchers.AnyAsync(
+            watcher =>
+                watcher.CompanyId == companyId
+                && watcher.CardId == cardId
+                && watcher.MembershipId == membershipId,
+            cancellationToken
+        );
+
     private async Task<int> CountActiveMembershipsAsync(
         Guid companyId,
         IReadOnlyList<Guid> membershipIds,
@@ -1840,6 +1878,26 @@ public sealed class AtendimentoCardService(
                     && membershipIds.Contains(member.Id),
                 cancellationToken
             );
+
+    /// <summary>
+    /// Intents saem somente em terminal de sucesso (Success/Created): estados
+    /// de rollback (auditoria/autorização/idempotência) nunca notificam.
+    /// </summary>
+    private async Task FlushOnTerminalSuccessAsync(
+        ActorContext actor,
+        AtendimentoCardOperationState state,
+        List<PendingIntent> pending,
+        CancellationToken cancellationToken
+    )
+    {
+        if (state is not (AtendimentoCardOperationState.Success or AtendimentoCardOperationState.Created))
+        {
+            pending.Clear();
+            return;
+        }
+
+        await FlushPendingNotificationsAsync(actor, pending, cancellationToken);
+    }
 
     /// <summary>
     /// Envia os intents pendentes APÓS o commit: chave determinística deduplica
@@ -1860,7 +1918,7 @@ public sealed class AtendimentoCardService(
                     new NotificationIntentCommand(
                         intent.CompanyId,
                         intent.RecipientUserId,
-                        EventKey(intent.TemplateKey, intent.CardId, intent.RecipientUserId),
+                        EventKey(intent.Kind, intent.CardId),
                         intent.TemplateKey,
                         DeepLinkSelector: "/atendimento"
                     ),
@@ -1895,8 +1953,12 @@ public sealed class AtendimentoCardService(
         }
     }
 
-    private static string EventKey(string templateKey, Guid cardId, Guid recipientUserId) =>
-        $"{templateKey}:{cardId:N}:{recipientUserId:N}";
+    /// <summary>
+    /// Contrato determinístico com cartão e tipo na frente; o destinatário não
+    /// entra na chave porque a unicidade do intent inclui recipient_user_id.
+    /// </summary>
+    private static string EventKey(string kind, Guid cardId) =>
+        $"atm.card.{cardId:N}.{kind}";
 
     private async Task<AtendimentoLookupWriteResult> AuditLookupDeniedAsync(
         ActorContext actor,
@@ -1989,10 +2051,6 @@ public sealed class AtendimentoCardService(
         {
             return false;
         }
-        if (command.SlaDueAt is { } slaDueAt && slaDueAt <= DateTimeOffset.UtcNow)
-        {
-            return false;
-        }
         return true;
     }
 
@@ -2009,6 +2067,7 @@ public sealed class AtendimentoCardService(
     private static string ErrorCode(AtendimentoCardOperationState state) =>
         state switch
         {
+            AtendimentoCardOperationState.Invalid => "invalid_request",
             AtendimentoCardOperationState.MembershipRequired => "membership_required",
             AtendimentoCardOperationState.CapabilityDenied => "capability_denied",
             AtendimentoCardOperationState.ResourceNotFound => "resource_not_found",
@@ -2062,5 +2121,8 @@ public sealed class AtendimentoCardService(
 
         public static Mutation IntegrityConflict(AtendimentoCardResponse current) =>
             new(AtendimentoCardOperationState.IntegrityConflict, Current: current);
+
+        public static Mutation Invalid() =>
+            new(AtendimentoCardOperationState.Invalid);
     }
 }
