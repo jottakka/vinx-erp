@@ -1,4 +1,5 @@
 using Vinx.Erp.Demandas;
+using Vinx.Erp.Foundation.Domain;
 using Xunit;
 
 namespace Vinx.Erp.Demandas.UnitTests;
@@ -12,12 +13,12 @@ public sealed class DemandRulesTests
     private static readonly DateTimeOffset Now = new(2026, 8, 26, 12, 0, 0, TimeSpan.Zero);
 
     private static DemandStageRule Rule(
-        int order,
-        string stage,
-        DemandStageTriggerKind trigger,
-        decimal? hours = null,
-        decimal? deadlineHours = null
-    ) => new(Guid.NewGuid(), order, stage, trigger, hours, deadlineHours);
+        int Order,
+        string Stage,
+        DemandStageTriggerKind TriggerKind,
+        decimal? TriggerHours = null,
+        decimal? DeadlineHours = null
+    ) => new(Guid.NewGuid(), Order, Stage, TriggerKind, TriggerHours, DeadlineHours);
 
     // ---------- Matriz de legalidade de transição ----------
 
@@ -224,9 +225,12 @@ public sealed class DemandRulesTests
         Assert.False(DemandRules.RequiresReInitiation(before, after));
     }
 
+    private static readonly Guid FixedMembershipId = Guid.NewGuid();
+    private static readonly Guid FixedRoutineId = Guid.NewGuid();
+
     private static OperationalSnapshot Snapshot()
     {
-        return new OperationalSnapshot(Guid.NewGuid(), Guid.NewGuid(), "Pagamento", "Financeiro");
+        return new OperationalSnapshot(FixedMembershipId, FixedRoutineId, "Pagamento", "Financeiro");
     }
 
     // ---------- Checklist ----------
