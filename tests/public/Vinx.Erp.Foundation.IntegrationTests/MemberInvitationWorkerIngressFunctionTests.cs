@@ -162,6 +162,7 @@ public sealed class MemberInvitationWorkerIngressFunctionTests
             SELECT count(*)
             FROM audit.audit_events
             WHERE resource_id = @invitation_id
+              AND action = 'member_invitation.delivery.ingress'
             """,
             administrator
         );
@@ -184,6 +185,7 @@ public sealed class MemberInvitationWorkerIngressFunctionTests
                 resource_type, resource_id, outcome, reason, metadata_json::text, correlation_id
             FROM audit.audit_events
             WHERE resource_id = @invitation_id
+              AND action = 'member_invitation.delivery.ingress'
             """,
             administrator
         );

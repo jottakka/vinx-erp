@@ -246,10 +246,31 @@ public sealed class OwnerInvitationWorkerIngressFunctionTests
 
         Assert.Equal(
             [
+                // O conjunto lista também as políticas do fluxo paralelo de convite
+                // de membro: a consulta enumera exaustivamente as políticas do
+                // vinx_worker_owner no schema, e ambos os fluxos compartilham o papel.
+                (
+                    "memberships",
+                    "memberships_worker_owner_read",
+                    "SELECT",
+                    "vinx_worker_owner"
+                ),
                 (
                     "organization_provisioning_receipts",
                     "organization_provisioning_receipts_worker_owner_read",
                     "SELECT",
+                    "vinx_worker_owner"
+                ),
+                (
+                    "pending_member_invitations",
+                    "pending_member_invitations_worker_owner_read",
+                    "SELECT",
+                    "vinx_worker_owner"
+                ),
+                (
+                    "pending_member_invitations",
+                    "pending_member_invitations_worker_owner_update",
+                    "UPDATE",
                     "vinx_worker_owner"
                 ),
                 (

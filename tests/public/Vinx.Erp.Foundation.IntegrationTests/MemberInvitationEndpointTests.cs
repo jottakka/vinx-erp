@@ -41,21 +41,13 @@ public sealed class MemberInvitationEndpointTests
         Assert.NotEqual(Guid.Empty, membershipId);
         Assert.NotEqual(Guid.Empty, invitationId);
         Assert.Equal(
-            new[] { "membershipId", "invitationId", "invitationStatus" },
+            new[] { "invitationId", "invitationStatus", "membershipId" },
             createdBody.EnumerateObject().Select(property => property.Name).Order()
         );
 
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var invitation = await administrator.Database
-            .SqlQueryRaw<InvitationState>(
-                """
-                SELECT id AS "Id", membership_id AS "MembershipId", user_id AS "UserId",
-                       company_id AS "CompanyId", status::text AS "Status"
-                FROM foundation.pending_member_invitations WHERE id = {0}
-                """,
-                invitationId)
-            .SingleAsync();
-        Assert.Equal(membershipId, invitation.MembershipId);
+        var invitation = await ReadInvitationAsync(factory.Fixture, invitationId);
+        Assert.Equal(membershipId, invitation!.MembershipId);
         Assert.Equal(scenario.CompanyId, invitation.CompanyId);
         Assert.Equal("pending_delivery", invitation.Status);
         var employee = await administrator.Employees.IgnoreQueryFilters().SingleAsync(candidate =>
@@ -259,6 +251,32 @@ public sealed class MemberInvitationEndpointTests
         }
 
         return messages;
+    }
+
+    private static async Task<InvitationState?> ReadInvitationAsync(
+        FoundationPostgresFixture fixture,
+        Guid invitationId
+    )
+    {
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT membership_id, user_id, company_id, status
+            FROM foundation.pending_member_invitations
+            WHERE id = @invitation_id
+            """,
+            administrator
+        );
+        command.Parameters.AddWithValue("invitation_id", invitationId);
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync()
+            ? new InvitationState(
+                invitationId,
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetGuid(2),
+                reader.GetString(3))
+            : null;
     }
 
     private sealed record InvitationScenario(Guid CompanyId);

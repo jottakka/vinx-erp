@@ -36,6 +36,11 @@ public partial class AddMemberInvitationWorkerIngress : Migration
             RESET ROLE;
 
             GRANT SELECT ON TABLE foundation.memberships TO vinx_worker_owner;
+            -- As políticas públicas de isolamento de memberships avaliam
+            -- current_authorized_company_ids() para todo papel; sem EXECUTE a
+            -- leitura do worker owner falha antes da política própria.
+            GRANT EXECUTE ON FUNCTION foundation.current_authorized_company_ids()
+                TO vinx_worker_owner;
             CREATE POLICY memberships_worker_owner_read
                 ON foundation.memberships FOR SELECT TO vinx_worker_owner
                 USING (deleted_at IS NULL);
@@ -172,6 +177,8 @@ public partial class AddMemberInvitationWorkerIngress : Migration
             RESET ROLE;
 
             DROP POLICY memberships_worker_owner_read ON foundation.memberships;
+            REVOKE EXECUTE ON FUNCTION foundation.current_authorized_company_ids()
+                FROM vinx_worker_owner;
             REVOKE SELECT ON TABLE foundation.memberships FROM vinx_worker_owner;
 
             GRANT CREATE ON SCHEMA foundation TO vinx_permissions_owner;
