@@ -69,7 +69,7 @@ public sealed class AddAtendimentoTicketing : Migration
                 card_id uuid NOT NULL,
                 event_seq bigint GENERATED ALWAYS AS IDENTITY,
                 action_kind varchar(30) NOT NULL CHECK (action_kind IN
-                    ('created', 'assigned', 'moved', 'fields_updated', 'watcher_added', 'watcher_removed')),
+                    ('created', 'assigned', 'mentioned', 'moved', 'fields_updated', 'watcher_added', 'watcher_removed')),
                 actor_membership_id uuid NULL REFERENCES foundation.memberships(id) ON DELETE SET NULL,
                 payload_digest varchar(64) NOT NULL,
                 occurred_at timestamp with time zone NOT NULL DEFAULT clock_timestamp(),
@@ -103,6 +103,9 @@ public sealed class AddAtendimentoTicketing : Migration
             SET search_path TO pg_catalog, service_desk, pg_temp
             AS $function$
             BEGIN
+                -- Mesma disciplina das funções de provisionamento: contexto de
+                -- empresa antes da escrita para satisfazer a policy com FORCE.
+                PERFORM set_config('app.company_id', NEW.id::text, true);
                 INSERT INTO service_desk.atendimento_channels (id, company_id, key)
                 VALUES
                     (gen_random_uuid(), NEW.id, 'whatsapp'),
@@ -117,30 +120,7 @@ public sealed class AddAtendimentoTicketing : Migration
                 AFTER INSERT ON foundation.companies
                 FOR EACH ROW EXECUTE FUNCTION service_desk.seed_company_lookup_defaults_trigger();
 
-            SET ROLE vinx_notifications_owner;
-            CREATE FUNCTION notifications.seed_atendimento_templates()
-            RETURNS trigger
-            LANGUAGE plpgsql
-            SECURITY DEFINER
-            SET search_path TO pg_catalog, notifications, pg_temp
-            AS $function$
-            BEGIN
-                INSERT INTO notifications.notification_templates
-                    (company_id, channel, template_key, is_approved)
-                VALUES
-                    (NEW.id, 'in_app', 'atendimento.card.assigned', true),
-                    (NEW.id, 'in_app', 'atendimento.card.mentioned', true),
-                    (NEW.id, 'in_app', 'atendimento.card.watcher_added', true)
-                ON CONFLICT (company_id, channel, template_key) DO NOTHING;
-                RETURN NULL;
-            END;
-            $function$;
-            RESET ROLE;
-            CREATE TRIGGER trg_seed_atendimento_templates
-                AFTER INSERT ON foundation.companies
-                FOR EACH ROW EXECUTE FUNCTION notifications.seed_atendimento_templates();
-
-            -- Backfill das empresas vivas já criadas antes desta migração.
+            -- Backfill dos canais das empresas vivas criadas antes da RLS.
             INSERT INTO service_desk.atendimento_channels (id, company_id, key)
             SELECT gen_random_uuid(), company.id, candidate.key
             FROM foundation.companies AS company
@@ -148,19 +128,11 @@ public sealed class AddAtendimentoTicketing : Migration
             WHERE company.deleted_at IS NULL
             ON CONFLICT (company_id, key) DO NOTHING;
 
-            INSERT INTO notifications.notification_templates
-                (company_id, channel, template_key, is_approved)
-            SELECT company.id, 'in_app', candidate.template_key, true
-            FROM foundation.companies AS company
-            CROSS JOIN (VALUES
-                ('atendimento.card.assigned'), ('atendimento.card.mentioned'),
-                ('atendimento.card.watcher_added')) AS candidate(template_key)
-            WHERE company.deleted_at IS NULL
-            ON CONFLICT (company_id, channel, template_key) DO NOTHING;
-
             ALTER TABLE service_desk.atendimento_channels ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE service_desk.atendimento_channels FORCE ROW LEVEL SECURITY;
             CREATE POLICY atendimento_channels_company_isolation ON service_desk.atendimento_channels
-                USING (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid);
+                USING (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid)
+                WITH CHECK (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid);
             ALTER TABLE service_desk.atendimento_categories ENABLE ROW LEVEL SECURITY;
             ALTER TABLE service_desk.atendimento_categories FORCE ROW LEVEL SECURITY;
             CREATE POLICY atendimento_categories_company_isolation ON service_desk.atendimento_categories
@@ -187,7 +159,6 @@ public sealed class AddAtendimentoTicketing : Migration
     protected override void Down(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
-            DROP TRIGGER IF EXISTS trg_seed_atendimento_templates ON foundation.companies;
             DROP TRIGGER IF EXISTS trg_seed_company_lookup_defaults ON foundation.companies;
             REVOKE ALL ON service_desk.atendimento_card_events,
                 service_desk.atendimento_card_watchers,
@@ -206,10 +177,6 @@ public sealed class AddAtendimentoTicketing : Migration
             DROP TABLE service_desk.atendimento_categories;
             DROP TABLE service_desk.atendimento_channels;
             DROP FUNCTION service_desk.seed_company_lookup_defaults_trigger();
-            DROP FUNCTION notifications.seed_atendimento_templates();
-            DELETE FROM notifications.notification_templates
-            WHERE channel = 'in_app'
-                AND template_key IN ('atendimento.card.assigned','atendimento.card.mentioned','atendimento.card.watcher_added');
             DO $block$
             BEGIN
                 DELETE FROM foundation.capabilities
