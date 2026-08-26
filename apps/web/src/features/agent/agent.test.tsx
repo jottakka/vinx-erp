@@ -588,16 +588,14 @@ describe("agent workspace", () => {
       "Selecione uma empresa para usar o assistente.",
     );
     expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
-    expect(
-      dock.getByRole("button", { name: "Anexar arquivo" }),
-    ).toHaveAttribute("aria-disabled", "true");
-    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const picker = dock.getByLabelText("Anexar documentos ao agente");
+    expect(picker).toBeDisabled();
+    expect(picker.closest("label")).not.toHaveAttribute("role");
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const composer = dock.getByLabelText("Mensagem para o agente");
     const blockedMessage = "tentativa sem empresa";
 
     await user.type(composer, blockedMessage);
-    await user.click(dock.getByRole("button", { name: "Anexar arquivo" }));
     await user.upload(picker, attachmentFile("sem-empresa.pdf"));
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
@@ -654,16 +652,14 @@ describe("agent workspace", () => {
       "O assistente não está disponível para o seu perfil nesta empresa.",
     );
     expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
-    expect(
-      dock.getByRole("button", { name: "Anexar arquivo" }),
-    ).toHaveAttribute("aria-disabled", "true");
-    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const picker = dock.getByLabelText("Anexar documentos ao agente");
+    expect(picker).toBeDisabled();
+    expect(picker.closest("label")).not.toHaveAttribute("role");
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const composer = dock.getByLabelText("Mensagem para o agente");
     const blockedMessage = "tentativa sem capability";
 
     await user.type(composer, blockedMessage);
-    await user.click(dock.getByRole("button", { name: "Anexar arquivo" }));
     await user.upload(picker, attachmentFile("sem-capability.pdf"));
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
@@ -705,6 +701,22 @@ describe("agent workspace", () => {
     ).toBeVisible();
     expect(dock.queryByText("capability_denied")).toBeNull();
     expect(runCalls(fetchSpy)).toHaveLength(1);
+  });
+
+  it("keeps the attachment chooser as a native label without a button role", async () => {
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
+    await user.click(
+      screen.getByRole("button", { name: "Abrir painel do agente" }),
+    );
+    const dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+    const picker = dock.getByLabelText("Anexar documentos ao agente");
+
+    expect(picker).toBeEnabled();
+    expect(picker.closest("label")).not.toHaveAttribute("role");
+    expect(dock.queryByRole("button", { name: "Anexar arquivo" })).toBeNull();
   });
 
   it("aborts and discards a pending reply when the workspace unmounts", async () => {

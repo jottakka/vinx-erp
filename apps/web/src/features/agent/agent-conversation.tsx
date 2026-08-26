@@ -228,12 +228,22 @@ export function AgentConversation() {
             value={draft}
             disabled={!access.available}
           />
-          <IconButton
-            aria-label="Anexar arquivo"
+          <Box
             component="label"
-            disabled={
-              thinking || !access.available || !attachmentSelectionAvailable
-            }
+            sx={{
+              alignItems: "center",
+              color:
+                thinking || !access.available || !attachmentSelectionAvailable
+                  ? "action.disabled"
+                  : "action.active",
+              cursor:
+                thinking || !access.available || !attachmentSelectionAvailable
+                  ? "default"
+                  : "pointer",
+              display: "inline-flex",
+              justifyContent: "center",
+              p: 1,
+            }}
             title="Anexar arquivo"
           >
             <AttachFileOutlinedIcon />
@@ -248,7 +258,7 @@ export function AgentConversation() {
               style={{ display: "none" }}
               type="file"
             />
-          </IconButton>
+          </Box>
           <Button
             disabled={
               !access.available ||

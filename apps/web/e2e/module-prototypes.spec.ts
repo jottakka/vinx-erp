@@ -381,10 +381,7 @@ test("Scenario: agent access blocks chat without ai.read", async ({ page }) => {
     "O assistente não está disponível para o seu perfil nesta empresa.",
   );
   await expect(dock.getByLabel("Mensagem para o agente")).toBeDisabled();
-  await expect(dock.getByRole("button", { name: "Anexar" })).toHaveAttribute(
-    "aria-disabled",
-    "true",
-  );
+  await expect(dock.getByLabel("Anexar documentos ao agente")).toBeDisabled();
   await expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
   await expect(dock).not.toContainText("capability_denied");
 
