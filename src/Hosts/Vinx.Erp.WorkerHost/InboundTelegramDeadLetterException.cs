@@ -15,3 +15,14 @@ public sealed class InboundTelegramDeadLetterException(string exceptionType, str
 
     public string ExceptionMessage { get; } = message;
 }
+
+/// <summary>Oculta detalhes da execução antes de devolver a falha ao Wolverine.</summary>
+internal sealed class InboundTelegramReceiptExecutionException(bool isTransient)
+    : Exception(
+        isTransient
+            ? "Inbound Telegram receipt failed transiently."
+            : "Inbound Telegram receipt failed unexpectedly."
+    )
+{
+    public bool IsTransient { get; } = isTransient;
+}

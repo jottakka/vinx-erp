@@ -25,6 +25,8 @@ linha ausente retorna `not_found` e qualquer resolução fechada permanece
 
 `completed` significa **somente recibo técnico da fila**. Não confirma leitura,
 resposta humana, decisão de negócio, entrega pelo Bot API nem aprovação por IA.
+Também não representa empresa escolhida pela pessoa usuária: seleção de empresa,
+assim como confirmação, continua sendo decisão explícita do servidor.
 Esta etapa não lê o texto e não chama HTTP, provedor ou IA. Toda confirmação
 humana ou de negócio continua sendo decidida pelo servidor em um fluxo próprio;
 nunca deve ser inferida deste estado.

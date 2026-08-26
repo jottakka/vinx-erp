@@ -7,11 +7,13 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications;
+using Vinx.Erp.Notifications.Providers.Telegram;
 using Wolverine;
 using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Serialization;
@@ -28,6 +30,30 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 [Collection("notification-worker")]
 public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
 {
+    [Fact]
+    public async Task Inbound_worker_uses_canonical_unconfigured_telegram_http_registration()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString,
+            useCanonicalTelegramHttpRegistration: true
+        );
+        using var workerClient = worker.CreateClient();
+        await using var scope = worker.Services.CreateAsyncScope();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<TelegramOptions>>().Value;
+        var handler = scope.ServiceProvider
+            .GetRequiredService<IHttpMessageHandlerFactory>()
+            .CreateHandler(TelegramClient.HttpClientName);
+
+        Assert.False(options.OutboundIsConfigured);
+        Assert.Equal(string.Empty, options.BotToken);
+        Assert.Equal("https://api.telegram.org", options.ApiBaseUrl);
+        Assert.Null(FindHttpHandler<FailFastTelegramBotHandler>(handler));
+        var sockets = Assert.IsType<SocketsHttpHandler>(FindHttpHandler<SocketsHttpHandler>(handler));
+        Assert.False(sockets.AllowAutoRedirect);
+        Assert.False(sockets.UseCookies);
+    }
+
     [Fact]
     public async Task Public_webhook_and_real_worker_complete_an_admitted_pending_row_as_queue_receipt()
     {
@@ -56,7 +82,8 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         Assert.Null(pending.CompletedAt);
 
         await using var worker = new NotificationWorkerHostFactory(
-            factory.Fixture.WorkerConnectionString
+            factory.Fixture.WorkerConnectionString,
+            useCanonicalTelegramHttpRegistration: true
         );
         using var workerClient = worker.CreateClient();
         using var health = await workerClient.GetAsync("/health");
@@ -76,7 +103,8 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         using var apiHealth = await apiClient.GetAsync("/health");
         Assert.Equal(HttpStatusCode.OK, apiHealth.StatusCode);
         await using var worker = new NotificationWorkerHostFactory(
-            factory.Fixture.WorkerConnectionString
+            factory.Fixture.WorkerConnectionString,
+            useCanonicalTelegramHttpRegistration: true
         );
         using var workerClient = worker.CreateClient();
         using var workerHealth = await workerClient.GetAsync("/health");
@@ -143,11 +171,13 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         {
             await using (var firstWorker = new NotificationWorkerHostFactory(
                 factory.Fixture.WorkerConnectionString,
-                debugLogPath: firstLog
+                debugLogPath: firstLog,
+                useCanonicalTelegramHttpRegistration: true
             ))
             await using (var secondWorker = new NotificationWorkerHostFactory(
                 factory.Fixture.WorkerConnectionString,
-                debugLogPath: secondLog
+                debugLogPath: secondLog,
+                useCanonicalTelegramHttpRegistration: true
             ))
             {
                 using var firstClient = firstWorker.CreateClient();
@@ -246,7 +276,8 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         {
             await using (var worker = new NotificationWorkerHostFactory(
                 factory.Fixture.WorkerConnectionString,
-                debugLogPath: workerLog
+                debugLogPath: workerLog,
+                useCanonicalTelegramHttpRegistration: true
             ))
             {
                 using var workerClient = worker.CreateClient();
@@ -290,12 +321,16 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         var originalFunction = await ReplaceCompletionFunctionWithUnexpectedFailureAsync(factory);
         var inboundId = Guid.NewGuid();
         const string failureSecret = "telegram-unexpected-secret";
+        const string failureDetailSecret = "telegram-unexpected-detail-secret";
         const string headerSecret = "telegram-unexpected-header";
+        var workerLog = Path.Combine(Path.GetTempPath(), $"telegram-worker-{Guid.NewGuid():N}.log");
 
         try
         {
             await using (var worker = new NotificationWorkerHostFactory(
-                factory.Fixture.WorkerConnectionString
+                factory.Fixture.WorkerConnectionString,
+                debugLogPath: workerLog,
+                useCanonicalTelegramHttpRegistration: true
             ))
             {
                 using var workerClient = worker.CreateClient();
@@ -313,15 +348,26 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
                     deadLetter,
                     inboundId.ToString("D"),
                     failureSecret,
+                    failureDetailSecret,
                     headerSecret
                 );
                 Assert.Equal(new AttemptSequenceState(1, true), await ReadAttemptCountAsync(factory));
                 Assert.Equal(1L, await CountTelegramDeadLettersAsync(factory));
+                AssertWorkerLogIsRedacted(
+                    File.ReadAllText(workerLog),
+                    inboundId,
+                    headerSecret,
+                    failureSecret,
+                    failureDetailSecret,
+                    "PostgresException",
+                    "P0001"
+                );
             }
         }
         finally
         {
             await RestoreCompletionFunctionAsync(factory, originalFunction);
+            File.Delete(workerLog);
         }
     }
 
@@ -335,22 +381,31 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         var originalFunction = await ReplaceCompletionFunctionWithTransientFailureAsync(factory);
         var inboundId = Guid.NewGuid();
         const string failureSecret = "telegram-transient-secret";
+        const string failureDetailSecret = "telegram-transient-detail-secret";
         const string headerSecret = "telegram-transient-header";
+        var workerLog = Path.Combine(Path.GetTempPath(), $"telegram-worker-{Guid.NewGuid():N}.log");
+        using var observationCancellation = new CancellationTokenSource();
 
         try
         {
             await using (var worker = new NotificationWorkerHostFactory(
-                factory.Fixture.WorkerConnectionString
+                factory.Fixture.WorkerConnectionString,
+                debugLogPath: workerLog,
+                useCanonicalTelegramHttpRegistration: true
             ))
             {
                 using var workerClient = worker.CreateClient();
                 using var workerHealth = await workerClient.GetAsync("/health");
                 Assert.Equal(HttpStatusCode.OK, workerHealth.StatusCode);
+                var scheduledDelays = ObserveScheduledRetryDelaysAsync(
+                    factory,
+                    observationCancellation.Token
+                );
                 await PublishTelegramEnvelopeAsync(factory, inboundId, headerSecret);
 
                 var deadLetter = await WaitForTelegramDeadLetterAsync(
                     factory,
-                    TimeSpan.FromSeconds(90)
+                    TimeSpan.FromSeconds(130)
                 );
                 Assert.Equal("telegram_inbound_retry_exhausted", deadLetter.ExceptionType);
                 Assert.Equal(
@@ -361,7 +416,32 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
                     deadLetter,
                     inboundId.ToString("D"),
                     failureSecret,
+                    failureDetailSecret,
                     headerSecret
+                );
+
+                var observedScheduledDelays = await scheduledDelays;
+                Assert.Equal(3, observedScheduledDelays.Count);
+                Assert.InRange(
+                    observedScheduledDelays[0],
+                    TimeSpan.FromMilliseconds(500),
+                    TimeSpan.FromSeconds(3)
+                );
+                Assert.InRange(
+                    observedScheduledDelays[1],
+                    TimeSpan.FromSeconds(4.5),
+                    TimeSpan.FromSeconds(7)
+                );
+                Assert.InRange(
+                    observedScheduledDelays[2],
+                    TimeSpan.FromSeconds(29),
+                    TimeSpan.FromSeconds(33)
+                );
+                output.WriteLine(
+                    "scheduled_delays_ms={0},{1},{2}",
+                    observedScheduledDelays[0].TotalMilliseconds,
+                    observedScheduledDelays[1].TotalMilliseconds,
+                    observedScheduledDelays[2].TotalMilliseconds
                 );
 
                 var attempts = await ReadAttemptTimestampsAsync(factory);
@@ -388,11 +468,23 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
                     TimeSpan.FromSeconds(60)
                 );
                 Assert.Equal(1L, await CountTelegramDeadLettersAsync(factory));
+                AssertWorkerLogIsRedacted(
+                    File.ReadAllText(workerLog),
+                    inboundId,
+                    headerSecret,
+                    failureSecret,
+                    failureDetailSecret,
+                    "PostgresException",
+                    "NpgsqlException",
+                    "08006"
+                );
             }
         }
         finally
         {
+            observationCancellation.Cancel();
             await RestoreCompletionFunctionAsync(factory, originalFunction);
+            File.Delete(workerLog);
         }
     }
 
@@ -501,7 +593,8 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         {
             await using (var worker = new NotificationWorkerHostFactory(
                 factory.Fixture.WorkerConnectionString,
-                debugLogPath: workerLog
+                debugLogPath: workerLog,
+                useCanonicalTelegramHttpRegistration: true
             ))
             {
                 using var workerClient = worker.CreateClient();
@@ -672,7 +765,8 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await using var worker = new NotificationWorkerHostFactory(
-            factory.Fixture.WorkerConnectionString
+            factory.Fixture.WorkerConnectionString,
+            useCanonicalTelegramHttpRegistration: true
         );
         using var client = worker.CreateClient();
         var originalId = Guid.NewGuid();
@@ -716,7 +810,8 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await using var worker = new NotificationWorkerHostFactory(
-            factory.Fixture.WorkerConnectionString
+            factory.Fixture.WorkerConnectionString,
+            useCanonicalTelegramHttpRegistration: true
         );
         using var client = worker.CreateClient();
         var secret = "telegram-provider-id-secret";
@@ -1042,7 +1137,8 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
                 PERFORM nextval('notifications.telegram_worker_attempt_counter_test');
                 RAISE EXCEPTION USING
                     ERRCODE = 'P0001',
-                    MESSAGE = 'telegram-unexpected-secret';
+                    MESSAGE = 'telegram-unexpected-secret',
+                    DETAIL = 'telegram-unexpected-detail-secret';
             END;
             $function$;
             """,
@@ -1132,7 +1228,8 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
 
                 RAISE EXCEPTION USING
                     ERRCODE = '08006',
-                    MESSAGE = 'telegram-transient-secret';
+                    MESSAGE = 'telegram-transient-secret',
+                    DETAIL = 'telegram-transient-detail-secret';
             END;
             $function$;
             """,
@@ -1162,6 +1259,74 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         return Enumerable.Range(0, 4)
             .Select(index => DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(index)))
             .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<TimeSpan>> ObserveScheduledRetryDelaysAsync(
+        FoundationApiFactory factory,
+        CancellationToken cancellationToken
+    )
+    {
+        var delays = new List<TimeSpan>(3);
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(75);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var observation = await TryReadScheduledRetryAsync(factory, attempt);
+                if (observation is not null)
+                {
+                    delays.Add(observation.ExecutionTime - observation.AttemptedAt);
+                    break;
+                }
+
+                await Task.Delay(25, cancellationToken);
+            }
+
+            if (delays.Count != attempt)
+            {
+                Assert.Fail($"Worker did not persist scheduled Telegram retry {attempt}.");
+            }
+        }
+
+        return delays;
+    }
+
+    private static async Task<ScheduledRetryObservation?> TryReadScheduledRetryAsync(
+        FoundationApiFactory factory,
+        int attempt
+    )
+    {
+        var sequenceName = attempt switch
+        {
+            1 => "telegram_worker_attempt_1_test",
+            2 => "telegram_worker_attempt_2_test",
+            3 => "telegram_worker_attempt_3_test",
+            _ => throw new ArgumentOutOfRangeException(nameof(attempt)),
+        };
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT scheduled.execution_time, attempt.last_value, attempt.is_called
+            FROM vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled AS scheduled
+            CROSS JOIN notifications.{sequenceName} AS attempt
+            WHERE scheduled.body IS NOT NULL
+              AND attempt.is_called
+            ORDER BY scheduled.execution_time DESC
+            LIMIT 1
+            """,
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return null;
+        }
+
+        return new ScheduledRetryObservation(
+            new DateTimeOffset(reader.GetDateTime(0)),
+            DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(1))
+        );
     }
 
     private static async Task RestoreCompletionFunctionAsync(
@@ -1207,8 +1372,39 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         }
     }
 
+    private static void AssertWorkerLogIsRedacted(
+        string log,
+        Guid inboundId,
+        params string[] sensitiveValues
+    )
+    {
+        Assert.DoesNotContain(inboundId.ToString("D"), log, StringComparison.OrdinalIgnoreCase);
+        foreach (var sensitiveValue in sensitiveValues)
+        {
+            Assert.DoesNotContain(sensitiveValue, log, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private static THandler? FindHttpHandler<THandler>(HttpMessageHandler handler)
+        where THandler : HttpMessageHandler
+    {
+        for (var current = handler; current is not null; current = (current as DelegatingHandler)?.InnerHandler)
+        {
+            if (current is THandler expected)
+            {
+                return expected;
+            }
+        }
+
+        return null;
+    }
+
     private sealed record TelegramInboundReceipt(string Status, bool Transitioned);
     private sealed record AttemptSequenceState(long LastValue, bool IsCalled);
+    private sealed record ScheduledRetryObservation(
+        DateTimeOffset ExecutionTime,
+        DateTimeOffset AttemptedAt
+    );
     private sealed record TelegramDeadLetterRow(
         byte[] Body,
         string ExceptionType,

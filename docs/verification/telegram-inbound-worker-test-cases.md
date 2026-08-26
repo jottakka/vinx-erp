@@ -2,7 +2,8 @@
 
 `completed` abaixo significa somente recibo técnico da fila. Não confirma
 leitura, resposta humana ou efeito de negócio; a confirmação continua sendo
-decisão explícita do servidor.
+decisão explícita do servidor. Também não significa empresa escolhida pela
+pessoa usuária: a seleção da empresa continua sendo decisão do servidor.
 
 | Cenário/BDD | Teste ou caminho | Intenção | Situação |
 |---|---|---|---|

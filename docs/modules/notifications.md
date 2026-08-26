@@ -167,6 +167,8 @@ worker, sem `CREATE` e sem devolver ao worker acesso ao storage do ApiHost.
 
 Nesse contrato, `completed` é **apenas recibo técnico da fila**. Não representa
 confirmação humana, leitura, resposta, efeito de negócio ou envio ao Telegram.
+Também não representa empresa escolhida pela pessoa usuária; seleção de empresa
+e confirmação permanecem decisões explícitas do servidor.
 O worker não lê o texto e não chama HTTP, Bot API ou IA. A confirmação continua
 sendo uma decisão explícita do servidor em fluxo próprio e nunca é inferida do
 recibo. Envelope inválido, retry Npgsql esgotado após 1 s/5 s/30 s e erro

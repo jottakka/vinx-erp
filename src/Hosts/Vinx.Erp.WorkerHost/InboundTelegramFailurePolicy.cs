@@ -1,5 +1,4 @@
 using JasperFx.CodeGeneration;
-using Npgsql;
 using Wolverine.Attributes;
 using Wolverine.Configuration;
 using Wolverine.ErrorHandling;
@@ -20,11 +19,20 @@ internal sealed class InboundTelegramFailurePolicyAttribute : ModifyHandlerChain
                 "Redact and dead-letter invalid inbound Telegram receipt"
             );
         chain
-            .OnException<NpgsqlException>(exception => exception.IsTransient, "transient_npgsql")
+            .OnException<InboundTelegramReceiptExecutionException>(
+                exception => exception.IsTransient,
+                "transient_npgsql"
+            )
             .ScheduleRetry(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30))
             .Then.CustomActionIndefinitely(
                 InboundTelegramTextReceivedHandler.PersistRetryExhaustedDeadLetterAsync,
                 "Redact and dead-letter exhausted inbound Telegram receipt"
+            );
+        chain
+            .OnException<InboundTelegramReceiptExecutionException>()
+            .CustomActionIndefinitely(
+                InboundTelegramTextReceivedHandler.PersistUnexpectedDeadLetterAsync,
+                "Redact and dead-letter unexpected inbound Telegram receipt"
             );
         chain
             .OnAnyException()

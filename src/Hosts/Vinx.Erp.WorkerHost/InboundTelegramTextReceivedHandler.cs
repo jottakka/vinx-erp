@@ -1,6 +1,7 @@
 using System.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Npgsql;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications;
 using Wolverine;
@@ -32,7 +33,24 @@ public sealed class InboundTelegramTextReceivedHandler(
             );
         }
 
-        var receipt = await CompleteAsync(message.InboundMessageId, cancellationToken);
+        TelegramInboundReceipt receipt;
+        try
+        {
+            receipt = await CompleteAsync(message.InboundMessageId, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (NpgsqlException exception) when (exception.IsTransient)
+        {
+            throw new InboundTelegramReceiptExecutionException(isTransient: true);
+        }
+        catch (Exception)
+        {
+            throw new InboundTelegramReceiptExecutionException(isTransient: false);
+        }
+
         var (result, reason) = receipt switch
         {
             { Status: "completed", Transitioned: true } => ("completed", "queue_receipt"),
