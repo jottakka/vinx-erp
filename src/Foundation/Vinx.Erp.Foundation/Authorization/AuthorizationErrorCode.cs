@@ -12,4 +12,5 @@ public enum AuthorizationErrorCode
     ProposalUnavailable,
     ProposalConflict,
     PlatformOperatorUnavailable,
+    LastAdminGuard,
 }

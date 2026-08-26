@@ -76,6 +76,7 @@ describe("application routes", () => {
     ["/paguai", "Paguai"],
     ["/atendimento", "Atendimento"],
     ["/pessoas", "Pessoas"],
+    ["/permissoes", "Permissões"],
   ])("protects and renders %s", async (path, heading) => {
     const router = renderRoute(path, await signedInGateway());
 

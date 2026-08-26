@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AtendimentoPage } from "../features/atendimento/atendimento-page";
 import { PaguaiPage } from "../features/paguai/paguai-page";
 import { PeoplePage } from "../features/people/people-page";
+import { PermissionsPage } from "../features/permissions/permissions-page";
 import { PlatformOrganizationPage } from "../features/platform/platform-organization-page";
 import { APP_PATHS } from "../shared/routing/app-paths";
 import { appRouteManifest } from "./app-route-manifest";
@@ -20,6 +21,11 @@ describe("app route manifest", () => {
     expect(byPath.get("/paguai")?.element.type).toBe(PaguaiPage);
     expect(byPath.get("/atendimento")?.element.type).toBe(AtendimentoPage);
     expect(byPath.has("/kanban")).toBe(false);
+
+    const permissionsRoute = byPath.get("/permissoes");
+    expect(permissionsRoute?.element.type).toBe(PermissionsPage);
+    expect(permissionsRoute?.group).toBe("modules");
+    expect(permissionsRoute?.navigation).toBe(true);
   });
 
   it("wires the platform administration route without navigation exposure", () => {

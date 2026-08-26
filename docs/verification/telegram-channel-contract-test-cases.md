@@ -1,0 +1,28 @@
+# Casos de verificação — contrato do canal Telegram
+
+Manifesto da fatia PR 1 (#307). A fatia não chama a API do Telegram, não
+recebe webhook e não decide o ciclo terminal de entrega.
+
+| BDD | teste/caminho | intenção | status |
+|---|---|---|---|
+| Sucesso — fan-out Telegram + in-app | `TelegramNotificationIntentTests.Eligible_telegram_event_creates_telegram_and_in_app_intents_with_opaque_messages` | Cria as duas intenções na mesma transação e lê duas mensagens opacas. | automatizado |
+| Sucesso — variação WhatsApp + Telegram + in-app | `TelegramNotificationIntentTests.Eligible_telegram_and_whatsapp_event_creates_three_independent_outcomes` | Mantém os três resultados de canal independentes. | automatizado |
+| Sucesso — uma mensagem opaca para cada entrega criada | `TelegramNotificationIntentTests.Eligible_telegram_event_creates_telegram_and_in_app_intents_with_opaque_messages`<br>`TelegramNotificationIntentTests.Eligible_telegram_and_whatsapp_event_creates_three_independent_outcomes` | Compara exatamente os IDs distintos criados com todos os envelopes desserializados, preservando a exclusão de texto/endereço em cada linha. | automatizado |
+| Validação — sem opt-in | `TelegramNotificationIntentTests.Telegram_opt_out_suppresses_only_telegram_and_keeps_mandatory_in_app` | Suprime apenas Telegram e preserva in-app obrigatório. | automatizado |
+| Validação — texto Telegram ausente ou não aprovado | `TelegramNotificationIntentTests.Missing_telegram_text_rejects_enqueue_without_telegram_or_in_app_side_effects`<br>`TelegramNotificationIntentTests.Unapproved_telegram_template_rejects_enqueue_without_side_effects` | Rejeita o comando sem intenção ou envelope parcial. | automatizado |
+| Validação — chave de template inválida | `TelegramNotificationIntentTests.Invalid_telegram_key_is_rejected_before_any_channel_is_written` | Rejeita a chave antes de gravar qualquer canal. | automatizado |
+| Validação — domínio do texto e limite por ponto de código | `TelegramNotificationIntentTests.Telegram_template_constraint_rejects_btrim_whitespace_only_and_edge_text`<br>`TelegramNotificationIntentTests.Telegram_template_constraint_counts_supplementary_plane_code_points` | Rejeita vazio/bordas da lista exata de `btrim` e aceita 4.096, mas rejeita 4.097, pontos de código suplementares. | automatizado |
+| Validação — endereço privado inválido ou fora da faixa | `TelegramNotificationIntentTests.Telegram_contact_rejects_noncanonical_or_out_of_range_private_ids` | Rejeita ID não canônico, negativo, com espaço ou acima da faixa privada. | automatizado |
+| Validação — colunas de contato mistas ou vazias | `TelegramNotificationIntentTests.Telegram_contact_constraint_rejects_mixed_or_empty_address_columns` | A constraint impede telefone e endereço simultâneos ou ambos nulos. | automatizado |
+| Acesso — ator ausente | `TelegramNotificationIntentTests.Telegram_preference_and_contact_require_an_actor_context` | Preferência e contato Telegram negam `app.user_id` ausente sem linha ou auditoria. | automatizado |
+| Acesso — ator A altera usuário B | `TelegramNotificationIntentTests.Telegram_actor_a_cannot_change_target_b_preference_or_contact` | Dois membros ativos distintos continuam estritamente self-service para preferência e contato. | automatizado |
+| Acesso — membership inativa | `TelegramNotificationIntentTests.Telegram_inactive_membership_is_denied_without_rows_or_messages` | Nega o destinatário revogado sem intenção ou envelope. | automatizado |
+| Acesso — destinatário de outra empresa | `TelegramNotificationIntentTests.Telegram_cross_company_recipient_is_rejected_without_rows_or_messages` | Nega o destinatário fora da empresa autorizada. | automatizado |
+| Estado/exceção — transição efetiva de preferência | `TelegramNotificationIntentTests.Telegram_preference_audits_only_effective_self_service_transitions` | Audita somente a mudança efetiva e não altera o contrato WhatsApp. | automatizado |
+| Estado/exceção — troca e repetição de contato | `TelegramNotificationIntentTests.Telegram_contact_change_resets_validation_and_repeating_it_is_idempotent` | A troca limpa validação; repetição sequencial não muda a linha. | automatizado |
+| Estado/exceção — replay e falha transacional | `TelegramNotificationIntentTests.Concurrent_duplicate_telegram_events_produce_one_delivery_per_channel`<br>`TelegramNotificationIntentTests.Telegram_and_in_app_intents_roll_back_when_outbox_enrollment_fails` | Replay conserva as entregas e falha de outbox não deixa intenção ou envelope parcial. | automatizado |
+| Estado/exceção — Down bem-sucedido | `TelegramNotificationIntentTests.Telegram_down_restores_predecessor_contract_and_preserves_legacy_rows` | Preserva linhas WhatsApp/in-app e restaura checks, assinatura, owner, `SECURITY DEFINER`, search path, ACL e chamadas sem 42702. | automatizado |
+| Estado/exceção — Down recusado | `TelegramNotificationIntentTests.Telegram_down_refuses_state_without_changing_history_or_legacy_rows` | Estado Telegram bloqueia o Down sem alterar histórico, schema ou linhas legadas. | automatizado |
+| Estado/exceção — ciclo terminal de entrega | — | Provider e estados terminais pertencem à PR 2. | não coberto |
+| Concorrência — enqueues Telegram idênticos | `TelegramNotificationIntentTests.Concurrent_duplicate_telegram_events_produce_one_delivery_per_channel` | A chave única deixa uma entrega por canal e dois resultados estáveis. | automatizado |
+| Concorrência — atualizações idênticas de contato | `TelegramNotificationIntentTests.Concurrent_identical_telegram_contact_updates_leave_one_row_and_one_audit` | Duas conexões simultâneas deixam um contato canônico e uma auditoria efetiva. | automatizado |

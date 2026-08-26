@@ -9,9 +9,12 @@ using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
+using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Notifications;
+using Vinx.Erp.Notifications.Providers.Email;
 using Vinx.Erp.Notifications.Providers.Meta;
+using Vinx.Erp.Notifications.Providers.Telegram;
 using Vinx.Erp.WorkerHost;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
@@ -124,10 +127,14 @@ builder.Services.AddDbContext<FoundationDbContext>(
 );
 builder.Services.AddScoped<OwnerInvitationDeliveryIngressService>();
 builder.Services.AddScoped<OwnerInvitationProviderDeliveryService>();
+builder.Services.AddScoped<MemberInvitationDeliveryIngressService>();
+builder.Services.AddScoped<MemberInvitationProviderDeliveryService>();
 builder.Services.AddSingleton<NotificationDeliveryMetrics>();
 builder.Services.AddScoped<NotificationProviderResolver>();
 builder.Services.AddScoped<INotificationProvider, InAppNotificationProvider>();
 builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
+builder.Services.AddScoped<INotificationProvider, EmailNotificationProvider>();
+builder.Services.AddScoped<INotificationProvider, TelegramProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
 builder.Services.AddScoped<InboundWhatsAppInteractionService>();
 builder.Services.AddScoped<InboundWhatsAppDocumentService>();
@@ -223,10 +230,65 @@ builder.Services.AddSingleton(serviceProvider =>
     serviceProvider.GetRequiredService<IOptions<MetaWhatsAppOptions>>().Value
 );
 builder
+    .Services.AddOptions<EmailProviderOptions>()
+    .Bind(builder.Configuration)
+    .Validate(
+        options =>
+            // Tudo ou nada no espírito do Meta WhatsApp: sem SMTP o worker sobe
+            // atendendo filas independentes e cada entrega de e-mail falha
+            // fechada; configurado-porém-parcial é erro de deploy.
+            (
+                string.IsNullOrWhiteSpace(options.Host)
+                && string.IsNullOrWhiteSpace(options.Username)
+                && string.IsNullOrWhiteSpace(options.Password)
+                && string.IsNullOrWhiteSpace(options.FromAddress)
+            )
+            || (
+                options.OutboundIsConfigured
+            ),
+        "SMTP email outbound options are invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<EmailProviderOptions>>().Value
+);
+builder
     .Services.AddHttpClient(MetaWhatsAppClient.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(() =>
         new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
     );
+builder
+    .Services.AddOptions<TelegramOptions>()
+    .Bind(builder.Configuration)
+    .Validate(
+        options =>
+            // A ausência mantém filas independentes operacionais. Este host
+            // só envia outbound, portanto valida exclusivamente token e base;
+            // o ApiHost assume o segredo de webhook quando o receber.
+            (
+                string.IsNullOrWhiteSpace(options.BotToken)
+                && string.Equals(
+                    options.ApiBaseUrl,
+                    "https://api.telegram.org",
+                    StringComparison.Ordinal
+                )
+            )
+            || options.OutboundIsConfigured,
+        "Telegram options are invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<TelegramOptions>>().Value
+);
+builder
+    .Services.AddHttpClient(
+        TelegramClient.HttpClientName,
+        client => client.Timeout = TimeSpan.FromSeconds(10)
+    )
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
+    )
+    .RemoveAllLoggers();
 builder
     .Services.AddHttpClient(
         InboundWhatsAppInteractionService.TextHttpClientName,
@@ -251,7 +313,7 @@ builder
     );
 builder
     .Services.AddHttpClient(
-        SupabaseAdminOwnerInvitationClient.HttpClientName,
+        SupabaseAdminInvitationClient.HttpClientName,
         client => client.Timeout = TimeSpan.FromSeconds(10)
     )
     .ConfigurePrimaryHttpMessageHandler(() =>
@@ -271,10 +333,12 @@ builder.Host.UseWolverine(options =>
     options.UseEntityFrameworkCoreTransactions();
     options.Discovery.DisableConventionalDiscovery(true);
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();
+    options.Discovery.IncludeType<MemberInvitationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<NotificationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppImageReceivedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppTextCorrelationExpiredHandler>();
     options.Discovery.IncludeType<InboundWhatsAppDocumentReceivedHandler>();
+    options.Discovery.IncludeType<InboundTelegramTextReceivedHandler>();
     options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
     options
         .PersistMessagesWithPostgresql(workerDataSource, schemaName: "vinx_wolverine_worker")
@@ -283,9 +347,11 @@ builder.Host.UseWolverine(options =>
             transport.TransportSchemaName("vinx_wolverine_queues")
         );
     options.ListenToPostgresqlQueue("owner-invitation-delivery").UseDurableInbox();
+    options.ListenToPostgresqlQueue("member-invitation-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("notification-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound-documents").UseDurableInbox();
+    options.ListenToPostgresqlQueue("telegram-inbound").UseDurableInbox();
 });
 
 

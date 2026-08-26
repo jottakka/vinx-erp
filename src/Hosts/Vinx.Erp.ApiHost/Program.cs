@@ -18,6 +18,7 @@ using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.ApiHost.Models;
 using Vinx.Erp.ApiHost.OpenApi;
+using Vinx.Erp.ApiHost.Permissions;
 using Vinx.Erp.Atendimento;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
@@ -31,9 +32,11 @@ using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
+using Vinx.Erp.Notifications.Providers.Telegram;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
+using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
@@ -75,6 +78,19 @@ builder
     .ValidateOnStart();
 builder.Services.AddSingleton(serviceProvider =>
     serviceProvider.GetRequiredService<IOptions<MetaWhatsAppOptions>>().Value
+);
+builder
+    .Services.AddOptions<TelegramOptions>()
+    .Bind(builder.Configuration)
+    .Validate(
+        options =>
+            string.IsNullOrEmpty(options.WebhookSecretToken)
+            || TelegramOptions.IsValidWebhookSecret(options.WebhookSecretToken),
+        "Telegram webhook secret token is invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<TelegramOptions>>().Value
 );
 builder
     .Services.AddOptions<SupabaseStorageOptions>()
@@ -124,6 +140,10 @@ builder.Host.UseWolverine(options =>
         .ToPostgresqlQueue("owner-invitation-delivery")
         .UseDurableOutbox();
     options
+        .PublishMessage<MemberInvitationDeliveryRequested>()
+        .ToPostgresqlQueue("member-invitation-delivery")
+        .UseDurableOutbox();
+    options
         .PublishMessage<NotificationDeliveryRequested>()
         .ToPostgresqlQueue("notification-delivery")
         .UseDurableOutbox();
@@ -139,6 +159,10 @@ builder.Host.UseWolverine(options =>
         .PublishMessage<InboundWhatsAppDocumentReceived>()
         .ToPostgresqlQueue("whatsapp-inbound-documents")
         .UseDurableOutbox();
+    options
+        .PublishMessage<InboundTelegramTextReceived>()
+        .ToPostgresqlQueue("telegram-inbound")
+        .UseDurableOutbox();
 });
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
@@ -150,10 +174,15 @@ builder.Services.AddScoped<PlatformOrganizationProvisioningService>();
 builder.Services.AddScoped<NotificationIntentService>();
 builder.Services.AddScoped<IInboundActorResolver, SqlInboundActorResolver>();
 builder.Services.AddScoped<InboundWhatsAppIngressService>();
+builder.Services.AddScoped<InboundTelegramIngressService>();
 builder.Services.AddScoped<NotificationInboxService>();
 builder.Services.AddScoped<EmployeeDirectoryService>();
+builder.Services.AddScoped<CompanyPermissionDirectoryService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
+builder.Services.AddScoped<RoleUnassignmentService>();
+builder.Services.AddScoped<RolePermissionsCopyService>();
+builder.Services.AddScoped<MemberInvitationService>();
 builder.Services.AddScoped<RevokeMembershipService>();
 // Engine antimalware condicionada por configuração: sem "MalwareScanner:ClamAvEndpoint"
 // o host permanece fail-closed (BlockedMalwareScanner); endpoint válido ativa o clamd.
@@ -357,6 +386,12 @@ if (app.Environment.IsDevelopment())
 app.MapBrowserBffSessionEndpoints();
 app.MapAgentRunSurface();
 app.MapMetaWhatsAppWebhookEndpoints();
+app.MapTelegramWebhookEndpoints(
+    (services, inbound, cancellationToken) =>
+        services
+            .GetRequiredService<InboundTelegramIngressService>()
+            .RecordAsync(inbound, cancellationToken)
+);
 app.MapControllers();
 var foundation = app.MapGroup("/foundation")
     .RequireAuthorization()
@@ -739,6 +774,7 @@ foundation.MapPost(
         return result.ToMinimalApiResult();
     }
 );
+foundation.MapFoundationPermissionsEndpoints();
 if (args.FirstOrDefault() is "db-apply" or "db-assert")
 {
     return await app.RunJasperFxCommands(args);

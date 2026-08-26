@@ -36,6 +36,7 @@ internal static class NotificationIntentSeed
 {
     public const string InAppTemplateKey = "alert.in_app";
     public const string WhatsAppTemplateKey = "alert.whatsapp";
+    public const string EmailTemplateKey = "alert.email";
 
     public static string NewEventKey() => $"event-{Guid.NewGuid():N}";
 
@@ -198,6 +199,62 @@ internal static class NotificationIntentSeed
         command.Parameters.AddWithValue("company_id", companyId);
         command.Parameters.AddWithValue("name", metaTemplateName);
         command.Parameters.AddWithValue("language", metaLanguage);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public static async Task SeedEmailTemplateAsync(
+        FoundationApiFactory factory,
+        Guid companyId,
+        string subject,
+        string bodyHtml,
+        bool approved = true
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO notifications.notification_templates (
+                company_id, channel, template_key, is_approved, email_subject, email_body_html)
+            VALUES (@company_id, 'email', @template_key, @approved, @subject, @body_html)
+            ON CONFLICT (company_id, channel, template_key) DO UPDATE
+                SET is_approved = EXCLUDED.is_approved,
+                    email_subject = EXCLUDED.email_subject,
+                    email_body_html = EXCLUDED.email_body_html
+            """,
+            administrator
+        );
+        command.Parameters.AddWithValue("company_id", companyId);
+        command.Parameters.AddWithValue("template_key", EmailTemplateKey);
+        command.Parameters.AddWithValue("approved", approved);
+        // Conteúdo aprovado só acompanha template aprovado (CHECK por coluna):
+        // template reprovado mantém assunto/corpo nulos, como o padrão Meta.
+        command.Parameters.AddWithValue("subject", approved ? subject : DBNull.Value);
+        command.Parameters.AddWithValue("body_html", approved ? bodyHtml : DBNull.Value);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public static async Task SeedEmailPreferenceAsync(
+        FoundationApiFactory factory,
+        Guid companyId,
+        Guid userId,
+        bool optedIn = true
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO notifications.notification_preferences (company_id, user_id, channel, opted_in, updated_by_user_id)
+            VALUES (@company_id, @user_id, 'email', @opted_in, @user_id)
+            ON CONFLICT (company_id, user_id, channel) DO UPDATE
+                SET opted_in = EXCLUDED.opted_in,
+                    updated_at = clock_timestamp(),
+                    updated_by_user_id = EXCLUDED.updated_by_user_id
+            """,
+            administrator
+        );
+        command.Parameters.AddWithValue("company_id", companyId);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("opted_in", optedIn);
         await command.ExecuteNonQueryAsync();
     }
 

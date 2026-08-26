@@ -184,6 +184,10 @@ public sealed class PlatformOrganizationProvisioningService(
                 result.OwnerMembershipId!.Value,
                 cancellationToken
             );
+            await database.EnsureCompanyDefaultRolesAsync(
+                result.CompanyId!.Value,
+                cancellationToken
+            );
         }
 
         return result;

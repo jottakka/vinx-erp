@@ -17,7 +17,9 @@ public sealed record NotificationIntentCommand(
     string EventKey,
     string InAppTemplateKey,
     string? WhatsAppTemplateKey = null,
-    string? DeepLinkSelector = null
+    string? EmailTemplateKey = null,
+    string? DeepLinkSelector = null,
+    string? TelegramTemplateKey = null
 );
 
 public enum NotificationIntentEnqueueState
@@ -39,7 +41,9 @@ public sealed record NotificationIntentOutcome(
 public sealed record NotificationEnqueueResult(
     NotificationIntentEnqueueState State,
     NotificationIntentOutcome? WhatsApp = null,
-    NotificationIntentOutcome? InApp = null
+    NotificationIntentOutcome? Email = null,
+    NotificationIntentOutcome? InApp = null,
+    NotificationIntentOutcome? Telegram = null
 );
 
 public enum NotificationPreferenceState
@@ -54,8 +58,9 @@ public sealed record NotificationPreferenceResult(NotificationPreferenceState St
 
 /// <summary>
 /// Cria as intenções de notificação e o evento Wolverine na mesma transação do
-/// produtor; o alerta in-app é obrigatório e o opt-in de WhatsApp é revalidado
-/// dentro da função de enfileiramento no momento da chamada.
+/// produtor; o alerta in-app é obrigatório e o opt-in de WhatsApp/e-mail/Telegram
+/// é revalidado dentro da função de enfileiramento no momento da chamada para
+/// cada canal externo habilitado.
 /// </summary>
 public sealed class NotificationIntentService(
     FoundationDbContext database,
@@ -79,6 +84,8 @@ public sealed class NotificationIntentService(
 
         var commitAttempted = false;
         NotificationIntentOutcome? whatsApp = null;
+        NotificationIntentOutcome? email = null;
+        NotificationIntentOutcome? telegram = null;
         NotificationIntentOutcome? inApp = null;
         var createdDeliveries = new List<Guid>();
         try
@@ -94,6 +101,30 @@ public sealed class NotificationIntentService(
                     normalized,
                     NotificationChannel.WhatsApp,
                     normalized.WhatsAppTemplateKey,
+                    createdDeliveries,
+                    cancellationToken
+                );
+            }
+
+            if (normalized.EmailTemplateKey is not null)
+            {
+                email = await EnqueueChannelAsync(
+                    transaction,
+                    normalized,
+                    NotificationChannel.Email,
+                    normalized.EmailTemplateKey,
+                    createdDeliveries,
+                    cancellationToken
+                );
+            }
+
+            if (normalized.TelegramTemplateKey is not null)
+            {
+                telegram = await EnqueueChannelAsync(
+                    transaction,
+                    normalized,
+                    NotificationChannel.Telegram,
+                    normalized.TelegramTemplateKey,
                     createdDeliveries,
                     cancellationToken
                 );
@@ -168,7 +199,9 @@ public sealed class NotificationIntentService(
         return new NotificationEnqueueResult(
             NotificationIntentEnqueueState.Enqueued,
             whatsApp,
-            inApp
+            email,
+            inApp,
+            telegram
         );
     }
 
@@ -180,7 +213,15 @@ public sealed class NotificationIntentService(
         CancellationToken cancellationToken
     )
     {
-        if (companyId == Guid.Empty || channel != NotificationChannel.WhatsApp)
+        if (
+            companyId == Guid.Empty
+            || channel
+                is not (
+                    NotificationChannel.WhatsApp
+                    or NotificationChannel.Email
+                    or NotificationChannel.Telegram
+                )
+        )
         {
             return new NotificationPreferenceResult(NotificationPreferenceState.Invalid);
         }
@@ -331,7 +372,9 @@ public sealed class NotificationIntentService(
         var eventKey = command.EventKey?.Trim();
         var inAppTemplateKey = command.InAppTemplateKey?.Trim();
         var whatsAppTemplateKey = command.WhatsAppTemplateKey?.Trim();
+        var emailTemplateKey = command.EmailTemplateKey?.Trim();
         var deepLinkSelector = command.DeepLinkSelector?.Trim();
+        var telegramTemplateKey = command.TelegramTemplateKey?.Trim();
         if (
             string.IsNullOrWhiteSpace(eventKey)
             || eventKey.Length > 200
@@ -339,6 +382,10 @@ public sealed class NotificationIntentService(
             || inAppTemplateKey.Length > 100
             || whatsAppTemplateKey is { Length: 0 }
             || whatsAppTemplateKey?.Length > 100
+            || emailTemplateKey is { Length: 0 }
+            || emailTemplateKey?.Length > 100
+            || telegramTemplateKey is { Length: 0 }
+            || telegramTemplateKey?.Length > 100
             || (
                 deepLinkSelector is not null
                 && (deepLinkSelector.Length > 200 || !deepLinkSelector.StartsWith('/'))
@@ -354,7 +401,9 @@ public sealed class NotificationIntentService(
             eventKey,
             inAppTemplateKey,
             whatsAppTemplateKey is { Length: > 0 } ? whatsAppTemplateKey : null,
-            deepLinkSelector is { Length: > 0 } ? deepLinkSelector : null
+            emailTemplateKey is { Length: > 0 } ? emailTemplateKey : null,
+            deepLinkSelector is { Length: > 0 } ? deepLinkSelector : null,
+            telegramTemplateKey is { Length: > 0 } ? telegramTemplateKey : null
         );
         return true;
     }
@@ -365,6 +414,8 @@ public sealed class NotificationIntentService(
         string EventKey,
         string InAppTemplateKey,
         string? WhatsAppTemplateKey,
-        string? DeepLinkSelector
+        string? EmailTemplateKey,
+        string? DeepLinkSelector,
+        string? TelegramTemplateKey
     );
 }

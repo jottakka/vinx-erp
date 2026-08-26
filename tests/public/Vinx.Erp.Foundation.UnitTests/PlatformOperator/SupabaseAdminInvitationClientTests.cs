@@ -6,7 +6,7 @@ using Xunit;
 
 namespace Vinx.Erp.Foundation.UnitTests.PlatformOperator;
 
-public sealed class SupabaseAdminOwnerInvitationClientTests
+public sealed class SupabaseAdminInvitationClientTests
 {
     private const string Issuer = "https://project.supabase.co/auth/v1/";
     private const string Audience = "authenticated";
@@ -21,7 +21,7 @@ public sealed class SupabaseAdminOwnerInvitationClientTests
 
         var result = await client.InviteAsync("owner@example.test", CancellationToken.None);
 
-        Assert.Equal(SupabaseOwnerInvitationResultKind.Succeeded, result.Kind);
+        Assert.Equal(SupabaseInvitationResultKind.Succeeded, result.Kind);
         Assert.Equal(Guid.Parse("2a0399f0-a602-4d1f-8f79-22f4bf75f190"), result.Subject);
         Assert.Equal(
             $"{Issuer.TrimEnd('/')}/invite?redirect_to=https%3A%2F%2Fapp.example.test%2Fconvite",
@@ -47,7 +47,7 @@ public sealed class SupabaseAdminOwnerInvitationClientTests
 
         var result = await client.InviteAsync("owner@example.test", CancellationToken.None);
 
-        Assert.Equal(SupabaseOwnerInvitationResultKind.Rejected, result.Kind);
+        Assert.Equal(SupabaseInvitationResultKind.Rejected, result.Kind);
         Assert.Null(result.Subject);
         Assert.DoesNotContain(
             "provider-body-must-not-escape",
@@ -72,7 +72,7 @@ public sealed class SupabaseAdminOwnerInvitationClientTests
 
         var result = await client.InviteAsync("owner@example.test", CancellationToken.None);
 
-        Assert.Equal(SupabaseOwnerInvitationResultKind.Ambiguous, result.Kind);
+        Assert.Equal(SupabaseInvitationResultKind.Ambiguous, result.Kind);
         Assert.Null(result.Subject);
         Assert.DoesNotContain(
             "provider-body-must-not-escape",
@@ -88,7 +88,7 @@ public sealed class SupabaseAdminOwnerInvitationClientTests
 
         var result = await client.InviteAsync("owner@example.test", CancellationToken.None);
 
-        Assert.Equal(SupabaseOwnerInvitationResultKind.Ambiguous, result.Kind);
+        Assert.Equal(SupabaseInvitationResultKind.Ambiguous, result.Kind);
         Assert.Null(result.Subject);
     }
 
@@ -101,7 +101,7 @@ public sealed class SupabaseAdminOwnerInvitationClientTests
 
         var result = await client.InviteAsync("owner@example.test", CancellationToken.None);
 
-        Assert.Equal(SupabaseOwnerInvitationResultKind.Ambiguous, result.Kind);
+        Assert.Equal(SupabaseInvitationResultKind.Ambiguous, result.Kind);
         Assert.Null(result.Subject);
     }
 
@@ -114,7 +114,7 @@ public sealed class SupabaseAdminOwnerInvitationClientTests
 
         var result = await client.InviteAsync("owner@example.test", CancellationToken.None);
 
-        Assert.Equal(SupabaseOwnerInvitationResultKind.Ambiguous, result.Kind);
+        Assert.Equal(SupabaseInvitationResultKind.Ambiguous, result.Kind);
         Assert.Null(result.Subject);
     }
 
@@ -127,11 +127,11 @@ public sealed class SupabaseAdminOwnerInvitationClientTests
 
         var result = await client.InviteAsync("owner@example.test", CancellationToken.None);
 
-        Assert.Equal(SupabaseOwnerInvitationResultKind.Ambiguous, result.Kind);
+        Assert.Equal(SupabaseInvitationResultKind.Ambiguous, result.Kind);
         Assert.Null(result.Subject);
     }
 
-    private static SupabaseAdminOwnerInvitationClient Client(StubHttpMessageHandler handler) =>
+    private static SupabaseAdminInvitationClient Client(StubHttpMessageHandler handler) =>
         new(
             new HttpClient(handler),
             new SupabaseAuthOptions { Issuer = Issuer, Audience = Audience },

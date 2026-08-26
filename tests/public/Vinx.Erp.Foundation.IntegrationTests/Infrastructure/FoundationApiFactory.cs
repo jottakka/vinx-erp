@@ -43,6 +43,7 @@ public sealed record E2eFixtureFactoryContext(
 public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyncDisposable
 {
     public const string TestAuthenticationScheme = "FoundationTest";
+    public const string TelegramWebhookSecret = "telegram-integration-test-secret";
 
     private readonly IFoundationFixtureAccess _fixtureAccess;
     private readonly IFoundationFixtureLifecycle? _ownedFixture;
@@ -55,13 +56,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly TimeSpan? _testMalwareScanTimeout;
     private readonly IAgentModel? _testAgentModel;
     private readonly AgentRunOptions? _testAgentRunOptions;
-    private readonly DbCommandInterceptor? _testCommandInterceptor;
+    private readonly IInterceptor? _testInterceptor;
     private readonly HttpMessageHandler? _browserSessionProviderHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
     private readonly Func<ValueTask>? _disposeJwtAsync;
     private readonly bool _useJwtBearer;
     private readonly bool _provisionWolverineStorage;
     private readonly bool _disableWolverineForE2e;
+    private readonly string _telegramWebhookSecret;
 
     private FoundationApiFactory(
         Guid actorUserId,
@@ -81,8 +83,9 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Func<ValueTask>? disposeHostAsync = null,
         Func<ValueTask>? disposeJwtAsync = null,
         bool provisionWolverineStorage = true,
-        DbCommandInterceptor? testCommandInterceptor = null,
-        bool disableWolverineForE2e = false)
+        IInterceptor? testInterceptor = null,
+        bool disableWolverineForE2e = false,
+        string telegramWebhookSecret = TelegramWebhookSecret)
     {
         ActorUserId = actorUserId;
         CorrelationId = correlationId;
@@ -95,7 +98,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _testMalwareScanTimeout = testMalwareScanTimeout;
         _testAgentModel = testAgentModel;
         _testAgentRunOptions = testAgentRunOptions;
-        _testCommandInterceptor = testCommandInterceptor;
+        _testInterceptor = testInterceptor;
         _browserSessionProviderHandler = browserSessionProviderHandler;
         if (fixture is not null && preparedFixtureAccess is not null)
         {
@@ -117,6 +120,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _useJwtBearer = jwtAuthority is not null;
         _provisionWolverineStorage = provisionWolverineStorage;
         _disableWolverineForE2e = disableWolverineForE2e;
+        _telegramWebhookSecret = telegramWebhookSecret;
     }
 
     public Guid ActorUserId { get; }
@@ -238,7 +242,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         IAgentModel? agentModel = null,
         AgentRunOptions? agentRunOptions = null,
         bool provisionWolverineStorage = true,
-        DbCommandInterceptor? commandInterceptor = null)
+        IInterceptor? commandInterceptor = null,
+        string telegramWebhookSecret = TelegramWebhookSecret)
     {
         var resolvedActorUserId = actorUserId ?? Guid.NewGuid();
         var resolvedCorrelationId = correlationId ?? Guid.NewGuid();
@@ -257,8 +262,21 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             testAgentModel: agentModel,
             testAgentRunOptions: agentRunOptions,
             provisionWolverineStorage: provisionWolverineStorage,
-            testCommandInterceptor: commandInterceptor);
+            testInterceptor: commandInterceptor,
+            telegramWebhookSecret: telegramWebhookSecret);
         return await PrepareAsync(factory);
+    }
+
+    public static async Task<FoundationApiFactory> CreateWithEmptyTelegramWebhookSecretAsync()
+    {
+        return await CreateAsync(telegramWebhookSecret: string.Empty);
+    }
+
+    public static async Task<FoundationApiFactory> CreateWithTelegramWebhookSecretAsync(
+        string webhookSecret)
+    {
+        ArgumentNullException.ThrowIfNull(webhookSecret);
+        return await CreateAsync(telegramWebhookSecret: webhookSecret);
     }
 
     public static async Task<FoundationApiFactory> CreateWithAuthenticatedIdentityAsync(
@@ -270,7 +288,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         string? aal = null,
         IAgentModel? agentModel = null,
         AgentRunOptions? agentRunOptions = null,
-        DbCommandInterceptor? commandInterceptor = null)
+        IInterceptor? commandInterceptor = null)
     {
         var factory = await CreateAsync(
             actorUserId, correlationId, fileStorage, malwareScanner, malwareScanTimeout, aal,
@@ -485,13 +503,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             }
         }
 
-        // Segredos de teste sem valor real; o webhook valida assinatura
-        // HMAC com estas chaves nos testes de integração.
+        // Segredos de teste sem valor real: WhatsApp usa HMAC; Telegram
+        // compara o header de segredo exato antes de interpretar o corpo.
         builder.UseSetting("META_WHATSAPP_PHONE_NUMBER_ID", "111111111111111");
         builder.UseSetting("META_WHATSAPP_ACCESS_TOKEN", "test-meta-access-token");
         builder.UseSetting("META_WHATSAPP_WEB_APP_BASE_URL", "https://app.example.test");
         builder.UseSetting("META_WHATSAPP_APP_SECRET", "test-meta-app-secret");
         builder.UseSetting("META_WHATSAPP_WEBHOOK_VERIFY_TOKEN", "test-meta-verify-token");
+        builder.UseSetting("TELEGRAM_WEBHOOK_SECRET_TOKEN", _telegramWebhookSecret);
         builder.ConfigureTestServices(services =>
         {
             if (_disableWolverineForE2e)
@@ -511,9 +530,9 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                         new RowVersionInterceptor(),
                         new GateDatabaseFailureInterceptor(_databaseFailurePoint),
                         new CommitAcknowledgementFailureInterceptor());
-                if (_testCommandInterceptor is not null)
+                if (_testInterceptor is not null)
                 {
-                    options.AddInterceptors(_testCommandInterceptor);
+                    options.AddInterceptors(_testInterceptor);
                 }
             });
             if (_testFileStorage is not null)

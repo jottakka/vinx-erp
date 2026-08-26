@@ -3,6 +3,7 @@ import AdminPanelSettingsOutlinedIcon from "@mui/icons-material/AdminPanelSettin
 import GroupsOutlinedIcon from "@mui/icons-material/GroupsOutlined";
 import HelpOutlinedIcon from "@mui/icons-material/HelpOutlined";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
+import ManageAccountsOutlinedIcon from "@mui/icons-material/ManageAccountsOutlined";
 import NotificationsOutlinedIcon from "@mui/icons-material/NotificationsOutlined";
 import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import ScienceOutlinedIcon from "@mui/icons-material/ScienceOutlined";
@@ -14,6 +15,7 @@ import { AtendimentoPage } from "../features/atendimento/atendimento-page";
 import { NotificationsPage } from "../features/notifications/notifications-page";
 import { PaguaiPage } from "../features/paguai/paguai-page";
 import { PeoplePage } from "../features/people/people-page";
+import { PermissionsPage } from "../features/permissions/permissions-page";
 import { PlatformOrganizationPage } from "../features/platform/platform-organization-page";
 import {
   type AppRouteCatalogEntry,
@@ -79,6 +81,11 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
     appearanceSlot: "neutral",
     icon: GroupsOutlinedIcon,
     render: () => <PeoplePage />,
+  },
+  "/permissoes": {
+    appearanceSlot: "neutral",
+    icon: ManageAccountsOutlinedIcon,
+    render: () => <PermissionsPage />,
   },
   "/administracao": {
     icon: AdminPanelSettingsOutlinedIcon,
