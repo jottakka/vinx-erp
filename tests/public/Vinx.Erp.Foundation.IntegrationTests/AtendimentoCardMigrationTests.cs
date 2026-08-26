@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
+using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
 
@@ -10,6 +11,8 @@ public sealed class AtendimentoCardMigrationTests
 {
     private const string BeforeAtendimentoMvp =
         "20260816012000_AddPlatformOrganizationProvisioning";
+    private const string BeforeAtendimentoCancellation =
+        "20260826112330_AddPaguaiRequestInvoiceFile";
 
     private static readonly (Guid Id, string Name)[] ExpectedCapabilities =
     [
@@ -195,4 +198,38 @@ public sealed class AtendimentoCardMigrationTests
         Assert.False(reader.GetBoolean(4));
         Assert.False(reader.GetBoolean(5));
     }
+
+    [Fact]
+    public async Task Empty_downgrade_preserves_the_preexisting_runtime_actor_profile_function()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var actor = new User(Guid.NewGuid(), "Perfil preservado", "profile@example.test");
+
+        await using (var administrator = fixture.CreateAdministratorDbContext())
+        {
+            administrator.Users.Add(actor);
+            await administrator.SaveChangesAsync();
+        }
+
+        await using (var migrator = fixture.CreateMigratorDbContext())
+        {
+            await migrator.Database.MigrateAsync(BeforeAtendimentoCancellation);
+        }
+
+        await using var runtime = fixture.CreateRuntimeDbContext();
+        await using var transaction = await runtime.Database.BeginTransactionAsync();
+        await runtime.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT set_config('app.user_id', {actor.Id.ToString()}, true)"
+        );
+        var profile = await runtime.Database.SqlQuery<ActorProfile>(
+            $"SELECT user_id, display_name FROM foundation.current_actor_profile()"
+        ).SingleAsync();
+
+        Assert.Equal(actor.Id, profile.UserId);
+        Assert.Equal("Perfil preservado", profile.DisplayName);
+    }
+
+    private sealed record ActorProfile(Guid UserId, string DisplayName);
 }

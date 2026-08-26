@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +12,7 @@ using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Persistence;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -39,6 +42,8 @@ public sealed class AtendimentoCardEndpointTests
         Assert.Equal(request.Description, created.Description);
         Assert.Equal("novo", created.Column);
         Assert.Equal(1, created.Version);
+        Assert.Null(created.AttachmentFileId);
+        Assert.Empty(created.ParticipantMembershipIds!);
 
         using var replay = await client.PostAsJsonAsync("/atendimento/cards", request);
 
@@ -103,6 +108,122 @@ public sealed class AtendimentoCardEndpointTests
             && audit.Reason == "idempotency_conflict"
         );
         Assert.Equal("service_desk.ticket.create", denial.Action);
+    }
+
+    [Fact]
+    public async Task Create_replays_a_predeploy_receipt_and_rejects_effective_attachment_or_participant_changes()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var legacyRequestId = Guid.NewGuid();
+        var legacyCardId = Guid.NewGuid();
+        var legacyTitle = "Receipt anterior";
+        var legacyDescription = "O formato anterior não tinha anexo nem participantes.";
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            administrator.IdempotencyRecords.Add(
+                new IdempotencyRecord(
+                    Guid.NewGuid(),
+                    scenario.CompanyId,
+                    factory.ActorUserId,
+                    "service_desk.ticket.create",
+                    legacyRequestId,
+                    HashPayload(
+                        new LegacyCreatePayload(
+                            scenario.CompanyId,
+                            legacyRequestId,
+                            legacyTitle,
+                            legacyDescription
+                        )
+                    ),
+                    JsonSerializer.Serialize(
+                        new
+                        {
+                            Id = legacyCardId,
+                            scenario.CompanyId,
+                            Title = legacyTitle,
+                            Description = legacyDescription,
+                            Column = "novo",
+                            Version = 1L,
+                            AssigneeMembershipId = (Guid?)null,
+                        }
+                    )
+                )
+            );
+            await administrator.SaveChangesAsync();
+        }
+
+        using var legacyReplay = await client.PostAsJsonAsync(
+            "/atendimento/cards",
+            new CreateCardRequest(
+                scenario.CompanyId,
+                legacyRequestId,
+                legacyTitle,
+                legacyDescription
+            )
+        );
+        Assert.Equal(HttpStatusCode.OK, legacyReplay.StatusCode);
+        var replayed = await legacyReplay.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.Equal(legacyCardId, replayed?.Id);
+        Assert.Null(replayed?.AttachmentFileId);
+        Assert.Empty(replayed?.ParticipantMembershipIds!);
+
+        Guid firstAttachmentId;
+        Guid changedAttachmentId;
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            firstAttachmentId = await AddConfirmedFileAsync(
+                administrator,
+                scenario.CompanyId,
+                scenario.AssigneeMembershipId,
+                factory.ActorUserId,
+                "service_desk_attachment"
+            );
+            changedAttachmentId = await AddConfirmedFileAsync(
+                administrator,
+                scenario.CompanyId,
+                scenario.AssigneeMembershipId,
+                factory.ActorUserId,
+                "service_desk_attachment"
+            );
+            await administrator.SaveChangesAsync();
+        }
+
+        var requestId = Guid.NewGuid();
+        var first = new CreateCardRequest(
+            scenario.CompanyId,
+            requestId,
+            "Com contexto estendido",
+            "O hash inclui anexo e conjunto canônico."
+        )
+        {
+            AttachmentFileId = firstAttachmentId,
+            ParticipantMembershipIds = [scenario.AssigneeMembershipId],
+        };
+        using var created = await client.PostAsJsonAsync("/atendimento/cards", first);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        using var changedAttachment = await client.PostAsJsonAsync(
+            "/atendimento/cards",
+            first with { AttachmentFileId = changedAttachmentId }
+        );
+        Assert.Equal(HttpStatusCode.Conflict, changedAttachment.StatusCode);
+        Assert.Equal(
+            "idempotency_conflict",
+            (await changedAttachment.Content.ReadFromJsonAsync<ErrorResponse>())?.Code
+        );
+
+        using var changedParticipants = await client.PostAsJsonAsync(
+            "/atendimento/cards",
+            first with { ParticipantMembershipIds = [scenario.ActorMembershipId] }
+        );
+        Assert.Equal(HttpStatusCode.Conflict, changedParticipants.StatusCode);
+        Assert.Equal(
+            "idempotency_conflict",
+            (await changedParticipants.Content.ReadFromJsonAsync<ErrorResponse>())?.Code
+        );
     }
 
     [Fact]
@@ -251,6 +372,135 @@ public sealed class AtendimentoCardEndpointTests
             await verify.Database.SqlQuery<long>(
                 $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_cards WHERE company_id = {scenario.CompanyId}"
             ).SingleAsync()
+        );
+    }
+
+    [Fact]
+    public async Task Create_rejects_wrong_company_attachment_and_every_invalid_participant_without_partial_state()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var requestIds = new List<Guid>();
+        Guid wrongClassificationAttachmentId;
+        Guid foreignAttachmentId;
+        Guid revokedMembershipId;
+        Guid foreignMembershipId;
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var foreignCompany = new Company(
+                Guid.NewGuid(),
+                scenario.GroupId,
+                "Empresa estrangeira",
+                factory.ActorUserId,
+                Guid.NewGuid()
+            );
+            var foreignUser = new User(Guid.NewGuid(), "Pessoa estrangeira", "foreign@example.test");
+            var foreignMembership = new Membership(
+                Guid.NewGuid(),
+                foreignCompany.Id,
+                foreignUser.Id,
+                factory.ActorUserId,
+                Guid.NewGuid()
+            );
+            var revokedUser = new User(Guid.NewGuid(), "Pessoa revogada", "revoked@example.test");
+            var revokedMembership = new Membership(
+                Guid.NewGuid(),
+                scenario.CompanyId,
+                revokedUser.Id,
+                factory.ActorUserId,
+                Guid.NewGuid()
+            );
+            administrator.AddRange(
+                foreignCompany,
+                foreignUser,
+                foreignMembership,
+                revokedUser,
+                revokedMembership
+            );
+            await administrator.SaveChangesAsync();
+            revokedMembership.Revoke("test_revocation", factory.ActorUserId, Guid.NewGuid());
+
+            wrongClassificationAttachmentId = await AddConfirmedFileAsync(
+                administrator,
+                scenario.CompanyId,
+                scenario.AssigneeMembershipId,
+                factory.ActorUserId,
+                "paguai_proof"
+            );
+            foreignAttachmentId = await AddConfirmedFileAsync(
+                administrator,
+                foreignCompany.Id,
+                foreignMembership.Id,
+                factory.ActorUserId,
+                "service_desk_attachment"
+            );
+            await administrator.SaveChangesAsync();
+            revokedMembershipId = revokedMembership.Id;
+            foreignMembershipId = foreignMembership.Id;
+        }
+
+        var cases = new Func<Guid, CreateCardRequest>[]
+        {
+            requestId => new CreateCardRequest(
+                scenario.CompanyId,
+                requestId,
+                "Acesso bloqueado",
+                "Usuário não consegue entrar no portal."
+            ) { AttachmentFileId = wrongClassificationAttachmentId },
+            requestId => new CreateCardRequest(
+                scenario.CompanyId,
+                requestId,
+                "Acesso bloqueado",
+                "Usuário não consegue entrar no portal."
+            ) { AttachmentFileId = foreignAttachmentId },
+            requestId => new CreateCardRequest(
+                scenario.CompanyId,
+                requestId,
+                "Acesso bloqueado",
+                "Usuário não consegue entrar no portal."
+            ) { ParticipantMembershipIds = [revokedMembershipId] },
+            requestId => new CreateCardRequest(
+                scenario.CompanyId,
+                requestId,
+                "Acesso bloqueado",
+                "Usuário não consegue entrar no portal."
+            ) { ParticipantMembershipIds = [foreignMembershipId] },
+            requestId => new CreateCardRequest(
+                scenario.CompanyId,
+                requestId,
+                "Acesso bloqueado",
+                "Usuário não consegue entrar no portal."
+            ) { ParticipantMembershipIds = [Guid.NewGuid()] },
+        };
+
+        foreach (var create in cases)
+        {
+            var requestId = Guid.NewGuid();
+            requestIds.Add(requestId);
+            using var response = await client.PostAsJsonAsync("/atendimento/cards", create(requestId));
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Equal("resource_not_found", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        }
+
+        await using var verify = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(
+            0L,
+            await verify.Database.SqlQuery<long>(
+                $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_cards WHERE company_id = {scenario.CompanyId}"
+            ).SingleAsync()
+        );
+        Assert.Equal(
+            0L,
+            await verify.Database.SqlQuery<long>(
+                $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_card_participants WHERE company_id = {scenario.CompanyId}"
+            ).SingleAsync()
+        );
+        Assert.False(
+            await verify.IdempotencyRecords.AnyAsync(record =>
+                record.CompanyId == scenario.CompanyId && requestIds.Contains(record.RequestId)
+            )
         );
     }
 
@@ -409,6 +659,20 @@ public sealed class AtendimentoCardEndpointTests
         var scenario = await SeedScenarioAsync(factory);
         using var client = factory.CreateClient();
 
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var ana = new User(Guid.NewGuid(), "Ana", "ana-options@example.test");
+            var anaMembership = new Membership(
+                Guid.NewGuid(),
+                scenario.CompanyId,
+                ana.Id,
+                factory.ActorUserId,
+                Guid.NewGuid()
+            );
+            administrator.AddRange(ana, anaMembership);
+            await administrator.SaveChangesAsync();
+        }
+
         using var response = await client.GetAsync(
             $"/atendimento/assignment-options?companyId={scenario.CompanyId}"
         );
@@ -421,7 +685,56 @@ public sealed class AtendimentoCardEndpointTests
                 .ThenBy(option => option.MembershipId),
             options
         );
+        Assert.True(options.Count >= 2);
+        Assert.True(
+            options.FindIndex(option => option.DisplayName == "Ana")
+                < options.FindIndex(option => option.DisplayName == "Bea")
+        );
         Assert.Contains(options, option => option.MembershipId == scenario.AssigneeMembershipId && option.DisplayName == "Bea");
+    }
+
+    [Fact]
+    public async Task Assignment_options_deny_missing_assign_capability_and_foreign_company_without_returning_people()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(
+            factory,
+            KnownCapabilities.ServiceDeskTicketReadQueue,
+            KnownCapabilities.ServiceDeskTicketCreate,
+            KnownCapabilities.ServiceDeskTicketMove
+        );
+        using var client = factory.CreateClient();
+
+        using var denied = await client.GetAsync(
+            $"/atendimento/assignment-options?companyId={scenario.CompanyId}"
+        );
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal("capability_denied", (await denied.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            administrator.Companies.Add(
+                new Company(
+                    Guid.NewGuid(),
+                    scenario.GroupId,
+                    "Empresa sem membership",
+                    factory.ActorUserId,
+                    Guid.NewGuid()
+                )
+            );
+            await administrator.SaveChangesAsync();
+            var foreignCompanyId = await administrator.Companies.Where(company =>
+                company.GroupId == scenario.GroupId && company.Name == "Empresa sem membership"
+            ).Select(company => company.Id).SingleAsync();
+
+            using var foreign = await client.GetAsync(
+                $"/atendimento/assignment-options?companyId={foreignCompanyId}"
+            );
+            Assert.Equal(HttpStatusCode.Forbidden, foreign.StatusCode);
+            var body = await foreign.Content.ReadAsStringAsync();
+            Assert.Contains("membership_required", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("Bea", body, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -499,6 +812,151 @@ public sealed class AtendimentoCardEndpointTests
                 && audit.Outcome == AuditOutcome.Success
                 && audit.ResourceId == created.Id
             ).ToListAsync()
+        );
+    }
+
+    [Fact]
+    public async Task Cancel_uses_each_routed_card_as_an_independent_scope_and_rejects_stale_or_foreign_targets()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var firstCard = await CreateCardAsync(client, scenario.CompanyId);
+        var secondCard = await CreateCardAsync(client, scenario.CompanyId);
+        var sharedRequestId = Guid.NewGuid();
+
+        using var firstCancel = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{firstCard.Id}/cancel",
+            new CancelCardRequest(
+                scenario.CompanyId,
+                sharedRequestId,
+                firstCard.Version,
+                "Cancelado de forma independente."
+            )
+        );
+        using var secondCancel = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{secondCard.Id}/cancel",
+            new CancelCardRequest(
+                scenario.CompanyId,
+                sharedRequestId,
+                secondCard.Version,
+                "Cancelado de forma independente."
+            )
+        );
+        Assert.Equal(HttpStatusCode.OK, firstCancel.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, secondCancel.StatusCode);
+
+        var staleCard = await CreateCardAsync(client, scenario.CompanyId);
+        using var moved = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{staleCard.Id}/move",
+            new MoveCardRequest(
+                scenario.CompanyId,
+                Guid.NewGuid(),
+                staleCard.Version,
+                "em_andamento"
+            )
+        );
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+        using var staleCancel = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{staleCard.Id}/cancel",
+            new CancelCardRequest(
+                scenario.CompanyId,
+                Guid.NewGuid(),
+                staleCard.Version,
+                "Versão antiga."
+            )
+        );
+        Assert.Equal(HttpStatusCode.Conflict, staleCancel.StatusCode);
+        Assert.Equal(
+            "em_andamento",
+            (await staleCancel.Content.ReadFromJsonAsync<IntegrityConflictResponse>())?.Current?.Column
+        );
+
+        var foreignCompanyId = Guid.NewGuid();
+        var foreignCardId = Guid.NewGuid();
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            administrator.Companies.Add(
+                new Company(
+                    foreignCompanyId,
+                    scenario.GroupId,
+                    "Empresa estrangeira",
+                    factory.ActorUserId,
+                    Guid.NewGuid()
+                )
+            );
+            await administrator.SaveChangesAsync();
+            await administrator.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                INSERT INTO service_desk.atendimento_cards
+                    (id, company_id, title, description, column_name, created_by_user_id, updated_by_user_id, request_id)
+                VALUES ({foreignCardId}, {foreignCompanyId}, 'Cartão externo', 'Não pode aparecer.', 'novo', {factory.ActorUserId}, {factory.ActorUserId}, {Guid.NewGuid()})
+                """
+            );
+        }
+
+        using var foreignCancel = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{foreignCardId}/cancel",
+            new CancelCardRequest(
+                foreignCompanyId,
+                Guid.NewGuid(),
+                1,
+                "Não autorizado."
+            )
+        );
+        Assert.Equal(HttpStatusCode.Forbidden, foreignCancel.StatusCode);
+        var foreignBody = await foreignCancel.Content.ReadAsStringAsync();
+        Assert.Contains("membership_required", foreignBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(foreignCardId.ToString(), foreignBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Cartão externo", foreignBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Failed_cancel_audit_rolls_back_card_history_and_receipt_in_a_fresh_context()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var card = await CreateCardAsync(client, scenario.CompanyId);
+        var requestId = Guid.NewGuid();
+        await RevokeAuditAppendAsync(factory);
+
+        using var response = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{card.Id}/cancel",
+            new CancelCardRequest(
+                scenario.CompanyId,
+                requestId,
+                card.Version,
+                "Auditoria indisponível."
+            )
+        );
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+
+        await using var verify = factory.Fixture.CreateAdministratorDbContext();
+        var unchanged = await verify.Database.SqlQuery<CardDatabaseState>(
+            $"SELECT column_name AS column, cancelled_at, cancelled_by_user_id, cancellation_reason FROM service_desk.atendimento_cards WHERE id = {card.Id}"
+        ).SingleAsync();
+        Assert.Equal("novo", unchanged.Column);
+        Assert.Null(unchanged.CancelledAt);
+        Assert.Null(unchanged.CancelledByUserId);
+        Assert.Null(unchanged.CancellationReason);
+        Assert.Equal(
+            0L,
+            await verify.Database.SqlQuery<long>(
+                $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_card_history WHERE card_id = {card.Id}"
+            ).SingleAsync()
+        );
+        Assert.False(
+            await verify.IdempotencyRecords.AnyAsync(record =>
+                record.CompanyId == scenario.CompanyId && record.RequestId == requestId
+            )
+        );
+        Assert.False(
+            await verify.AuditEvents.AnyAsync(audit =>
+                audit.Action == "service_desk.ticket.cancel"
+                && audit.Outcome == AuditOutcome.Success
+                && audit.ResourceId == card.Id
+            )
         );
     }
 
@@ -857,6 +1315,44 @@ public sealed class AtendimentoCardEndpointTests
         }
 
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        var createPost = paths.GetProperty("/atendimento/cards").GetProperty("post");
+        Assert.True(createPost.GetProperty("responses").TryGetProperty("404", out _));
+        Assert.True(
+            HasSchemaType(
+                createPost
+                    .GetProperty("requestBody")
+                    .GetProperty("content")
+                    .GetProperty("application/json")
+                    .GetProperty("schema"),
+                "object"
+            )
+        );
+        var createProperties = schemas
+            .GetProperty("CreateAtendimentoCardRequest")
+            .GetProperty("properties");
+        Assert.True(IsNullableSchema(createProperties.GetProperty("attachmentFileId")));
+        Assert.True(HasSchemaType(createProperties.GetProperty("participantMembershipIds"), "array"));
+        var cardProperties = schemas
+            .GetProperty("AtendimentoCardResponse")
+            .GetProperty("properties");
+        Assert.True(IsNullableSchema(cardProperties.GetProperty("attachmentFileId")));
+        Assert.True(HasSchemaType(cardProperties.GetProperty("participantMembershipIds"), "array"));
+        var cancelPost = paths.GetProperty("/atendimento/cards/{id}/cancel").GetProperty("post");
+        Assert.True(
+            HasSchemaType(
+                cancelPost
+                    .GetProperty("requestBody")
+                    .GetProperty("content")
+                    .GetProperty("application/json")
+                    .GetProperty("schema"),
+                "object"
+            )
+        );
+        var cancelProperties = schemas
+            .GetProperty("CancelAtendimentoCardRequest")
+            .GetProperty("properties");
+        Assert.True(HasSchemaType(cancelProperties.GetProperty("reason"), "string"));
+        Assert.True(HasSchemaType(cancelProperties.GetProperty("expectedVersion"), "integer"));
         foreach (
             var path in new[]
             {
@@ -916,6 +1412,15 @@ public sealed class AtendimentoCardEndpointTests
             return true;
         }
 
+        if (
+            schema.TryGetProperty("type", out var type)
+            && type.ValueKind == JsonValueKind.Array
+            && type.EnumerateArray().Any(value => value.GetString() == "null")
+        )
+        {
+            return true;
+        }
+
         return sourceArray.Any(composition =>
             schema.TryGetProperty(composition, out var alternatives)
             && alternatives
@@ -927,6 +1432,13 @@ public sealed class AtendimentoCardEndpointTests
                 )
         );
     }
+
+    private static bool HasSchemaType(JsonElement schema, string expectedType) =>
+        schema.TryGetProperty("type", out var type)
+        && (type.ValueKind == JsonValueKind.String
+            ? type.GetString() == expectedType
+            : type.ValueKind == JsonValueKind.Array
+                && type.EnumerateArray().Any(value => value.GetString() == expectedType));
 
     private static async Task<CardResponse> CreateCardAsync(HttpClient client, Guid companyId)
     {
@@ -942,6 +1454,41 @@ public sealed class AtendimentoCardEndpointTests
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         return (await response.Content.ReadFromJsonAsync<CardResponse>())!;
     }
+
+    private static Task<Guid> AddConfirmedFileAsync(
+        FoundationDbContext database,
+        Guid companyId,
+        Guid uploaderMembershipId,
+        Guid actorUserId,
+        string classification
+    )
+    {
+        var fileId = Guid.NewGuid();
+        var file = new FileRecord(
+            fileId,
+            companyId,
+            uploaderMembershipId,
+            "evidencia.pdf",
+            ".pdf",
+            42,
+            "application/pdf",
+            Convert.ToHexString(Guid.NewGuid().ToByteArray()).PadLeft(64, 'a'),
+            classification,
+            "web",
+            DateTimeOffset.UtcNow.AddDays(1),
+            actorUserId,
+            Guid.NewGuid()
+        );
+        file.MarkVerified(actorUserId, Guid.NewGuid());
+        file.MarkConfirmed(actorUserId, Guid.NewGuid());
+        database.Files.Add(file);
+        return Task.FromResult(fileId);
+    }
+
+    private static string HashPayload<T>(T payload) =>
+        Convert
+            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload))))
+            .ToLowerInvariant();
 
     private static async Task<AtendimentoScenario> SeedScenarioAsync(
         FoundationApiFactory factory,
@@ -1024,7 +1571,12 @@ public sealed class AtendimentoCardEndpointTests
             ))
         );
         await administrator.SaveChangesAsync();
-        return new AtendimentoScenario(group.Id, company.Id, assigneeMembership.Id);
+        return new AtendimentoScenario(
+            group.Id,
+            company.Id,
+            actorMembership.Id,
+            assigneeMembership.Id
+        );
     }
 
     private static async Task RevokeAuditAppendAsync(FoundationApiFactory factory)
@@ -1070,6 +1622,7 @@ public sealed class AtendimentoCardEndpointTests
     private sealed record AtendimentoScenario(
         Guid GroupId,
         Guid CompanyId,
+        Guid ActorMembershipId,
         Guid AssigneeMembershipId
     );
 
@@ -1090,6 +1643,13 @@ public sealed class AtendimentoCardEndpointTests
         )]
         public IReadOnlyList<Guid>? ParticipantMembershipIds { get; init; }
     }
+
+    private sealed record LegacyCreatePayload(
+        Guid CompanyId,
+        Guid RequestId,
+        string Title,
+        string Description
+    );
 
     private sealed record MoveCardRequest(
         Guid CompanyId,
@@ -1129,6 +1689,13 @@ public sealed class AtendimentoCardEndpointTests
     private sealed record ErrorResponse(string Code);
 
     private sealed record IntegrityConflictResponse(string Code, CardResponse? Current);
+
+    private sealed record CardDatabaseState(
+        string Column,
+        DateTimeOffset? CancelledAt,
+        Guid? CancelledByUserId,
+        string? CancellationReason
+    );
 
     private sealed class BrowserSessionProviderHandler : HttpMessageHandler
     {

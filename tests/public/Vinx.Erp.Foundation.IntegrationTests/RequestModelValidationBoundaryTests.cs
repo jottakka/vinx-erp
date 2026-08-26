@@ -341,6 +341,13 @@ public sealed class RequestModelValidationBoundaryTests
             () => new
             {
                 companyId = scenario.CompanyId,
+                requestId = Guid.Empty,
+                expectedVersion = created.Version,
+                reason = "Cancelamento válido.",
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
                 requestId = NextRequestId(requestIds),
                 expectedVersion = created.Version,
                 reason = string.Empty,
@@ -371,6 +378,25 @@ public sealed class RequestModelValidationBoundaryTests
                 companyId = scenario.CompanyId,
                 requestId = NextRequestId(requestIds),
                 expectedVersion = created.Version,
+                reason = (string?)null,
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                reason = "Cancelamento válido.",
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
                 reason = new string('a', 501),
             },
         };
@@ -390,6 +416,26 @@ public sealed class RequestModelValidationBoundaryTests
         }
 
         await AssertCardUnchangedAndNoReceiptAsync(factory, client, scenario, created, requestIds);
+
+        var routedRequestId = Guid.NewGuid();
+        using var emptyRoute = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{Guid.Empty}/cancel",
+            new
+            {
+                companyId = scenario.CompanyId,
+                requestId = routedRequestId,
+                expectedVersion = created.Version,
+                reason = "Cancelamento válido.",
+            }
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, emptyRoute.StatusCode);
+        await AssertCardUnchangedAndNoReceiptAsync(
+            factory,
+            client,
+            scenario,
+            created,
+            [routedRequestId]
+        );
     }
 
     private static Guid NextRequestId(List<Guid> requestIds)

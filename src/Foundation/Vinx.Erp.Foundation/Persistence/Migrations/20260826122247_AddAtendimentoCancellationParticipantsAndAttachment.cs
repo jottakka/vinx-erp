@@ -78,7 +78,6 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 GRANT SELECT, INSERT ON service_desk.atendimento_card_participants TO vinx_runtime;
 
                 GRANT USAGE, CREATE ON SCHEMA foundation TO vinx_authorization_owner;
-                GRANT SELECT (id, display_name) ON foundation.users TO vinx_authorization_owner;
                 SET ROLE vinx_authorization_owner;
                 CREATE FUNCTION foundation.current_company_membership_options()
                 RETURNS TABLE (membership_id uuid, display_name text)
@@ -135,7 +134,6 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     FROM PUBLIC, vinx_migrator, vinx_runtime;
                 DROP FUNCTION foundation.current_company_membership_options();
                 RESET ROLE;
-                REVOKE SELECT (id, display_name) ON foundation.users FROM vinx_authorization_owner;
 
                 REVOKE ALL ON service_desk.atendimento_card_participants FROM PUBLIC, vinx_runtime;
                 DROP POLICY atendimento_card_participants_company_isolation

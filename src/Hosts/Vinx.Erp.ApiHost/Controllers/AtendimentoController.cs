@@ -111,6 +111,7 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
@@ -146,6 +147,11 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
         CancellationToken cancellationToken
     )
     {
+        if (id == Guid.Empty)
+        {
+            return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
+        }
+
         var actor = HttpContext.GetRequiredActorContext();
         var result = await service.AssignAsync(actor, id, model.ToCommand(), cancellationToken);
         return ToCommandResult(result);
@@ -168,6 +174,11 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
         CancellationToken cancellationToken
     )
     {
+        if (id == Guid.Empty)
+        {
+            return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
+        }
+
         if (!IsTrimmed(model.Column))
         {
             return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
@@ -195,6 +206,11 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
         CancellationToken cancellationToken
     )
     {
+        if (id == Guid.Empty)
+        {
+            return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
+        }
+
         if (!IsTrimmed(model.Reason))
         {
             return ApiControllerError.InvalidRequest(StatusCodes.Status400BadRequest);
