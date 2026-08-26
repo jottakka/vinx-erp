@@ -18,11 +18,11 @@ public partial class AddTelegramNotificationChannel : Migration
             ALTER TABLE notifications.notification_preferences
                 DROP CONSTRAINT notification_preferences_channel_check,
                 ADD CONSTRAINT notification_preferences_channel_check
-                    CHECK (channel IN ('whatsapp', 'telegram'));
+                    CHECK (channel IN ('whatsapp', 'email', 'telegram'));
             ALTER TABLE notifications.notification_templates
                 DROP CONSTRAINT notification_templates_channel_check,
                 ADD CONSTRAINT notification_templates_channel_check
-                    CHECK (channel IN ('in_app', 'whatsapp', 'telegram')),
+                    CHECK (channel IN ('in_app', 'whatsapp', 'email', 'telegram')),
                 ADD COLUMN telegram_text text NULL,
                 ADD CONSTRAINT ck_notification_templates_telegram_text CHECK (
                     telegram_text IS NULL
@@ -34,7 +34,7 @@ public partial class AddTelegramNotificationChannel : Migration
             ALTER TABLE notifications.notification_intents
                 DROP CONSTRAINT notification_intents_channel_check,
                 ADD CONSTRAINT notification_intents_channel_check
-                    CHECK (channel IN ('in_app', 'whatsapp', 'telegram'));
+                    CHECK (channel IN ('in_app', 'whatsapp', 'email', 'telegram'));
 
             ALTER TABLE notifications.notification_recipient_contacts
                 ALTER COLUMN phone_number DROP NOT NULL,
@@ -78,7 +78,7 @@ public partial class AddTelegramNotificationChannel : Migration
                 END IF;
                 IF p_company_id IS NULL
                     OR p_recipient_user_id IS NULL
-                    OR p_channel IS NULL OR p_channel NOT IN ('in_app', 'whatsapp', 'telegram')
+                    OR p_channel IS NULL OR p_channel NOT IN ('in_app', 'whatsapp', 'email', 'telegram')
                     OR p_event_key IS NULL OR btrim(p_event_key) = '' OR char_length(btrim(p_event_key)) > 200
                         OR p_event_key <> btrim(p_event_key)
                     OR p_template_key IS NULL OR btrim(p_template_key) = '' OR char_length(btrim(p_template_key)) > 100
@@ -185,7 +185,7 @@ public partial class AddTelegramNotificationChannel : Migration
                 IF v_actor_user_id IS NULL THEN
                     RAISE EXCEPTION 'notification actor is required' USING ERRCODE = '42501';
                 END IF;
-                IF p_channel IS NULL OR p_channel NOT IN ('whatsapp', 'telegram') OR p_opted_in IS NULL THEN
+                IF p_channel IS NULL OR p_channel NOT IN ('whatsapp', 'email', 'telegram') OR p_opted_in IS NULL THEN
                     RAISE EXCEPTION 'notification preference parameters are invalid' USING ERRCODE = '22023';
                 END IF;
                 IF v_actor_user_id <> p_user_id THEN
@@ -357,7 +357,7 @@ public partial class AddTelegramNotificationChannel : Migration
                 END IF;
                 IF p_company_id IS NULL
                     OR p_recipient_user_id IS NULL
-                    OR p_channel IS NULL OR p_channel NOT IN ('in_app', 'whatsapp')
+                    OR p_channel IS NULL OR p_channel NOT IN ('in_app', 'whatsapp', 'email')
                     OR p_event_key IS NULL OR btrim(p_event_key) = '' OR char_length(btrim(p_event_key)) > 200
                         OR p_event_key <> btrim(p_event_key)
                     OR p_template_key IS NULL OR btrim(p_template_key) = '' OR char_length(btrim(p_template_key)) > 100
@@ -369,18 +369,18 @@ public partial class AddTelegramNotificationChannel : Migration
                 END IF;
 
                 PERFORM set_config('app.company_id', p_company_id::text, true);
+
                 IF NOT EXISTS (
-                    SELECT 1
-                    FROM foundation.memberships AS membership
+                    SELECT 1 FROM foundation.memberships AS membership
                     WHERE membership.company_id = p_company_id
                         AND membership.user_id = p_recipient_user_id
                         AND membership.deleted_at IS NULL)
                 THEN
                     RAISE EXCEPTION 'recipient is not a member of the company' USING ERRCODE = '42501';
                 END IF;
+
                 IF NOT EXISTS (
-                    SELECT 1
-                    FROM notifications.notification_templates AS template
+                    SELECT 1 FROM notifications.notification_templates AS template
                     WHERE template.company_id = p_company_id
                         AND template.channel = p_channel
                         AND template.template_key = p_template_key
@@ -388,19 +388,19 @@ public partial class AddTelegramNotificationChannel : Migration
                 THEN
                     RAISE EXCEPTION 'notification template is not approved' USING ERRCODE = '22023';
                 END IF;
-                IF p_channel = 'whatsapp' THEN
-                    SELECT preference.opted_in
-                        INTO v_opted_in
+
+                IF p_channel IN ('whatsapp', 'email') THEN
+                    SELECT preference.opted_in INTO v_opted_in
                     FROM notifications.notification_preferences AS preference
                     WHERE preference.company_id = p_company_id
                         AND preference.user_id = p_recipient_user_id
-                        AND preference.channel = 'whatsapp';
+                        AND preference.channel = p_channel;
                     IF COALESCE(v_opted_in, false) IS DISTINCT FROM true THEN
-                        RETURN QUERY
-                            SELECT 'suppressed_channel_opt_out'::text AS status, NULL::uuid AS delivery_id;
+                        RETURN QUERY SELECT 'suppressed_channel_opt_out'::text, NULL::uuid;
                         RETURN;
                     END IF;
                 END IF;
+
                 INSERT INTO notifications.notification_intents (
                     id, company_id, recipient_user_id, event_key, channel, template_key,
                     deep_link_selector, status, correlation_id, created_by_user_id)
@@ -408,25 +408,24 @@ public partial class AddTelegramNotificationChannel : Migration
                     gen_random_uuid(), p_company_id, p_recipient_user_id, p_event_key, p_channel, p_template_key,
                     p_deep_link_selector, 'pending_delivery', v_correlation_id, v_actor_user_id)
                 ON CONFLICT (event_key, recipient_user_id, channel, template_key) DO NOTHING
-                RETURNING notification_intents.id INTO v_delivery_id;
+                RETURNING id INTO v_delivery_id;
+
                 IF v_delivery_id IS NULL THEN
-                    SELECT existing_intent.id
-                        INTO v_delivery_id
+                    SELECT existing_intent.id INTO v_delivery_id
                     FROM notifications.notification_intents AS existing_intent
                     WHERE existing_intent.event_key = p_event_key
                         AND existing_intent.recipient_user_id = p_recipient_user_id
                         AND existing_intent.channel = p_channel
                         AND existing_intent.template_key = p_template_key;
-                    RETURN QUERY
-                        SELECT 'replay'::text AS status, v_delivery_id AS delivery_id;
+                    RETURN QUERY SELECT 'replay'::text, v_delivery_id;
                     RETURN;
                 END IF;
+
                 PERFORM audit.append_event(
                     v_actor_user_id, 'company', p_company_id, 'web', 'notification.intent.enqueue',
                     'notification_intent', v_delivery_id, 'success', v_correlation_id, NULL,
                     jsonb_build_object('channel', p_channel, 'event_key', p_event_key));
-                RETURN QUERY
-                    SELECT 'created'::text AS status, v_delivery_id AS delivery_id;
+                RETURN QUERY SELECT 'created'::text, v_delivery_id;
             END;
             $function$;
             ALTER FUNCTION notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text)
@@ -451,7 +450,7 @@ public partial class AddTelegramNotificationChannel : Migration
                 IF v_actor_user_id IS NULL THEN
                     RAISE EXCEPTION 'notification actor is required' USING ERRCODE = '42501';
                 END IF;
-                IF p_channel IS DISTINCT FROM 'whatsapp' OR p_opted_in IS NULL THEN
+                IF p_channel NOT IN ('whatsapp', 'email') OR p_opted_in IS NULL THEN
                     RAISE EXCEPTION 'notification preference parameters are invalid' USING ERRCODE = '22023';
                 END IF;
                 IF v_actor_user_id <> p_user_id THEN
@@ -565,15 +564,15 @@ public partial class AddTelegramNotificationChannel : Migration
                 DROP COLUMN telegram_text,
                 DROP CONSTRAINT notification_templates_channel_check,
                 ADD CONSTRAINT notification_templates_channel_check
-                    CHECK (channel IN ('in_app', 'whatsapp'));
+                    CHECK (channel IN ('in_app', 'whatsapp', 'email'));
             ALTER TABLE notifications.notification_intents
                 DROP CONSTRAINT notification_intents_channel_check,
                 ADD CONSTRAINT notification_intents_channel_check
-                    CHECK (channel IN ('in_app', 'whatsapp'));
+                    CHECK (channel IN ('in_app', 'whatsapp', 'email'));
             ALTER TABLE notifications.notification_preferences
                 DROP CONSTRAINT notification_preferences_channel_check,
                 ADD CONSTRAINT notification_preferences_channel_check
-                    CHECK (channel IN ('whatsapp'));
+                    CHECK (channel IN ('whatsapp', 'email'));
             RESET ROLE;
             REVOKE CREATE ON SCHEMA notifications FROM vinx_notifications_owner;
             """);
