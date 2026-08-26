@@ -700,6 +700,31 @@ foundation
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
     .Produces(StatusCodes.Status429TooManyRequests)
     .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable);
+foundation
+    .MapGet(
+        "/companies/{companyId:guid}/directory-options",
+        async (
+            Guid companyId,
+            HttpContext httpContext,
+            EmployeeDirectoryService service,
+            CancellationToken cancellationToken
+        ) =>
+        {
+            var result = await service.ListForPickerAsync(
+                httpContext.GetRequiredActorContext(),
+                companyId,
+                cancellationToken
+            );
+            return result.ToMinimalApiResult();
+        }
+    )
+    .WithName("CompanyDirectoryOptions")
+    .WithMetadata(new BrowserBffNoStoreEndpointMetadata())
+    .Produces<IReadOnlyList<EmployeeDirectoryItem>>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status401Unauthorized)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status403Forbidden)
+    .Produces(StatusCodes.Status429TooManyRequests)
+    .Produces<AuthorizationErrorResponse>(StatusCodes.Status503ServiceUnavailable);
 foundation.MapGet(
     "/memberships",
     async (
