@@ -55,7 +55,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly TimeSpan? _testMalwareScanTimeout;
     private readonly IAgentModel? _testAgentModel;
     private readonly AgentRunOptions? _testAgentRunOptions;
-    private readonly DbCommandInterceptor? _testCommandInterceptor;
+    private readonly IInterceptor? _testInterceptor;
     private readonly HttpMessageHandler? _browserSessionProviderHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
     private readonly Func<ValueTask>? _disposeJwtAsync;
@@ -81,7 +81,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         Func<ValueTask>? disposeHostAsync = null,
         Func<ValueTask>? disposeJwtAsync = null,
         bool provisionWolverineStorage = true,
-        DbCommandInterceptor? testCommandInterceptor = null,
+        IInterceptor? testInterceptor = null,
         bool disableWolverineForE2e = false,
         string telegramWebhookSecret = TelegramWebhookSecret)
     {
@@ -96,7 +96,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _testMalwareScanTimeout = testMalwareScanTimeout;
         _testAgentModel = testAgentModel;
         _testAgentRunOptions = testAgentRunOptions;
-        _testCommandInterceptor = testCommandInterceptor;
+        _testInterceptor = testInterceptor;
         _browserSessionProviderHandler = browserSessionProviderHandler;
         _fixture = fixture ?? new FoundationPostgresFixture();
         _disposeHostAsync = disposeHostAsync;
@@ -200,7 +200,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         IAgentModel? agentModel = null,
         AgentRunOptions? agentRunOptions = null,
         bool provisionWolverineStorage = true,
-        DbCommandInterceptor? commandInterceptor = null,
+        IInterceptor? commandInterceptor = null,
         string telegramWebhookSecret = TelegramWebhookSecret)
     {
         var resolvedActorUserId = actorUserId ?? Guid.NewGuid();
@@ -220,7 +220,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             testAgentModel: agentModel,
             testAgentRunOptions: agentRunOptions,
             provisionWolverineStorage: provisionWolverineStorage,
-            testCommandInterceptor: commandInterceptor,
+            testInterceptor: commandInterceptor,
             telegramWebhookSecret: telegramWebhookSecret);
         return await PrepareAsync(factory);
     }
@@ -239,7 +239,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         string? aal = null,
         IAgentModel? agentModel = null,
         AgentRunOptions? agentRunOptions = null,
-        DbCommandInterceptor? commandInterceptor = null)
+        IInterceptor? commandInterceptor = null)
     {
         var factory = await CreateAsync(
             actorUserId, correlationId, fileStorage, malwareScanner, malwareScanTimeout, aal,
@@ -438,8 +438,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             }
         }
 
-        // Segredos de teste sem valor real; o webhook valida assinatura
-        // HMAC com estas chaves nos testes de integração.
+        // Segredos de teste sem valor real: WhatsApp usa HMAC; Telegram
+        // compara o header de segredo exato antes de interpretar o corpo.
         builder.UseSetting("META_WHATSAPP_PHONE_NUMBER_ID", "111111111111111");
         builder.UseSetting("META_WHATSAPP_ACCESS_TOKEN", "test-meta-access-token");
         builder.UseSetting("META_WHATSAPP_WEB_APP_BASE_URL", "https://app.example.test");
@@ -465,9 +465,9 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                         new RowVersionInterceptor(),
                         new GateDatabaseFailureInterceptor(_databaseFailurePoint),
                         new CommitAcknowledgementFailureInterceptor());
-                if (_testCommandInterceptor is not null)
+                if (_testInterceptor is not null)
                 {
-                    options.AddInterceptors(_testCommandInterceptor);
+                    options.AddInterceptors(_testInterceptor);
                 }
             });
             if (_testFileStorage is not null)

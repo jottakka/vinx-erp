@@ -1,6 +1,5 @@
 using System.Net;
 using System.Text;
-using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Wolverine.Runtime.Serialization;
@@ -41,14 +40,16 @@ public sealed class TelegramInboundOutboxTests
         var inbound = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
         var envelope = Assert.Single(await ReadTelegramQueueAsync(factory));
         Assert.Equal(inbound.Id, envelope.InboundMessageId);
-        Assert.DoesNotContain("private inbound test", envelope.RawBody, StringComparison.Ordinal);
-        Assert.DoesNotContain("810001", envelope.RawBody, StringComparison.Ordinal);
-        Assert.DoesNotContain("1001", envelope.RawBody, StringComparison.Ordinal);
-        Assert.DoesNotContain("2001", envelope.RawBody, StringComparison.Ordinal);
-        Assert.DoesNotContain("private inbound test", envelope.RawMetadata, StringComparison.Ordinal);
-        Assert.DoesNotContain("810001", envelope.RawMetadata, StringComparison.Ordinal);
-        Assert.DoesNotContain("1001", envelope.RawMetadata, StringComparison.Ordinal);
-        Assert.DoesNotContain("2001", envelope.RawMetadata, StringComparison.Ordinal);
+        Assert.Equal(["inboundMessageId"], envelope.PayloadPropertyNames);
+        Assert.Empty(envelope.Headers);
+        AssertOpaque(
+            envelope,
+            "private inbound test",
+            "810001",
+            "1001",
+            "2001",
+            WebhookSecret
+        );
     }
 
     [Fact]
@@ -110,6 +111,147 @@ public sealed class TelegramInboundOutboxTests
         Assert.Single(await ReadTelegramQueueAsync(factory));
     }
 
+    [Fact]
+    public async Task Concurrent_identical_private_posts_return_safely_with_one_row_and_one_envelope()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "810003",
+            telegramContactValidated: true
+        );
+        using var client = factory.CreateClient();
+
+        var responses = await Task.WhenAll(
+            PostPrivateAsync(client, 1003, 810003, 2003, "concurrent replay"),
+            PostPrivateAsync(client, 1003, 810003, 2003, "concurrent replay")
+        );
+        using var first = responses[0];
+        using var second = responses[1];
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Single(await ReadTelegramQueueAsync(factory));
+    }
+
+    [Fact]
+    public async Task Precommit_failure_leaves_no_row_or_envelope_and_a_retry_recovers()
+    {
+        var failure = new OneShotTransactionCommitFailureInterceptor();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            commandInterceptor: failure
+        );
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "810004",
+            telegramContactValidated: true
+        );
+        using var client = factory.CreateClient();
+        failure.Arm();
+
+        using (var failed = await PostPrivateAsync(client, 1004, 810004, 2004, "precommit failure"))
+        {
+            Assert.False(failed.IsSuccessStatusCode);
+        }
+
+        Assert.Empty(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Empty(await ReadTelegramQueueAsync(factory));
+
+        using (var retry = await PostPrivateAsync(client, 1004, 810004, 2004, "precommit failure"))
+        {
+            Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        }
+
+        Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Single(await ReadTelegramQueueAsync(factory));
+    }
+
+    [Theory]
+    [MemberData(nameof(TransportIgnoredPayloads))]
+    public async Task Transport_ignored_updates_return_accepted_without_rows_or_envelopes(string payload)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var client = factory.CreateClient();
+
+        using var response = await PostJsonAsync(client, payload);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Empty(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Empty(await ReadTelegramQueueAsync(factory));
+    }
+
+    [Fact]
+    public async Task Closed_actor_resolutions_persist_evidence_without_an_envelope_or_tenant_choice()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: null
+        );
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "810006",
+            telegramContactValidated: false
+        );
+        var inactive = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "810007",
+            telegramContactValidated: true
+        );
+        await TelegramNotificationSeed.RevokeMembershipAsync(
+            factory,
+            inactive.CompanyId,
+            inactive.RecipientUserId
+        );
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "810008",
+            telegramContactValidated: true
+        );
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "810008",
+            telegramContactValidated: true
+        );
+        using var client = factory.CreateClient();
+
+        var cases = new[]
+        {
+            (ChatId: 810005L, ExpectedState: "unbound"),
+            (ChatId: 810006L, ExpectedState: "unverified"),
+            (ChatId: 810007L, ExpectedState: "inactive"),
+            (ChatId: 810008L, ExpectedState: "ambiguous"),
+        };
+        foreach (var (chatId, expectedState) in cases)
+        {
+            using var response = await PostPrivateAsync(client, 1000 + chatId, chatId, 2000 + chatId, "closed actor");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        var rows = await TelegramNotificationSeed.ReadInboundMessagesAsync(factory);
+        Assert.Equal(cases.Length, rows.Count);
+        foreach (var (_, expectedState) in cases)
+        {
+            var row = Assert.Single(rows, row => row.ResolutionState == expectedState);
+            Assert.Null(row.ResolvedUserId);
+            Assert.Null(row.ResolvedCompanyId);
+            Assert.Null(row.ResolvedMembershipId);
+        }
+        Assert.Empty(await ReadTelegramQueueAsync(factory));
+    }
+
+    public static IEnumerable<object[]> TransportIgnoredPayloads()
+    {
+        yield return ["""{"update_id":1101,"message":{"message_id":2101,"from":{"id":810101,"is_bot":false},"chat":{"id":810101,"type":"group"},"text":"group"}}"""];
+        yield return ["""{"update_id":1102,"message":{"message_id":2102,"from":{"id":810102,"is_bot":false},"chat":{"id":810102,"type":"supergroup"},"text":"supergroup"}}"""];
+        yield return ["""{"update_id":1103,"message":{"message_id":2103,"from":{"id":810103,"is_bot":false},"chat":{"id":810103,"type":"channel"},"text":"channel"}}"""];
+        yield return ["""{"update_id":1104,"business_message":{"message_id":2104,"from":{"id":810104,"is_bot":false},"chat":{"id":810104,"type":"private"},"text":"business"}}"""];
+        yield return ["""{"update_id":1105,"message":{"message_id":2105,"from":{"id":810105,"is_bot":true},"chat":{"id":810105,"type":"private"},"text":"bot"}}"""];
+        yield return ["""{"update_id":1106,"message":{"message_id":2106,"from":{"id":810106,"is_bot":false},"chat":{"id":810107,"type":"private"},"text":"mismatch"}}"""];
+        yield return ["""{"update_id":1107,"message":{"message_id":2107,"from":{"id":810107,"is_bot":false},"chat":{"id":810107,"type":"private"},"photo":[{}]}}"""];
+    }
+
     private static Task<HttpResponseMessage> PostPrivateAsync(
         HttpClient client,
         long updateId,
@@ -139,6 +281,16 @@ public sealed class TelegramInboundOutboxTests
         return client.SendAsync(request);
     }
 
+    private static Task<HttpResponseMessage> PostJsonAsync(HttpClient client, string payload)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, WebhookPath)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+        request.Headers.Add(SecretHeader, WebhookSecret);
+        return client.SendAsync(request);
+    }
+
     private static async Task<IReadOnlyList<TelegramQueueEnvelope>> ReadTelegramQueueAsync(
         FoundationApiFactory factory)
     {
@@ -156,7 +308,9 @@ public sealed class TelegramInboundOutboxTests
             using var payload = System.Text.Json.JsonDocument.Parse(envelope.Data!);
             envelopes.Add(new TelegramQueueEnvelope(
                 payload.RootElement.GetProperty("inboundMessageId").GetGuid(),
-                Encoding.UTF8.GetString(body),
+                payload.RootElement.EnumerateObject().Select(property => property.Name).ToArray(),
+                envelope.Headers.ToDictionary(header => header.Key, header => header.Value ?? string.Empty),
+                body,
                 reader.GetString(1)
             ));
         }
@@ -166,7 +320,22 @@ public sealed class TelegramInboundOutboxTests
 
     private sealed record TelegramQueueEnvelope(
         Guid InboundMessageId,
-        string RawBody,
+        IReadOnlyList<string> PayloadPropertyNames,
+        IReadOnlyDictionary<string, string> Headers,
+        byte[] RawBody,
         string RawMetadata
     );
+
+    private static void AssertOpaque(TelegramQueueEnvelope envelope, params string[] sensitiveValues)
+    {
+        var headers = string.Join("\n", envelope.Headers.Select(header => $"{header.Key}={header.Value}"));
+        foreach (var value in sensitiveValues)
+        {
+            Assert.Equal(-1, envelope.RawBody.AsSpan().IndexOf(Encoding.UTF8.GetBytes(value)));
+            Assert.DoesNotContain(value, envelope.RawMetadata, StringComparison.Ordinal);
+            Assert.DoesNotContain(value, headers, StringComparison.Ordinal);
+            Assert.DoesNotContain(Convert.ToBase64String(Encoding.UTF8.GetBytes(value)), envelope.RawMetadata, StringComparison.Ordinal);
+            Assert.DoesNotContain(Convert.ToBase64String(Encoding.UTF8.GetBytes(value)), headers, StringComparison.Ordinal);
+        }
+    }
 }
