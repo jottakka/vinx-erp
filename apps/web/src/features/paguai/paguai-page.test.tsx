@@ -17,6 +17,7 @@ import { PaguaiPage } from "./paguai-page";
 
 const companyId = "11111111-1111-4111-8111-111111111111";
 const secondCompanyId = "66666666-6666-4666-8666-666666666666";
+const proofFileId = "44444444-4444-4444-8444-444444444444";
 const draft = {
   id: "33333333-3333-4333-8333-333333333333",
   companyId,
@@ -31,6 +32,11 @@ const draft = {
   state: "rascunho" as const,
   version: 1 as const,
   createdAt: "2026-08-16T12:00:00.000+00:00",
+};
+const draftWithServerProof = {
+  ...draft,
+  proofFileId,
+  proofFileName: "comprovante.pdf",
 };
 
 const readCapability = {
@@ -71,6 +77,19 @@ const gateway: MockSessionGateway = {
 function renderPage(
   draftClient: unknown,
   sessionGateway: MockSessionGateway = gateway,
+  proofUploader?: (
+    file: File,
+    signal: AbortSignal,
+  ) => Promise<
+    | {
+        ok: true;
+        fileId: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+      }
+    | { ok: false; error: { kind: string; message: string } }
+  >,
 ) {
   render(
     <VinxThemeProvider>
@@ -78,6 +97,9 @@ function renderPage(
         <PaguaiPage
           draftClient={
             draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
+          }
+          proofUploader={
+            proofUploader as Parameters<typeof PaguaiPage>[0]["proofUploader"]
           }
         />
       </SessionProvider>
@@ -409,5 +431,87 @@ describe("PaguaiPage", () => {
     ).toBeNull();
     await user.click(screen.getByRole("button", { name: "Visualizar" }));
     expect(await screen.findByRole("dialog")).toBeVisible();
+  });
+
+  it("persists the dialog proof file id into the create payload", async () => {
+    const user = userEvent.setup();
+    const proofUploader = vi.fn(async (file: File) => ({
+      ok: true as const,
+      fileId: proofFileId,
+      fileName: file.name,
+      mimeType: "application/pdf",
+      sizeBytes: file.size,
+    }));
+    const create = vi.fn(async (input: { proofFileId?: string | null }) => ({
+      ok: true as const,
+      value: { ...draft, proofFileId: input.proofFileId ?? null },
+    }));
+    const draftClient = {
+      create,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPage(draftClient, gateway, proofUploader);
+
+    await openCreate(user);
+    await fillForm(user);
+    const attachInput = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Anexar comprovante: anexar arquivo"]',
+    );
+    if (!attachInput) throw new Error("attachment input missing");
+    await user.upload(attachInput, new File(["pdf"], "comprovante.pdf"));
+    expect(await screen.findByText("comprovante.pdf")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      proofFileId,
+    });
+  });
+
+  it("surfaces the server-owned attachment after a fresh reload read", async () => {
+    const user = userEvent.setup();
+    const draftClient = {
+      create: async () => ({ ok: true as const, value: draftWithServerProof }),
+      detail: async () => ({ ok: true as const, value: draftWithServerProof }),
+      list: async () => ({ ok: true as const, value: [draftWithServerProof] }),
+    };
+
+    renderPage(draftClient);
+
+    await user.click(await screen.findByRole("button", { name: "Visualizar" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // A anexação vem da leitura autorizada do servidor, não do estado local.
+    expect(
+      within(dialog).getByText(/Comprovante anexado \(comprovante\.pdf\)/),
+    ).toBeVisible();
+  });
+
+  it("renders the typed conflict code when the proof is already bound", async () => {
+    const user = userEvent.setup();
+    const draftClient = {
+      create: async () =>
+        ({
+          ok: false as const,
+          error: { status: 409, code: "proof_file_bound" },
+        }) as const,
+      detail: async () => ({ ok: true as const, value: draft }),
+      list: async () => ({ ok: true as const, value: [] }),
+    };
+
+    renderPage(draftClient);
+
+    await openCreate(user);
+    await fillForm(user);
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    expect(
+      await screen.findByText(
+        "Este comprovante já está vinculado a outra solicitação.",
+      ),
+    ).toBeVisible();
   });
 });
