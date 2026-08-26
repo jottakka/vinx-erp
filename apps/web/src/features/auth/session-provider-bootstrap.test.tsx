@@ -250,7 +250,11 @@ describe("SessionProvider bootstrap refresh", () => {
       screen.getByRole("button", { name: "Atualizar bootstrap" }),
     );
 
-    await waitFor(() => expect(screen.getByText("anonymous")).toBeVisible());
+    // Status e fallback de nome exibem "anonymous" juntos no 401; o wait é
+    // só sincronização — a limpeza é verificada a seguir.
+    await waitFor(() =>
+      expect(screen.getAllByText("anonymous").length).toBeGreaterThan(0),
+    );
     expect(
       queryClient.getQueryData(["company", beta.companyId]),
     ).toBeUndefined();

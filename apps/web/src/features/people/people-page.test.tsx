@@ -323,12 +323,8 @@ describe("PeoplePage", () => {
     expect(
       screen.queryByText("44444444-4444-4444-8444-444444444444"),
     ).toBeNull();
-    expect(
-      screen.getAllByText("Alfa", { exact: true }),
-    ).not.toHaveLength(0);
-    expect(
-      screen.getAllByText("Beta", { exact: true }),
-    ).not.toHaveLength(0);
+    expect(screen.getAllByText("Alfa", { exact: true })).not.toHaveLength(0);
+    expect(screen.getAllByText("Beta", { exact: true })).not.toHaveLength(0);
   });
 
   it("validates locally before reserving", async () => {
@@ -1115,9 +1111,7 @@ describe("PeoplePage", () => {
     expect(
       within(dialog).queryByText("44444444-4444-4444-8444-444444444444"),
     ).toBeNull();
-    expect(
-      within(dialog).getByText("Alfa", { exact: true }),
-    ).toBeVisible();
+    expect(within(dialog).getByText("Alfa", { exact: true })).toBeVisible();
   });
 
   it("drops a delayed create after closing the dialog", async () => {

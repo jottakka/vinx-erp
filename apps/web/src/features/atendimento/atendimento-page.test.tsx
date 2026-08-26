@@ -852,9 +852,7 @@ describe("AtendimentoPage", () => {
     await user.click(
       screen.getByRole("combobox", { name: "Empresa do atendimento" }),
     );
-    await user.click(
-      await screen.findByRole("option", { name: /Beta/ }),
-    );
+    await user.click(await screen.findByRole("option", { name: /Beta/ }));
     await user.type(screen.getByLabelText("Título"), betaCard.title);
     await user.type(screen.getByLabelText("Descrição"), betaCard.description);
     await user.click(screen.getByRole("button", { name: "Criar cartão" }));

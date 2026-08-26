@@ -349,7 +349,7 @@ export function SessionProvider({
         setIsSigningOut(false);
       }
     }
-  }, [browserSessionClient, gateway, supersede]);
+  }, [browserSessionClient, gateway, publishBootstrap, supersede]);
 
   return (
     <SessionContext.Provider

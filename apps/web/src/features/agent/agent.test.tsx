@@ -363,9 +363,9 @@ describe("agent workspace", () => {
     await renderAgentWorkspace();
 
     const dock = await openDockAndType(user, "Preciso antecipar um pagamento");
-    expect(
-      dock.getAllByText("Alfa", { exact: true }).length,
-    ).toBeGreaterThan(0);
+    expect(dock.getAllByText("Alfa", { exact: true }).length).toBeGreaterThan(
+      0,
+    );
     expect(dock.getByText("Empresa selecionada")).toBeVisible();
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
@@ -690,9 +690,9 @@ describe("agent workspace", () => {
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
 
-    expect(
-      dock.getAllByText("Alfa", { exact: true }).length,
-    ).toBeGreaterThan(0);
+    expect(dock.getAllByText("Alfa", { exact: true }).length).toBeGreaterThan(
+      0,
+    );
     expect(dock.getByText("Assistente indisponível")).toBeVisible();
     expect(dock.getByRole("status")).toHaveTextContent(
       "O assistente não está disponível para o seu perfil nesta empresa.",
@@ -920,9 +920,8 @@ describe("agent workspace", () => {
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
     expect(
-      (
-        await refreshedDock.findAllByText("Alfa renovada", { exact: true })
-      ).length,
+      (await refreshedDock.findAllByText("Alfa renovada", { exact: true }))
+        .length,
     ).toBeGreaterThan(0);
     expect(
       scopeCommits.find(
@@ -982,9 +981,9 @@ describe("agent workspace", () => {
     });
 
     const dock = await openDockAndType(user, "consulta da Alfa");
-    expect(
-      dock.getAllByText("Alfa", { exact: true }).length,
-    ).toBeGreaterThan(0);
+    expect(dock.getAllByText("Alfa", { exact: true }).length).toBeGreaterThan(
+      0,
+    );
     await user.click(dock.getByRole("button", { name: "Enviar" }));
     await waitFor(() => expect(runCalls(fetchSpy)).toHaveLength(1));
     const [firstPath, firstInit] = runCalls(fetchSpy)[0];
@@ -1166,6 +1165,11 @@ describe("agent workspace", () => {
     expect(runCalls(fetchSpy)).toHaveLength(0);
 
     resolveToken(antiforgeryTokenResponse());
+    // Consome o assentamento do upload dentro do próprio teste (pronto ou
+    // falho): o fetch stubado não pode vazar para o spy do teste seguinte.
+    await waitFor(() =>
+      expect(dock.queryByText("Enviando")).not.toBeInTheDocument(),
+    );
   });
 
   it("sends three ready IDs in order after rejecting a fourth and clears the warning", async () => {
@@ -1174,7 +1178,13 @@ describe("agent workspace", () => {
       "55555555-5555-4555-8555-555555555555",
       "66666666-6666-4666-8666-666666666666",
     ];
-    const fetchSpy = attachmentFetch(fileIds);
+    // IDs por nome de arquivo (ordem de assentamento dos uploads não é
+    // garantida sob carga); a ordem do corpo não é contrato do produto.
+    const fetchSpy = attachmentFetch(fileIds, undefined, {
+      "primeiro.pdf": fileIds[0],
+      "segundo.pdf": fileIds[1],
+      "terceiro.pdf": fileIds[2],
+    });
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     await renderAgentWorkspace();
@@ -1195,7 +1205,7 @@ describe("agent workspace", () => {
 
     expect(await dock.findByText("Resposta autorizada")).toBeVisible();
     const body = JSON.parse(runCalls(fetchSpy)[0][1].body as string);
-    expect(body.attachments).toEqual(fileIds);
+    expect([...body.attachments].sort()).toEqual([...fileIds].sort());
     expect(
       dock.queryByRole("list", { name: "Anexos selecionados" }),
     ).toBeNull();
