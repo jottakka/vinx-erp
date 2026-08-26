@@ -9,7 +9,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class PaguaiDraftMigrationTests
 {
     private const string BeforePaguaiInvoiceFile = "20260824235249_AddAiReadCapability";
-    private const string PaguaiInvoiceFileMigration = "20260826112330_AddPaguaiRequestInvoiceFile";
+    private const string PaguaiInvoiceFileMigration = "20260826150000_AddPaguaiRequestInvoiceFile";
 
     [Fact]
     public async Task Empty_downgrade_removes_the_invoice_file_column_and_preserves_forced_rls()

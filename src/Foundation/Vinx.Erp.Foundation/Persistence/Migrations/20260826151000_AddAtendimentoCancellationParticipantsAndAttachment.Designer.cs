@@ -12,7 +12,7 @@ using Vinx.Erp.Foundation.Persistence;
 namespace Vinx.Erp.Foundation.Persistence.Migrations
 {
     [DbContext(typeof(FoundationDbContext))]
-    [Migration("20260826122247_AddAtendimentoCancellationParticipantsAndAttachment")]
+    [Migration("20260826151000_AddAtendimentoCancellationParticipantsAndAttachment")]
     partial class AddAtendimentoCancellationParticipantsAndAttachment
     {
         /// <inheritdoc />

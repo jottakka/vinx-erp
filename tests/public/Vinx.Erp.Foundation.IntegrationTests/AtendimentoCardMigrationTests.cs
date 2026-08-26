@@ -12,9 +12,9 @@ public sealed class AtendimentoCardMigrationTests
     private const string BeforeAtendimentoMvp =
         "20260816012000_AddPlatformOrganizationProvisioning";
     private const string BeforeAtendimentoCancellation =
-        "20260826112330_AddPaguaiRequestInvoiceFile";
+        "20260826150000_AddPaguaiRequestInvoiceFile";
     private const string AtendimentoCancellationMigration =
-        "20260826122247_AddAtendimentoCancellationParticipantsAndAttachment";
+        "20260826151000_AddAtendimentoCancellationParticipantsAndAttachment";
 
     private static readonly (Guid Id, string Name)[] ExpectedCapabilities =
     [
