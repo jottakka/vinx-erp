@@ -888,6 +888,194 @@ END;
 $$;
 
 
+-- Name: list_company_members_with_roles(uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.list_company_members_with_roles(p_company_id uuid) RETURNS TABLE(membership_id uuid, display_name text, role_ids uuid[], role_names text[], capability_names text[], invitation_status text)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+BEGIN
+    IF p_company_id IS NULL THEN
+        RAISE EXCEPTION 'member permissions parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM set_config('app.company_id', p_company_id::text, true);
+
+    IF v_actor_user_id IS NULL
+        OR NOT EXISTS (
+            SELECT 1
+            FROM foundation.memberships AS membership
+            INNER JOIN foundation.role_assignments AS assignment
+                ON assignment.company_id = membership.company_id
+               AND assignment.membership_id = membership.id
+               AND assignment.deleted_at IS NULL
+            INNER JOIN foundation.roles AS role_record
+                ON role_record.company_id = assignment.company_id
+               AND role_record.id = assignment.role_id
+               AND role_record.deleted_at IS NULL
+            INNER JOIN foundation.role_capabilities AS grant_record
+                ON grant_record.company_id = assignment.company_id
+               AND grant_record.role_id = assignment.role_id
+               AND grant_record.scope = 'company'
+               AND grant_record.deleted_at IS NULL
+            INNER JOIN foundation.capabilities AS capability
+                ON capability.id = grant_record.capability_id
+               AND capability.name = 'foundation.roles.assign'
+            WHERE membership.company_id = p_company_id
+              AND membership.user_id = v_actor_user_id
+              AND membership.deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'member permissions capability is required'
+            USING ERRCODE = '42501';
+    END IF;
+
+    RETURN QUERY
+    WITH member_roles AS (
+        SELECT
+            assignment.membership_id AS member_id,
+            role_record.id AS granted_role_id,
+            role_record.name AS granted_role_name
+        FROM foundation.role_assignments AS assignment
+        INNER JOIN foundation.roles AS role_record
+            ON role_record.company_id = assignment.company_id
+           AND role_record.id = assignment.role_id
+           AND role_record.deleted_at IS NULL
+        WHERE assignment.company_id = p_company_id
+          AND assignment.deleted_at IS NULL
+    ),
+    roles_aggregated AS (
+        SELECT
+            member_roles.member_id AS member_id,
+            array_agg(member_roles.granted_role_id ORDER BY member_roles.granted_role_name)
+                AS aggregated_role_ids,
+            array_agg(member_roles.granted_role_name::text ORDER BY member_roles.granted_role_name)
+                AS aggregated_role_names
+        FROM member_roles
+        GROUP BY member_roles.member_id
+    ),
+    member_capabilities AS (
+        SELECT DISTINCT
+            member_roles.member_id AS member_id,
+            capability.name AS granted_capability_name
+        FROM member_roles
+        INNER JOIN foundation.role_capabilities AS grant_record
+            ON grant_record.company_id = p_company_id
+           AND grant_record.role_id = member_roles.granted_role_id
+           AND grant_record.scope = 'company'
+           AND grant_record.deleted_at IS NULL
+        INNER JOIN foundation.capabilities AS capability
+            ON capability.id = grant_record.capability_id
+    ),
+    capabilities_aggregated AS (
+        SELECT
+            member_capabilities.member_id AS member_id,
+            array_agg(
+                member_capabilities.granted_capability_name::text
+                ORDER BY member_capabilities.granted_capability_name)
+                AS aggregated_capability_names
+        FROM member_capabilities
+        GROUP BY member_capabilities.member_id
+    )
+    SELECT
+        member_row.membership_id,
+        member_row.display_name,
+        COALESCE(roles_aggregated.aggregated_role_ids, '{}'::uuid[]),
+        COALESCE(roles_aggregated.aggregated_role_names, '{}'::text[]),
+        COALESCE(capabilities_aggregated.aggregated_capability_names, '{}'::text[]),
+        NULL::text
+    FROM (
+        SELECT
+            membership.id AS membership_id,
+            min(app_user.display_name)::text AS display_name
+        FROM foundation.memberships AS membership
+        INNER JOIN foundation.users AS app_user
+            ON app_user.id = membership.user_id
+        WHERE membership.company_id = p_company_id
+          AND membership.deleted_at IS NULL
+        GROUP BY membership.id
+    ) AS member_row
+    LEFT JOIN roles_aggregated
+        ON roles_aggregated.member_id = member_row.membership_id
+    LEFT JOIN capabilities_aggregated
+        ON capabilities_aggregated.member_id = member_row.membership_id
+    ORDER BY member_row.display_name, member_row.membership_id;
+END;
+$$;
+
+
+-- Name: list_company_roles_with_grants(uuid); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.list_company_roles_with_grants(p_company_id uuid) RETURNS TABLE(role_id uuid, name text, capability_names text[])
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
+    AS $$
+DECLARE
+    v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+BEGIN
+    IF p_company_id IS NULL THEN
+        RAISE EXCEPTION 'member permissions parameters are invalid'
+            USING ERRCODE = '22023';
+    END IF;
+
+    PERFORM set_config('app.company_id', p_company_id::text, true);
+
+    IF v_actor_user_id IS NULL
+        OR NOT EXISTS (
+            SELECT 1
+            FROM foundation.memberships AS membership
+            INNER JOIN foundation.role_assignments AS assignment
+                ON assignment.company_id = membership.company_id
+               AND assignment.membership_id = membership.id
+               AND assignment.deleted_at IS NULL
+            INNER JOIN foundation.roles AS role_record
+                ON role_record.company_id = assignment.company_id
+               AND role_record.id = assignment.role_id
+               AND role_record.deleted_at IS NULL
+            INNER JOIN foundation.role_capabilities AS grant_record
+                ON grant_record.company_id = assignment.company_id
+               AND grant_record.role_id = assignment.role_id
+               AND grant_record.scope = 'company'
+               AND grant_record.deleted_at IS NULL
+            INNER JOIN foundation.capabilities AS capability
+                ON capability.id = grant_record.capability_id
+               AND capability.name = 'foundation.roles.assign'
+            WHERE membership.company_id = p_company_id
+              AND membership.user_id = v_actor_user_id
+              AND membership.deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'member permissions capability is required'
+            USING ERRCODE = '42501';
+    END IF;
+
+    RETURN QUERY
+    WITH grants_aggregated AS (
+        SELECT
+            grant_record.role_id AS granted_role_id,
+            array_agg(capability.name::text ORDER BY capability.name)
+                AS aggregated_capability_names
+        FROM foundation.role_capabilities AS grant_record
+        INNER JOIN foundation.capabilities AS capability
+            ON capability.id = grant_record.capability_id
+        WHERE grant_record.company_id = p_company_id
+          AND grant_record.scope = 'company'
+          AND grant_record.deleted_at IS NULL
+        GROUP BY grant_record.role_id
+    )
+    SELECT
+        role_record.id,
+        role_record.name::text,
+        COALESCE(grants_aggregated.aggregated_capability_names, '{}'::text[])
+    FROM foundation.roles AS role_record
+    LEFT JOIN grants_aggregated
+        ON grants_aggregated.granted_role_id = role_record.id
+    WHERE role_record.company_id = p_company_id
+      AND role_record.deleted_at IS NULL
+    ORDER BY role_record.name, role_record.id;
+END;
+$$;
+
+
 -- Name: lock_user_for_session_admission(uuid); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.lock_user_for_session_admission(p_user_id uuid) RETURNS TABLE(sessions_valid_after timestamp with time zone)
@@ -2091,6 +2279,13 @@ CREATE POLICY capabilities_employee_directory_owner_select ON foundation.capabil
 CREATE POLICY capabilities_notifications_owner_read ON foundation.capabilities FOR SELECT TO vinx_notifications_owner USING (((name)::text = 'foundation.files.upload'::text));
 
 
+-- Name: capabilities capabilities_permissions_owner_granted_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_permissions_owner_granted_select ON foundation.capabilities FOR SELECT TO vinx_permissions_owner USING ((EXISTS ( SELECT 1
+   FROM foundation.role_capabilities grant_record
+  WHERE ((grant_record.capability_id = capabilities.id) AND (grant_record.deleted_at IS NULL)))));
+
+
 -- Name: capabilities capabilities_permissions_owner_select; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY capabilities_permissions_owner_select ON foundation.capabilities FOR SELECT TO vinx_permissions_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying, 'foundation.files.upload'::character varying, 'foundation.files.confirm'::character varying])::text[])));
@@ -2335,6 +2530,11 @@ CREATE POLICY role_assignments_employee_directory_owner_select ON foundation.rol
 -- Name: role_assignments role_assignments_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_assignments_notifications_owner_read ON foundation.role_assignments FOR SELECT TO vinx_notifications_owner USING (true);
+
+
+-- Name: role_assignments role_assignments_permissions_owner_select; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_assignments_permissions_owner_select ON foundation.role_assignments FOR SELECT TO vinx_permissions_owner USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
 -- Name: role_assignments role_assignments_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -

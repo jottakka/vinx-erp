@@ -18,6 +18,7 @@ using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.ApiHost.Models;
 using Vinx.Erp.ApiHost.OpenApi;
+using Vinx.Erp.ApiHost.Permissions;
 using Vinx.Erp.Atendimento;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
@@ -34,6 +35,7 @@ using Vinx.Erp.Notifications.Providers.Meta;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
+using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
@@ -152,6 +154,7 @@ builder.Services.AddScoped<IInboundActorResolver, SqlInboundActorResolver>();
 builder.Services.AddScoped<InboundWhatsAppIngressService>();
 builder.Services.AddScoped<NotificationInboxService>();
 builder.Services.AddScoped<EmployeeDirectoryService>();
+builder.Services.AddScoped<CompanyPermissionDirectoryService>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<RoleAssignmentService>();
 builder.Services.AddScoped<RevokeMembershipService>();
@@ -739,6 +742,7 @@ foundation.MapPost(
         return result.ToMinimalApiResult();
     }
 );
+foundation.MapFoundationPermissionsEndpoints();
 if (args.FirstOrDefault() is "db-apply" or "db-assert")
 {
     return await app.RunJasperFxCommands(args);

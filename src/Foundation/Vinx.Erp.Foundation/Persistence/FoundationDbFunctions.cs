@@ -176,6 +176,62 @@ internal static class FoundationDbFunctions
         );
 
     /// <summary>
+    /// Lista memberships ativos da empresa com papéis e capabilities efetivos;
+    /// o gate de <c>foundation.roles.assign</c> é aplicado pela própria função
+    /// (42501 <c>member permissions capability is required</c>).
+    /// </summary>
+    internal static async Task<IReadOnlyList<CompanyMemberWithRoles>> ListCompanyMembersWithRolesAsync(
+        this FoundationDbContext database,
+        Guid companyId,
+        CancellationToken cancellationToken)
+    {
+        var rows = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<CompanyMemberRolesRow>(
+                    $"""
+                    SELECT membership_id, display_name, role_ids, role_names, capability_names, invitation_status
+                    FROM foundation.list_company_members_with_roles({companyId})
+                    """)
+                .ToListAsync(cancellationToken)
+        );
+        return rows
+            .Select(row => new CompanyMemberWithRoles(
+                row.MembershipId,
+                row.DisplayName,
+                row.RoleIds ?? [],
+                row.RoleNames ?? [],
+                row.CapabilityNames ?? [],
+                row.InvitationStatus))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Lista papéis vivos da empresa com as capabilities concedidas; mesmo gate
+    /// de <c>foundation.roles.assign</c> da listagem de membros.
+    /// </summary>
+    internal static async Task<IReadOnlyList<CompanyRoleWithGrants>> ListCompanyRolesWithGrantsAsync(
+        this FoundationDbContext database,
+        Guid companyId,
+        CancellationToken cancellationToken)
+    {
+        var rows = await UnwrapProviderExceptionAsync(
+            database.Database
+                .SqlQuery<CompanyRoleGrantsRow>(
+                    $"""
+                    SELECT role_id, name, capability_names
+                    FROM foundation.list_company_roles_with_grants({companyId})
+                    """)
+                .ToListAsync(cancellationToken)
+        );
+        return rows
+            .Select(row => new CompanyRoleWithGrants(
+                row.RoleId,
+                row.Name,
+                row.CapabilityNames ?? []))
+            .ToList();
+    }
+
+    /// <summary>
     /// Cria a entrada idempotente de funcionário no diretório da empresa
     /// (created / replay / idempotency_conflict).
     /// </summary>
@@ -265,6 +321,24 @@ internal static class FoundationDbFunctions
         Guid MembershipId,
         Guid UserId);
 
+    /// <summary>
+    /// Linha de retorno: <c>membership_id uuid, display_name text, role_ids uuid[],
+    /// role_names text[], capability_names text[], invitation_status text</c>.
+    /// </summary>
+    private sealed record CompanyMemberRolesRow(
+        Guid MembershipId,
+        string DisplayName,
+        Guid[]? RoleIds,
+        string[]? RoleNames,
+        string[]? CapabilityNames,
+        string? InvitationStatus);
+
+    /// <summary>Linha de retorno: <c>role_id uuid, name text, capability_names text[]</c>.</summary>
+    private sealed record CompanyRoleGrantsRow(
+        Guid RoleId,
+        string Name,
+        string[]? CapabilityNames);
+
     private static OwnerInvitationDeliveryIngressResult ToIngressResult(OwnerInvitationDeliveryIngressRow? row)
     {
         if (row is null || string.Equals(row.Status, "not_found", StringComparison.Ordinal))
@@ -335,3 +409,18 @@ internal sealed record EmployeeDirectoryEntry(
     Guid EmployeeId,
     Guid MembershipId,
     Guid UserId);
+
+/// <summary>Membro ativo com papéis e capabilities efetivos; email nunca é retornado.</summary>
+internal sealed record CompanyMemberWithRoles(
+    Guid MembershipId,
+    string DisplayName,
+    Guid[] RoleIds,
+    string[] RoleNames,
+    string[] CapabilityNames,
+    string? InvitationStatus);
+
+/// <summary>Papel vivo da empresa com os nomes de capabilities concedidas.</summary>
+internal sealed record CompanyRoleWithGrants(
+    Guid RoleId,
+    string Name,
+    string[] CapabilityNames);
