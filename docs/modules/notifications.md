@@ -120,8 +120,10 @@ literal de 1 a 4096 caracteres, serializando apenas `chat_id` e `text`. O
 token aparece apenas no caminho da requisição no instante do envio; o client
 tem timeout de 10 segundos, cookies/redirects desativados e sem logging HTTP
 padronizado. `ok=true` com `result.message_id` positivo confirma o provider;
-`4xx` ordinário, exceto `408`/`429`, ou `ok=false` é rejeição; `408`, timeout,
-transporte incerto e 2xx malformado são ambíguos terminais; `429`/`5xx` são
+corpo 2xx acima do limite de 8192 bytes — com ou sem anúncio de comprimento — é
+ambíguo sem ser lido até o fim. `4xx` ordinário, exceto `408`/`429`, ou
+`ok=false` é rejeição; `408`, timeout, transporte incerto e 2xx malformado
+são ambíguos terminais; `429`/`5xx` são
 transitivos e usam somente o retry finito do worker. Não há retry no adapter,
 webhook, inbound ou resposta automática nesta fatia. Runbook:
 `docs/runbooks/telegram-outbound.md`.

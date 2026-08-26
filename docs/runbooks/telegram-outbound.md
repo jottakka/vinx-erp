@@ -10,7 +10,7 @@ evidência de teste.
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Token do bot criado pelo BotFather (segredo) |
 | `TELEGRAM_API_BASE_URL` | Base HTTPS do Bot API; padrão `https://api.telegram.org` |
-| `TELEGRAM_WEBHOOK_SECRET_TOKEN` | Segredo opcional para um webhook futuro (segredo) |
+| `TELEGRAM_WEBHOOK_SECRET_TOKEN` | Segredo do webhook inbound, conforme `docs/runbooks/telegram-inbound.md` (segredo) |
 
 > **Aviso:** `TELEGRAM_API_BASE_URL` deve apontar somente para um endpoint
 > confiável, pois o token do bot trafega no caminho da URL.
@@ -19,8 +19,9 @@ O WorkerHost considera somente `TELEGRAM_BOT_TOKEN` e
 `TELEGRAM_API_BASE_URL`: a ausência outbound mantém filas independentes
 operacionais, e token/base parciais ou inválidos impedem o startup. Ele ignora
 `TELEGRAM_WEBHOOK_SECRET_TOKEN`, inclusive quando está sozinho ou malformado;
-o ApiHost validará esse segredo quando a fatia de webhook existir. Esta fatia é
-somente outbound e não registra webhook nem processa mensagens recebidas.
+o ApiHost valida esse segredo no webhook inbound
+(`docs/runbooks/telegram-inbound.md`). Este runbook é somente outbound e não
+registra webhook nem processa mensagens recebidas.
 
 ## Provisionamento e cadastro confiável
 
@@ -52,10 +53,11 @@ somente outbound e não registra webhook nem processa mensagens recebidas.
   aprovado, atualize o secret store, reinicie o WorkerHost e confirme que não
   há token antigo em logs/observabilidade. Não cole tokens em tickets ou shell
   history.
-- Quando houver configuração de webhook em uma fase futura, consulte
-  `getWebhookInfo` usando uma sessão operacional autorizada para diagnosticar
-  URL, último erro e pendências; não coloque a resposta bruta em logs ou
-  documentação. Esta fase não depende de webhook.
+- Para o webhook inbound em operação (ver
+  `docs/runbooks/telegram-inbound.md`), consulte `getWebhookInfo` usando uma
+  sessão operacional autorizada para diagnosticar URL, último erro e pendências;
+  não coloque a resposta bruta em logs ou documentação. O envio outbound não
+  depende de webhook.
 
 ## Incidentes
 

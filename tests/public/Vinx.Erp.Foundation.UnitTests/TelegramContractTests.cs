@@ -215,6 +215,27 @@ public sealed class TelegramContractTests
         Assert.Equal(NotificationProviderResultKind.Ambiguous, result.Kind);
     }
 
+    [Fact]
+    public async Task Client_stops_reading_unadvertised_success_payloads_after_the_cap()
+    {
+        var content = new CountingContent(
+            "{\"ok\":true,\"result\":{\"message_id\":42}}"
+            + new string('x', 65_000)
+        );
+        var client = BuildClient(
+            new CapturingHandler(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = content }
+            )
+        );
+
+        var result = await client.SendAsync(Message(), CancellationToken.None);
+
+        Assert.Equal(NotificationProviderResultKind.Ambiguous, result.Kind);
+        // Dois chunks de 8192 bytes: o cliente encerra no instante em que o
+        // limite é excedido, sem drenar o restante do corpo.
+        Assert.Equal(16_384, content.Served);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.TooManyRequests)]
     [InlineData(HttpStatusCode.InternalServerError)]
@@ -397,6 +418,66 @@ public sealed class TelegramContractTests
             BotToken = UnitTestToken,
             ApiBaseUrl = "https://api.telegram.test",
         });
+
+    private sealed class CountingContent(string payload) : HttpContent
+    {
+        private readonly byte[] _payload = Encoding.UTF8.GetBytes(payload);
+        private int _served;
+
+        public int Served => Volatile.Read(ref _served);
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(new CountingStream(_payload, this));
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            throw new NotSupportedException(
+                "The counting content must be read directly by the consumer."
+            );
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+
+        private sealed class CountingStream(byte[] payload, CountingContent owner) : Stream
+        {
+            private int _position;
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => payload.Length;
+            public override long Position
+            {
+                get => _position;
+                set => throw new NotSupportedException();
+            }
+
+            public override void Flush() { }
+
+            public override int Read(byte[] buffer, int offset, int count) =>
+                ReadAt(buffer.AsMemory(offset, count));
+
+            public override ValueTask<int> ReadAsync(
+                Memory<byte> buffer,
+                CancellationToken cancellationToken = default
+            ) => ValueTask.FromResult(ReadAt(buffer));
+
+            private int ReadAt(Memory<byte> buffer)
+            {
+                var count = Math.Min(buffer.Length, payload.Length - _position);
+                payload.AsSpan(_position, count).CopyTo(buffer.Span);
+                _position += count;
+                Interlocked.Add(ref owner._served, count);
+                return count;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+    }
 
     private sealed class CapturingHandler(HttpResponseMessage response) : HttpMessageHandler
     {

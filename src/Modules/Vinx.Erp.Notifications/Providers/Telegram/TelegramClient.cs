@@ -45,7 +45,11 @@ public sealed class TelegramClient(HttpClient http, TelegramOptions options)
         HttpResponseMessage response;
         try
         {
-            response = await http.SendAsync(request, cancellationToken);
+            response = await http.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken
+            );
         }
         catch (OperationCanceledException)
             when (!cancellationToken.IsCancellationRequested)
@@ -81,10 +85,10 @@ public sealed class TelegramClient(HttpClient http, TelegramOptions options)
                 return Ambiguous();
             }
 
-            string payload;
+            string? payload;
             try
             {
-                payload = await response.Content.ReadAsStringAsync(cancellationToken);
+                payload = await ReadBoundedPayloadAsync(response.Content, cancellationToken);
             }
             catch (OperationCanceledException)
                 when (!cancellationToken.IsCancellationRequested)
@@ -95,8 +99,12 @@ public sealed class TelegramClient(HttpClient http, TelegramOptions options)
             {
                 return Ambiguous();
             }
+            catch (IOException)
+            {
+                return Ambiguous();
+            }
 
-            if (payload.Length > 8_192)
+            if (payload is null || payload.Length > 8_192)
             {
                 return Ambiguous();
             }
@@ -136,6 +144,38 @@ public sealed class TelegramClient(HttpClient http, TelegramOptions options)
 
             return Ambiguous();
         }
+    }
+
+    /// <summary>
+    /// Lê no máximo 8192 bytes do corpo antes de devolvê-lo como texto; um corpo
+    /// maior sinaliza ambiguidade sem ser consumido até o fim.
+    /// </summary>
+    private static async Task<string?> ReadBoundedPayloadAsync(
+        HttpContent content,
+        CancellationToken cancellationToken
+    )
+    {
+        await using var buffer = new MemoryStream();
+        await using (var stream = await content.ReadAsStreamAsync(cancellationToken))
+        {
+            var chunk = new byte[8_192];
+            while (true)
+            {
+                var bytesRead = await stream.ReadAsync(chunk, cancellationToken);
+                if (bytesRead == 0)
+                {
+                    break;
+                }
+
+                buffer.Write(chunk, 0, bytesRead);
+                if (buffer.Length > 8_192)
+                {
+                    return null;
+                }
+            }
+        }
+
+        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, checked((int)buffer.Length));
     }
 
     private static NotificationProviderResult Delivered() =>
