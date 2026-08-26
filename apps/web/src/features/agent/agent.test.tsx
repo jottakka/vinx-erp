@@ -981,7 +981,7 @@ describe("agent workspace", () => {
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/agente"));
     expect(
-      screen.getByRole("list", { name: "Anexos selecionados" }),
+      await screen.findByRole("list", { name: "Anexos selecionados" }),
     ).toHaveTextContent("primeiro.pdf");
   });
 
