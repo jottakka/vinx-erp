@@ -38,7 +38,10 @@ conclui diretamente e o worker não recebe `CREATE` no schema da fila.
 Envelope vazio vai imediatamente para a DLQ como `telegram_inbound_invalid`.
 Falha Npgsql transitória repete de forma finita após 1 s, 5 s e 30 s e termina
 como `telegram_inbound_retry_exhausted`; falha inesperada termina como
-`telegram_inbound_unexpected`. Antes da persistência, o corpo vira
+`telegram_inbound_unexpected`. `OperationCanceledException` observada pela
+cadeia durante o desligamento usa a mesma janela finita de 1 s, 5 s e 30 s e,
+se não concluir, termina redigida como `telegram_inbound_retry_exhausted`; não
+existe requeue indefinido. Antes da persistência, o corpo vira
 `InboundTelegramTextReceived(Guid.Empty)`, headers são removidos e a mensagem
 da exceção é estável. UUID original, header, texto, IDs do Telegram e detalhes
 da falha não podem sobreviver no corpo ou na exceção da DLQ.

@@ -140,7 +140,7 @@ public sealed class TelegramWebhookTests
     }
 
     [Fact]
-    public async Task Unicode_whitespace_only_text_is_accepted_without_ingress()
+    public async Task Sql_btrim_whitespace_only_text_is_accepted_without_ingress()
     {
         var ingressCalls = 0;
         await using var application = await CreateApplicationAsync(
@@ -155,13 +155,41 @@ public sealed class TelegramWebhookTests
         using var response = await PostAsync(
             client,
             """
-            {"update_id":101,"message":{"message_id":303,"from":{"id":202,"is_bot":false},"chat":{"id":202,"type":"private"},"text":"\u00A0"}}
+            {"update_id":101,"message":{"message_id":303,"from":{"id":202,"is_bot":false},"chat":{"id":202,"type":"private"},"text":" \t\n\u000B\f\r"}}
             """
         );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("{\"code\":\"accepted\"}", await response.Content.ReadAsStringAsync());
         Assert.Equal(0, ingressCalls);
+    }
+
+    [Fact]
+    public async Task Non_btrim_unicode_whitespace_is_forwarded_to_ingress()
+    {
+        InboundTelegramText? received = null;
+        await using var application = await CreateApplicationAsync(
+            (_, inbound, _) =>
+            {
+                received = inbound;
+                return Task.CompletedTask;
+            }
+        );
+        using var client = application.GetTestClient();
+
+        using var response = await PostAsync(
+            client,
+            """
+            {"update_id":101,"message":{"message_id":303,"from":{"id":202,"is_bot":false},"chat":{"id":202,"type":"private"},"text":"\u00A0"}}
+            """
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("{\"code\":\"accepted\"}", await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            new InboundTelegramText(101, 202, 303, "\u00A0"),
+            received
+        );
     }
 
     [Fact]

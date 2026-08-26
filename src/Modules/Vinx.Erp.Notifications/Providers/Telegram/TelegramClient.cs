@@ -76,6 +76,11 @@ public sealed class TelegramClient(HttpClient http, TelegramOptions options)
                 return Rejected();
             }
 
+            if (response.Content.Headers.ContentLength is > 8_192)
+            {
+                return Ambiguous();
+            }
+
             string payload;
             try
             {
@@ -87,6 +92,11 @@ public sealed class TelegramClient(HttpClient http, TelegramOptions options)
                 return Ambiguous();
             }
             catch (HttpRequestException)
+            {
+                return Ambiguous();
+            }
+
+            if (payload.Length > 8_192)
             {
                 return Ambiguous();
             }

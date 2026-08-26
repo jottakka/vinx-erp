@@ -63,12 +63,42 @@ public sealed class WolverineStorageScriptTests
                 has_table_privilege(
                     'vinx_worker',
                     'vinx_wolverine_queues.wolverine_queue_telegram_inbound',
-                    'SELECT, INSERT, UPDATE, DELETE'
+                    'SELECT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound',
+                    'INSERT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound',
+                    'UPDATE'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound',
+                    'DELETE'
                 ),
                 has_table_privilege(
                     'vinx_worker',
                     'vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled',
-                    'SELECT, INSERT, UPDATE, DELETE'
+                    'SELECT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled',
+                    'INSERT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled',
+                    'UPDATE'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled',
+                    'DELETE'
                 )
             """,
             administrator
@@ -78,7 +108,9 @@ public sealed class WolverineStorageScriptTests
         Assert.True(reader.GetBoolean(0));
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
-        Assert.True(reader.GetBoolean(3));
-        Assert.True(reader.GetBoolean(4));
+        for (var index = 3; index <= 10; index++)
+        {
+            Assert.True(reader.GetBoolean(index));
+        }
     }
 }

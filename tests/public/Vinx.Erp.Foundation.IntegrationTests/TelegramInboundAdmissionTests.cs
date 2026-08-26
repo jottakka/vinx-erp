@@ -17,7 +17,7 @@ public sealed class TelegramInboundAdmissionTests
     private const long MaximumPrivateChatId = 4_503_599_627_370_495;
 
     [Fact]
-    public async Task Validated_private_chats_resolve_and_admit_only_their_own_tenant_identity()
+    public async Task Admission_derives_each_validated_tenant_identity_without_caller_supplied_ids()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var first = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
@@ -43,14 +43,14 @@ public sealed class TelegramInboundAdmissionTests
             "created",
             await AdmitAsync(
                 factory,
-                AdmissionRequest.Admitted(810001, 1, 1001, "first tenant", firstResolution)
+                AdmissionRequest.Create(810001, 1, 1001, "first tenant")
             )
         );
         Assert.Equal(
             "created",
             await AdmitAsync(
                 factory,
-                AdmissionRequest.Admitted(810002, 2, 1002, "second tenant", secondResolution)
+                AdmissionRequest.Create(810002, 2, 1002, "second tenant")
             )
         );
 
@@ -116,10 +116,10 @@ public sealed class TelegramInboundAdmissionTests
     }
 
     [Fact]
-    public async Task Admission_rejects_invalid_ids_text_limits_and_resolution_tuples()
+    public async Task Admission_rejects_invalid_ids_and_text_limits()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var valid = AdmissionRequest.Unbound(830001, 1, 2001, "valid text");
+        var valid = AdmissionRequest.Create(830001, 1, 2001, "valid text");
         var invalid = new[]
         {
             valid with { InboundId = null },
@@ -134,9 +134,7 @@ public sealed class TelegramInboundAdmissionTests
             valid with { MessageId = 0 },
             valid with { MessageId = -1 },
             valid with { TextBody = "" },
-            valid with { TextBody = " \t\r\n" },
-            valid with { ResolutionState = "admitted" },
-            valid with { UserId = Guid.NewGuid() },
+            valid with { TextBody = " \t\n\v\f\r" },
         };
 
         foreach (var request in invalid)
@@ -153,7 +151,7 @@ public sealed class TelegramInboundAdmissionTests
             Assert.Equal(PostgresErrorCodes.InvalidParameterValue, exception.SqlState);
         }
 
-        var longest = AdmissionRequest.Unbound(830002, 2, 2002, new string('a', 4096));
+        var longest = AdmissionRequest.Create(830002, 2, 2002, new string('a', 4096));
         Assert.Equal("created", await AdmitAsync(factory, longest));
         var tooLong = longest with
         {
@@ -172,10 +170,26 @@ public sealed class TelegramInboundAdmissionTests
     }
 
     [Fact]
+    public async Task Admission_accepts_non_btrim_unicode_whitespace_as_literal_text()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var request = AdmissionRequest.Create(830004, 3, 2004, "\u00A0");
+
+        Assert.Equal("created", await AdmitAsync(factory, request));
+
+        var row = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
+        Assert.Equal("\u00A0", row.TextBody);
+        Assert.Equal("unbound", row.ResolutionState);
+        Assert.Null(row.ResolvedUserId);
+        Assert.Null(row.ResolvedCompanyId);
+        Assert.Null(row.ResolvedMembershipId);
+    }
+
+    [Fact]
     public async Task Exact_replay_and_conflict_preserve_the_first_closed_evidence_after_later_validation()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var first = AdmissionRequest.Unbound(840001, 9, 3001, "first closed evidence");
+        var first = AdmissionRequest.Create(840001, 9, 3001, "first closed evidence");
         Assert.Equal("created", await AdmitAsync(factory, first));
 
         var laterContact = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
@@ -186,14 +200,7 @@ public sealed class TelegramInboundAdmissionTests
         var admitted = await TelegramNotificationSeed.ResolveInboundActorAsync(factory, 840001);
         AssertAdmitted(admitted, laterContact.RecipientUserId, laterContact.CompanyId);
 
-        var replay = first with
-        {
-            InboundId = Guid.NewGuid(),
-            ResolutionState = admitted.ResolutionState,
-            UserId = admitted.UserId,
-            CompanyId = admitted.CompanyId,
-            MembershipId = admitted.MembershipId,
-        };
+        var replay = first with { InboundId = Guid.NewGuid() };
         Assert.Equal("replay", await AdmitAsync(factory, replay));
         Assert.Equal(
             "conflict",
@@ -226,7 +233,7 @@ public sealed class TelegramInboundAdmissionTests
     public async Task Rolled_back_admission_leaves_no_evidence_and_allows_a_new_created_result()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var request = AdmissionRequest.Unbound(850001, 11, 4001, "rolled back");
+        var request = AdmissionRequest.Create(850001, 11, 4001, "rolled back");
 
         await using (var runtime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString))
         {
@@ -245,7 +252,7 @@ public sealed class TelegramInboundAdmissionTests
     public async Task Concurrent_duplicate_admission_returns_created_and_replay_without_a_unique_violation()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var template = AdmissionRequest.Unbound(860001, 12, 5001, "concurrent");
+        var template = AdmissionRequest.Create(860001, 12, 5001, "concurrent");
         await using var firstRuntime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString);
         await firstRuntime.OpenAsync();
         await using var firstTransaction = await firstRuntime.BeginTransactionAsync();
@@ -322,7 +329,7 @@ public sealed class TelegramInboundAdmissionTests
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
         await fixture.MigrateAsync();
-        var request = AdmissionRequest.Unbound(870001, 13, 6001, "downgrade guard");
+        var request = AdmissionRequest.Create(870001, 13, 6001, "downgrade guard");
         Assert.Equal("created", await AdmitAsync(fixture.RuntimeConnectionString, request));
 
         await using var migrator = fixture.CreateMigratorDbContext();
@@ -363,7 +370,7 @@ public sealed class TelegramInboundAdmissionTests
                     'EXECUTE'),
                 has_function_privilege(
                     'vinx_runtime',
-                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)',
+                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)',
                     'EXECUTE'),
                 has_function_privilege(
                     'vinx_worker',
@@ -371,8 +378,10 @@ public sealed class TelegramInboundAdmissionTests
                     'EXECUTE'),
                 has_function_privilege(
                     'vinx_worker',
-                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)',
+                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)',
                     'EXECUTE'),
+                to_regprocedure(
+                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)') IS NULL,
                 to_regprocedure('notifications.complete_inbound_telegram_text(uuid)') IS NULL
             FROM pg_class AS table_row
             WHERE table_row.oid = 'notifications.inbound_telegram_messages'::regclass
@@ -395,6 +404,7 @@ public sealed class TelegramInboundAdmissionTests
             Assert.False(reader.GetBoolean(9));
             Assert.False(reader.GetBoolean(10));
             Assert.True(reader.GetBoolean(11));
+            Assert.True(reader.GetBoolean(12));
             Assert.False(await reader.ReadAsync());
         }
 
@@ -405,7 +415,7 @@ public sealed class TelegramInboundAdmissionTests
         );
         await AssertFunctionContractAsync(
             administrator,
-            "notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)",
+            "notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)",
             "vinx_runtime"
         );
 
@@ -481,9 +491,9 @@ public sealed class TelegramInboundAdmissionTests
     {
         await using var command = new NpgsqlCommand(
             """
-            SELECT notifications.admit_inbound_telegram_text(
-                @inbound_id, @update_id, @chat_id, @message_id, @text_body,
-                @resolution_state, @user_id, @company_id, @membership_id)
+            SELECT status
+            FROM notifications.admit_inbound_telegram_text(
+                @inbound_id, @update_id, @chat_id, @message_id, @text_body)
             """,
             connection,
             transaction
@@ -493,10 +503,6 @@ public sealed class TelegramInboundAdmissionTests
         AddParameter(command, "chat_id", NpgsqlDbType.Bigint, request.ChatId);
         AddParameter(command, "message_id", NpgsqlDbType.Bigint, request.MessageId);
         AddParameter(command, "text_body", NpgsqlDbType.Text, request.TextBody);
-        AddParameter(command, "resolution_state", NpgsqlDbType.Text, request.ResolutionState);
-        AddParameter(command, "user_id", NpgsqlDbType.Uuid, request.UserId);
-        AddParameter(command, "company_id", NpgsqlDbType.Uuid, request.CompanyId);
-        AddParameter(command, "membership_id", NpgsqlDbType.Uuid, request.MembershipId);
         return (string)(await command.ExecuteScalarAsync())!;
     }
 
@@ -519,7 +525,7 @@ public sealed class TelegramInboundAdmissionTests
                 to_regclass('notifications.inbound_telegram_messages') IS NOT NULL,
                 to_regprocedure('notifications.resolve_inbound_telegram_actor(bigint)') IS NOT NULL,
                 to_regprocedure(
-                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)') IS NOT NULL,
+                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)') IS NOT NULL,
                 to_regprocedure(
                     'notifications.get_telegram_notification_delivery_target(uuid,uuid)') IS NOT NULL
             """,
@@ -635,46 +641,14 @@ public sealed class TelegramInboundAdmissionTests
         long? UpdateId,
         long? ChatId,
         long? MessageId,
-        string? TextBody,
-        string? ResolutionState,
-        Guid? UserId,
-        Guid? CompanyId,
-        Guid? MembershipId
+        string? TextBody
     )
     {
-        public static AdmissionRequest Unbound(
+        public static AdmissionRequest Create(
             long chatId,
             long updateId,
             long messageId,
             string textBody
-        ) => new(
-            Guid.NewGuid(),
-            updateId,
-            chatId,
-            messageId,
-            textBody,
-            "unbound",
-            null,
-            null,
-            null
-        );
-
-        public static AdmissionRequest Admitted(
-            long chatId,
-            long updateId,
-            long messageId,
-            string textBody,
-            TelegramInboundActorResolution resolution
-        ) => new(
-            Guid.NewGuid(),
-            updateId,
-            chatId,
-            messageId,
-            textBody,
-            resolution.ResolutionState,
-            resolution.UserId,
-            resolution.CompanyId,
-            resolution.MembershipId
-        );
+        ) => new(Guid.NewGuid(), updateId, chatId, messageId, textBody);
     }
 }

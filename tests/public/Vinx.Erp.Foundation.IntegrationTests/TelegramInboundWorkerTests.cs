@@ -244,21 +244,46 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         {
             (closed.Id, "unbound"),
         };
-        foreach (var (resolutionState, discriminator) in new[]
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "940100",
+            telegramContactValidated: false
+        );
+        var inactiveSeed = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "940200",
+            telegramContactValidated: true
+        );
+        await TelegramNotificationSeed.RevokeMembershipAsync(
+            factory,
+            inactiveSeed.CompanyId,
+            inactiveSeed.RecipientUserId
+        );
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "940300",
+            telegramContactValidated: true
+        );
+        await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "940300",
+            telegramContactValidated: true
+        );
+        foreach (var (resolutionState, chatId) in new[]
         {
-            ("unverified", 9401L),
-            ("inactive", 9402L),
-            ("ambiguous", 9403L),
+            ("unverified", 940100L),
+            ("inactive", 940200L),
+            ("ambiguous", 940300L),
         })
         {
             var inboundId = Guid.NewGuid();
             Assert.Equal(
                 "created",
-                await AdmitClosedAsync(
+                await AdmitAsync(
                     factory.Fixture.RuntimeConnectionString,
                     inboundId,
-                    resolutionState,
-                    discriminator
+                    chatId,
+                    $"{resolutionState} closed receipt text"
                 )
             );
             closedRows.Add((inboundId, resolutionState));
@@ -497,14 +522,13 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             telegramAddress: "930004",
             telegramContactValidated: true
         );
-        var resolution = await TelegramNotificationSeed.ResolveInboundActorAsync(factory, 930004);
         var inboundId = Guid.NewGuid();
         Assert.Equal(
             "created",
             await AdmitAsync(
                 factory.Fixture.RuntimeConnectionString,
                 inboundId,
-                resolution,
+                930004L,
                 "runtime denial evidence"
             )
         );
@@ -548,14 +572,13 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             telegramAddress: "930005",
             telegramContactValidated: true
         );
-        var resolution = await TelegramNotificationSeed.ResolveInboundActorAsync(factory, 930005);
         var inboundId = Guid.NewGuid();
         Assert.Equal(
             "created",
             await AdmitAsync(
                 factory.Fixture.RuntimeConnectionString,
                 inboundId,
-                resolution,
+                930005L,
                 "cancelled receipt evidence"
             )
         );
@@ -626,7 +649,6 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             telegramAddress: "910001",
             telegramContactValidated: true
         );
-        var resolution = await TelegramNotificationSeed.ResolveInboundActorAsync(factory, 910001);
         var inboundId = Guid.NewGuid();
 
         Assert.Equal(
@@ -634,7 +656,7 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             await AdmitAsync(
                 factory.Fixture.RuntimeConnectionString,
                 inboundId,
-                resolution,
+                910001L,
                 "receipt-only text"
             )
         );
@@ -660,7 +682,12 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
 
         Assert.Equal(
             "created",
-            await AdmitClosedAsync(factory.Fixture.RuntimeConnectionString, closedId)
+            await AdmitAsync(
+                factory.Fixture.RuntimeConnectionString,
+                closedId,
+                9200L,
+                "unbound closed receipt text"
+            )
         );
 
         var closed = await CompleteAsync(factory.Fixture.WorkerConnectionString, closedId);
@@ -683,14 +710,13 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             telegramAddress: "910002",
             telegramContactValidated: true
         );
-        var resolution = await TelegramNotificationSeed.ResolveInboundActorAsync(factory, 910002);
         var inboundId = Guid.NewGuid();
         Assert.Equal(
             "created",
             await AdmitAsync(
                 factory.Fixture.RuntimeConnectionString,
                 inboundId,
-                resolution,
+                910002L,
                 "transaction receipt text"
             )
         );
@@ -729,14 +755,13 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             telegramAddress: "910003",
             telegramContactValidated: true
         );
-        var resolution = await TelegramNotificationSeed.ResolveInboundActorAsync(factory, 910003);
         var inboundId = Guid.NewGuid();
         Assert.Equal(
             "created",
             await AdmitAsync(
                 factory.Fixture.RuntimeConnectionString,
                 inboundId,
-                resolution,
+                910003L,
                 "closed connection receipt text"
             )
         );
@@ -841,7 +866,7 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
     private static async Task<string> AdmitAsync(
         string connectionString,
         Guid inboundId,
-        TelegramInboundActorResolution resolution,
+        long chatId,
         string textBody
     )
     {
@@ -849,47 +874,17 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         await runtime.OpenAsync();
         await using var command = new NpgsqlCommand(
             """
-            SELECT notifications.admit_inbound_telegram_text(
-                @inbound_id, @update_id, @chat_id, @message_id, @text_body,
-                @resolution_state, @user_id, @company_id, @membership_id)
+            SELECT status
+            FROM notifications.admit_inbound_telegram_text(
+                @inbound_id, @update_id, @chat_id, @message_id, @text_body)
             """,
             runtime
         );
         command.Parameters.AddWithValue("inbound_id", NpgsqlDbType.Uuid, inboundId);
-        command.Parameters.AddWithValue("update_id", NpgsqlDbType.Bigint, 91L);
-        command.Parameters.AddWithValue("chat_id", NpgsqlDbType.Bigint, 910001L);
-        command.Parameters.AddWithValue("message_id", NpgsqlDbType.Bigint, 9101L);
+        command.Parameters.AddWithValue("update_id", NpgsqlDbType.Bigint, chatId);
+        command.Parameters.AddWithValue("chat_id", NpgsqlDbType.Bigint, chatId);
+        command.Parameters.AddWithValue("message_id", NpgsqlDbType.Bigint, chatId);
         command.Parameters.AddWithValue("text_body", NpgsqlDbType.Text, textBody);
-        command.Parameters.AddWithValue("resolution_state", NpgsqlDbType.Text, resolution.ResolutionState);
-        command.Parameters.AddWithValue("user_id", NpgsqlDbType.Uuid, resolution.UserId!.Value);
-        command.Parameters.AddWithValue("company_id", NpgsqlDbType.Uuid, resolution.CompanyId!.Value);
-        command.Parameters.AddWithValue("membership_id", NpgsqlDbType.Uuid, resolution.MembershipId!.Value);
-        return (string)(await command.ExecuteScalarAsync())!;
-    }
-
-    private static async Task<string> AdmitClosedAsync(
-        string connectionString,
-        Guid inboundId,
-        string resolutionState = "unbound",
-        long discriminator = 92L
-    )
-    {
-        await using var runtime = new NpgsqlConnection(connectionString);
-        await runtime.OpenAsync();
-        await using var command = new NpgsqlCommand(
-            """
-            SELECT notifications.admit_inbound_telegram_text(
-                @inbound_id, @update_id, @chat_id, @message_id, @text_body,
-                @resolution_state, NULL, NULL, NULL)
-            """,
-            runtime
-        );
-        command.Parameters.AddWithValue("inbound_id", NpgsqlDbType.Uuid, inboundId);
-        command.Parameters.AddWithValue("update_id", NpgsqlDbType.Bigint, discriminator);
-        command.Parameters.AddWithValue("chat_id", NpgsqlDbType.Bigint, discriminator * 100L);
-        command.Parameters.AddWithValue("message_id", NpgsqlDbType.Bigint, discriminator * 10L);
-        command.Parameters.AddWithValue("text_body", NpgsqlDbType.Text, $"{resolutionState} closed receipt text");
-        command.Parameters.AddWithValue("resolution_state", NpgsqlDbType.Text, resolutionState);
         return (string)(await command.ExecuteScalarAsync())!;
     }
 

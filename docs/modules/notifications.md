@@ -84,7 +84,10 @@ A Foundation aceita o canal opt-in `telegram` sem alterar a semântica do
 WhatsApp ou do in-app obrigatório. O template aprovado é texto plano de 1 a
 4096 pontos de código Unicode em `notification_templates.telegram_text`; não
 pode ficar vazio nem começar ou terminar com U+0020, tabulação, quebra de
-linha, tabulação vertical, form feed ou retorno de carro. O contato privado
+linha, tabulação vertical, form feed ou retorno de carro. O limite de 4096 do
+Telegram conta unidades de código UTF-16, enquanto `char_length` conta pontos
+de código; por isso, templates aprovados com muitos caracteres astrais falham
+de forma fechada na entrega. O contato privado
 usa `notification_recipient_contacts.address` com chat ID decimal positivo e
 `phone_number` permanece exclusivo do WhatsApp. A função
 `notifications.enqueue_notification_intent` revalida o opt-in e o template no
@@ -92,6 +95,10 @@ momento do enfileiramento. Quando o opt-in existe, Telegram e in-app são
 criados na mesma transação e cada entrega nova publica somente
 `NotificationDeliveryRequested(deliveryId)` no outbox; o texto e o endereço
 nunca entram no envelope, metadado, log ou métrica.
+
+Para retirar a aprovação de um template Telegram, primeiro limpe
+`telegram_text`. Caso contrário, o `CHECK` bloqueia a alteração com SQLSTATE
+`23514`.
 
 Alterar o endereço por `notifications.set_recipient_contact` limpa
 `is_validated`; repetir o mesmo endereço não altera a linha nem gera auditoria
@@ -134,11 +141,14 @@ contato não validado, identidade inativa ou mais de uma identidade retornam,
 respectivamente, `unbound`, `unverified`, `inactive` ou `ambiguous`, sem IDs
 de usuário, empresa ou membership.
 
-`notifications.admit_inbound_telegram_text(...)` grava somente parâmetros
-válidos e deduplica por `(chat_id, message_id)`: a mesma combinação de
-`update_id` e corpo retorna `replay`; uma reutilização incompatível retorna
-`conflict`. Nenhum replay atualiza a primeira decisão persistida, inclusive se
-o contato for validado depois.
+`notifications.admit_inbound_telegram_text(...)` recebe somente os cinco dados
+de transporte, resolve internamente o ator por
+`notifications.resolve_inbound_telegram_actor(chat_id)`, valida defensivamente
+a tupla derivada e deduplica por `(chat_id, message_id)`. O retorno contém
+`status` e `resolution_state`: a mesma combinação de `update_id` e corpo
+retorna `replay`; uma reutilização incompatível retorna `conflict`. Nenhum
+replay atualiza a primeira decisão persistida, inclusive se o contato for
+validado depois.
 
 ## Telegram inbound — webhook e outbox (#309)
 
@@ -151,7 +161,8 @@ Somente texto de conversa `private`, humano, com `from.id == chat.id`, IDs
 positivos e até 4096 pontos de código chega à admissão; formas incompatíveis
 recebem `200` sem efeito para interromper retry inútil.
 
-O ingress resolve a identidade fechada e, apenas para `created + admitted`,
+A função de admissão resolve a identidade dentro da fronteira SQL e devolve
+estado e resolução ao ingress; apenas para `created + admitted`, o ingress
 publica `InboundTelegramTextReceived(InboundMessageId)` no outbox durável para
 `telegram-inbound`, na mesma transação da evidência. O envelope e seus
 metadados contêm somente o GUID opaco: nunca texto, chat ID, update ID ou
@@ -171,9 +182,11 @@ Também não representa empresa escolhida pela pessoa usuária; seleção de emp
 e confirmação permanecem decisões explícitas do servidor.
 O worker não lê o texto e não chama HTTP, Bot API ou IA. A confirmação continua
 sendo uma decisão explícita do servidor em fluxo próprio e nunca é inferida do
-recibo. Envelope inválido, retry Npgsql esgotado após 1 s/5 s/30 s e erro
-inesperado entram na DLQ com tipos estáveis, payload `Guid.Empty`, headers
-removidos e sem UUID, conteúdo, IDs do provedor ou detalhe original da exceção.
+recibo. Envelope inválido, retry Npgsql ou cancelamento esgotado após
+1 s/5 s/30 s e erro inesperado entram na DLQ com tipos estáveis, payload
+`Guid.Empty`, headers removidos e sem UUID, conteúdo, IDs do provedor ou
+detalhe original da exceção; cancelamento da cadeia nunca usa requeue
+indefinido durante o desligamento.
 
 ## Inbound admissão e identidade (#272 PR1)
 

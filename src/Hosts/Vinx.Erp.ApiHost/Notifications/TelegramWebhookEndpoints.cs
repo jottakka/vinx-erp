@@ -182,6 +182,6 @@ public static class TelegramWebhookEndpoints
     }
 
     private static bool HasValidText(string text) =>
-        !string.IsNullOrWhiteSpace(text)
+        text.Trim(' ', '\t', '\n', '\v', '\f', '\r').Length > 0
         && text.EnumerateRunes().Count() <= 4096;
 }

@@ -16,7 +16,6 @@ namespace Vinx.Erp.ApiHost.Notifications;
 public sealed class InboundTelegramIngressService(
     FoundationDbContext database,
     IDbContextOutbox outbox,
-    IInboundTelegramActorResolver actorResolver,
     ILogger<InboundTelegramIngressService> logger
 )
 {
@@ -35,37 +34,45 @@ public sealed class InboundTelegramIngressService(
         await using var transaction = await database.Database.BeginTransactionAsync(
             cancellationToken
         );
-        var resolution = await actorResolver.ResolveAsync(text.ChatId, cancellationToken);
 
         var connection = database.Database.GetDbConnection();
         await using var command = connection.CreateCommand();
         command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
         command.CommandText =
-            "SELECT notifications.admit_inbound_telegram_text("
-            + "@inbound_id, @update_id, @chat_id, @message_id, @text_body, "
-            + "@resolution_state, @user_id, @company_id, @membership_id)";
+            "SELECT status, resolution_state "
+            + "FROM notifications.admit_inbound_telegram_text("
+            + "@inbound_id, @update_id, @chat_id, @message_id, @text_body)";
         AddParameter(command, "inbound_id", inboundId);
         AddParameter(command, "update_id", text.UpdateId);
         AddParameter(command, "chat_id", text.ChatId);
         AddParameter(command, "message_id", text.MessageId);
         AddParameter(command, "text_body", text.Body);
-        AddParameter(command, "resolution_state", resolution.SerializeState());
-        AddParameter(
-            command,
-            "user_id",
-            resolution.UserId.HasValue ? resolution.UserId.Value : DBNull.Value
-        );
-        AddParameter(
-            command,
-            "company_id",
-            resolution.CompanyId.HasValue ? resolution.CompanyId.Value : DBNull.Value
-        );
-        AddParameter(
-            command,
-            "membership_id",
-            resolution.MembershipId.HasValue ? resolution.MembershipId.Value : DBNull.Value
-        );
-        var admission = (string?)await command.ExecuteScalarAsync(cancellationToken);
+
+        string admission;
+        bool admitted;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            if (!await reader.ReadAsync(cancellationToken))
+            {
+                throw new InvalidOperationException(
+                    "Inbound telegram text admission returned no row."
+                );
+            }
+
+            admission = reader.GetString(0);
+            admitted = string.Equals(
+                reader.GetString(1),
+                "admitted",
+                StringComparison.Ordinal
+            );
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                throw new InvalidOperationException(
+                    "Inbound telegram text admission returned multiple rows."
+                );
+            }
+        }
+
         var created = string.Equals(admission, "created", StringComparison.Ordinal);
 
         if (!created && !string.Equals(admission, "replay", StringComparison.Ordinal))
@@ -79,7 +86,7 @@ public sealed class InboundTelegramIngressService(
             );
         }
 
-        if (created && resolution.IsAdmitted)
+        if (created && admitted)
         {
             outbox.Enroll(database);
             await outbox.PublishAsync(

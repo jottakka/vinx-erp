@@ -176,6 +176,45 @@ public sealed class TelegramContractTests
         Assert.Equal(NotificationProviderResultKind.Ambiguous, result.Kind);
     }
 
+    [Fact]
+    public async Task Client_classifies_oversized_advertised_success_payload_as_ambiguous()
+    {
+        var content = new StringContent(
+            "{\"ok\":true,\"result\":{\"message_id\":42}}",
+            Encoding.UTF8,
+            "application/json"
+        );
+        content.Headers.ContentLength = 8_193;
+        var client = BuildClient(
+            new CapturingHandler(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = content }
+            )
+        );
+
+        var result = await client.SendAsync(Message(), CancellationToken.None);
+
+        Assert.Equal(NotificationProviderResultKind.Ambiguous, result.Kind);
+    }
+
+    [Fact]
+    public async Task Client_classifies_oversized_unadvertised_success_payload_as_ambiguous()
+    {
+        var payload =
+            "{\"ok\":true,\"result\":{\"message_id\":42}}"
+            + new string(' ', 8_193);
+        var content = new StringContent(payload, Encoding.UTF8, "application/json");
+        content.Headers.ContentLength = null;
+        var client = BuildClient(
+            new CapturingHandler(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = content }
+            )
+        );
+
+        var result = await client.SendAsync(Message(), CancellationToken.None);
+
+        Assert.Equal(NotificationProviderResultKind.Ambiguous, result.Kind);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.TooManyRequests)]
     [InlineData(HttpStatusCode.InternalServerError)]

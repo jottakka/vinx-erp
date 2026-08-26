@@ -60,8 +60,13 @@ public sealed class InboundTelegramTextReceivedHandler(
             _ => throw new InvalidOperationException("Inbound Telegram receipt returned an unknown state."),
         };
 
-#pragma warning disable CA1873 // Os argumentos são valores constantes e baratos; o guard não agrega ganho.
-        logger.LogInformation(
+        // Marco operacional somente para a transição real para `completed`;
+        // os no-ops (replay/ausente/fechado) permanecem em diagnóstico para não
+        // poluir o nível Information com volume rotineiro de chat.
+        var logLevel = result == "completed" ? LogLevel.Information : LogLevel.Debug;
+#pragma warning disable CA1873 // Os argumentos são valores constantes e baratos; o nível segue o resultado.
+        logger.Log(
+            logLevel,
             "Inbound Telegram receipt {Operation} {Module} {Result} {Reason}",
             Operation,
             Module,

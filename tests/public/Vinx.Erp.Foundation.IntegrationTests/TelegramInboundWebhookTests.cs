@@ -24,7 +24,6 @@ public sealed class TelegramInboundWebhookTests
         var service = new InboundTelegramIngressService(
             database,
             scope.ServiceProvider.GetRequiredService<IDbContextOutbox>(),
-            new SqlInboundTelegramActorResolver(database),
             NullLogger<InboundTelegramIngressService>.Instance
         );
 

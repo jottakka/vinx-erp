@@ -35,6 +35,13 @@ internal sealed class InboundTelegramFailurePolicyAttribute : ModifyHandlerChain
                 "Redact and dead-letter unexpected inbound Telegram receipt"
             );
         chain
+            .OnException<OperationCanceledException>()
+            .ScheduleRetry(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30))
+            .Then.CustomActionIndefinitely(
+                InboundTelegramTextReceivedHandler.PersistRetryExhaustedDeadLetterAsync,
+                "Redact and dead-letter cancelled inbound Telegram receipt"
+            );
+        chain
             .OnAnyException()
             .CustomActionIndefinitely(
                 InboundTelegramTextReceivedHandler.PersistUnexpectedDeadLetterAsync,

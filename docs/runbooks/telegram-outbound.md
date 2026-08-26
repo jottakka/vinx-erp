@@ -12,6 +12,9 @@ evidência de teste.
 | `TELEGRAM_API_BASE_URL` | Base HTTPS do Bot API; padrão `https://api.telegram.org` |
 | `TELEGRAM_WEBHOOK_SECRET_TOKEN` | Segredo opcional para um webhook futuro (segredo) |
 
+> **Aviso:** `TELEGRAM_API_BASE_URL` deve apontar somente para um endpoint
+> confiável, pois o token do bot trafega no caminho da URL.
+
 O WorkerHost considera somente `TELEGRAM_BOT_TOKEN` e
 `TELEGRAM_API_BASE_URL`: a ausência outbound mantém filas independentes
 operacionais, e token/base parciais ou inválidos impedem o startup. Ele ignora

@@ -168,7 +168,6 @@ builder.Services.AddScoped<PlatformOrganizationProvisioningService>();
 builder.Services.AddScoped<NotificationIntentService>();
 builder.Services.AddScoped<IInboundActorResolver, SqlInboundActorResolver>();
 builder.Services.AddScoped<InboundWhatsAppIngressService>();
-builder.Services.AddScoped<IInboundTelegramActorResolver, SqlInboundTelegramActorResolver>();
 builder.Services.AddScoped<InboundTelegramIngressService>();
 builder.Services.AddScoped<NotificationInboxService>();
 builder.Services.AddScoped<EmployeeDirectoryService>();

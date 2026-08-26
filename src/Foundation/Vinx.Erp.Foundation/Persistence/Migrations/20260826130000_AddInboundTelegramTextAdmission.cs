@@ -180,18 +180,18 @@ public partial class AddInboundTelegramTextAdmission : Migration
                 p_update_id bigint,
                 p_chat_id bigint,
                 p_message_id bigint,
-                p_text_body text,
-                p_resolution_state text,
-                p_user_id uuid,
-                p_company_id uuid,
-                p_membership_id uuid)
-            RETURNS text
+                p_text_body text)
+            RETURNS TABLE (status text, resolution_state text)
             LANGUAGE plpgsql SECURITY DEFINER
             SET search_path TO pg_catalog, notifications, pg_temp
             AS $function$
             DECLARE
                 v_existing notifications.inbound_telegram_messages%ROWTYPE;
                 v_now timestamp with time zone := clock_timestamp();
+                v_resolution_state text;
+                v_user_id uuid;
+                v_company_id uuid;
+                v_membership_id uuid;
             BEGIN
                 IF p_inbound_id IS NULL
                     OR p_update_id IS NULL OR p_update_id <= 0
@@ -199,18 +199,32 @@ public partial class AddInboundTelegramTextAdmission : Migration
                     OR p_message_id IS NULL OR p_message_id <= 0
                     OR p_text_body IS NULL
                     OR btrim(p_text_body, E' \t\n\013\f\r') = ''
-                    OR char_length(p_text_body) NOT BETWEEN 1 AND 4096
-                    OR p_resolution_state IS NULL
-                    OR p_resolution_state NOT IN ('admitted', 'unbound', 'ambiguous', 'unverified', 'inactive')
+                    OR char_length(p_text_body) NOT BETWEEN 1 AND 4096 THEN
+                    RAISE EXCEPTION 'inbound telegram text admission parameters are invalid' USING ERRCODE = '22023';
+                END IF;
+
+                SELECT resolution.resolution_state,
+                    resolution.user_id,
+                    resolution.company_id,
+                    resolution.membership_id
+                    INTO v_resolution_state,
+                    v_user_id,
+                    v_company_id,
+                    v_membership_id
+                FROM notifications.resolve_inbound_telegram_actor(p_chat_id) AS resolution;
+
+                IF v_resolution_state IS NULL
+                    OR v_resolution_state NOT IN (
+                        'admitted', 'unbound', 'ambiguous', 'unverified', 'inactive')
                     OR NOT (
-                        (p_resolution_state = 'admitted'
-                            AND p_user_id IS NOT NULL
-                            AND p_company_id IS NOT NULL
-                            AND p_membership_id IS NOT NULL)
-                        OR (p_resolution_state IN ('unbound', 'ambiguous', 'unverified', 'inactive')
-                            AND p_user_id IS NULL
-                            AND p_company_id IS NULL
-                            AND p_membership_id IS NULL)) THEN
+                        (v_resolution_state = 'admitted'
+                            AND v_user_id IS NOT NULL
+                            AND v_company_id IS NOT NULL
+                            AND v_membership_id IS NOT NULL)
+                        OR (v_resolution_state IN ('unbound', 'ambiguous', 'unverified', 'inactive')
+                            AND v_user_id IS NULL
+                            AND v_company_id IS NULL
+                            AND v_membership_id IS NULL)) THEN
                     RAISE EXCEPTION 'inbound telegram text admission parameters are invalid' USING ERRCODE = '22023';
                 END IF;
 
@@ -220,11 +234,12 @@ public partial class AddInboundTelegramTextAdmission : Migration
                     resolved_at, created_at)
                 VALUES (
                     p_inbound_id, p_update_id, p_chat_id, p_message_id, p_text_body, 'pending',
-                    p_resolution_state, p_user_id, p_company_id, p_membership_id,
+                    v_resolution_state, v_user_id, v_company_id, v_membership_id,
                     v_now, v_now)
                 ON CONFLICT (chat_id, message_id) DO NOTHING;
                 IF FOUND THEN
-                    RETURN 'created';
+                    RETURN QUERY SELECT 'created'::text, v_resolution_state;
+                    RETURN;
                 END IF;
 
                 SELECT message.* INTO v_existing
@@ -234,17 +249,18 @@ public partial class AddInboundTelegramTextAdmission : Migration
 
                 IF v_existing.update_id = p_update_id
                     AND v_existing.text_body = p_text_body THEN
-                    RETURN 'replay';
+                    RETURN QUERY SELECT 'replay'::text, v_existing.resolution_state;
+                    RETURN;
                 END IF;
 
-                RETURN 'conflict';
+                RETURN QUERY SELECT 'conflict'::text, v_existing.resolution_state;
             END;
             $function$;
-            ALTER FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text, text, uuid, uuid, uuid)
+            ALTER FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text)
                 OWNER TO vinx_notifications_owner;
-            REVOKE ALL ON FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text, text, uuid, uuid, uuid)
+            REVOKE ALL ON FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text)
                 FROM PUBLIC, vinx_migrator;
-            GRANT EXECUTE ON FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text, text, uuid, uuid, uuid)
+            GRANT EXECUTE ON FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text)
                 TO vinx_runtime;
 
             RESET ROLE;
@@ -271,10 +287,10 @@ public partial class AddInboundTelegramTextAdmission : Migration
 
             REVOKE ALL ON FUNCTION notifications.resolve_inbound_telegram_actor(bigint)
                 FROM PUBLIC, vinx_runtime, vinx_migrator;
-            REVOKE ALL ON FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text, text, uuid, uuid, uuid)
+            REVOKE ALL ON FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text)
                 FROM PUBLIC, vinx_runtime, vinx_migrator;
             DROP FUNCTION notifications.resolve_inbound_telegram_actor(bigint);
-            DROP FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text, text, uuid, uuid, uuid);
+            DROP FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text);
             DROP TABLE notifications.inbound_telegram_messages;
 
             RESET ROLE;
