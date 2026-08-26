@@ -12,6 +12,7 @@ using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
+using Vinx.Erp.Notifications.Providers.Telegram;
 using Vinx.Erp.WorkerHost;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
@@ -128,6 +129,7 @@ builder.Services.AddSingleton<NotificationDeliveryMetrics>();
 builder.Services.AddScoped<NotificationProviderResolver>();
 builder.Services.AddScoped<INotificationProvider, InAppNotificationProvider>();
 builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
+builder.Services.AddScoped<INotificationProvider, TelegramProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
 builder.Services.AddScoped<InboundWhatsAppInteractionService>();
 builder.Services.AddScoped<InboundWhatsAppDocumentService>();
@@ -227,6 +229,45 @@ builder
     .ConfigurePrimaryHttpMessageHandler(() =>
         new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
     );
+builder
+    .Services.AddOptions<TelegramOptions>()
+    .Bind(builder.Configuration)
+    .Validate(
+        options =>
+            // A ausência mantém filas independentes operacionais. Qualquer
+            // configuração presente precisa permitir envio seguro; o segredo
+            // de webhook continua opcional, mas se definido deve ser válido.
+            (
+                string.IsNullOrWhiteSpace(options.BotToken)
+                && string.Equals(
+                    options.ApiBaseUrl,
+                    "https://api.telegram.org",
+                    StringComparison.Ordinal
+                )
+                && string.IsNullOrWhiteSpace(options.WebhookSecretToken)
+            )
+            || (
+                options.OutboundIsConfigured
+                && (
+                    string.IsNullOrWhiteSpace(options.WebhookSecretToken)
+                    || options.WebhookIsConfigured
+                )
+            ),
+        "Telegram options are invalid."
+    )
+    .ValidateOnStart();
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<TelegramOptions>>().Value
+);
+builder
+    .Services.AddHttpClient(
+        TelegramClient.HttpClientName,
+        client => client.Timeout = TimeSpan.FromSeconds(10)
+    )
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
+    )
+    .RemoveAllLoggers();
 builder
     .Services.AddHttpClient(
         InboundWhatsAppInteractionService.TextHttpClientName,

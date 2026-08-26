@@ -1,5 +1,8 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Telegram;
 using Xunit;
@@ -226,6 +229,67 @@ public sealed class TelegramContractTests
         Assert.Equal(1, handler.CallCount);
     }
 
+    [Fact]
+    public void Mapper_preserves_an_approved_target_as_the_minimal_plain_text_payload()
+    {
+        var message = TelegramMapper.Map("4503599627370495", "Approved <b>text</b>");
+
+        Assert.Equal("4503599627370495", message.ChatId);
+        Assert.Equal("Approved <b>text</b>", message.Text);
+        using var payload = JsonDocument.Parse(
+            JsonSerializer.Serialize(message, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+        );
+        Assert.Equal(["chat_id", "text"], [.. payload.RootElement.EnumerateObject().Select(property => property.Name)]);
+        Assert.Equal("4503599627370495", payload.RootElement.GetProperty("chat_id").GetString());
+        Assert.Equal("Approved <b>text</b>", payload.RootElement.GetProperty("text").GetString());
+    }
+
+    [Theory]
+    [InlineData("0", "Approved Telegram text")]
+    [InlineData("001", "Approved Telegram text")]
+    [InlineData("-1", "Approved Telegram text")]
+    [InlineData("123 456", "Approved Telegram text")]
+    [InlineData("4503599627370496", "Approved Telegram text")]
+    [InlineData("123456789", " ")]
+    [InlineData("123456789", " Approved Telegram text")]
+    [InlineData("123456789", "Approved Telegram text ")]
+    public void Mapper_rejects_noncanonical_targets_and_nonblank_text_violations(
+        string chatId,
+        string text
+    )
+    {
+        Assert.Throws<ArgumentException>(() => TelegramMapper.Map(chatId, text));
+    }
+
+    [Fact]
+    public void Mapper_rejects_text_over_the_Telegram_plain_text_limit()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            TelegramMapper.Map("123456789", new string('t', 4097))
+        );
+    }
+
+    [Fact]
+    public async Task Provider_rejects_disabled_outbound_without_resolving_a_target_or_creating_an_HTTP_client()
+    {
+        var httpClientFactory = new FailingHttpClientFactory();
+        var provider = new TelegramProvider(
+            null!,
+            httpClientFactory,
+            new TelegramOptions(),
+            NullLogger<TelegramProvider>.Instance
+        );
+
+        var result = await provider.DeliverAsync(
+            new NotificationDeliveryRequest(Guid.NewGuid(), Guid.NewGuid()),
+            CancellationToken.None
+        );
+
+        Assert.Equal(NotificationChannel.Telegram, provider.Channel);
+        Assert.Equal(NotificationProviderResultKind.Rejected, result.Kind);
+        Assert.Equal(0, httpClientFactory.CreateClientCalls);
+    }
+
     private static TelegramMessage Message() =>
         new("123456789", "Approved Telegram text");
 
@@ -266,6 +330,17 @@ public sealed class TelegramContractTests
         {
             CallCount++;
             return Task.FromException<HttpResponseMessage>(exception);
+        }
+    }
+
+    private sealed class FailingHttpClientFactory : IHttpClientFactory
+    {
+        public int CreateClientCalls { get; private set; }
+
+        public HttpClient CreateClient(string name)
+        {
+            CreateClientCalls++;
+            throw new InvalidOperationException("The disabled provider must not create an HTTP client.");
         }
     }
 }
