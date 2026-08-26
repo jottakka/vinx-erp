@@ -45,7 +45,7 @@ public partial class AddTelegramNotificationChannel : Migration
                 ADD CONSTRAINT ck_notification_recipient_contacts_channel_address CHECK (
                     (channel = 'whatsapp'
                         AND phone_number IS NOT NULL
-                        AND phone_number ~ '^\\+[1-9][0-9]{6,14}$'
+                        AND phone_number ~ '^\+[1-9][0-9]{6,14}$'
                         AND address IS NULL)
                     OR (channel = 'telegram'
                         AND phone_number IS NULL
@@ -244,7 +244,7 @@ public partial class AddTelegramNotificationChannel : Migration
                 IF p_channel IS NULL
                     OR p_channel NOT IN ('whatsapp', 'telegram')
                     OR p_address IS NULL
-                    OR (p_channel = 'whatsapp' AND p_address !~ '^\\+[1-9][0-9]{6,14}$')
+                    OR (p_channel = 'whatsapp' AND p_address !~ '^\+[1-9][0-9]{6,14}$')
                     OR (p_channel = 'telegram'
                         AND (p_address <> btrim(p_address)
                             OR p_address !~ '^[1-9][0-9]{0,15}$'
@@ -302,6 +302,7 @@ public partial class AddTelegramNotificationChannel : Migration
     protected override void Down(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
+            GRANT CREATE ON SCHEMA notifications TO vinx_notifications_owner;
             SET ROLE vinx_notifications_owner;
             DO $block$
             BEGIN
@@ -504,7 +505,7 @@ public partial class AddTelegramNotificationChannel : Migration
                     RAISE EXCEPTION 'notification actor is required' USING ERRCODE = '42501';
                 END IF;
                 IF p_channel IS DISTINCT FROM 'whatsapp'
-                    OR p_phone_number IS NULL OR p_phone_number !~ '^\\+[1-9][0-9]{6,14}$' THEN
+                    OR p_phone_number IS NULL OR p_phone_number !~ '^\+[1-9][0-9]{6,14}$' THEN
                     RAISE EXCEPTION 'notification contact parameters are invalid' USING ERRCODE = '22023';
                 END IF;
                 IF v_actor_user_id <> p_user_id THEN
@@ -548,13 +549,12 @@ public partial class AddTelegramNotificationChannel : Migration
             ALTER TABLE notifications.notification_recipient_contacts
                 DROP CONSTRAINT ck_notification_recipient_contacts_channel_address,
                 DROP CONSTRAINT notification_recipient_contacts_channel_check,
-                DROP CONSTRAINT notification_recipient_contacts_phone_number_check,
                 DROP COLUMN address,
                 ALTER COLUMN phone_number SET NOT NULL,
                 ADD CONSTRAINT notification_recipient_contacts_channel_check
                     CHECK (channel = 'whatsapp'),
                 ADD CONSTRAINT notification_recipient_contacts_phone_number_check
-                    CHECK (phone_number ~ '^\\+[1-9][0-9]{6,14}$');
+                    CHECK (phone_number ~ '^\+[1-9][0-9]{6,14}$');
             ALTER TABLE notifications.notification_templates
                 DROP CONSTRAINT ck_notification_templates_telegram_text,
                 DROP COLUMN telegram_text,
@@ -570,5 +570,6 @@ public partial class AddTelegramNotificationChannel : Migration
                 ADD CONSTRAINT notification_preferences_channel_check
                     CHECK (channel IN ('whatsapp'));
             RESET ROLE;
+            REVOKE CREATE ON SCHEMA notifications FROM vinx_notifications_owner;
             """);
 }
