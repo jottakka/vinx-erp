@@ -21,6 +21,29 @@ internal sealed record TelegramContactRow(
     bool IsValidated
 );
 
+internal sealed record TelegramInboundActorResolution(
+    string ResolutionState,
+    Guid? UserId,
+    Guid? CompanyId,
+    Guid? MembershipId
+);
+
+internal sealed record TelegramInboundMessageRow(
+    Guid Id,
+    long UpdateId,
+    long ChatId,
+    long MessageId,
+    string TextBody,
+    string Status,
+    string ResolutionState,
+    Guid? ResolvedUserId,
+    Guid? ResolvedCompanyId,
+    Guid? ResolvedMembershipId,
+    DateTimeOffset ResolvedAt,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? CompletedAt
+);
+
 /// <summary>
 /// Semente isolada para o contrato Telegram; a identidade e os dados genéricos
 /// de empresa são criados pela semente de intenção existente.
@@ -169,6 +192,79 @@ internal static class TelegramNotificationSeed
             reader.IsDBNull(1) ? null : reader.GetString(1),
             reader.GetBoolean(2)
         );
+    }
+
+    public static async Task<TelegramInboundActorResolution> ResolveInboundActorAsync(
+        FoundationApiFactory factory,
+        long chatId
+    )
+    {
+        await using var runtime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT resolution_state, user_id, company_id, membership_id FROM notifications.resolve_inbound_telegram_actor(@chat_id)",
+            runtime
+        );
+        command.Parameters.AddWithValue("chat_id", chatId);
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            throw new InvalidOperationException("The Telegram actor resolver returned no result.");
+        }
+
+        var result = new TelegramInboundActorResolution(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetGuid(1),
+            reader.IsDBNull(2) ? null : reader.GetGuid(2),
+            reader.IsDBNull(3) ? null : reader.GetGuid(3)
+        );
+        if (await reader.ReadAsync())
+        {
+            throw new InvalidOperationException("The Telegram actor resolver returned multiple results.");
+        }
+
+        return result;
+    }
+
+    public static async Task<IReadOnlyList<TelegramInboundMessageRow>> ReadInboundMessagesAsync(
+        FoundationApiFactory factory
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT id, update_id, chat_id, message_id, text_body, status, resolution_state,
+                   resolved_user_id, resolved_company_id, resolved_membership_id,
+                   resolved_at, created_at, completed_at
+            FROM notifications.inbound_telegram_messages
+            ORDER BY created_at, id
+            """,
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        var rows = new List<TelegramInboundMessageRow>();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(
+                new TelegramInboundMessageRow(
+                    reader.GetGuid(0),
+                    reader.GetInt64(1),
+                    reader.GetInt64(2),
+                    reader.GetInt64(3),
+                    reader.GetString(4),
+                    reader.GetString(5),
+                    reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetGuid(7),
+                    reader.IsDBNull(8) ? null : reader.GetGuid(8),
+                    reader.IsDBNull(9) ? null : reader.GetGuid(9),
+                    reader.GetFieldValue<DateTimeOffset>(10),
+                    reader.GetFieldValue<DateTimeOffset>(11),
+                    reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12)
+                )
+            );
+        }
+
+        return rows;
     }
 
     public static async Task RevokeMembershipAsync(
