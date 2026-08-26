@@ -556,7 +556,6 @@ export function PermissionsPage({
                   Membros
                 </Typography>
                 <TextField
-                  aria-label="Buscar membro"
                   disabled={!members.data?.ok}
                   label="Buscar membro"
                   onChange={(event) => setMemberSearch(event.target.value)}
