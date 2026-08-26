@@ -6,15 +6,15 @@ import { AgentConversation } from "./agent-conversation";
 import { useAgentConversation } from "./agent-conversation-provider";
 
 export function AgentPage() {
-  const { companyName, openDock } = useAgentConversation();
+  const { access, companyName, openDock } = useAgentConversation();
   const location = useLocation();
   const navigate = useNavigate();
-  const description = companyName
+  const description = access.available
     ? "Cada mensagem é uma consulta independente ao agente da empresa ativa; turnos anteriores não fazem parte do contexto."
-    : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar cada envio; turnos anteriores não fazem parte do contexto.";
-  const processingNotice = companyName
+    : access.message;
+  const processingNotice = access.available
     ? "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado."
-    : "Nenhuma empresa foi selecionada. O servidor solicitará contexto antes de processar o envio.";
+    : access.message;
 
   function backToContext() {
     openDock();
