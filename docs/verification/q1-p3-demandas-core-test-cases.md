@@ -17,4 +17,4 @@ Mapa de verificação da fatia A1 (núcleo backend do módulo Demandas). Provas 
 | 11 | Idempotência: replay equivalente devolve original; payload divergente devolve idempotency_conflict | Integração | RED agendado |
 | 12 | Outbox observável: intents composições pós-commit para assigned/stage_advanced/participant_added com chave ciclo-estável | Integração | RED agendado |
 
-Worker replay idempotency e decisão de aprovação entram nos mapas das fatias worker/approvals.
+Fatias seguintes: aprovação (prepare/bloqueio de entrada em awaiting_approval; confirm claimed/replay encerra; veto reinicia) e worker (avança DUE → depois overdue; eventos idempotentes por chave-gatilho; corte: sem auto-avanço para awaiting_approval). Decisões cobertas pelos pinos unitários da costura (ApprovalCapabilityPolicyPinTests 3/3).

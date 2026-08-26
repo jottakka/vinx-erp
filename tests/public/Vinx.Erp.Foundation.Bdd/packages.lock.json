@@ -1196,6 +1196,7 @@
       "vinx.erp.workerhost": {
         "type": "Project",
         "dependencies": {
+          "Vinx.Erp.Demandas": "[1.0.0, )",
           "Vinx.Erp.Foundation": "[1.0.0, )",
           "Vinx.Erp.Notifications": "[1.0.0, )",
           "WolverineFx.Postgresql": "[6.29.2, )",
