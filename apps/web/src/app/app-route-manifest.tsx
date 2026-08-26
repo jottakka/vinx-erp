@@ -13,6 +13,7 @@ import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import { Skeleton, Stack } from "@mui/material";
 import { lazy, type ReactElement, Suspense } from "react";
 import { AtendimentoPage } from "../features/atendimento/atendimento-page";
+import { DemandasPage } from "../features/demandas/demandas-page";
 import { NotificationsPage } from "../features/notifications/notifications-page";
 import { PaguaiPage } from "../features/paguai/paguai-page";
 import { PeoplePage } from "../features/people/people-page";
@@ -76,6 +77,11 @@ const routePresentation: Record<ProductAppPath, AppRoutePresentation> = {
     appearanceSlot: "gamma",
     icon: ViewKanbanOutlinedIcon,
     render: () => <AtendimentoPage title="Kanban" />,
+  },
+  "/demandas": {
+    appearanceSlot: "beta",
+    icon: ViewKanbanOutlinedIcon,
+    render: () => <DemandasPage />,
   },
   "/paguai": {
     appearanceSlot: "alpha",
