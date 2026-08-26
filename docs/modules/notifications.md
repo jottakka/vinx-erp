@@ -138,9 +138,26 @@ de usuário, empresa ou membership.
 válidos e deduplica por `(chat_id, message_id)`: a mesma combinação de
 `update_id` e corpo retorna `replay`; uma reutilização incompatível retorna
 `conflict`. Nenhum replay atualiza a primeira decisão persistida, inclusive se
-o contato for validado depois. Nesta PR não há endpoint, publicação, fila,
-worker nem função para concluir a linha; `completed` permanece fora do
-contrato até a fatia própria do worker.
+o contato for validado depois.
+
+## Telegram inbound — webhook e outbox (#309)
+
+O ApiHost expõe `POST /foundation/notifications/telegram/webhook` fora dos
+grupos autenticados porque o Telegram autentica a origem por um único header
+`X-Telegram-Bot-Api-Secret-Token`. O segredo é opcional para boot: ausência
+retorna `503`; valor presente fora da gramática do Telegram falha no startup.
+Antes de ler JSON, a rota recusa segredo ausente, errado ou múltiplo com `401`.
+Somente texto de conversa `private`, humano, com `from.id == chat.id`, IDs
+positivos e até 4096 pontos de código chega à admissão; formas incompatíveis
+recebem `200` sem efeito para interromper retry inútil.
+
+O ingress resolve a identidade fechada e, apenas para `created + admitted`,
+publica `InboundTelegramTextReceived(InboundMessageId)` no outbox durável para
+`telegram-inbound`, na mesma transação da evidência. O envelope e seus
+metadados contêm somente o GUID opaco: nunca texto, chat ID, update ID ou
+message ID. Replay é 2xx/no-op; erro antes do commit preserva ausência de linha
+e envelope. Esta PR não instala listener, grant de fila, receipt ou efeito de
+negócio: a fronteira de consumo e conclusão é a PR5.
 
 ## Inbound admissão e identidade (#272 PR1)
 
