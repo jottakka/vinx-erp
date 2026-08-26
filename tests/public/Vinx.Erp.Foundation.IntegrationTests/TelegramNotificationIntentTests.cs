@@ -165,8 +165,15 @@ public sealed class TelegramNotificationIntentTests
         Assert.Empty(await NotificationIntentSeed.ReadNotificationMessagesAsync(factory));
     }
 
-    [Fact]
-    public async Task Telegram_template_constraint_rejects_blank_and_over_limit_text()
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("\t")]
+    [InlineData("\n")]
+    [InlineData("\tapproved")]
+    [InlineData("approved\t")]
+    public async Task Telegram_template_constraint_rejects_btrim_whitespace_only_and_edge_text(
+        string invalidText
+    )
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var seed = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(factory);
@@ -175,14 +182,36 @@ public sealed class TelegramNotificationIntentTests
         await Assert.ThrowsAsync<PostgresException>(() => InsertTemplateAsync(
             administrator,
             seed.CompanyId,
-            "telegram-blank",
-            " "
+            $"telegram-invalid-{Guid.NewGuid():N}",
+            invalidText
         ));
+    }
+
+    [Fact]
+    public async Task Telegram_template_constraint_counts_supplementary_plane_code_points()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(factory);
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        const string supplementaryCharacter = "\U0001F600";
+
+        await InsertTemplateAsync(
+            administrator,
+            seed.CompanyId,
+            "telegram-one-supplementary",
+            supplementaryCharacter
+        );
+        await InsertTemplateAsync(
+            administrator,
+            seed.CompanyId,
+            "telegram-4096-supplementary",
+            string.Concat(Enumerable.Repeat(supplementaryCharacter, 4096))
+        );
         await Assert.ThrowsAsync<PostgresException>(() => InsertTemplateAsync(
             administrator,
             seed.CompanyId,
-            "telegram-over-limit",
-            new string('x', 4097)
+            "telegram-4097-supplementary",
+            string.Concat(Enumerable.Repeat(supplementaryCharacter, 4097))
         ));
     }
 

@@ -82,7 +82,9 @@ confirmação humana. Runbook: `docs/runbooks/whatsapp-outbound.md`.
 
 A Foundation aceita o canal opt-in `telegram` sem alterar a semântica do
 WhatsApp ou do in-app obrigatório. O template aprovado é texto plano de 1 a
-4096 caracteres em `notification_templates.telegram_text`; o contato privado
+4096 pontos de código Unicode em `notification_templates.telegram_text`; não
+pode ficar vazio nem começar ou terminar com U+0020, tabulação, quebra de
+linha, tabulação vertical, form feed ou retorno de carro. O contato privado
 usa `notification_recipient_contacts.address` com chat ID decimal positivo e
 `phone_number` permanece exclusivo do WhatsApp. A função
 `notifications.enqueue_notification_intent` revalida o opt-in e o template no

@@ -289,9 +289,11 @@ tentativa em curso, `vinx_worker`) e `record_provider_event`
 assinatura).
 
 A fatia #307 acrescenta o canal opt-in `telegram` ao contrato compartilhado.
-Templates Telegram guardam somente texto aprovado de 1 a 4096 caracteres;
-contatos privados usam `address` com o chat ID decimal positivo, enquanto
-WhatsApp preserva o telefone E.164 em `phone_number`. A intenção Telegram
+Templates Telegram guardam somente texto aprovado de 1 a 4096 pontos de
+código Unicode, sem vazio ou bordas U+0020, tabulação, quebra de linha,
+tabulação vertical, form feed ou retorno de carro; contatos privados usam
+`address` com o chat ID decimal positivo, enquanto WhatsApp preserva o telefone
+E.164 em `phone_number`. A intenção Telegram
 revalida o opt-in no banco e participa do fan-out transacional com o in-app;
 cada entrega nova publica o mesmo envelope Wolverine opaco, sem texto,
 telefone ou endereço. A validação do chat é externa e administrada até que uma
