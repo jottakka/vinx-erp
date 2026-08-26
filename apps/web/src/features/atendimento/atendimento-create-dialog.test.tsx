@@ -22,7 +22,7 @@ describe("AtendimentoCreateDialog", () => {
           assignmentOptions={[]}
           companyId="11111111-1111-4111-8111-111111111111"
           onClose={() => undefined}
-          onSubmit={async () => undefined}
+          onSubmit={async () => ({ ok: true })}
           open
         />
       </VinxThemeProvider>,
@@ -54,7 +54,10 @@ describe("AtendimentoCreateDialog", () => {
           assignmentOptions={[]}
           companyId="11111111-1111-4111-8111-111111111111"
           onClose={() => undefined}
-          onSubmit={() => create.promise}
+          onSubmit={async () => {
+            await create.promise;
+            return { ok: true };
+          }}
           open
           uploader={{ upload: () => upload.promise }}
         />

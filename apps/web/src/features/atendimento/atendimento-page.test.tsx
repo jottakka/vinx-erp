@@ -15,6 +15,7 @@ import type {
 } from "../auth/session-contract";
 import { SessionProvider } from "../auth/session-provider";
 import { type AtendimentoCard, atendimentoClient } from "./atendimento-client";
+import type { AtendimentoAttachmentUploader } from "./atendimento-create-dialog";
 import { AtendimentoPage } from "./atendimento-page";
 
 const alfaCompanyId = "11111111-1111-4111-8111-111111111111";
@@ -101,11 +102,14 @@ function gatewayFor(getBootstrap = async () => snapshot()): MockSessionGateway {
   };
 }
 
-function renderPage(bootstrap = snapshot()) {
+function renderPage(
+  bootstrap = snapshot(),
+  attachmentUploader?: AtendimentoAttachmentUploader,
+) {
   render(
     <VinxThemeProvider>
       <SessionProvider gateway={gatewayFor(async () => bootstrap)}>
-        <AtendimentoPage />
+        <AtendimentoPage attachmentUploader={attachmentUploader} />
       </SessionProvider>
     </VinxThemeProvider>,
   );
@@ -236,6 +240,67 @@ describe("AtendimentoPage", () => {
         screen.getByRole("button", { name: "Novo atendimento" }),
       ).toBeVisible(),
     );
+  });
+
+  it("keeps the create dialog data after a real client creation failure", async () => {
+    const user = userEvent.setup();
+    const attachmentFileId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
+    vi.spyOn(atendimentoClient, "assignmentOptions").mockResolvedValue([
+      {
+        displayName: "Maria Silva",
+        membershipId: "88888888-8888-4888-8888-888888888888",
+      },
+    ]);
+    const create = vi.spyOn(atendimentoClient, "create").mockResolvedValue({
+      code: "atendimento_unavailable",
+      ok: false,
+    } as Awaited<ReturnType<typeof atendimentoClient.create>>);
+    const uploader: AtendimentoAttachmentUploader = {
+      upload: vi.fn().mockResolvedValue({
+        attachmentFileId,
+        ok: true,
+      }),
+    };
+
+    renderPage(snapshot(), uploader);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Novo atendimento" }),
+    );
+    await user.type(screen.getByLabelText("Título"), "Falha preservada");
+    await user.type(screen.getByLabelText("Descrição"), "Tente novamente");
+    await user.click(
+      screen.getByRole("combobox", { name: "Pessoas envolvidas" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Maria Silva" }),
+    );
+    await user.keyboard("{Escape}");
+    await user.upload(
+      screen.getByTestId("atendimento-attachment-picker"),
+      new File(["documento"], "evidencia.pdf", { type: "application/pdf" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Criar cartão" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create).toHaveBeenCalledWith(
+      alfaCompanyId,
+      "Falha preservada",
+      "Tente novamente",
+      {
+        attachmentFileId,
+        participantMembershipIds: ["88888888-8888-4888-8888-888888888888"],
+      },
+    );
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.getByLabelText("Título")).toHaveValue("Falha preservada");
+    expect(screen.getByLabelText("Descrição")).toHaveValue("Tente novamente");
+    expect(screen.getByRole("button", { name: "evidencia.pdf" })).toBeVisible();
+    expect(
+      screen.getByText("Não foi possível concluir a ação. Tente novamente."),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Criar cartão" })).toBeEnabled();
   });
 
   it("keeps an optional document visibly selected in the create dialog", async () => {

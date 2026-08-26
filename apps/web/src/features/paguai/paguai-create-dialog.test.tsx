@@ -40,6 +40,7 @@ describe("PaguaiCreateDialog", () => {
   it("blocks creation when the selected invoice failed and explains the recovery", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
+    let uploadAttempts = 0;
     render(
       <VinxThemeProvider>
         <PaguaiCreateDialog
@@ -50,10 +51,21 @@ describe("PaguaiCreateDialog", () => {
           onClose={() => undefined}
           onSubmit={onSubmit}
           open
-          uploader={async () => ({
-            error: { kind: "network" as const, message: "Falha" },
-            ok: false as const,
-          })}
+          uploader={async (file) => {
+            uploadAttempts += 1;
+            return uploadAttempts === 1
+              ? {
+                  error: { kind: "network" as const, message: "Falha" },
+                  ok: false as const,
+                }
+              : {
+                  fileId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                  fileName: file.name,
+                  mimeType: file.type,
+                  ok: true as const,
+                  sizeBytes: file.size,
+                };
+          }}
         />
       </VinxThemeProvider>,
     );
@@ -86,6 +98,9 @@ describe("PaguaiCreateDialog", () => {
         "O anexo selecionado não foi enviado. Remova-o e selecione o arquivo novamente antes de criar a solicitação.",
       ),
     ).toBeVisible();
+    const form = screen.getByLabelText("Título").closest("form");
+    if (!form) throw new Error("Expected create form");
+    fireEvent.submit(form);
     expect(onSubmit).not.toHaveBeenCalled();
     expect(
       screen.getByRole("button", { name: "Criar rascunho" }),
@@ -93,5 +108,25 @@ describe("PaguaiCreateDialog", () => {
     expect(
       screen.getByRole("button", { name: "Remover fatura.pdf" }),
     ).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "Remover fatura.pdf" }),
+    );
+    await user.upload(
+      screen.getByLabelText(
+        "Fatura ou documento da solicitação: anexar arquivo",
+      ),
+      new File(["fatura nova"], "fatura-nova.pdf", {
+        type: "application/pdf",
+      }),
+    );
+    expect(await screen.findByText("Anexado")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invoiceFileId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      }),
+    );
   });
 });

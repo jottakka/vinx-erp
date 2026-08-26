@@ -36,7 +36,10 @@ import {
   type AtendimentoColumn,
   atendimentoClient,
 } from "./atendimento-client";
-import { AtendimentoCreateDialog } from "./atendimento-create-dialog";
+import {
+  type AtendimentoAttachmentUploader,
+  AtendimentoCreateDialog,
+} from "./atendimento-create-dialog";
 
 const columns: readonly {
   id: AtendimentoColumn;
@@ -63,7 +66,13 @@ function messageFor(code: string) {
   return "Não foi possível concluir a ação. Tente novamente.";
 }
 
-export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
+export function AtendimentoPage({
+  attachmentUploader,
+  title = "Atendimento",
+}: {
+  attachmentUploader?: AtendimentoAttachmentUploader;
+  title?: string;
+}) {
   const { bootstrap } = useSession();
   const companies = useMemo(
     () =>
@@ -192,8 +201,12 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     description: string;
     attachmentFileId?: string;
     participantMembershipIds: readonly string[];
-  }) {
-    if (!companyId || loading) return;
+  }): Promise<{ ok: true } | { ok: false; message: string }> {
+    if (!companyId || loading)
+      return {
+        message: "Não foi possível criar o atendimento. Tente novamente.",
+        ok: false,
+      };
     const result =
       values.attachmentFileId || values.participantMembershipIds.length
         ? await atendimentoClient.create(
@@ -211,10 +224,10 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             values.description,
           );
     if (!result.ok) {
-      setError(messageFor(result.code));
-      return;
+      return { message: messageFor(result.code), ok: false };
     }
     setCards((current) => [...current, result.card]);
+    return { ok: true };
   }
 
   async function move(card: AtendimentoCard, column: AtendimentoColumn) {
@@ -576,6 +589,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
 
       <AtendimentoCreateDialog
         assignmentOptions={createOptions}
+        uploader={attachmentUploader}
         companyId={companyId}
         onClose={() => setCreateOpen(false)}
         onSubmit={(values) => {

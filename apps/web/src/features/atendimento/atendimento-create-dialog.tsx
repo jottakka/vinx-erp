@@ -34,15 +34,18 @@ type Values = z.output<typeof schema> & {
   attachmentFileId?: string;
   participantMembershipIds: readonly string[];
 };
+export type AtendimentoCreateSubmitResult =
+  | { ok: true }
+  | { ok: false; message: string };
 type Props = {
   assignmentOptions: readonly AtendimentoAssignmentOption[];
   companyId: string;
   onClose: () => void;
-  onSubmit: (values: Values) => Promise<void>;
+  onSubmit: (values: Values) => Promise<AtendimentoCreateSubmitResult>;
   open: boolean;
   uploader?: AtendimentoAttachmentUploader;
 };
-type AtendimentoAttachmentUploader = ReturnType<
+export type AtendimentoAttachmentUploader = ReturnType<
   typeof createAtendimentoAttachmentUploader
 >;
 const defaultUploader = createAtendimentoAttachmentUploader();
@@ -121,12 +124,17 @@ export function AtendimentoCreateDialog({
     }
     if (epoch !== epochRef.current) return;
     setPhase("creating");
-    await onSubmit({
+    const result = await onSubmit({
       ...values,
       attachmentFileId,
       participantMembershipIds: [...new Set(participantMembershipIds)].sort(),
     });
     if (epoch !== epochRef.current) return;
+    if (!result.ok) {
+      setPhase("idle");
+      setError(result.message);
+      return;
+    }
     setPhase("idle");
     reset();
     onClose();
