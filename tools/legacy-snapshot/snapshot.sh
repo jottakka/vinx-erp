@@ -37,11 +37,17 @@ for bin in pg_dump psql; do
 done
 
 digest_of() {
-  if command -v shasum >/dev/null; then
-    shasum -a 256 "$1" | awk '{print $1}'
-  else
-    openssl dgst -sha256 -r "$1" | awk '{print $1}'
+  # Cadeia de fallbacks; ambientes sem utilitário sha256 são rejeitados.
+  local d=""
+  if command -v shasum >/dev/null 2>&1; then
+    d=$(shasum -a 256 "$1" | awk '{print $1}')
+  elif command -v sha256sum >/dev/null 2>&1; then
+    d=$(sha256sum "$1" | awk '{print $1}')
+  elif command -v openssl >/dev/null 2>&1; then
+    d=$(openssl dgst -sha256 -r "$1" | awk '{print $1}')
   fi
+  [[ -n "$d" ]] || fail "nenhum utilitário SHA-256 encontrado no ambiente"
+  printf '%s' "$d"
 }
 
 dest_parent=$(dirname "$1")
@@ -57,6 +63,8 @@ if repo_root=$(git rev-parse --show-toplevel 2>/dev/null); then
       ;;
   esac
 fi
+[[ "$dest_abs" =~ [[:space:]\'\"] ]] &&
+  fail "diretório de saída não pode conter espaços ou aspas: $dest_abs"
 [[ -e "$dest_abs" ]] && fail "destino já existe (bundles são imutáveis): $dest_abs"
 
 TMP_DIR=$(mktemp -d)
@@ -86,25 +94,27 @@ main() {
 
 
   # Sessão única REPEATABLE READ READ ONLY grava todos os agregados ordenados.
-  {
-    echo "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;"
-    echo "SELECT set_config('vinx.snapshot.schema', :'schema', true);"
-    cat <<CONSISTENT_SQL
-\\o "$dest_abs/json/server.json"
+  # Delimitador QUOTED: o corpo contém dollar-quoting plpgsql ($fn$) que JAMAIS
+  # pode passar pela expansão do shell; caminhos entram por token __DIR__ e o
+  # destino é validado sem espaços/aspas (\o não interpreta aspas).
+  cat > "$TMP_DIR/consistent.tpl" <<'CONSISTENT_SQL'
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SELECT set_config('vinx.snapshot.schema', :'schema', true);
+\o __DIR__/json/server.json
 SELECT json_build_object('current_database', current_database(), 'server_version', current_setting('server_version'))::text;
 
-\\o "$dest_abs/json/extensions.json"
+\o __DIR__/json/extensions.json
 SELECT COALESCE(json_agg(t ORDER BY t.extname), '[]'::json)::text
 FROM (SELECT extname, extversion FROM pg_extension) t;
 
-\\o "$dest_abs/json/roles.json"
+\o __DIR__/json/roles.json
 SELECT COALESCE(json_agg(t ORDER BY t.rolname), '[]'::json)::text
 FROM (
   SELECT rolname, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolcanlogin
   FROM pg_roles WHERE rolname NOT LIKE 'pg\_%'
 ) t;
 
-\\o "$dest_abs/json/grants.json"
+\o __DIR__/json/grants.json
 SELECT COALESCE(json_agg(t ORDER BY t.table_name, t.grantee, t.privilege_type), '[]'::json)::text
 FROM (
   SELECT grantee, table_name, privilege_type
@@ -112,54 +122,67 @@ FROM (
   WHERE table_schema = :'schema'
 ) t;
 
-\\o "$dest_abs/json/sequences.json"
+\o __DIR__/json/sequences.json
 SELECT COALESCE(json_agg(t ORDER BY t.name), '[]'::json)::text
 FROM (
   SELECT schemaname || '.' || sequencename AS name, start_value, min_value, max_value, increment_by, last_value
   FROM pg_sequences WHERE schemaname = :'schema'
 ) t;
 
-\\o "$dest_abs/json/policies.json"
+\o __DIR__/json/policies.json
 SELECT COALESCE(json_agg(t ORDER BY t.tablename, t.policyname), '[]'::json)::text
 FROM (
   SELECT tablename, policyname, permissive, roles, cmd
   FROM pg_policies WHERE schemaname = :'schema'
 ) t;
 
-\\o "$dest_abs/json/cron_jobs.json"
-SELECT CASE
-  WHEN to_regclass('cron.job') IS NULL THEN json_build_object('pg_cron_exposed', false)::text
-  ELSE (
-    SELECT json_build_object('pg_cron_exposed', true, 'jobs',
-      COALESCE(json_agg(j ORDER BY j.jobid), '[]'::json)::text)
-    FROM (SELECT jobid, schedule, command, database, username FROM cron.job) j
-  )
-END;
+\o __DIR__/json/cron_jobs.json
+-- Condicional no CLIENTE: o planner resolve relações mesmo em ramos não tomados.
+SELECT to_regclass('cron.job') IS NOT NULL AS has_cron \gset
+\if :has_cron
+SELECT json_build_object('pg_cron_exposed', true, 'jobs',
+  COALESCE(json_agg(j ORDER BY j.jobid), '[]'::json)::text)::text
+FROM (SELECT jobid, schedule, command, database, username FROM cron.job) j;
+\else
+SELECT json_build_object('pg_cron_exposed', false)::text;
+\endif
 
-\\o "$dest_abs/json/row_counts.json"
--- Descoberta e contagens na MESMA transação repeatable read (função temporária,
--- escrita permitida apenas no namespace temp durante sessão READ ONLY).
-CREATE TEMP FUNCTION vinx_snapshot_count_rows(p_table name) RETURNS bigint
-LANGUAGE plpgsql AS $fn$
-DECLARE n bigint;
-BEGIN
-  EXECUTE format('SELECT count(*)::bigint FROM %I.%I',
-                 current_setting('vinx.snapshot.schema'), p_table) INTO n;
-  RETURN n;
-END
-$fn$;
-SELECT COALESCE(
-         json_object_agg(t, n ORDER BY t),
-         '{}'::json)::text AS row_counts
-FROM (
-  SELECT c.relname AS t, vinx_snapshot_count_rows(c.relname) AS n
-  FROM pg_class c JOIN pg_namespace cn ON cn.oid = c.relnamespace
-  WHERE cn.nspname = current_setting('vinx.snapshot.schema') AND c.relkind = 'r'
-) q WHERE t IS NOT NULL;
-DROP FUNCTION vinx_snapshot_count_rows(name);
+\o __DIR__/json/.counts.gen
+-- Descoberta das contagens na MESMA transação repeatable read; os comandos
+-- gerados (ordenados) rodam em seguida na própria sessão via \gexec.
+SELECT format('SELECT %L AS t, count(*)::bigint AS n FROM %I.%I', c.relname, :'schema', c.relname)
+FROM pg_class c JOIN pg_namespace cn ON cn.oid = c.relnamespace
+WHERE cn.nspname = :'schema' AND c.relkind = 'r'
+ORDER BY c.relname;
+\o __DIR__/json/.counts.raw
+\gexec
+
+\o __DIR__/json/.session-done
+SELECT 'ok';
+\o
 COMMIT;
 CONSISTENT_SQL
-  } | psql_conn -qAt -v schema="$SCHEMA" -f -
+  while IFS= read -r line; do
+    printf '%s\n' "${line//__DIR__/$dest_abs}"
+  done < "$TMP_DIR/consistent.tpl" > "$TMP_DIR/consistent.sql"
+  psql_conn -qAt -v schema="$SCHEMA" -f "$TMP_DIR/consistent.sql"
+  [[ -f "$dest_abs/json/.session-done" ]] || fail "sessão consistente não concluiu"
+  rm -f "$dest_abs/json/.session-done"
+
+  # Converte o fluxo bruto t|n (mesma sessão consistente) em JSON ordenado.
+  local raw="$dest_abs/json/.counts.raw" gen="$dest_abs/json/.counts.gen"
+  [[ -f "$raw" && -f "$gen" ]] || fail "fluxo de contagens ausente da sessão consistente"
+  {
+    printf '{'
+    local sep="" line t n
+    while IFS='|' read -r t n; do
+      [[ -n "$sep" ]] && printf ','
+      printf '"%s":%s' "$t" "$n"
+      sep=1
+    done < "$raw"
+    printf '}'
+  } > "$dest_abs/json/row_counts.json"
+  rm -f "$raw" "$gen"
 
   # Dump único do schema: DDL, políticas, funções, triggers, extensões.
   db_pg_dump --schema-only --no-owner --no-privileges \
@@ -245,7 +268,9 @@ now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   : > manifest.sha256
   find sql json commands -type f -print | LC_ALL=C sort |
     while IFS= read -r f; do
-      printf '%s  %s\n' "$(digest_of "$f")" "$f" >> manifest.sha256
+      d=$(digest_of "$f") || fail "falha ao calcular digest de $f"
+      [[ -n "$d" ]] || fail "digest vazio para $f"
+      printf '%s  %s\n' "$d" "$f" >> manifest.sha256
     done
 )
 
