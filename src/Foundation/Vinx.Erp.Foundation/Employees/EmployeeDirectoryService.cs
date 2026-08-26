@@ -197,7 +197,7 @@ public sealed class EmployeeDirectoryService(
         );
     }
 
-    private async Task<bool> AuditDeniedAsync(        ActorContext actor,
+    private async Task<bool> AuditDeniedAsync(ActorContext actor,
         Guid companyId,
         CancellationToken cancellationToken
     )
