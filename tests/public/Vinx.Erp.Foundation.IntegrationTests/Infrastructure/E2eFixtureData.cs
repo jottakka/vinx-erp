@@ -327,7 +327,7 @@ public static class E2eFixtureSeeder
             "paguai.draft.create", "paguai.draft.read");
         AddGrants(rows, GamaCompanyId, GamaRestrictedRoleId, profile.Clara.UserId, 17, 42,
             "service_desk.ticket.read_queue");
-        AddGrants(rows, AlfaCompanyId, AlfaOperationsRoleId, profile.Maria.UserId, 18, 43,
+        AddGrants(rows, AlfaCompanyId, AlfaOperationsRoleId, profile.Maria.UserId, 18, 65,
             "ai.read");
         return rows.ToArray();
     }

@@ -360,13 +360,14 @@ test("Scenario: agent chat uploads, removes, and sends the remaining attachment 
 
 test("Scenario: agent access blocks chat without ai.read", async ({ page }) => {
   await enterHome(page);
-  await installBootstrapAgentReadOverride(page, { agentReadCapability: false });
-  await page.reload();
 
   let runRequests = 0;
   page.on("request", (request) => {
     if (request.url().includes("/agent/runs")) runRequests += 1;
   });
+
+  await installBootstrapAgentReadOverride(page, { agentReadCapability: false });
+  await page.reload();
 
   await page
     .getByRole("button", {
@@ -386,7 +387,6 @@ test("Scenario: agent access blocks chat without ai.read", async ({ page }) => {
   );
   await expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
   await expect(dock).not.toContainText("capability_denied");
-  expect(runRequests).toBe(0);
 
   await page.setViewportSize({ height: 844, width: 320 });
   await expect
@@ -401,4 +401,5 @@ test("Scenario: agent access blocks chat without ai.read", async ({ page }) => {
     .include("#vinx-agent-dock")
     .analyze();
   expect(agentScan.violations).toEqual([]);
+  expect(runRequests).toBe(0);
 });
