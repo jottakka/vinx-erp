@@ -457,9 +457,14 @@ public sealed class RealE2eFixtureHostTests
                 using var attempt = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
                 await client.ConnectAsync(host, port, attempt.Token);
             }
-            catch (Exception exception) when (exception is SocketException or OperationCanceledException)
+            catch (SocketException)
             {
+                // Only a refused connection proves the port is closed.
                 return;
+            }
+            catch (OperationCanceledException)
+            {
+                // A slow or stalled connect is inconclusive; keep polling until the deadline.
             }
 
             await Task.Delay(100);

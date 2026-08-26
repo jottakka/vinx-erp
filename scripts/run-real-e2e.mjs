@@ -8,6 +8,7 @@ const WEB_HOST = "127.0.0.1";
 const WEB_PORTS = { clara: 4175, maria: 4174 };
 const WEB_PORT = WEB_PORTS.maria;
 const BROWSER_URL = `http://${WEB_HOST}:${WEB_PORT}`;
+const SINGLE_READY_KEYS = ["E2E_API_ORIGIN", "E2E_SINGLE_READY"];
 const SHARED_READY_KEYS = [
   "E2E_API_ORIGIN_MARIA",
   "E2E_API_ORIGIN_CLARA",
@@ -60,6 +61,29 @@ export function parseReadyOrigin(line) {
   }
 
   return match[1];
+}
+
+export function parseSingleReadiness(lines) {
+  if (!Array.isArray(lines) || lines.length !== SINGLE_READY_KEYS.length) {
+    throw new LauncherError("invalid_host_readiness");
+  }
+
+  for (const [index, line] of lines.entries()) {
+    const separator = typeof line === "string" ? line.indexOf("=") : -1;
+    if (
+      separator <= 0 ||
+      line.indexOf("=", separator + 1) !== -1 ||
+      line.slice(0, separator) !== SINGLE_READY_KEYS[index]
+    ) {
+      throw new LauncherError("invalid_host_readiness");
+    }
+  }
+
+  if (lines[1] !== "E2E_SINGLE_READY=1") {
+    throw new LauncherError("invalid_host_readiness");
+  }
+
+  return parseReadyOrigin(lines[0]);
 }
 
 export function parseSharedReadiness(lines) {
@@ -136,43 +160,7 @@ function checkPortAvailable(host, port) {
   });
 }
 
-function waitForHostOrigin(stream, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const lines = createInterface({ crlfDelay: Infinity, input: stream });
-    let done = false;
-    const finish = (error, origin) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timeout);
-      lines.off("close", onClose);
-      lines.off("line", onLine);
-      lines.close();
-      if (error) reject(error);
-      else {
-        stream.resume();
-        resolve(origin);
-      }
-    };
-    const onClose = () => finish(new LauncherError("host_exit"));
-    const onLine = (line) => {
-      if (!line.startsWith("E2E_API_ORIGIN=")) return;
-      try {
-        finish(undefined, parseReadyOrigin(line));
-      } catch (error) {
-        finish(normalizeError(error, "invalid_host_readiness"));
-      }
-    };
-    const timeout = setTimeout(
-      () => finish(new LauncherError("host_readiness_timeout")),
-      timeoutMs,
-    );
-
-    lines.once("close", onClose);
-    lines.on("line", onLine);
-  });
-}
-
-function waitForSharedReadiness(stream, timeoutMs) {
+function waitForReadinessBlock(stream, timeoutMs, keys, parseBlock) {
   return new Promise((resolve, reject) => {
     const reader = createInterface({ crlfDelay: Infinity, input: stream });
     const lines = [];
@@ -193,21 +181,21 @@ function waitForSharedReadiness(stream, timeoutMs) {
     };
     const onClose = () => finish(new LauncherError("host_exit"));
     const onLine = (line) => {
-      if (lines.length === 0 && !line.startsWith("E2E_API_ORIGIN_MARIA=")) {
+      if (lines.length === 0 && !line.startsWith(`${keys[0]}=`)) {
         if (line.startsWith("E2E_"))
           finish(new LauncherError("invalid_host_readiness"));
         return;
       }
-      const expectedKey = SHARED_READY_KEYS[lines.length];
+      const expectedKey = keys[lines.length];
       if (!expectedKey || !line.startsWith(`${expectedKey}=`)) {
         finish(new LauncherError("invalid_host_readiness"));
         return;
       }
 
       lines.push(line);
-      if (lines.length !== SHARED_READY_KEYS.length) return;
+      if (lines.length !== keys.length) return;
       try {
-        finish(undefined, parseSharedReadiness(lines));
+        finish(undefined, parseBlock(lines));
       } catch (error) {
         finish(normalizeError(error, "invalid_host_readiness"));
       }
@@ -220,6 +208,24 @@ function waitForSharedReadiness(stream, timeoutMs) {
     reader.once("close", onClose);
     reader.on("line", onLine);
   });
+}
+
+function waitForSingleReadiness(stream, timeoutMs) {
+  return waitForReadinessBlock(
+    stream,
+    timeoutMs,
+    SINGLE_READY_KEYS,
+    parseSingleReadiness,
+  );
+}
+
+function waitForSharedReadiness(stream, timeoutMs) {
+  return waitForReadinessBlock(
+    stream,
+    timeoutMs,
+    SHARED_READY_KEYS,
+    parseSharedReadiness,
+  );
 }
 
 function waitForHostFailure(stream) {
@@ -489,7 +495,7 @@ async function runSingleSupervised(profile, deps, signals, children) {
   event = await Promise.race([
     readyEventWithHostOutcome(
       () =>
-        waitForHostOrigin(
+        waitForSingleReadiness(
           children.host.child.stdout,
           deps.readinessTimeoutMs,
         ),
@@ -666,12 +672,18 @@ function waitForOutcome(supervisor, timeoutMs) {
 
 async function stopChild(supervisor, signal, deps) {
   if (!Number.isInteger(supervisor?.child?.pid)) return;
-  const requireCleanExit = (gracefulShutdownRequested) => {
+  // A launcher-initiated shutdown is clean when the child exited with code 0
+  // or died from exactly the signal we forwarded to its process group: the
+  // `dotnet run` wrapper may legitimately terminate by that signal even when
+  // the underlying host shut down cleanly. Any other outcome is a cleanup
+  // failure, and `undefined` keeps the fully strict check for SIGKILL
+  // escalation outcomes.
+  const requireCleanExit = (forwardedSignal) => {
     if (
       supervisor.requireCleanExit &&
-      (!gracefulShutdownRequested ||
-        supervisor.exitCode !== 0 ||
-        supervisor.exitSignal !== null)
+      (forwardedSignal === undefined ||
+        (supervisor.exitCode !== 0 &&
+          supervisor.exitSignal !== forwardedSignal))
     ) {
       throw new LauncherError("child_cleanup_failed");
     }
@@ -688,11 +700,12 @@ async function stopChild(supervisor, signal, deps) {
   };
 
   if (!send(signal)) {
-    requireCleanExit(false);
+    // The process group is already gone; the primary failure (if any) is
+    // preserved exactly like the already-finished branch above.
     return;
   }
   if (await waitForOutcome(supervisor, deps.shutdownTimeoutMs)) {
-    requireCleanExit(signal !== "SIGKILL");
+    requireCleanExit(signal === "SIGKILL" ? undefined : signal);
     return;
   }
   if (signal === "SIGKILL" || !send("SIGKILL")) {
@@ -701,7 +714,7 @@ async function stopChild(supervisor, signal, deps) {
   if (!(await waitForOutcome(supervisor, 5_000))) {
     throw new LauncherError("child_cleanup_failed");
   }
-  requireCleanExit(false);
+  requireCleanExit(undefined);
 }
 
 async function stopChildren(children, signal, deps) {

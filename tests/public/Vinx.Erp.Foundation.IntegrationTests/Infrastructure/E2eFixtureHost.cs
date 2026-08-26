@@ -133,6 +133,19 @@ public sealed class E2eFixtureHostOutput : IDisposable
             $"E2E_API_ORIGIN={origin.GetLeftPart(UriPartial.Authority)}");
     }
 
+    public Task WriteSingleReadinessAsync(Uri origin)
+    {
+        ArgumentNullException.ThrowIfNull(origin);
+        return WriteLineAsync(
+            _standardOutput,
+            string.Join(
+                Environment.NewLine,
+                [
+                    $"E2E_API_ORIGIN={origin.GetLeftPart(UriPartial.Authority)}",
+                    "E2E_SINGLE_READY=1",
+                ]));
+    }
+
     public Task WriteSharedReadinessAsync(E2eSharedFixtureReadiness readiness)
     {
         ArgumentNullException.ThrowIfNull(readiness);
@@ -238,6 +251,7 @@ public sealed class E2eFixtureHostOutput : IDisposable
 public sealed class E2eFixtureHost : IAsyncDisposable
 {
     private static readonly TimeSpan ReadbackTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan ReadbackStageTimeout = TimeSpan.FromSeconds(10);
     private readonly HttpClient _client;
     private readonly object _disposeLock = new();
     private readonly FoundationApiFactory _factory;
@@ -318,11 +332,21 @@ public sealed class E2eFixtureHost : IAsyncDisposable
             using var readbackCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken);
             readbackCancellation.CancelAfter(ReadbackTimeout);
-            await VerifyReadbackAsync(
-                client,
-                context.Profile,
-                context.Receipt,
-                readbackCancellation.Token);
+            try
+            {
+                await VerifyReadbackAsync(
+                    client,
+                    context.Profile,
+                    context.Receipt,
+                    readbackCancellation.Token);
+            }
+            catch (OperationCanceledException exception) when (
+                !cancellationToken.IsCancellationRequested)
+            {
+                throw new InvalidOperationException(
+                    $"The E2E readback sequence exceeded its overall budget of {ReadbackTimeout.TotalSeconds:0}s.",
+                    exception);
+            }
 
             return new E2eFixtureHost(context, fixtureAccess, client, origin);
         }
@@ -422,7 +446,10 @@ public sealed class E2eFixtureHost : IAsyncDisposable
         E2eDatasetReceipt receipt,
         CancellationToken cancellationToken)
     {
-        using (var health = await client.GetAsync("/health", cancellationToken))
+        using (var health = await RunReadbackStageAsync(
+            "health",
+            token => client.GetAsync("/health", token),
+            cancellationToken))
         {
             if (health.StatusCode != HttpStatusCode.OK)
             {
@@ -432,6 +459,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
 
         using (var bootstrap = await ReadSuccessJsonAsync(
             client,
+            "bootstrap",
             "/foundation/bootstrap",
             cancellationToken))
         {
@@ -474,6 +502,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
 
         using (var employees = await ReadSuccessJsonAsync(
             client,
+            "employees",
             $"/foundation/companies/{receipt.AlfaCompanyId}/employees",
             cancellationToken))
         {
@@ -489,6 +518,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
 
         using (var paguai = await ReadSuccessJsonAsync(
             client,
+            "paguai",
             $"/paguai/requests?companyId={receipt.BetaCompanyId}",
             cancellationToken))
         {
@@ -511,6 +541,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
 
         using (var atendimento = await ReadSuccessJsonAsync(
             client,
+            "atendimento",
             $"/atendimento/cards?companyId={receipt.AlfaCompanyId}",
             cancellationToken))
         {
@@ -529,6 +560,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
 
         using (var inbox = await ReadSuccessJsonAsync(
             client,
+            "notifications",
             "/notifications/inbox?limit=10",
             cancellationToken))
         {
@@ -547,10 +579,12 @@ public sealed class E2eFixtureHost : IAsyncDisposable
 
         await RequireCapabilityDeniedAsync(
             client,
+            "denials",
             $"/foundation/companies/{receipt.GamaCompanyId}/employees",
             cancellationToken);
         await RequireCapabilityDeniedAsync(
             client,
+            "denials",
             $"/paguai/requests?companyId={receipt.GamaCompanyId}",
             cancellationToken);
     }
@@ -562,6 +596,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
     {
         using (var employees = await ReadSuccessJsonAsync(
             client,
+            "employees",
             $"/foundation/companies/{receipt.AlfaCompanyId}/employees",
             cancellationToken))
         {
@@ -577,6 +612,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
 
         using var atendimento = await ReadSuccessJsonAsync(
             client,
+            "atendimento",
             $"/atendimento/cards?companyId={receipt.AlfaCompanyId}",
             cancellationToken);
         var cards = atendimento.RootElement.EnumerateArray().ToArray();
@@ -599,6 +635,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
     {
         using var paguai = await ReadSuccessJsonAsync(
             client,
+            "paguai",
             $"/paguai/requests?companyId={receipt.BetaCompanyId}",
             cancellationToken);
         var drafts = paguai.RootElement.EnumerateArray().ToArray();
@@ -625,6 +662,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
     {
         using (var atendimento = await ReadSuccessJsonAsync(
             client,
+            "atendimento",
             $"/atendimento/cards?companyId={receipt.GamaCompanyId}",
             cancellationToken))
         {
@@ -646,6 +684,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
 
         using var inbox = await ReadSuccessJsonAsync(
             client,
+            "notifications",
             "/notifications/inbox?limit=10",
             cancellationToken);
         var notifications = inbox.RootElement.GetProperty("items").EnumerateArray().ToArray();
@@ -674,36 +713,74 @@ public sealed class E2eFixtureHost : IAsyncDisposable
             || string.Equals(href, "/atendimento", StringComparison.Ordinal);
     }
 
-    private static async Task<JsonDocument> ReadSuccessJsonAsync(
-        HttpClient client,
-        string requestUri,
+    /// <summary>
+    /// Applies a per-request budget to one readback stage so a slow early call cannot
+    /// silently starve later stages, and names the stage in the failure when it is exceeded.
+    /// Cancellation requested by the caller is propagated unchanged for clean-cancellation handling.
+    /// </summary>
+    private static async Task<T> RunReadbackStageAsync<T>(
+        string stage,
+        Func<CancellationToken, Task<T>> stageOperation,
         CancellationToken cancellationToken)
     {
-        using var response = await client.GetAsync(requestUri, cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        using var stageCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        stageCancellation.CancelAfter(ReadbackStageTimeout);
+        try
         {
-            throw new InvalidOperationException("E2E HTTP readback returned an unexpected status.");
+            return await stageOperation(stageCancellation.Token);
         }
-
-        await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
+        catch (OperationCanceledException exception) when (
+            stageCancellation.IsCancellationRequested
+            && !cancellationToken.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"The E2E readback stage '{stage}' exceeded its per-request budget of {ReadbackStageTimeout.TotalSeconds:0}s.",
+                exception);
+        }
     }
 
-    private static async Task RequireCapabilityDeniedAsync(
+    private static Task<JsonDocument> ReadSuccessJsonAsync(
         HttpClient client,
+        string stage,
         string requestUri,
-        CancellationToken cancellationToken)
-    {
-        using var response = await client.GetAsync(requestUri, cancellationToken);
-        if (response.StatusCode != HttpStatusCode.Forbidden
-            || !string.Equals(
-                await response.Content.ReadAsStringAsync(cancellationToken),
-                "{\"code\":\"capability_denied\"}",
-                StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("E2E authorization readback failed.");
-        }
-    }
+        CancellationToken cancellationToken) =>
+        RunReadbackStageAsync(
+            stage,
+            async token =>
+            {
+                using var response = await client.GetAsync(requestUri, token);
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new InvalidOperationException("E2E HTTP readback returned an unexpected status.");
+                }
+
+                await using var content = await response.Content.ReadAsStreamAsync(token);
+                return await JsonDocument.ParseAsync(content, cancellationToken: token);
+            },
+            cancellationToken);
+
+    private static Task RequireCapabilityDeniedAsync(
+        HttpClient client,
+        string stage,
+        string requestUri,
+        CancellationToken cancellationToken) =>
+        RunReadbackStageAsync(
+            stage,
+            async token =>
+            {
+                using var response = await client.GetAsync(requestUri, token);
+                if (response.StatusCode != HttpStatusCode.Forbidden
+                    || !string.Equals(
+                        await response.Content.ReadAsStringAsync(token),
+                        "{\"code\":\"capability_denied\"}",
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("E2E authorization readback failed.");
+                }
+
+                return true;
+            },
+            cancellationToken);
 
     private static async Task<Exception> DisposeStartFailureAsync(
         E2eFixtureFactoryContext? context,

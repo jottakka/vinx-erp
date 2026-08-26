@@ -30,7 +30,7 @@ static async Task<int> RunAsync(string[] arguments)
                 host = singleHost;
                 if (!shutdown.IsCancellationRequested)
                 {
-                    await output.WriteReadinessAsync(singleHost.Origin);
+                    await output.WriteSingleReadinessAsync(singleHost.Origin);
                 }
 
                 break;

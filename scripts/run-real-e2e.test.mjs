@@ -12,6 +12,7 @@ import {
   parseLauncherArgs,
   parseReadyOrigin,
   parseSharedReadiness,
+  parseSingleReadiness,
   runLauncher,
 } from "./run-real-e2e.mjs";
 
@@ -66,6 +67,8 @@ function startDirectE2eHost(profile) {
     readySettled = true;
     operation();
   };
+  let readinessOrigin;
+  let readinessSentinelSeen = false;
   child.stdout.on("data", (chunk) => {
     standardOutput += chunk;
     let newlineIndex;
@@ -74,12 +77,18 @@ function startDirectE2eHost(profile) {
         .slice(parsedOutputLength, newlineIndex)
         .replace(/\r$/, "");
       parsedOutputLength = newlineIndex + 1;
-      if (!line.startsWith("E2E_API_ORIGIN=")) continue;
-      try {
-        const origin = parseReadyOrigin(line);
-        settleReady(() => resolveReady(origin));
-      } catch (error) {
-        settleReady(() => rejectReady(error));
+      if (line.startsWith("E2E_API_ORIGIN=")) {
+        try {
+          readinessOrigin = parseReadyOrigin(line);
+        } catch (error) {
+          settleReady(() => rejectReady(error));
+        }
+      } else if (line === "E2E_SINGLE_READY=1") {
+        readinessSentinelSeen = true;
+      }
+
+      if (readinessOrigin !== undefined && readinessSentinelSeen) {
+        settleReady(() => resolveReady(readinessOrigin));
       }
     }
   });
@@ -137,6 +146,10 @@ function createFakeChild(label, pid) {
   return child;
 }
 
+function singleReadinessLines(origin = "http://127.0.0.1:54321") {
+  return `E2E_API_ORIGIN=${origin}\nE2E_SINGLE_READY=1\n`;
+}
+
 function createHarness(overrides = {}) {
   const {
     onHostSpawn,
@@ -150,24 +163,6 @@ function createHarness(overrides = {}) {
   const events = [];
   const spawns = [];
   const output = [];
-  let resolveShutdown;
-  const shutdown = new Promise((resolve) => {
-    resolveShutdown = resolve;
-  });
-  const signalWaiter = () => {
-    const onInterrupt = () => resolveShutdown("SIGINT");
-    const onTerminate = () => resolveShutdown("SIGTERM");
-    signalTarget.on("SIGINT", onInterrupt);
-    signalTarget.on("SIGTERM", onTerminate);
-    return {
-      dispose: () => {
-        signalTarget.off("SIGINT", onInterrupt);
-        signalTarget.off("SIGTERM", onTerminate);
-      },
-      promise: shutdown,
-    };
-  };
-  let outputLines = 0;
   const recordReady = (lines) => {
     output.push(...lines);
     setImmediate(onReady ?? (() => signalTarget.emit("SIGINT")));
@@ -193,7 +188,7 @@ function createHarness(overrides = {}) {
         child.emit("spawn");
         if (child === host) {
           (onHostSpawn ?? (() =>
-            host.stdout.write("E2E_API_ORIGIN=http://127.0.0.1:54321\n")))();
+            host.stdout.write(singleReadinessLines())))();
         } else {
           onViteSpawn?.();
         }
@@ -205,7 +200,6 @@ function createHarness(overrides = {}) {
       events.push(`http:${url}`);
     },
     signalTarget,
-    waitForShutdownSignal: signalWaiter,
     killProcessGroup: (child, signal) => {
       events.push(`kill:${child.label}:${signal}`);
       setTimeout(() => {
@@ -218,13 +212,6 @@ function createHarness(overrides = {}) {
         `E2E_BROWSER_URL=${browserUrl}`,
         `E2E_PROFILE=${profile}`,
       ]),
-    writeLine: (line) => {
-      output.push(line);
-      outputLines += 1;
-      if (outputLines === 2) {
-        setImmediate(onReady ?? (() => signalTarget.emit("SIGINT")));
-      }
-    },
     ...dependencyOverrides,
   };
 
@@ -460,6 +447,34 @@ test("parseSharedReadiness accepts exactly one complete ordered shared block", (
   });
 });
 
+test("parseSingleReadiness accepts exactly the origin and terminal sentinel block", () => {
+  assert.equal(
+    parseSingleReadiness([
+      "E2E_API_ORIGIN=http://127.0.0.1:54321",
+      "E2E_SINGLE_READY=1",
+    ]),
+    "http://127.0.0.1:54321",
+  );
+});
+
+test("parseSingleReadiness rejects incomplete, out-of-order, and unsafe blocks", () => {
+  for (const lines of [
+    [],
+    ["E2E_API_ORIGIN=http://127.0.0.1:54321"],
+    ["E2E_API_ORIGIN=http://127.0.0.1:54321", "E2E_SINGLE_READY=1", "extra"],
+    ["E2E_API_ORIGIN=http://127.0.0.1:54321", "E2E_SINGLE_READY=0"],
+    ["E2E_API_ORIGIN=http://127.0.0.1:54321", "E2E_SHARED_READY=1"],
+    ["E2E_SINGLE_READY=1", "E2E_API_ORIGIN=http://127.0.0.1:54321"],
+    ["E2E_API_ORIGIN=http://example.test:54321", "E2E_SINGLE_READY=1"],
+    "E2E_API_ORIGIN=http://127.0.0.1:54321",
+  ]) {
+    assert.throws(
+      () => parseSingleReadiness(lines),
+      /E2E launcher failed: invalid_host_readiness/,
+    );
+  }
+});
+
 test("shared launcher ignores host build preamble before its contiguous readiness block", async () => {
   const harness = createSharedHarness({
     onHostSpawn: () => {
@@ -471,6 +486,63 @@ test("shared launcher ignores host build preamble before its contiguous readines
 
   assert.equal(await runLauncher(harness.deps), 0);
   assert.equal(harness.spawns.length, 3);
+});
+
+test("single launcher ignores host build preamble before its contiguous readiness block", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.write("Determining projects to restore...\n");
+      harness.host.stdout.write("Build succeeded. 0 Error(s)\n");
+      harness.host.stdout.write(singleReadinessLines());
+    },
+  });
+
+  assert.equal(await runLauncher(harness.deps), 0);
+  assert.equal(harness.spawns.length, 2);
+});
+
+test("single launcher rejects an unexpected E2E line before its readiness block", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.write("E2E_DB_HOST=127.0.0.1\n");
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /E2E launcher failed: invalid_host_readiness/,
+  );
+  assert.equal(harness.spawns.length, 1);
+});
+
+test("single launcher rejects noise between the origin and the readiness sentinel", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.write("E2E_API_ORIGIN=http://127.0.0.1:54321\n");
+      harness.host.stdout.write("noise between readiness lines\n");
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /E2E launcher failed: invalid_host_readiness/,
+  );
+  assert.equal(harness.spawns.length, 1);
+});
+
+test("single launcher times out when the origin is not followed by the sentinel", async () => {
+  const harness = createHarness({
+    readinessTimeoutMs: 5,
+    onHostSpawn: () => {
+      harness.host.stdout.write("E2E_API_ORIGIN=http://127.0.0.1:54321\n");
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /E2E launcher failed: host_readiness_timeout/,
+  );
+  assert.equal(harness.spawns.length, 1);
 });
 
 test("launcher preserves a typed host failure while the process exits shortly after it", async () => {
@@ -657,15 +729,89 @@ test("shared launcher preserves an already-exited host as the primary failure", 
   );
 });
 
-test("shared launcher accepts only a graceful zero host exit for SIGINT and SIGTERM", async () => {
+test("shared launcher accepts a zero-code or forwarded-signal host exit for SIGINT and SIGTERM", async () => {
   for (const signal of ["SIGINT", "SIGTERM"]) {
-    const harness = createSharedHarness({
+    for (const hostExit of ["zero-code", "forwarded-signal"]) {
+      const harness = createSharedHarness({
+        onReady: () => harness.signalTarget.emit(signal),
+        killProcessGroup: (child, forwardedSignal) => {
+          harness.events.push(`kill:${child.label}:${forwardedSignal}`);
+          setTimeout(() => {
+            harness.events.push(`exit:${child.label}`);
+            child.finish(
+              child === harness.host && hostExit === "zero-code" ? 0 : null,
+              child === harness.host
+                ? (hostExit === "forwarded-signal" ? forwardedSignal : null)
+                : forwardedSignal,
+            );
+          }, 1);
+        },
+      });
+
+      assert.equal(await runLauncher(harness.deps), 0);
+      assert.ok(harness.events.includes(`kill:host:${signal}`));
+    }
+  }
+});
+
+test("shared launcher rejects a host exit by a signal other than the forwarded one", async () => {
+  const harness = createSharedHarness({
+    killProcessGroup: (child, forwardedSignal) => {
+      harness.events.push(`kill:${child.label}:${forwardedSignal}`);
+      setTimeout(() => {
+        harness.events.push(`exit:${child.label}`);
+        child.finish(
+          null,
+          child === harness.host ? "SIGHUP" : forwardedSignal,
+        );
+      }, 1);
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: child_cleanup_failed$/,
+  );
+});
+
+test("runLauncher accepts a host terminated by the forwarded shutdown signal", async () => {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    const harness = createHarness({
       onReady: () => harness.signalTarget.emit(signal),
+      killProcessGroup: (child, forwardedSignal) => {
+        harness.events.push(`kill:${child.label}:${forwardedSignal}`);
+        setTimeout(() => {
+          harness.events.push(`exit:${child.label}`);
+          child.finish(null, forwardedSignal);
+        }, 1);
+      },
     });
 
-    assert.equal(await runLauncher(harness.deps), 0);
+    assert.equal(await withTestTimeout(runLauncher(harness.deps)), 0);
     assert.ok(harness.events.includes(`kill:host:${signal}`));
   }
+});
+
+test("runLauncher preserves the primary failure when the host group already vanished", async () => {
+  const harness = createHarness({
+    readinessTimeoutMs: 5,
+    spawnProcess: (command, args, options) => {
+      harness.spawns.push({ command, args, options });
+      queueMicrotask(() => harness.host.emit("spawn"));
+      return harness.host;
+    },
+    killProcessGroup: () => {
+      const error = new Error("process group does not exist");
+      error.code = "ESRCH";
+      throw error;
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /E2E launcher failed: host_readiness_timeout/,
+  );
+  assert.equal(harness.spawns.length, 1);
 });
 
 test("shared launcher rejects a SIGKILL host exit with no exit code", async () => {
@@ -727,7 +873,7 @@ test("runLauncher rejects invalid host readiness before starting Vite", async ()
       queueMicrotask(() => {
         harness.host.emit("spawn");
         harness.host.stdout.write(
-          "E2E_API_ORIGIN=http://example.test:54321\n",
+          singleReadinessLines("http://example.test:54321"),
         );
       });
       return harness.host;
@@ -903,7 +1049,6 @@ test("runLauncher keeps signal handlers through cleanup and absorbs repeats", as
       });
     },
   });
-  delete harness.deps.waitForShutdownSignal;
 
   await withTestTimeout(runLauncher(harness.deps), 100);
 
@@ -938,7 +1083,7 @@ test("runLauncher maps a Vite error before spawn without leaking details", async
       queueMicrotask(() => {
         if (child === harness.host) {
           child.emit("spawn");
-          child.stdout.write("E2E_API_ORIGIN=http://127.0.0.1:54321\n");
+          child.stdout.write(singleReadinessLines());
         } else {
           child.emit("error", new Error("/sensitive/vite/path"));
         }
@@ -1102,10 +1247,17 @@ test(
     }
 
     const output = direct.output();
-    assert.equal(output.standardOutput, `E2E_API_ORIGIN=${apiOrigin}\n`);
+    assert.equal(
+      output.standardOutput,
+      `E2E_API_ORIGIN=${apiOrigin}\nE2E_SINGLE_READY=1\n`,
+    );
     assert.equal(output.standardError, "");
     assert.equal(
       output.standardOutput.match(/E2E_API_ORIGIN=/g)?.length,
+      1,
+    );
+    assert.equal(
+      output.standardOutput.match(/E2E_SINGLE_READY=/g)?.length,
       1,
     );
     assert.equal(
