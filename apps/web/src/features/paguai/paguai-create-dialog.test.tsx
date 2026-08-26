@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
@@ -239,6 +245,103 @@ describe("PaguaiCreateDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ invoiceFileId: null }),
     );
+  });
+
+  it("does not submit while an attachment upload is still in flight", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <VinxThemeProvider>
+        <PaguaiCreateDialog
+          company={{
+            companyId: "11111111-1111-4111-8111-111111111111",
+            companyName: "Alfa",
+          }}
+          onClose={() => undefined}
+          onSubmit={onSubmit}
+          open
+          uploader={() => new Promise(() => {})}
+        />
+      </VinxThemeProvider>,
+    );
+
+    await user.upload(
+      screen.getByLabelText(
+        "Fatura ou documento da solicitação: anexar arquivo",
+      ),
+      new File(["fatura"], "lenta.pdf", { type: "application/pdf" }),
+    );
+    expect(await screen.findByText("Enviando")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Anexando…" })).toBeDisabled();
+
+    await user.type(screen.getByLabelText("Título"), "Nova solicitação");
+    await user.type(screen.getByLabelText("Descrição"), "Descrição");
+    await user.type(screen.getByLabelText("Valor (R$)"), "1.250,00");
+    const dueDate = document.querySelector('input[name="dueDate"]');
+    if (!dueDate) throw new Error("Expected due date input");
+    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+    await user.type(screen.getByLabelText("Quem receberá"), "Fornecedor");
+    await user.click(
+      screen.getByRole("combobox", { name: "Comprovante de pagamento" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Obrigatório" }),
+    );
+
+    // Enter dispara o submit nativo do formulário mesmo com o botão travado.
+    const form = screen.getByLabelText("Título").closest("form");
+    if (!form) throw new Error("Expected create form");
+    fireEvent.submit(form);
+    // A validação do react-hook-form é assíncrona: esvazia as microtasks para
+    // conferir o resultado já depois da cadeia de submit.
+    await act(async () => {});
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("clears an amount format error as soon as the user edits the amount field", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <VinxThemeProvider>
+        <PaguaiCreateDialog
+          company={{
+            companyId: "11111111-1111-4111-8111-111111111111",
+            companyName: "Alfa",
+          }}
+          onClose={() => undefined}
+          onSubmit={onSubmit}
+          open
+        />
+      </VinxThemeProvider>,
+    );
+
+    await user.type(screen.getByLabelText("Título"), "Nova solicitação");
+    await user.type(screen.getByLabelText("Descrição"), "Descrição");
+    await user.type(screen.getByLabelText("Valor (R$)"), "1.2,34");
+    const dueDate = document.querySelector('input[name="dueDate"]');
+    if (!dueDate) throw new Error("Expected due date input");
+    fireEvent.change(dueDate, { target: { value: "2026-09-01" } });
+    await user.type(screen.getByLabelText("Quem receberá"), "Fornecedor");
+    await user.click(
+      screen.getByRole("combobox", { name: "Comprovante de pagamento" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Obrigatório" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
+    expect(
+      await screen.findByText(
+        "Informe um valor válido em reais (ex.: 1.250,00).",
+      ),
+    ).toBeVisible();
+
+    await user.type(screen.getByLabelText("Valor (R$)"), "0");
+
+    expect(
+      screen.queryByText("Informe um valor válido em reais (ex.: 1.250,00)."),
+    ).not.toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("clears an amount format error after a corrected valid resubmission", async () => {

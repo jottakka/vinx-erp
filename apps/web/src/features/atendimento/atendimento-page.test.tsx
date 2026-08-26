@@ -498,6 +498,52 @@ describe("AtendimentoPage", () => {
     expect(move.mock.calls[0]?.[2]).toBe("em_andamento");
   });
 
+  it("ignores a second move for the same card while the first is pending", async () => {
+    const user = userEvent.setup();
+    const result =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockReturnValue(result.promise);
+
+    renderPage();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+    expect(
+      screen.getByRole("button", { name: "Alterar status" }),
+    ).toBeDisabled();
+
+    // Segunda via (arrastar e soltar) enquanto o primeiro move está pendente.
+    const card = screen
+      .getByText(alfaCard.title)
+      .closest(".MuiCard-root") as HTMLElement;
+    const targetColumn = screen.getByRole("heading", {
+      name: "Em andamento",
+    }).parentElement as HTMLElement;
+    act(() => {
+      fireEvent.dragStart(card);
+      fireEvent.drop(targetColumn);
+    });
+
+    expect(move).toHaveBeenCalledTimes(1);
+
+    result.resolve({
+      card: { ...alfaCard, column: "em_andamento" },
+      ok: true,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Alterar status" }),
+      ).toBeEnabled(),
+    );
+    expect(move).toHaveBeenCalledTimes(1);
+  });
+
   it("anchors each card menu to its trigger and preserves Escape close", async () => {
     const user = userEvent.setup();
     vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
@@ -703,6 +749,11 @@ describe("AtendimentoPage", () => {
       screen.getByRole("button", { name: "Confirmar atribuição" }),
     );
     await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText(
+        "O cartão foi atualizado enquanto você atuava. Verifique o estado atual da fila.",
+      ),
+    ).toBeVisible();
     await user.click(
       screen.getByRole("button", { name: "Confirmar atribuição" }),
     );

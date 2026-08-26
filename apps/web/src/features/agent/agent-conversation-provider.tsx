@@ -108,7 +108,7 @@ type AgentConversationContextValue = {
   removeAttachment: (localId: string) => void;
   resetConversation: () => void;
   selectAttachments: (files: readonly File[]) => void;
-  sendMessage: (text: string) => void;
+  sendMessage: (text: string) => boolean;
   status: AgentStatus;
 };
 
@@ -155,7 +155,7 @@ const inertValue: AgentConversationContextValue = {
   removeAttachment: () => {},
   resetConversation: () => {},
   selectAttachments: () => {},
-  sendMessage: () => {},
+  sendMessage: () => false,
   status: "idle",
 };
 
@@ -432,9 +432,9 @@ function ScopedAgentConversationProvider({
   );
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string): boolean => {
       if (!access.available) {
-        return;
+        return false;
       }
       const normalized = text.trim();
       const selectedAttachments = attachmentSnapshot.current;
@@ -445,13 +445,14 @@ function ScopedAgentConversationProvider({
       );
 
       // Trava síncrona: um envio por vez, exatamente um requestId novo.
+      // Devolve false para o compositor manter o rascunho digitado.
       if (
         !companyId ||
         !normalized ||
         inFlight.current ||
         attachmentIds.length !== selectedAttachments.length
       ) {
-        return;
+        return false;
       }
 
       const controller = new AbortController();
@@ -515,6 +516,7 @@ function ScopedAgentConversationProvider({
             setStatus("idle");
           }
         });
+      return true;
     },
     [access.available, companyId, replaceAttachments],
   );

@@ -111,8 +111,9 @@ export function AgentConversation() {
     : access.message;
 
   function submitFromInput() {
-    sendMessage(draft);
-    setDraft("");
+    // Só descarta o rascunho quando o envio foi aceito; bloqueios (anexo em
+    // curso, envio em andamento, empresa ausente) preservam o texto digitado.
+    if (sendMessage(draft)) setDraft("");
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {

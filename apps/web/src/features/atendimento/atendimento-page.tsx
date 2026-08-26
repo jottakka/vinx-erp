@@ -68,7 +68,7 @@ type CardMenuState = {
 
 function messageFor(code: string) {
   if (code === "integrity_conflict")
-    return "O cartão foi atualizado por outra pessoa. A fila foi sincronizada.";
+    return "O cartão foi atualizado enquanto você atuava. Verifique o estado atual da fila.";
   if (code === "capability_denied" || code === "membership_required")
     return "Sua sessão não tem permissão para esta ação nesta empresa.";
   return "Não foi possível concluir a ação. Tente novamente.";
@@ -126,10 +126,14 @@ export function AtendimentoPage({
   const [cancelling, setCancelling] = useState(false);
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<AtendimentoColumn | null>(null);
+  const [movingCardIdList, setMovingCardIdList] = useState<readonly string[]>(
+    [],
+  );
   const assignmentEpoch = useRef(0);
   const assignmentAbort = useRef<AbortController | null>(null);
   const assigningRef = useRef(false);
   const cancellingRef = useRef(false);
+  const movingCardIds = useRef(new Set<string>());
 
   const createCompanies = useMemo(
     () =>
@@ -257,11 +261,21 @@ export function AtendimentoPage({
 
   async function move(card: AtendimentoCard, column: AtendimentoColumn) {
     if (card.column === column || card.column === "cancelado") return;
-    const result = await atendimentoClient.move(card.companyId, card, column);
-    if (!result.ok) return recover(result.code, result.current);
-    setCards((current) =>
-      current.map((item) => (item.id === card.id ? result.card : item)),
-    );
+    // Trava por cartão: ignora um segundo move (menu ou arraste) até o
+    // primeiro assentar, no mesmo padrão de assign/cancel.
+    if (movingCardIds.current.has(card.id)) return;
+    movingCardIds.current.add(card.id);
+    setMovingCardIdList([...movingCardIds.current]);
+    try {
+      const result = await atendimentoClient.move(card.companyId, card, column);
+      if (!result.ok) return recover(result.code, result.current);
+      setCards((current) =>
+        current.map((item) => (item.id === card.id ? result.card : item)),
+      );
+    } finally {
+      movingCardIds.current.delete(card.id);
+      setMovingCardIdList([...movingCardIds.current]);
+    }
   }
 
   async function assign(card: AtendimentoCard) {
@@ -501,131 +515,131 @@ export function AtendimentoPage({
               <Stack spacing={1.25}>
                 {visibleCards
                   .filter((card) => card.column === column.id)
-                  .map((card) => (
-                    <Card
-                      key={card.id}
-                      draggable={
-                        canEditCard(card) && card.column !== "cancelado"
-                      }
-                      onDragEnd={() => setDraggedCardId(null)}
-                      onDragStart={() => setDraggedCardId(card.id)}
-                      sx={{
-                        cursor:
-                          canEditCard(card) && card.column !== "cancelado"
-                            ? "grab"
-                            : "default",
-                        "&:active": {
-                          cursor:
-                            canEditCard(card) && card.column !== "cancelado"
-                              ? "grabbing"
-                              : "default",
-                        },
-                      }}
-                      variant="outlined"
-                    >
-                      <CardContent sx={{ pb: 1 }}>
-                        <Stack
-                          direction="row"
-                          spacing={1}
-                          sx={{ alignItems: "flex-start" }}
-                        >
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Typography variant="subtitle1">
-                              {card.title}
-                            </Typography>
-                            <Typography color="text.secondary">
-                              {card.description}
-                            </Typography>
-                            <Box sx={{ mt: 1 }}>
-                              <CompanyIdentity
-                                companyId={card.companyId}
-                                companyName={
-                                  sessionCompanies.find(
-                                    (company) =>
-                                      company.companyId === card.companyId,
-                                  )?.companyName ?? "Empresa autorizada"
-                                }
-                              />
+                  .map((card) => {
+                    const moveLocked = movingCardIdList.includes(card.id);
+                    const cardMovable =
+                      canEditCard(card) &&
+                      card.column !== "cancelado" &&
+                      !moveLocked;
+                    return (
+                      <Card
+                        key={card.id}
+                        draggable={cardMovable}
+                        onDragEnd={() => setDraggedCardId(null)}
+                        onDragStart={() => setDraggedCardId(card.id)}
+                        sx={{
+                          cursor: cardMovable ? "grab" : "default",
+                          "&:active": {
+                            cursor: cardMovable ? "grabbing" : "default",
+                          },
+                        }}
+                        variant="outlined"
+                      >
+                        <CardContent sx={{ pb: 1 }}>
+                          <Stack
+                            direction="row"
+                            spacing={1}
+                            sx={{ alignItems: "flex-start" }}
+                          >
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="subtitle1">
+                                {card.title}
+                              </Typography>
+                              <Typography color="text.secondary">
+                                {card.description}
+                              </Typography>
+                              <Box sx={{ mt: 1 }}>
+                                <CompanyIdentity
+                                  companyId={card.companyId}
+                                  companyName={
+                                    sessionCompanies.find(
+                                      (company) =>
+                                        company.companyId === card.companyId,
+                                    )?.companyName ?? "Empresa autorizada"
+                                  }
+                                />
+                              </Box>
                             </Box>
-                          </Box>
-                          {canEditCard(card) && card.column !== "cancelado" ? (
-                            <DragIndicatorOutlinedIcon
-                              aria-hidden
-                              color="action"
-                              fontSize="small"
-                            />
-                          ) : null}
-                        </Stack>
-                        <Stack
-                          direction="row"
-                          spacing={0.75}
-                          sx={{ flexWrap: "wrap", mt: 1 }}
-                        >
-                          <Chip
-                            color={
-                              columns.find((item) => item.id === card.column)
-                                ?.tone
-                            }
-                            label={columnLabel(card.column)}
-                            size="small"
-                            variant="outlined"
-                          />
-                          {card.assigneeMembershipId ? (
+                            {cardMovable ? (
+                              <DragIndicatorOutlinedIcon
+                                aria-hidden
+                                color="action"
+                                fontSize="small"
+                              />
+                            ) : null}
+                          </Stack>
+                          <Stack
+                            direction="row"
+                            spacing={0.75}
+                            sx={{ flexWrap: "wrap", mt: 1 }}
+                          >
                             <Chip
-                              color="primary"
-                              label="Responsável atribuído"
+                              color={
+                                columns.find((item) => item.id === card.column)
+                                  ?.tone
+                              }
+                              label={columnLabel(card.column)}
                               size="small"
                               variant="outlined"
                             />
-                          ) : null}
-                        </Stack>
-                      </CardContent>
-                      <CardActions
-                        sx={{
-                          alignItems: "center",
-                          flexWrap: "wrap",
-                          gap: 0.5,
-                          "& > :not(style) ~ :not(style)": { ml: 0 },
-                        }}
-                      >
-                        <Button
-                          onClick={() => setViewingCard(card)}
-                          size="small"
-                          startIcon={<VisibilityOutlinedIcon />}
+                            {card.assigneeMembershipId ? (
+                              <Chip
+                                color="primary"
+                                label="Responsável atribuído"
+                                size="small"
+                                variant="outlined"
+                              />
+                            ) : null}
+                          </Stack>
+                        </CardContent>
+                        <CardActions
+                          sx={{
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            gap: 0.5,
+                            "& > :not(style) ~ :not(style)": { ml: 0 },
+                          }}
                         >
-                          Visualizar
-                        </Button>
-                        {canEditCard(card) && card.column !== "cancelado" ? (
                           <Button
-                            onClick={(event) =>
-                              setStatusMenu({
-                                anchorEl: event.currentTarget,
-                                card,
-                              })
-                            }
+                            onClick={() => setViewingCard(card)}
                             size="small"
+                            startIcon={<VisibilityOutlinedIcon />}
                           >
-                            Alterar status
+                            Visualizar
                           </Button>
-                        ) : null}
-                        {(canAssignCard(card) || canEditCard(card)) &&
-                        card.column !== "cancelado" ? (
-                          <IconButton
-                            aria-label="Mais ações"
-                            onClick={(event) =>
-                              setActionsMenu({
-                                anchorEl: event.currentTarget,
-                                card,
-                              })
-                            }
-                            size="small"
-                          >
-                            <MoreVertOutlinedIcon />
-                          </IconButton>
-                        ) : null}
-                      </CardActions>
-                    </Card>
-                  ))}
+                          {canEditCard(card) && card.column !== "cancelado" ? (
+                            <Button
+                              disabled={moveLocked}
+                              onClick={(event) =>
+                                setStatusMenu({
+                                  anchorEl: event.currentTarget,
+                                  card,
+                                })
+                              }
+                              size="small"
+                            >
+                              Alterar status
+                            </Button>
+                          ) : null}
+                          {(canAssignCard(card) || canEditCard(card)) &&
+                          card.column !== "cancelado" ? (
+                            <IconButton
+                              aria-label="Mais ações"
+                              onClick={(event) =>
+                                setActionsMenu({
+                                  anchorEl: event.currentTarget,
+                                  card,
+                                })
+                              }
+                              size="small"
+                            >
+                              <MoreVertOutlinedIcon />
+                            </IconButton>
+                          ) : null}
+                        </CardActions>
+                      </Card>
+                    );
+                  })}
                 {visibleCards.filter((card) => card.column === column.id)
                   .length === 0 ? (
                   <Typography color="text.secondary" variant="body2">

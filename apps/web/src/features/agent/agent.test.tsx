@@ -1141,6 +1141,32 @@ describe("agent workspace", () => {
     resolveToken(antiforgeryTokenResponse());
   });
 
+  it("keeps the typed text when Enter is pressed while an attachment is still uploading", async () => {
+    let resolveToken: (response: Response) => void = () => {};
+    const token = new Promise<Response>((resolve) => (resolveToken = resolve));
+    const fetchSpy = attachmentFetch([], { at: 1, response: token });
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
+    const dock = await openDockAndSelectCompany(user);
+
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("lento.pdf"),
+    );
+    await waitFor(() => expect(dock.getByText("Enviando")).toBeVisible());
+
+    const composer = dock.getByLabelText("Mensagem para o agente");
+    await user.type(composer, "resuma o anexo quando terminar");
+    await user.keyboard("{Enter}");
+
+    expect(composer).toHaveValue("resuma o anexo quando terminar");
+    expect(dock.queryByText("resuma o anexo quando terminar")).toBeNull();
+    expect(runCalls(fetchSpy)).toHaveLength(0);
+
+    resolveToken(antiforgeryTokenResponse());
+  });
+
   it("sends three ready IDs in order after rejecting a fourth and clears the warning", async () => {
     const fileIds = [
       "44444444-4444-4444-8444-444444444444",
@@ -1259,9 +1285,18 @@ describe("agent workspace", () => {
       "../auth/mock-session-fixtures"
     );
     snapshot = createBootstrapSnapshot(mockSessionProfiles.maria);
+    // O escopo da conversa só reseta quando a identidade/empresa realmente
+    // muda: renovar o membershipId da Alfa é uma mudança real de escopo.
     const nextScope = {
       ...snapshot,
-      companies: [...snapshot.companies].reverse(),
+      companies: snapshot.companies.map((company) =>
+        company.companyId === alfaCompanyId
+          ? {
+              ...company,
+              membershipId: "88888888-8888-4888-8888-888888888888",
+            }
+          : company,
+      ),
     };
     let resolveToken: (response: Response) => void = () => {};
     const token = new Promise<Response>((resolve) => (resolveToken = resolve));

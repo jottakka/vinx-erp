@@ -115,7 +115,7 @@ export function PaguaiCreateDialog({
   }
 
   function submit(values: PaguaiFormValues) {
-    if (hasFailedAttachment || locked) return;
+    if (isUploading || hasFailedAttachment || locked) return;
     const amount = amountFromReais(values.amountReais);
     if (amount === null) {
       setAmountError("Informe um valor válido em reais (ex.: 1.250,00).");
@@ -180,7 +180,11 @@ export function PaguaiCreateDialog({
             label="Valor (R$)"
             placeholder="1.250,00"
             sx={{ minWidth: 0 }}
-            {...form.register("amountReais")}
+            {...form.register("amountReais", {
+              // O erro de formato só vale para o valor submetido: editar o
+              // campo já o descarta, sem esperar um novo envio válido.
+              onChange: () => setAmountError(null),
+            })}
           />
           <TextField
             disabled={locked}
