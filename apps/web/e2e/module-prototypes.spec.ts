@@ -1,6 +1,10 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
-import { installBffSession, signIn } from "./support/bff-session";
+import {
+  installBffSession,
+  installBootstrapAgentReadOverride,
+  signIn,
+} from "./support/bff-session";
 
 test.beforeEach(async ({ page }) => {
   await installBffSession(page);
@@ -355,8 +359,9 @@ test("Scenario: agent chat uploads, removes, and sends the remaining attachment 
 });
 
 test("Scenario: agent access blocks chat without ai.read", async ({ page }) => {
-  await installBffSession(page, { agentReadCapability: false });
   await enterHome(page);
+  await installBootstrapAgentReadOverride(page, { agentReadCapability: false });
+  await page.reload();
 
   let runRequests = 0;
   page.on("request", (request) => {

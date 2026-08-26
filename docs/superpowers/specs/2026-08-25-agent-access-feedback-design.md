@@ -87,7 +87,10 @@ tooltip e o nome acessível do gatilho antecipam o estado.
 - Playwright prova o estado bloqueado no dock, ausência de POST, acessibilidade
   axe e ausência de overflow em viewport estreita.
 - O cenário Playwright autorizado recebe `ai.read` explicitamente na fixture;
-  a capability não é concedida por migration ou produção.
+  o grant existe somente no fixture determinístico `E2eFixtureSeeder` para
+  Maria em Alfa, e não é concedido por migration ou produção. O teste
+  `SeedAsync_creates_the_rich_multi_company_dataset_atomically` confirma o
+  dataset; produção, grants reais e catálogo canônico ficam intocados.
 - Inspeção manual registra screenshots desktop e estreita do estado bloqueado.
 
 ## Linha de base conhecida

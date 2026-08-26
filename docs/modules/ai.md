@@ -241,7 +241,12 @@ descobrível. Essa verificação é somente preflight de UX: o endpoint revalida
 membership e capability server-side a cada envio, e uma negação tardia vira
 texto amigável sem expor reason codes. A capability não é concedida por
 migration nem automaticamente em produção; o fixture E2E pode registrá-la
-explicitamente para os cenários autorizados.
+explicitamente para os cenários autorizados. Esse grant é exclusivamente
+determinístico de teste (`E2eFixtureSeeder`), para Maria em Alfa; não altera
+produção, migrations, grants reais nem o catálogo. O teste
+`SeedAsync_creates_the_rich_multi_company_dataset_atomically` fixa essa
+evidência, enquanto `POST /agent/runs` continua revalidando a autorização no
+servidor.
 
 ## Ownership
 

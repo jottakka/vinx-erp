@@ -240,6 +240,13 @@ git commit -m "fix(agent): gate chat with actionable access feedback"
 
 ### Task 3: Playwright, documentação e gate da implementação
 
+**Decisão registrada (2026-08-25):** o único `ai.read` adicional é o grant do
+`E2eFixtureSeeder` para Maria em Alfa. Ele cria o caminho autorizado
+determinístico dos testes E2E; não altera produção, migrations, grants reais
+nem catálogo. O override Playwright substitui somente o bootstrap já
+autenticado para representar a ausência de capability. Em todos os casos,
+`POST /agent/runs` preserva a autoridade server-side.
+
 **Files:**
 - Modify: `apps/web/e2e/support/bff-session.ts`
 - Modify: `apps/web/e2e/module-prototypes.spec.ts`

@@ -35,10 +35,10 @@ const snapshot = {
 } as const;
 
 type BffSessionOptions = {
-  agentReadCapability?: boolean;
+  agentReadCapability: boolean;
 };
 
-function sessionSnapshot({ agentReadCapability = true }: BffSessionOptions) {
+function sessionSnapshot({ agentReadCapability }: BffSessionOptions) {
   if (agentReadCapability) return snapshot;
 
   return {
@@ -52,18 +52,14 @@ function sessionSnapshot({ agentReadCapability = true }: BffSessionOptions) {
   };
 }
 
-export async function installBffSession(
-  page: Page,
-  options: BffSessionOptions = {},
-) {
+export async function installBffSession(page: Page) {
   let authenticated = false;
-  const currentSnapshot = sessionSnapshot(options);
 
   await page.route("**/foundation/bootstrap", async (route) => {
     await route.fulfill(
       authenticated
         ? {
-            body: JSON.stringify(currentSnapshot),
+            body: JSON.stringify(snapshot),
             contentType: "application/json",
             status: 200,
           }
@@ -107,6 +103,26 @@ export async function installBffSession(
     }
 
     await route.fallback();
+  });
+}
+
+/**
+ * Substitui somente a resposta do bootstrap depois que o cenário já autenticou
+ * a sessão. Assim, testes podem simular a projeção de capability sem alterar
+ * a rota de login, antiforgery ou qualquer autorização server-side.
+ */
+export async function installBootstrapAgentReadOverride(
+  page: Page,
+  options: BffSessionOptions,
+) {
+  const overriddenSnapshot = sessionSnapshot(options);
+
+  await page.route("**/foundation/bootstrap", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify(overriddenSnapshot),
+      contentType: "application/json",
+      status: 200,
+    });
   });
 }
 
