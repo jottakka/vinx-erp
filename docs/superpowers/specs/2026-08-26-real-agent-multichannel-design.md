@@ -2,9 +2,8 @@
 
 ## Estado
 
-Desenho aprovado em conversa quanto ao objetivo, à entrega em uma única PR e
-ao uso direto da API OpenCode Go. Este arquivo aguarda a revisão final do
-responsável antes do plano de implementação.
+Desenho aprovado pelo responsável quanto ao objetivo, à entrega em uma única
+PR e ao núcleo agnóstico de provider dentro do protocolo OpenAI-compatible.
 
 ## Objetivo
 
@@ -15,15 +14,20 @@ solicitação financeira sem confirmação humana autenticada no Web/BFF.
 
 ## Decisões obrigatórias
 
-- A aplicação chama a API remota OpenCode Go diretamente. Harness, serviço web
-  do Harness, OpenCode CLI e subprocessos de provider não participam do runtime.
-- O provider é `openai_compatible`, com base
-  `https://opencode.ai/zen/go/v1` e modelo
+- O núcleo conhece somente o protocolo `openai_compatible`: endpoint, modelo,
+  host allow-listed, limites e modalidades pertencem ao perfil server-side.
+  Não existe classe, interface ou regra de domínio específica de OpenCode.
+- O primeiro perfil real e o smoke autorizado usam diretamente OpenCode Go,
+  com base `https://opencode.ai/zen/go/v1` e modelo
   `deepseek-v4-flash-vision-exp`. A chamada usa Chat Completions; o prefixo
   `opencode-go/` pertence somente à configuração interna do OpenCode e não vai
-  no campo `model` da API.
+  no campo `model` da API. Outro endpoint OpenAI-compatible aprovado pode ser
+  configurado server-side sem alterar o núcleo.
+- Harness, serviço web do Harness, OpenCode CLI e subprocessos de provider não
+  participam do runtime.
 - A chave entra somente no processo servidor por
-  `VINX_OPENCODE_GO_API_KEY`. Ela não vem de arquivo do Harness, argumento CLI,
+  `VINX_AGENT_PROVIDER_API_KEY`. No smoke, seu valor é a API key OpenCode Go.
+  Ela não vem de arquivo do Harness, argumento CLI,
   `.env` versionado, browser, banco, fixture, log ou documentação.
 - O mesmo modelo atua nos perfis server-side `AgentRun` e `AgentRun:Vision`.
   Somente o segundo aceita imagem canônica para OCR.
@@ -90,18 +94,17 @@ envelope separados, sem transformar `completed` em efeito de negócio.
 
 ### Ledger de execução
 
-O ledger tem unicidade por ator, empresa, canal e request ID, além do hash do
-payload. Seus estados são `claimed`, `vision_in_flight`, `model_in_flight`,
-`completed`, `failed_closed` e `ambiguous`.
-Chamadas externas também recebem sub-registro único por execução, papel
-(`vision` ou `main`) e ordinal; PDF multipágina pode ter um ordinal por página,
-enquanto a chamada principal usa ordinal zero.
+O ledger é um único registro monotônico por execução, com unicidade por ator,
+empresa, canal e request ID, além do hash do payload. Seus estados são
+`claimed`, `vision_in_flight`, `model_in_flight`, `completed`, `failed_closed`
+e `ambiguous`. Não há framework de workflow, tabela por chamada ou dispatcher
+genérico.
 
 - mesmo request ID e hash em `completed` devolve o resultado persistido;
 - mesmo request ID com outro hash retorna `idempotency_conflict`;
 - concorrente que encontra `claimed`/`*_in_flight` não chama OCR/provider;
 - imediatamente antes de cada chamada externa, a transição para o estado
-  `*_in_flight` e o respectivo sub-registro são persistidos;
+  `*_in_flight` é persistida;
 - crash, cancelamento local ou timeout após `*_in_flight` produz
   `ambiguous`; nunca há retry cego do provider;
 - falha comprovadamente anterior a qualquer chamada pode fechar como
@@ -119,7 +122,7 @@ redelivery nesses estados é no-op e preserva evidência para reconciliação.
 
 O adapter existente `OpenAiCompatibleChatClient` continua sendo a única
 implementação de protocolo. Um resolver interno lê exclusivamente
-`VINX_OPENCODE_GO_API_KEY` do ambiente do processo, exige valor não vazio em
+`VINX_AGENT_PROVIDER_API_KEY` do ambiente do processo, exige valor não vazio em
 uma linha e rejeita controles. `AgentRun__ApiKey`, appsettings, argumentos e
 demais fontes de `IConfiguration` não podem fornecer nem sobrescrever a chave.
 O valor entra em um tipo interno de credencial sensível e é entregue em memória
@@ -133,7 +136,8 @@ hosts.
 Cada `HttpClient` do provider usa `SocketsHttpHandler` dedicado com:
 
 - HTTPS e porta 443;
-- host exato `opencode.ai`;
+- host exato pertencente à allowlist do perfil server-side; no smoke,
+  `opencode.ai`;
 - `AllowAutoRedirect = false`;
 - `UseProxy = false`;
 - cookies desabilitados;
@@ -352,7 +356,7 @@ npm run dev:real-e2e -- --profiles maria,clara --agent-mode real
 
 O modo determinístico não faz rede externa. O modo real:
 
-- exige `VINX_OPENCODE_GO_API_KEY` antes de iniciar Docker;
+- exige `VINX_AGENT_PROVIDER_API_KEY` antes de iniciar Docker;
 - fixa endpoint/modelo/perfis somente no processo servidor;
 - não registra `DeterministicE2eAgentModel`;
 - mostra aviso de envio de conteúdo sintético, sem provider metadata sensível;
