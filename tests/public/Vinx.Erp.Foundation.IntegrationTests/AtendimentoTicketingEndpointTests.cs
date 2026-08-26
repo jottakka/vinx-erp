@@ -373,12 +373,13 @@ public sealed class AtendimentoTicketingEndpointTests
     }
 
     [Fact]
-    public async Task Watchers_add_remove_and_repeat_adds_return_no_change()
+    public async Task Watchers_cover_repeat_absent_and_stale_paths_without_side_effects()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory);
         using var client = factory.CreateClient();
         var created = await CreateCardAsync(client, scenario.CompanyId);
+        const string staleConflict = "integrity_conflict";
 
         using var added = await client.PostAsJsonAsync(
             $"/atendimento/cards/{created.Id}/watchers/add",
@@ -390,6 +391,7 @@ public sealed class AtendimentoTicketingEndpointTests
         Assert.Contains(scenario.AssigneeMembershipId, withWatcher!.WatcherMembershipIds!);
         Assert.Equal(created.Version + 1, withWatcher.Version);
 
+        // Repetição de adição: sem DELETE acidental e sem bump de versão.
         using var repeated = await client.PostAsJsonAsync(
             $"/atendimento/cards/{created.Id}/watchers/add",
             new WatcherRequest(scenario.CompanyId, Guid.NewGuid(), withWatcher.Version, scenario.AssigneeMembershipId)
@@ -398,15 +400,86 @@ public sealed class AtendimentoTicketingEndpointTests
         var unchanged = await repeated.Content.ReadFromJsonAsync<CardResponse>();
         Assert.NotNull(unchanged);
         Assert.Equal(withWatcher.Version, unchanged!.Version);
+        Assert.Contains(scenario.AssigneeMembershipId, unchanged.WatcherMembershipIds!);
 
-        using var removed = await client.PostAsJsonAsync(
+        // Remoção de vínculo ausente: idempotente, sem INSERT e sem bump.
+        using var absentRemove = await client.PostAsJsonAsync(
             $"/atendimento/cards/{created.Id}/watchers/remove",
-            new WatcherRequest(scenario.CompanyId, Guid.NewGuid(), withWatcher.Version, scenario.AssigneeMembershipId)
+            new WatcherRequest(scenario.CompanyId, Guid.NewGuid(), unchanged.Version, scenario.OtherMembershipId!)
         );
-        Assert.Equal(HttpStatusCode.OK, removed.StatusCode);
-        var withoutWatcher = await removed.Content.ReadFromJsonAsync<CardResponse>();
-        Assert.NotNull(withoutWatcher);
-        Assert.Empty(withoutWatcher!.WatcherMembershipIds!);
+        Assert.Equal(HttpStatusCode.OK, absentRemove.StatusCode);
+        var afterAbsent = await absentRemove.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.NotNull(afterAbsent);
+        Assert.Equal(unchanged.Version, afterAbsent!.Version);
+        Assert.Single(afterAbsent.WatcherMembershipIds!, scenario.AssigneeMembershipId);
+
+        // Conflito de versão no caminho de adição preserva estado atual.
+        using var staleAdd = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/watchers/add",
+            new WatcherRequest(scenario.CompanyId, Guid.NewGuid(), created.Version, scenario.AssigneeMembershipId)
+        );
+        Assert.Equal(HttpStatusCode.Conflict, staleAdd.StatusCode);
+        Assert.Equal(staleConflict, (await staleAdd.Content.ReadFromJsonAsync<IntegrityConflictResponse>())?.Code);
+
+        // Conflito de versão no caminho de remoção também não altera nada.
+        using var staleRemove = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/watchers/remove",
+            new WatcherRequest(scenario.CompanyId, Guid.NewGuid(), created.Version, scenario.AssigneeMembershipId)
+        );
+        Assert.Equal(HttpStatusCode.Conflict, staleRemove.StatusCode);
+
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM service_desk.atendimento_card_watchers WHERE card_id = @card_id",
+            administrator
+        );
+        command.Parameters.AddWithValue("card_id", created.Id);
+        Assert.Equal(1L, await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task Runtime_rls_reads_channels_only_for_the_transaction_company_and_never_without_context()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var companyAId = Guid.NewGuid();
+        var companyBId = Guid.NewGuid();
+        await using (var administrator = fixture.CreateAdministratorDbContext())
+        {
+            var group = new Group(Guid.NewGuid(), "Grupo Canais", actorId, requestId);
+            var actor = new User(actorId, "Ator canais", "ator-canais@example.test");
+            administrator.AddRange(
+                actor,
+                group,
+                new Company(companyAId, group.Id, "Canais A", actorId, requestId),
+                new Company(companyBId, group.Id, "Canais B", actorId, requestId)
+            );
+            await administrator.SaveChangesAsync();
+        }
+
+        // O trigger da migração semeia os canais por empresa nova.
+        await using (var runtime = fixture.CreateRuntimeDbContext())
+        {
+            await runtime.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT set_config('app.company_id', {companyAId.ToString()}, true)"
+            );
+            var visible = await runtime.Database.SqlQuery<string>(
+                $"SELECT key AS \"Value\" FROM service_desk.atendimento_channels ORDER BY key"
+            ).ToListAsync();
+            Assert.Equal(new[] { "email", "manual", "web", "whatsapp" }, visible);
+        }
+
+        await using (var runtime = fixture.CreateRuntimeDbContext())
+        {
+            var withoutContext = await runtime.Database.SqlQuery<Guid>(
+                $"SELECT id AS \"Value\" FROM service_desk.atendimento_channels"
+            ).ToListAsync();
+            Assert.Empty(withoutContext);
+        }
     }
 
     // ---------- Concurrency ----------
@@ -467,7 +540,7 @@ public sealed class AtendimentoTicketingEndpointTests
         var assigned = await first.Content.ReadFromJsonAsync<CardResponse>();
 
         // Repetição legítima do mesmo responsável em comando distinto: o intent
-        // determinístico (cartão + pessoa) continua único na caixa de saída.
+        // determinístico com chave leading (cartão + tipo) continua único.
         using var second = await client.PostAsJsonAsync(
             $"/atendimento/cards/{created.Id}/assign",
             new AssignCardRequest(
@@ -486,7 +559,7 @@ public sealed class AtendimentoTicketingEndpointTests
         );
         command.Parameters.AddWithValue(
             "event_key",
-            $"atendimento.card.assigned:{created.Id:N}:{scenario.AssigneeUserId:N}"
+            $"atm.card.{created.Id:N}.assigned"
         );
         command.Parameters.AddWithValue("recipient_user_id", scenario.AssigneeUserId);
         Assert.Equal(1L, await command.ExecuteScalarAsync());
@@ -736,11 +809,23 @@ public sealed class AtendimentoTicketingEndpointTests
             ))
         );
         await administrator.SaveChangesAsync();
+        var otherUser = new User(Guid.NewGuid(), "Caio", $"caio-{Guid.NewGuid():N}@example.test");
+        var otherMembership = new Membership(
+            Guid.NewGuid(),
+            company.Id,
+            otherUser.Id,
+            factory.ActorUserId,
+            requestId
+        );
+        administrator.Add(otherUser);
+        administrator.Add(otherMembership);
+        await administrator.SaveChangesAsync();
         return new AtendimentoScenario(
             group.Id,
             company.Id,
             assigneeMembership.Id,
-            assigneeUser.Id
+            assigneeUser.Id,
+            otherMembership.Id
         );
     }
 
@@ -748,7 +833,8 @@ public sealed class AtendimentoTicketingEndpointTests
         Guid GroupId,
         Guid CompanyId,
         Guid AssigneeMembershipId,
-        Guid AssigneeUserId
+        Guid AssigneeUserId,
+        Guid OtherMembershipId
     );
 
     private sealed record CreateCardRequest(
