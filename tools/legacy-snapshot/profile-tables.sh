@@ -29,9 +29,13 @@ set -o errtrace
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib-db.sh"
 
 fail() { echo "erro: $*" >&2; exit 2; }
+validate_name() {
+  [[ "$1" =~ ^[a-z_][a-z_0-9]*$ ]] || fail "nome fora do padrão seguro: $2"
+}
 
 [[ $# -eq 2 ]] || { echo "uso: LEGACY_SNAPSHOT_CONN=... $0 <config.txt> <diretorio-de-saida>" >&2; exit 2; }
 SCHEMA="${LEGACY_SNAPSHOT_SCHEMA:-public}"
+validate_name "$SCHEMA" LEGACY_SNAPSHOT_SCHEMA
 CONFIG_FILE=$1
 : "${LEGACY_SNAPSHOT_CONN:?LEGACY_SNAPSHOT_CONN é obrigatória}"
 [[ -r "$CONFIG_FILE" ]] || fail "config não legível: $CONFIG_FILE"
@@ -69,9 +73,11 @@ db_setup   # converte a connection string em pgpass 0600; nunca em argv
 psql_conn() { db_psql "$@"; }
 
 # Átomos citados no servidor; voltam prontos para colar como identificadores/literais.
-q_ident() { psql_conn -qAt -v a="$1" -c "SELECT format('%I', :'a');"; }
-q_table() { psql_conn -qAt -v a="$1" -v b="$2" -c "SELECT format('%I.%I', :'a', :'b');"; }
-q_text() { psql_conn -qAt -v a="$1" -c "SELECT format('%L', :'a');"; }
+# Entradas já validadas com o charset [a-z_][a-z_0-9]* — literais seguros.
+q_ident() { psql_conn -qAt -c "SELECT quote_ident('$1');"; }
+q_table() { psql_conn -qAt -c "SELECT quote_ident('$1') || '.' || quote_ident('$2');"; }
+q_text() { psql_conn -qAt -c "SELECT quote_literal('$1');"; }
+
 
 classify_pair() {
   psql_conn -qAt -v schema="$SCHEMA" -v tbl="$1" -v col="$2" <<'SQL'
@@ -150,7 +156,7 @@ main() {
       block+=", 'min_ts', (SELECT min($colref)::text FROM $tblref)"
       block+=", 'max_ts', (SELECT max($colref)::text FROM $tblref)"
     fi
-    block+=')'
+    block+=') AS payload'
 
     if [[ $first -eq 1 ]]; then first=0; else echo "UNION ALL" >> "$aggregate_doc"; fi
     printf '%s\n' "$block" >> "$aggregate_doc"
