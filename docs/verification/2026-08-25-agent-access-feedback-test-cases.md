@@ -13,7 +13,7 @@ Comandos focados (Node isolado do laboratório):
 ```powershell
 npm --workspace web run lint
 npm --workspace web run format:check
-npm --workspace web run test -- --run src/features/agent/agent.test.tsx -t "access|no-company|document context|capability"
+npm --workspace web run test -- --run src/features/agent/agent.test.tsx -t "access|no company|document context|capability"
 npm --workspace web run test:e2e:prototypes -- --grep "agent"
 ```
 

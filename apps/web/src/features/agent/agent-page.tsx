@@ -11,10 +11,9 @@ export function AgentPage() {
   const navigate = useNavigate();
   const description = access.available
     ? "Cada mensagem é uma consulta independente ao agente da empresa ativa; turnos anteriores não fazem parte do contexto."
-    : access.message;
-  const processingNotice = access.available
-    ? "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado."
-    : access.message;
+    : companyName
+      ? "Mensagens e anexos permanecem desativados até que seu perfil tenha acesso ao assistente nesta empresa."
+      : "Mensagens e anexos permanecem desativados até que uma empresa seja selecionada.";
 
   function backToContext() {
     openDock();
@@ -34,9 +33,12 @@ export function AgentPage() {
         eyebrow={`${companyName ?? "Sem empresa"} · Página dedicada`}
         title="Agente"
       />
-      <Alert role="note" severity="info" variant="outlined">
-        {processingNotice}
-      </Alert>
+      {access.available ? (
+        <Alert role="note" severity="info" variant="outlined">
+          Os envios são reais, vinculados à empresa indicada e, quando
+          disponível, processados pelo provedor de IA configurado.
+        </Alert>
+      ) : null}
       <Card variant="outlined">
         <CardContent>
           <Stack sx={{ gap: 2, minHeight: { md: "60dvh" } }}>

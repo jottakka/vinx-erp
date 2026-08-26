@@ -90,8 +90,6 @@ public sealed class E2eFixtureSeederTests
             "paguai.draft.read;Beta/Reader=paguai.draft.read|service_desk.ticket.read_queue;" +
             "Gama/Restricted=service_desk.ticket.read_queue",
             root.GetProperty("role_capabilities").GetString());
-        Assert.Contains("Alfa/Operations=", root.GetProperty("role_capabilities").GetString());
-        Assert.Contains("ai.read", root.GetProperty("role_capabilities").GetString());
         Assert.Equal(
             "groups=a1000000-0000-4000-8000-000000000001/f4000000-0000-4000-8000-000000000001;" +
             "companies=a2000000-0000-4000-8000-000000000001/f4000000-0000-4000-8000-000000000002," +

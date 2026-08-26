@@ -550,7 +550,7 @@ describe("agent workspace", () => {
     ).toBeVisible();
   });
 
-  it("uses actionable no-company wording throughout the dedicated page and composer", async () => {
+  it("keeps the blocked composer status canonical on the dedicated page", async () => {
     await renderAgentWorkspace("/agente", createCompanylessGateway());
 
     expect(
@@ -558,7 +558,15 @@ describe("agent workspace", () => {
     ).toBeVisible();
     expect(
       screen.getAllByText("Selecione uma empresa para usar o assistente."),
-    ).toHaveLength(3);
+    ).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Selecione uma empresa para usar o assistente.",
+    );
+    expect(
+      screen.getByText(
+        "Mensagens e anexos permanecem desativados até que uma empresa seja selecionada.",
+      ),
+    ).toBeVisible();
     expect(screen.queryByText(/empresa ativa/i)).toBeNull();
     expect(screen.queryByText(/vinculados à empresa indicada/i)).toBeNull();
   });

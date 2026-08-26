@@ -26,7 +26,10 @@ Playwright 1.62 e axe-core.
 - TDD obrigatório: registrar RED dos novos comportamentos antes de editar
   produção; não usar a flutuação preexistente do teste de três anexos como RED.
 - O browser não concede acesso: o backend continua revalidando `ai.read`.
-- Não alterar endpoint, payload, migration, grant ou catálogo canônico.
+- Não conceder `ai.read` em produção nem alterar endpoint, payload, migration,
+  grants reais ou catálogo canônico. A única exceção é o grant determinístico
+  do fixture `E2eFixtureSeeder` para Maria em Alfa, exclusivamente para cobrir
+  o caminho E2E autorizado.
 - Não mostrar reason codes ou error codes internos no texto da conversa.
 - Sem botão ou link de solicitação de acesso até existir jornada real.
 - Sem dependência nova, retry, persistência ou histórico multi-turn.
