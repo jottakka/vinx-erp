@@ -5,14 +5,15 @@ import {
   Stack,
   TextField,
 } from "@mui/material";
-import { PeoplePicker } from "./people-picker";
-import { priorityLabel } from "./atendimento-lookup";
+import { useEffect, useRef, useState } from "react";
 import {
   type AtendimentoColumn,
   type AtendimentoPriority,
   type QueueFilter,
   queueFilterToQuery,
 } from "./atendimento-client";
+import { priorityLabel } from "./atendimento-lookup";
+import { PeoplePicker } from "./people-picker";
 
 export const columnChoices: readonly AtendimentoColumn[] = [
   "novo",
@@ -69,10 +70,58 @@ export function AtendimentoFilterBar({
   onChange: (next: QueueFilter) => void;
 }) {
   return (
+    <SearchDebouncedInner
+      companyId={companyId}
+      disabled={disabled}
+      filter={filter}
+      onChange={onChange}
+    />
+  );
+}
+
+function SearchDebouncedInner({
+  companyId,
+  disabled,
+  filter,
+  onChange,
+}: {
+  companyId: string;
+  disabled?: boolean;
+  filter: QueueFilter;
+  onChange: (next: QueueFilter) => void;
+}) {
+  // Busca com debounce curto para não disparar leitura por tecla.
+  const [searchTerm, setSearchTerm] = useState(filter.search ?? "");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setSearchTerm(filter.search ?? "");
+  }, [filter.search]);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  function handleSearch(next: string) {
+    setSearchTerm(next);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      onChange({ ...filter, search: next.trim() || undefined });
+    }, 300);
+  }
+
+  return (
     <Stack
       direction="row"
       spacing={1.5}
-      sx={{ alignItems: "center", flexWrap: "wrap", opacity: disabled ? 0.6 : 1 }}
+      sx={{
+        alignItems: "center",
+        flexWrap: "wrap",
+        opacity: disabled ? 0.6 : 1,
+      }}
       useFlexGap
     >
       <TextField
@@ -80,7 +129,9 @@ export function AtendimentoFilterBar({
         onChange={(event) =>
           onChange({
             ...filter,
-            status: (event.target.value || undefined) as AtendimentoColumn | undefined,
+            status: (event.target.value || undefined) as
+              | AtendimentoColumn
+              | undefined,
           })
         }
         select
@@ -100,7 +151,9 @@ export function AtendimentoFilterBar({
         onChange={(event) =>
           onChange({
             ...filter,
-            priority: (event.target.value || undefined) as AtendimentoPriority | undefined,
+            priority: (event.target.value || undefined) as
+              | AtendimentoPriority
+              | undefined,
           })
         }
         select
@@ -120,29 +173,32 @@ export function AtendimentoFilterBar({
         helperText="Filtro por responsável"
         label="Responsável"
         onChange={(membershipId) =>
-          onChange({ ...filter, assigneeMembershipId: membershipId ?? undefined })
+          onChange({
+            ...filter,
+            assigneeMembershipId: membershipId ?? undefined,
+          })
         }
         value={filter.assigneeMembershipId ?? null}
       />
       <FormControlLabel
         control={
           <Checkbox
+            aria-label="Somente atrasados"
             checked={filter.overdue}
-            inputProps={{ "aria-label": "Somente atrasados" }}
-            onChange={(event) => onChange({ ...filter, overdue: event.target.checked })}
+            onChange={(event) =>
+              onChange({ ...filter, overdue: event.target.checked })
+            }
           />
         }
         label="Atrasados"
       />
       <TextField
-        defaultValue={filter.search ?? ""}
         label="Busca"
-        onChange={(event) =>
-          onChange({ ...filter, search: event.target.value || undefined })
-        }
+        onChange={(event) => handleSearch(event.target.value)}
         placeholder="Título ou descrição"
         size="small"
         sx={{ minWidth: 200 }}
+        value={searchTerm}
       />
     </Stack>
   );

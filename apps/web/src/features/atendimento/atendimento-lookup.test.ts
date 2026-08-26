@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { filterFromSearchParams } from "./atendimento-filter-bar";
 import {
   channelLabel,
   eventLabels,
@@ -6,9 +7,6 @@ import {
   priorityColor,
   priorityLabel,
 } from "./atendimento-lookup";
-import {
-  filterFromSearchParams,
-} from "./atendimento-filter-bar";
 
 describe("atendimento lookup single source", () => {
   it("maps priorities and channels to pt-BR labels from one table", () => {

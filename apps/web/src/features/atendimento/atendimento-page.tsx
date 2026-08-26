@@ -18,17 +18,16 @@ import { CompanySelect } from "../../shared/ui/company-select";
 import { PageHeader } from "../../shared/ui/page-header";
 import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
+import { CategoriesAdminSection } from "./atendimento-categories-admin";
 import {
   type AtendimentoCard,
   type AtendimentoColumn,
+  atendimentoClient,
   type LookupsResponse,
   type QueueFilter,
-  atendimentoClient,
 } from "./atendimento-client";
 import { AtendimentoCreateDialog } from "./atendimento-create-dialog";
-import {
-  AtendimentoDetailDialog,
-} from "./atendimento-detail-dialog";
+import { AtendimentoDetailDialog } from "./atendimento-detail-dialog";
 import {
   AtendimentoFilterBar,
   filterFromSearchParams,
@@ -40,7 +39,6 @@ import {
   priorityColor,
   priorityLabel,
 } from "./atendimento-lookup";
-import { CategoriesAdminSection } from "./atendimento-categories-admin";
 
 const readCapability = "service_desk.ticket.read_queue";
 const createCapability = "service_desk.ticket.create";
@@ -185,8 +183,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     setDropTarget(null);
   }
 
-  const viewingCard =
-    cards.find((card) => card.id === viewingCardId) ?? null;
+  const viewingCard = cards.find((card) => card.id === viewingCardId) ?? null;
   const categoryNames = new Map(
     (lookups?.categories ?? []).map((category) => [category.id, category.name]),
   );
@@ -294,8 +291,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                     ? "action.selected"
                     : "background.paper",
                 border: 1,
-                borderColor:
-                  dropTarget === column ? "primary.main" : "divider",
+                borderColor: dropTarget === column ? "primary.main" : "divider",
                 borderRadius: 3,
                 minHeight: 220,
                 px: 1.5,
@@ -374,11 +370,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                             />
                           ) : null}
                           {card.overdue ? (
-                            <Chip
-                              color="error"
-                              label="Atrasado"
-                              size="small"
-                            />
+                            <Chip color="error" label="Atrasado" size="small" />
                           ) : null}
                           {card.categoryRefId ? (
                             <Chip
@@ -395,7 +387,11 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                               label={
                                 channelKeys.get(card.channelRefId) === undefined
                                   ? "Canal"
-                                  : (channelLabel(channelKeys.get(card.channelRefId) as string))
+                                  : channelLabel(
+                                      channelKeys.get(
+                                        card.channelRefId,
+                                      ) as string,
+                                    )
                               }
                               size="small"
                               variant="outlined"
@@ -413,7 +409,9 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                         </Button>
                         {permissions.canEdit
                           ? columns
-                              .filter((destination) => destination !== card.column)
+                              .filter(
+                                (destination) => destination !== card.column,
+                              )
                               .map((destination) => (
                                 <Button
                                   key={destination}
@@ -427,8 +425,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                       </CardActions>
                     </Card>
                   ))}
-                {cards.filter((card) => card.column === column).length ===
-                0 ? (
+                {cards.filter((card) => card.column === column).length === 0 ? (
                   <Typography color="text.secondary" variant="body2">
                     Nenhum cartão nesta coluna.
                   </Typography>

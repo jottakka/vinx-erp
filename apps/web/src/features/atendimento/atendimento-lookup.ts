@@ -1,4 +1,7 @@
-import type { AtendimentoPriority, AtendimentoColumn } from "./atendimento-client";
+import type {
+  AtendimentoColumn,
+  AtendimentoPriority,
+} from "./atendimento-client";
 
 /**
  * Fonte única de rótulos e cores dos chips (status/prioridade/canal), sempre
@@ -37,9 +40,7 @@ export const channelLabels: Record<string, string> = {
 
 export function priorityLabel(value: string | null | undefined): string {
   if (!value) return "";
-  return (
-    priorityLabels[value as AtendimentoPriority] ?? value
-  );
+  return priorityLabels[value as AtendimentoPriority] ?? value;
 }
 
 export function priorityColor(

@@ -241,14 +241,15 @@ export const atendimentoClient = {
       requestId: crypto.randomUUID(),
     });
   },
-  async events(cardId: string, companyId: string): Promise<TimelineEvent[] | null> {
+  async events(
+    cardId: string,
+    companyId: string,
+  ): Promise<TimelineEvent[] | null> {
     try {
       const response = await request(
         `${basePath}/${cardId}/events?companyId=${encodeURIComponent(companyId)}`,
       );
-      return response.ok
-        ? ((await response.json()) as TimelineEvent[])
-        : null;
+      return response.ok ? ((await response.json()) as TimelineEvent[]) : null;
     } catch {
       return null;
     }
@@ -258,9 +259,7 @@ export const atendimentoClient = {
       const response = await request(
         `/atendimento/lookups?companyId=${encodeURIComponent(companyId)}`,
       );
-      return response.ok
-        ? ((await response.json()) as LookupsResponse)
-        : null;
+      return response.ok ? ((await response.json()) as LookupsResponse) : null;
     } catch {
       return null;
     }
@@ -270,9 +269,7 @@ export const atendimentoClient = {
       const response = await request(
         `/foundation/companies/${encodeURIComponent(companyId)}/directory-options`,
       );
-      return response.ok
-        ? ((await response.json()) as PersonOption[])
-        : null;
+      return response.ok ? ((await response.json()) as PersonOption[]) : null;
     } catch {
       return null;
     }

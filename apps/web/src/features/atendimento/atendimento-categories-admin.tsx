@@ -1,16 +1,7 @@
 import DeleteOutlineOutlinedIcon from "@mui/icons-material/DeleteOutlineOutlined";
-import {
-  Button,
-  Chip,
-  Stack,
-  TextField,
-  Typography,
-} from "@mui/material";
+import { Button, Chip, Stack, TextField, Typography } from "@mui/material";
 import { useState } from "react";
-import {
-  type LookupCategory,
-  atendimentoClient,
-} from "./atendimento-client";
+import { atendimentoClient, type LookupCategory } from "./atendimento-client";
 
 /**
  * Edição de categorias restrita a quem tem `service_desk.lookup.admin`;
@@ -69,16 +60,25 @@ export function CategoriesAdminSection({
           Criar categoria
         </Button>
       </Stack>
-      <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap" }} useFlexGap>
+      <Stack
+        direction="row"
+        spacing={0.75}
+        sx={{ flexWrap: "wrap" }}
+        useFlexGap
+      >
         {(categories ?? []).map((category) => (
           <Chip
-            color={category.isActive ? "default" : "default"}
+            color={category.isActive ? "default" : "secondary"}
             key={category.id}
             label={`${category.name}${category.isActive ? "" : " (inativa)"}`}
             onDelete={
               category.isActive ? () => void deactivate(category.id) : undefined
             }
-            deleteIcon={<DeleteOutlineOutlinedIcon aria-label={`Desativar ${category.name}`} />}
+            deleteIcon={
+              <DeleteOutlineOutlinedIcon
+                aria-label={`Desativar ${category.name}`}
+              />
+            }
             variant="outlined"
           />
         ))}

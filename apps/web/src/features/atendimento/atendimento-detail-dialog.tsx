@@ -1,4 +1,5 @@
 import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
+import PersonAddAltOutlinedIcon from "@mui/icons-material/PersonAddAltOutlined";
 import {
   Autocomplete,
   Avatar,
@@ -17,15 +18,26 @@ import { EntityDialog } from "../../shared/ui/entity-dialog";
 import {
   type AtendimentoCard,
   type AtendimentoPriority,
+  atendimentoClient,
   type LookupChannel,
   type PersonOption,
   type TimelineEvent,
-  atendimentoClient,
 } from "./atendimento-client";
-import { channelLabel, eventLabels, initialsFor, priorityLabel } from "./atendimento-lookup";
+import {
+  channelLabel,
+  eventLabels,
+  initialsFor,
+  priorityLabel,
+} from "./atendimento-lookup";
 import { PeoplePicker } from "./people-picker";
+import { useDirectoryOptions } from "./use-directory-options";
 
-const priorities: readonly AtendimentoPriority[] = ["critica", "alta", "media", "baixa"];
+const priorities: readonly AtendimentoPriority[] = [
+  "critica",
+  "alta",
+  "media",
+  "baixa",
+];
 
 /**
  * Detalhe do cartão com abas: resumo + timeline (leitura), edição de campos
@@ -50,11 +62,14 @@ export function AtendimentoDetailDialog({
 }) {
   const [tab, setTab] = useState(0);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
+  // Reset ao trocar de cartão durante o próprio render (padrão React para
+  // ajustar estado quando a prop muda), sem efeito e sem deps extras.
+  const [resetForId, setResetForId] = useState<string | null>(null);
+  if (card && resetForId !== card.id) {
+    setResetForId(card.id);
     setTab(0);
     setError(null);
-  }, [card?.id]);
+  }
 
   function replaced(next: AtendimentoCard) {
     onUpdated(next);
@@ -67,7 +82,9 @@ export function AtendimentoDetailDialog({
         onClose={onClose}
         open={false}
         title="Visualizar atendimento"
-      />
+      >
+        <span />
+      </EntityDialog>
     );
   }
 
@@ -91,11 +108,14 @@ export function AtendimentoDetailDialog({
           </Typography>
         ) : null}
         {tab === 0 ? (
-          <SummaryTab canAssign={canAssign} card={card} companyId={companyId} onSaved={replaced} />
+          <SummaryTab
+            canAssign={canAssign}
+            card={card}
+            companyId={companyId}
+            onSaved={replaced}
+          />
         ) : null}
-        {tab === 1 ? (
-          <TimelineTab card={card} companyId={companyId} />
-        ) : null}
+        {tab === 1 ? <TimelineTab card={card} companyId={companyId} /> : null}
         {tab === 2 ? (
           <FieldsTab
             card={card}
@@ -125,9 +145,9 @@ function SummaryTab({
   companyId: string;
   onSaved: (card: AtendimentoCard) => void;
 }) {
-  const [assigneeMembershipId, setAssigneeMembershipId] = useState<string | null>(
-    card.assigneeMembershipId,
-  );
+  const [assigneeMembershipId, setAssigneeMembershipId] = useState<
+    string | null
+  >(card.assigneeMembershipId);
   const [assignError, setAssignError] = useState<string | null>(null);
 
   async function save() {
@@ -184,23 +204,41 @@ function SummaryTab({
       <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap" }}>
         <Chip label={card.column} size="small" variant="outlined" />
         {card.priority ? (
-          <Chip label={priorityLabel(card.priority)} size="small" variant="outlined" />
+          <Chip
+            label={priorityLabel(card.priority)}
+            size="small"
+            variant="outlined"
+          />
         ) : null}
         {card.overdue ? (
           <Chip color="error" label="Atrasado (SLA)" size="small" />
         ) : null}
         {card.slaDueAt ? (
-          <Chip label={`SLA: ${new Date(card.slaDueAt).toLocaleString("pt-BR")}`} size="small" variant="outlined" />
+          <Chip
+            label={`SLA: ${new Date(card.slaDueAt).toLocaleString("pt-BR")}`}
+            size="small"
+            variant="outlined"
+          />
         ) : null}
         {card.requesterPersonRef ? (
-          <Chip label={`Solicitante: ${card.requesterPersonRef}`} size="small" variant="outlined" />
+          <Chip
+            label={`Solicitante: ${card.requesterPersonRef}`}
+            size="small"
+            variant="outlined"
+          />
         ) : null}
       </Stack>
     </Stack>
   );
 }
 
-function TimelineTab({ card, companyId }: { card: AtendimentoCard; companyId: string }) {
+function TimelineTab({
+  card,
+  companyId,
+}: {
+  card: AtendimentoCard;
+  companyId: string;
+}) {
   const [events, setEvents] = useState<TimelineEvent[] | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -229,8 +267,8 @@ function TimelineTab({ card, companyId }: { card: AtendimentoCard; companyId: st
       {(events ?? []).map((event) => (
         <Box component="li" key={event.id}>
           <Typography variant="body2">
-            <strong>{eventLabels(event.actionKind)}</strong>{" "}
-            por {event.actorDisplayName} ·{" "}
+            <strong>{eventLabels(event.actionKind)}</strong> por{" "}
+            {event.actorDisplayName} ·{" "}
             {new Date(event.occurredAt).toLocaleString("pt-BR")}
           </Typography>
         </Box>
@@ -264,44 +302,36 @@ function FieldsTab({
   onError: (message: string | null) => void;
   onSaved: (card: AtendimentoCard) => void;
 }) {
-  const [priority, setPriority] = useState<AtendimentoPriority | "">(card.priority ?? "");
+  const [priority, setPriority] = useState<AtendimentoPriority | "">(
+    card.priority ?? "",
+  );
   const [categoryRefId, setCategoryRefId] = useState(card.categoryRefId ?? "");
   const [channelRefId, setChannelRefId] = useState(card.channelRefId ?? "");
   const [slaLocal, setSlaLocal] = useState(
     card.slaDueAt ? toLocalInputValue(new Date(card.slaDueAt)) : "",
   );
-  const [requesterMembershipId, setRequesterMembershipId] = useState<string | null>(
-    null,
-  );
+  const [requesterMembershipId, setRequesterMembershipId] = useState<
+    string | null
+  >(null);
   const [mentioned, setMentioned] = useState<PersonOption[]>([]);
   const requesterPersonRef = card.requesterPersonRef ?? "";
-  const [mentionOptions, setMentionOptions] = useState<PersonOption[]>([]);
+  const { options: mentionOptions } = useDirectoryOptions(companyId);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    void atendimentoClient.directoryOptions(companyId).then((result) => {
-      if (active && result) setMentionOptions(result);
-    });
-    return () => {
-      active = false;
-    };
-  }, [companyId]);
 
   async function save() {
     setSaving(true);
     onError(null);
-    const slaIso =
-      slaLocal
-        ? new Date(slaLocal).toISOString()
-        : undefined;
+    const slaIso = slaLocal ? new Date(slaLocal).toISOString() : undefined;
     const result = await atendimentoClient.fields(companyId, card, {
       categoryRefId: categoryRefId || undefined,
       channelRefId: channelRefId || undefined,
       mentionedMembershipIds:
-        mentioned.length > 0 ? mentioned.map((option) => option.membershipId) : undefined,
+        mentioned.length > 0
+          ? mentioned.map((option) => option.membershipId)
+          : undefined,
       priority: priority ? priority : undefined,
-      requesterPersonRef: requesterMembershipId ?? requesterPersonRef ?? undefined,
+      requesterPersonRef:
+        requesterMembershipId ?? requesterPersonRef ?? undefined,
       slaDueAt: slaIso,
     });
     setSaving(false);
@@ -361,8 +391,8 @@ function FieldsTab({
       <TextField
         fullWidth
         helperText="Prazo do SLA; o atraso é derivado e nunca é armazenado."
-        InputLabelProps={{ shrink: true }}
         label="SLA previsto"
+        slotProps={{ inputLabel: { shrink: true } }}
         onChange={(event) => setSlaLocal(event.target.value)}
         size="small"
         type="datetime-local"
@@ -377,8 +407,8 @@ function FieldsTab({
       />
       <Autocomplete<PersonOption, true, false, false>
         multiple
-        options={mentionOptions}
         onChange={(_, value) => setMentioned(value)}
+        options={mentionOptions}
         renderInput={(params) => (
           <TextField
             {...params}
@@ -386,20 +416,6 @@ function FieldsTab({
             size="small"
           />
         )}
-        renderTags={(value, getTagProps) =>
-          value.map((option, index) => {
-            const { key, ...tagProps } = getTagProps({ index });
-            return (
-              <Chip
-                {...tagProps}
-                avatar={<Avatar sx={{ fontSize: 12 }}>{initialsFor(option.displayName)}</Avatar>}
-                key={key}
-                label={option.displayName}
-                size="small"
-              />
-            );
-          })
-        }
         value={mentioned}
       />
       <Button
@@ -431,22 +447,16 @@ function WatchersTab({
     })),
   );
   const [selected, setSelected] = useState<string | null>(null);
-  const [names, setNames] = useState<PersonOption[]>([]);
+  const { options: names } = useDirectoryOptions(companyId);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    void atendimentoClient.directoryOptions(companyId).then((result) => {
-      if (active && result) setNames(result);
-    });
-    return () => {
-      active = false;
-    };
-  }, [companyId]);
 
   async function add() {
     if (!selected) return;
-    const result = await atendimentoClient.addWatcher(companyId, card, selected);
+    const result = await atendimentoClient.addWatcher(
+      companyId,
+      card,
+      selected,
+    );
     if (!result.ok) return setError(messageForCode(result.code));
     setWatchers((current) =>
       current.some((watcher) => watcher.membershipId === selected)
@@ -484,7 +494,11 @@ function WatchersTab({
         onChange={setSelected}
         value={selected}
       />
-      <Button disabled={!selected} onClick={() => void add()} variant="outlined">
+      <Button
+        disabled={!selected}
+        onClick={() => void add()}
+        variant="outlined"
+      >
         Adicionar observador
       </Button>
       {error ? (
@@ -492,30 +506,38 @@ function WatchersTab({
           {error}
         </Typography>
       ) : null}
-      <Autocomplete<PersonOption, true, false, false>
-        multiple
-        options={names}
-        readOnly
-        renderTags={(value, getTagProps) =>
-          value.map((option, index) => {
-            const { key, ...tagProps } = getTagProps({ index });
-            return (
-              <Chip
-                {...tagProps}
-                avatar={<Avatar sx={{ fontSize: 12 }}>{initialsFor(option.displayName)}</Avatar>}
-                key={key}
-                label={option.displayName}
-                onDelete={() => void remove(option.membershipId)}
-                size="small"
-              />
-            );
-          })
-        }
-        value={watchers}
-      />
+      <Stack
+        direction="row"
+        spacing={0.75}
+        sx={{ flexWrap: "wrap" }}
+        useFlexGap
+      >
+        {(names.length > 0
+          ? watchers.map(
+              (watcher) =>
+                names.find(
+                  (option) => option.membershipId === watcher.membershipId,
+                ) ?? watcher,
+            )
+          : watchers
+        ).map((watcher) => (
+          <Chip
+            avatar={
+              <Avatar sx={{ fontSize: 12 }}>
+                {initialsFor(watcher.displayName)}
+              </Avatar>
+            }
+            key={watcher.membershipId}
+            label={watcher.displayName}
+            onDelete={() => void remove(watcher.membershipId)}
+            size="small"
+          />
+        ))}
+      </Stack>
       {watchers.length === 0 ? (
         <Typography color="text.secondary" variant="body2">
-          Nenhum observador. Observadores avisados são apenas os adicionados por aqui.
+          Nenhum observador. Observadores avisados são apenas os adicionados por
+          aqui.
         </Typography>
       ) : null}
     </Stack>
@@ -525,7 +547,8 @@ function WatchersTab({
 function messageForCode(code: string): string {
   if (code === "integrity_conflict")
     return "O cartão mudou no servidor. Reabra o detalhe para recarregar.";
-  if (code === "resource_not_found") return "Referência inexistente ou inativa.";
+  if (code === "resource_not_found")
+    return "Referência inexistente ou inativa.";
   if (code === "capability_denied" || code === "membership_required")
     return "Sua sessão não tem permissão para esta ação nesta empresa.";
   return "Não foi possível concluir a ação. Tente novamente.";

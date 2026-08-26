@@ -138,8 +138,16 @@ describe("atendimento client", () => {
     const fetchSpy = csrfThenOk(createdCard);
     vi.stubGlobal("fetch", fetchSpy);
 
-    await atendimentoClient.addWatcher(createdCard.companyId, createdCard, membershipId);
-    await atendimentoClient.removeWatcher(createdCard.companyId, createdCard, membershipId);
+    await atendimentoClient.addWatcher(
+      createdCard.companyId,
+      createdCard,
+      membershipId,
+    );
+    await atendimentoClient.removeWatcher(
+      createdCard.companyId,
+      createdCard,
+      membershipId,
+    );
 
     expect(fetchSpy.mock.calls[1]?.[0]).toBe(
       `/atendimento/cards/${createdCard.id}/watchers/add`,
@@ -147,9 +155,11 @@ describe("atendimento client", () => {
     expect(fetchSpy.mock.calls[3]?.[0]).toBe(
       `/atendimento/cards/${createdCard.id}/watchers/remove`,
     );
-    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body))).toMatchObject({
-      memberMembershipId: membershipId,
-    });
+    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body))).toMatchObject(
+      {
+        memberMembershipId: membershipId,
+      },
+    );
   });
 
   it("reads timeline and lookups through company-scoped GETs", async () => {

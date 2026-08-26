@@ -1,7 +1,8 @@
 import { Autocomplete, Avatar, Box, Chip, TextField } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
-import { type PersonOption, atendimentoClient } from "./atendimento-client";
+import { useMemo } from "react";
+import type { PersonOption } from "./atendimento-client";
 import { initialsFor } from "./atendimento-lookup";
+import { useDirectoryOptions } from "./use-directory-options";
 
 /**
  * Picker de pessoas por empresa (nome + avatar de iniciais); guarda apenas o
@@ -23,35 +24,18 @@ export function PeoplePicker({
   onChange: (membershipId: string | null) => void;
   value: string | null;
 }) {
-  const [options, setOptions] = useState<PersonOption[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    if (!companyId) return;
-    let active = true;
-    setLoading(true);
-    setFailed(false);
-    void atendimentoClient.directoryOptions(companyId).then((result) => {
-      if (!active) return;
-      if (result) {
-        setOptions(result);
-      } else {
-        setOptions([]);
-        setFailed(true);
-      }
-      setLoading(false);
-    });
-    return () => {
-      active = false;
-    };
-  }, [companyId]);
+  const { failed, options } = useDirectoryOptions(companyId);
+  const loading = !failed && companyId.length > 0 && options.length === 0;
 
   const selected = useMemo(
     () =>
       options.find((option) => option.membershipId === value) ??
       (value && options.length === 0
-        ? ({ displayName: value, employeeId: value, membershipId: value } as PersonOption)
+        ? ({
+            displayName: value,
+            employeeId: value,
+            membershipId: value,
+          } as PersonOption)
         : null),
     [options, value],
   );
@@ -65,8 +49,14 @@ export function PeoplePicker({
         option.membershipId === candidate.membershipId
       }
       loading={loading}
-      noOptionsText={failed ? "Não foi possível carregar as pessoas." : "Nenhuma pessoa encontrada."}
-      onChange={(_, selectedOption) => onChange(selectedOption?.membershipId ?? null)}
+      noOptionsText={
+        failed
+          ? "Não foi possível carregar as pessoas."
+          : "Nenhuma pessoa encontrada."
+      }
+      onChange={(_, selectedOption) =>
+        onChange(selectedOption?.membershipId ?? null)
+      }
       onBlur={() => undefined}
       options={options}
       renderInput={(params) => (
