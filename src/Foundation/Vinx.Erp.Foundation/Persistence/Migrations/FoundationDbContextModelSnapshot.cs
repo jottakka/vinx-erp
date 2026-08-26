@@ -895,6 +895,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("date")
                         .HasColumnName("due_date");
 
+                    b.Property<Guid?>("InvoiceFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invoice_file_id");
+
                     b.Property<string>("ProofRequirement")
                         .IsRequired()
                         .HasMaxLength(10)
@@ -930,6 +934,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_requests");
+
+                    b.HasIndex("CompanyId", "InvoiceFileId")
+                        .HasDatabaseName("ix_requests_company_id_invoice_file_id");
 
                     b.ToTable("requests", "paguai", t =>
                         {
@@ -1547,6 +1554,16 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Navigation("Company");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiRequest", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.FileRecord", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "InvoiceFileId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_requests_files_company_id_invoice_file_id");
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Role", b =>

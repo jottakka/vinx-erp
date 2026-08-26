@@ -78,6 +78,31 @@ public sealed class PaguaiDraftService(
                 return DeserializeReplay(existing.ResultJson);
             }
 
+            if (command.InvoiceFileId is { } invoiceFileId)
+            {
+                var invoice = await database.Files.SingleOrDefaultAsync(
+                    file => file.CompanyId == command.CompanyId && file.Id == invoiceFileId,
+                    cancellationToken
+                );
+                if (
+                    invoice is null
+                    || !string.Equals(
+                        invoice.ProcessingState,
+                        FileRecord.ConfirmedState,
+                        StringComparison.Ordinal
+                    )
+                    || !string.Equals(
+                        invoice.Classification,
+                        "paguai_request_invoice",
+                        StringComparison.Ordinal
+                    )
+                )
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
+                }
+            }
+
             var request = new PaguaiRequest
             {
                 Id = Guid.NewGuid(),
@@ -91,6 +116,7 @@ public sealed class PaguaiDraftService(
                 DueDate = command.DueDate,
                 BeneficiaryDisplayName = command.BeneficiaryDisplayName,
                 ProofRequirement = command.ProofRequirement,
+                InvoiceFileId = command.InvoiceFileId,
                 SourceInboundMessageId = command.SourceInboundMessageId,
                 State = "rascunho",
                 Version = 1,
@@ -558,6 +584,7 @@ public sealed class PaguaiDraftService(
             request.DueDate,
             request.BeneficiaryDisplayName,
             request.ProofRequirement,
+            request.InvoiceFileId,
             request.State,
             request.Version,
             request.CreatedAt
@@ -596,6 +623,7 @@ public sealed class PaguaiDraftService(
                         legacy.DueDate,
                         legacy.BeneficiaryDisplayName,
                         legacy.ProofRequirement,
+                        null,
                         legacy.State,
                         legacy.Version,
                         legacy.CreatedAt
@@ -656,12 +684,32 @@ public sealed class PaguaiDraftService(
                 dueDate = command.DueDate,
                 beneficiaryDisplayName = command.BeneficiaryDisplayName,
                 proofRequirement = command.ProofRequirement,
+                invoiceFileId = command.InvoiceFileId,
             }
         );
         return HashCanonicalPayload(canonical);
     }
 
-    private static string ComputeLegacyPayloadHash(CreateDraftCommand command)
+    private static string ComputeLegacyDecimalPayloadHash(CreateDraftCommand command)
+    {
+        var canonical = JsonSerializer.Serialize(
+            new
+            {
+                companyId = command.CompanyId,
+                requestId = command.RequestId,
+                title = command.Title,
+                description = command.Description,
+                amount = command.Amount,
+                currency = command.Currency,
+                dueDate = command.DueDate,
+                beneficiaryDisplayName = command.BeneficiaryDisplayName,
+                proofRequirement = command.ProofRequirement,
+            }
+        );
+        return HashCanonicalPayload(canonical);
+    }
+
+    private static string ComputeLegacyAmountMinorPayloadHash(CreateDraftCommand command)
     {
         var canonical = JsonSerializer.Serialize(
             new
@@ -684,12 +732,21 @@ public sealed class PaguaiDraftService(
         string existingHash,
         CreateDraftCommand command,
         string currentHash
-    ) =>
-        string.Equals(existingHash, currentHash, StringComparison.Ordinal)
-        || string.Equals(
-            existingHash,
-            ComputeLegacyPayloadHash(command),
-            StringComparison.Ordinal
+    ) => string.Equals(existingHash, currentHash, StringComparison.Ordinal)
+        || (
+            command.InvoiceFileId is null
+            && (
+                string.Equals(
+                    existingHash,
+                    ComputeLegacyDecimalPayloadHash(command),
+                    StringComparison.Ordinal
+                )
+                || string.Equals(
+                    existingHash,
+                    ComputeLegacyAmountMinorPayloadHash(command),
+                    StringComparison.Ordinal
+                )
+            )
         );
 
     private static string HashCanonicalPayload(string canonical) =>

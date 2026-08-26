@@ -15,6 +15,7 @@ public sealed record CreateDraftCommand(
     DateOnly DueDate,
     string BeneficiaryDisplayName,
     string ProofRequirement,
+    Guid? InvoiceFileId = null,
     Guid? SourceInboundMessageId = null
 );
 
@@ -42,6 +43,7 @@ public sealed record PaguaiDraft(
     DateOnly DueDate,
     string BeneficiaryDisplayName,
     string ProofRequirement,
+    Guid? InvoiceFileId,
     string State,
     int Version,
     DateTimeOffset CreatedAt

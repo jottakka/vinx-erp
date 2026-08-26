@@ -47,6 +47,8 @@ public sealed class CreatePaguaiDraftRequest
     [AllowedValues("optional", "required")]
     public string ProofRequirement { get; init; } = string.Empty;
 
+    public Guid? InvoiceFileId { get; init; }
+
     public CreateDraftCommand ToCommand() =>
         new(
             CompanyId,
@@ -57,6 +59,7 @@ public sealed class CreatePaguaiDraftRequest
             Currency,
             DueDate,
             BeneficiaryDisplayName,
-            ProofRequirement
+            ProofRequirement,
+            InvoiceFileId
         );
 }
