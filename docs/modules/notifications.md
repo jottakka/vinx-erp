@@ -78,6 +78,25 @@ bytes brutos antes de qualquer parse e grava eventos insert-only por
 `(message_id, event_type)` sem correlação com o negócio; `read` não é
 confirmação humana. Runbook: `docs/runbooks/whatsapp-outbound.md`.
 
+## Provider Telegram — contrato compartilhado (#307)
+
+A Foundation aceita o canal opt-in `telegram` sem alterar a semântica do
+WhatsApp ou do in-app obrigatório. O template aprovado é texto plano de 1 a
+4096 caracteres em `notification_templates.telegram_text`; o contato privado
+usa `notification_recipient_contacts.address` com chat ID decimal positivo e
+`phone_number` permanece exclusivo do WhatsApp. A função
+`notifications.enqueue_notification_intent` revalida o opt-in e o template no
+momento do enfileiramento. Quando o opt-in existe, Telegram e in-app são
+criados na mesma transação e cada entrega nova publica somente
+`NotificationDeliveryRequested(deliveryId)` no outbox; o texto e o endereço
+nunca entram no envelope, metadado, log ou métrica.
+
+Alterar o endereço por `notifications.set_recipient_contact` limpa
+`is_validated`; repetir o mesmo endereço não altera a linha nem gera auditoria
+extra. A validação do chat é externa e controlada por processo administrativo
+até que uma vinculação de uso único seja aprovada. Esta fatia não chama a API
+do Telegram, não recebe webhook e não cria resposta automática.
+
 ## Inbound admissão e identidade (#272 PR1)
 
 O webhook (mesmo endpoint do W3) lê `messages[]` dos tipos `image`, `document`
