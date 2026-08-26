@@ -199,7 +199,14 @@ public sealed class TelegramInboundAdmissionTests
             "conflict",
             await AdmitAsync(
                 factory,
-                replay with { InboundId = Guid.NewGuid(), UpdateId = 10, TextBody = "changed" }
+                replay with { InboundId = Guid.NewGuid(), UpdateId = 10 }
+            )
+        );
+        Assert.Equal(
+            "conflict",
+            await AdmitAsync(
+                factory,
+                replay with { InboundId = Guid.NewGuid(), TextBody = "changed" }
             )
         );
 
@@ -239,31 +246,57 @@ public sealed class TelegramInboundAdmissionTests
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var template = AdmissionRequest.Unbound(860001, 12, 5001, "concurrent");
-        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var ready = 0;
+        await using var firstRuntime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString);
+        await firstRuntime.OpenAsync();
+        await using var firstTransaction = await firstRuntime.BeginTransactionAsync();
+        var firstResult = await AdmitAsync(firstRuntime, firstTransaction, template);
 
-        var results = await Task.WhenAll(Enumerable.Range(0, 2).Select(AdmitConcurrentlyAsync));
+        await using var contenderRuntime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString);
+        await contenderRuntime.OpenAsync();
+        var contenderTask = AdmitAsync(
+            contenderRuntime,
+            null,
+            template with { InboundId = Guid.NewGuid() }
+        );
+        await using var observer = await factory.Fixture.OpenAdministratorConnectionAsync();
+        var firstCommitted = false;
+        try
+        {
+            using var lockWaitCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await WaitForContenderUniqueConstraintLockAsync(
+                observer,
+                contenderRuntime.ProcessID,
+                lockWaitCancellation.Token
+            );
 
-        Assert.Contains("created", results);
-        Assert.Contains("replay", results);
-        Assert.DoesNotContain("conflict", results);
+            await firstTransaction.CommitAsync();
+            firstCommitted = true;
+            Assert.Equal("created", firstResult);
+            var contenderException = await Record.ExceptionAsync(async () => await contenderTask);
+            Assert.NotEqual(
+                PostgresErrorCodes.UniqueViolation,
+                (contenderException as PostgresException)?.SqlState
+            );
+            Assert.Null(contenderException);
+            Assert.Equal("replay", await contenderTask);
+        }
+        finally
+        {
+            if (!firstCommitted)
+            {
+                await firstTransaction.RollbackAsync();
+            }
+
+            if (!contenderTask.IsCompleted)
+            {
+                await contenderTask;
+            }
+        }
+
         var row = Assert.Single(await TelegramNotificationSeed.ReadInboundMessagesAsync(factory));
         Assert.Equal(template.ChatId, row.ChatId);
         Assert.Equal(template.MessageId, row.MessageId);
         Assert.Equal("unbound", row.ResolutionState);
-
-        async Task<string> AdmitConcurrentlyAsync(int attempt)
-        {
-            await using var runtime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString);
-            await runtime.OpenAsync();
-            if (Interlocked.Increment(ref ready) == 2)
-            {
-                release.TrySetResult(true);
-            }
-
-            await release.Task;
-            return await AdmitAsync(runtime, null, template with { InboundId = Guid.NewGuid() });
-        }
     }
 
     [Fact]
@@ -486,7 +519,9 @@ public sealed class TelegramInboundAdmissionTests
                 to_regclass('notifications.inbound_telegram_messages') IS NOT NULL,
                 to_regprocedure('notifications.resolve_inbound_telegram_actor(bigint)') IS NOT NULL,
                 to_regprocedure(
-                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)') IS NOT NULL
+                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)') IS NOT NULL,
+                to_regprocedure(
+                    'notifications.get_telegram_notification_delivery_target(uuid,uuid)') IS NOT NULL
             """,
             administrator
         );
@@ -495,7 +530,48 @@ public sealed class TelegramInboundAdmissionTests
         Assert.Equal(expected, reader.GetBoolean(0));
         Assert.Equal(expected, reader.GetBoolean(1));
         Assert.Equal(expected, reader.GetBoolean(2));
+        Assert.True(reader.GetBoolean(3));
         Assert.False(await reader.ReadAsync());
+    }
+
+    private static async Task WaitForContenderUniqueConstraintLockAsync(
+        NpgsqlConnection observer,
+        int contenderProcessId,
+        CancellationToken cancellationToken
+    )
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_stat_activity AS activity
+                    WHERE activity.pid = @process_id
+                      AND activity.wait_event_type = 'Lock'
+                      AND activity.wait_event = 'transactionid')
+                """,
+                observer
+            );
+            command.Parameters.AddWithValue("process_id", contenderProcessId);
+            if ((bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false))
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            "The contender did not block on the first admission transaction."
+        );
     }
 
     private static async Task AssertFunctionContractAsync(
