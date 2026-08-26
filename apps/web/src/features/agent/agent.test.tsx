@@ -566,7 +566,7 @@ describe("agent workspace", () => {
   it("blocks all interaction with no company before any request", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     await renderAgentWorkspace("/", createCompanylessGateway());
     await user.click(
       screen.getByRole("button", {
@@ -584,6 +584,20 @@ describe("agent workspace", () => {
       "aria-disabled",
       "true",
     );
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    const picker = dock.getByLabelText("Anexar documentos ao agente");
+    const blockedMessage = "tentativa sem empresa";
+
+    await user.click(dock.getByRole("button", { name: "Anexar" }));
+    await user.upload(picker, attachmentFile("sem-empresa.pdf"));
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+
+    expect(picker).toHaveValue("");
+    expect(
+      dock.queryByRole("list", { name: "Anexos selecionados" }),
+    ).toBeNull();
+    expect(dock.getByRole("log")).not.toHaveTextContent(blockedMessage);
+    expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -613,7 +627,7 @@ describe("agent workspace", () => {
     };
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
     await renderAgentWorkspace("/", gateway);
 
     await user.click(
@@ -634,6 +648,20 @@ describe("agent workspace", () => {
       "aria-disabled",
       "true",
     );
+    expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
+    const picker = dock.getByLabelText("Anexar documentos ao agente");
+    const blockedMessage = "tentativa sem capability";
+
+    await user.click(dock.getByRole("button", { name: "Anexar" }));
+    await user.upload(picker, attachmentFile("sem-capability.pdf"));
+    await user.click(dock.getByRole("button", { name: "Enviar" }));
+
+    expect(picker).toHaveValue("");
+    expect(
+      dock.queryByRole("list", { name: "Anexos selecionados" }),
+    ).toBeNull();
+    expect(dock.getByRole("log")).not.toHaveTextContent(blockedMessage);
+    expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
