@@ -154,6 +154,39 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                         RAISE EXCEPTION 'member default role capability catalog is incomplete'
                             USING ERRCODE = '23514';
                     END IF;
+                ELSE
+                    -- Admin pré-existente: completa APENAS o grant ausente da
+                    -- nova capability, idempotente e sem tocar nos demais.
+                    INSERT INTO foundation.role_capabilities (
+                        id, company_id, role_id, capability_id, scope,
+                        created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+                    SELECT
+                        gen_random_uuid(),
+                        p_company_id,
+                        admin_role.id,
+                        capability.id,
+                        'company',
+                        admin_role.created_by_user_id,
+                        admin_role.created_by_user_id,
+                        gen_random_uuid(),
+                        clock_timestamp(),
+                        clock_timestamp()
+                    FROM foundation.roles AS admin_role
+                    CROSS JOIN foundation.capabilities AS capability
+                    WHERE admin_role.company_id = p_company_id
+                      AND admin_role.name = 'admin'
+                      AND admin_role.deleted_at IS NULL
+                      AND capability.name = 'paguai.draft.approve'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM foundation.role_capabilities AS existing
+                          WHERE existing.company_id = admin_role.company_id
+                            AND existing.role_id = admin_role.id
+                            AND existing.capability_id = capability.id
+                            AND existing.scope = 'company'
+                            AND existing.deleted_at IS NULL)
+                    ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+                        DO NOTHING;
                 END IF;
             END;
             $function$;
@@ -168,57 +201,45 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
         );
         migrationBuilder.Sql(
             """
-            -- Backfill: empresas com admin existente recebem o novo grant
-            -- (executado como migrator, bypass de RLS, como na migração original).
+            -- Enumeração temporária de empresas para o DONO provisionar; padrão
+            -- idêntico ao bloco final da migração AddCompanyDefaultRoles.
+            CREATE POLICY companies_permissions_owner_backfill_select
+                ON foundation.companies FOR SELECT TO vinx_permissions_owner
+                USING (deleted_at IS NULL);
+
+            GRANT CREATE ON SCHEMA foundation TO vinx_permissions_owner;
+            SET ROLE vinx_permissions_owner;
+
             DO $block$
             DECLARE
                 company_record record;
+                has_active_membership boolean;
             BEGIN
                 FOR company_record IN
-                    SELECT company.id
-                    FROM foundation.companies AS company
-                    INNER JOIN foundation.memberships AS membership
-                        ON membership.company_id = company.id
-                       AND membership.deleted_at IS NULL
-                    WHERE company.deleted_at IS NULL
-                    GROUP BY company.id
+                    SELECT id FROM foundation.companies WHERE deleted_at IS NULL
                 LOOP
-                    INSERT INTO foundation.role_capabilities (
-                        id, company_id, role_id, capability_id, scope,
-                        created_by_user_id, updated_by_user_id, request_id,
-                        created_at, updated_at)
-                    SELECT
-                        gen_random_uuid(),
-                        company_record.id,
-                        role_record.id,
-                        capability.id,
-                        'company',
-                        role_record.created_by_user_id,
-                        role_record.created_by_user_id,
-                        gen_random_uuid(),
-                        clock_timestamp(),
-                        clock_timestamp()
-                    FROM foundation.roles AS role_record
-                    CROSS JOIN foundation.capabilities AS capability
-                    WHERE role_record.company_id = company_record.id
-                      AND role_record.name = 'admin'
-                      AND role_record.deleted_at IS NULL
-                      AND capability.name = 'paguai.draft.approve'
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM foundation.role_capabilities AS existing
-                          WHERE existing.company_id = role_record.company_id
-                            AND existing.role_id = role_record.id
-                            AND existing.capability_id = capability.id
-                            AND existing.scope = 'company'
-                            AND existing.deleted_at IS NULL)
-                    ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
-                        DO NOTHING;
+                    -- Contexto de empresa por iteração desbloqueia a leitura das
+                    -- memberships sob as policies do papel de provisionamento.
+                    PERFORM set_config('app.company_id', company_record.id::text, true);
+                    SELECT EXISTS (
+                        SELECT 1 FROM foundation.memberships
+                        WHERE company_id = company_record.id
+                          AND deleted_at IS NULL)
+                    INTO has_active_membership;
+                    IF has_active_membership THEN
+                        PERFORM foundation.ensure_company_default_roles(company_record.id);
+                    END IF;
                 END LOOP;
             END;
             $block$;
+
+            RESET ROLE;
+            DROP POLICY companies_permissions_owner_backfill_select
+                ON foundation.companies;
+            REVOKE CREATE ON SCHEMA foundation FROM vinx_permissions_owner;
 """
         );
+
         migrationBuilder.Sql(
             """
             -- Diretório de destinatários na fila: resolução só na entrega. O

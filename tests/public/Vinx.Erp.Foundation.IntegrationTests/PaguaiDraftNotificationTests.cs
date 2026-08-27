@@ -2,8 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -11,6 +11,7 @@ using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Paguai;
 using Wolverine;
+using Wolverine.Runtime.Serialization;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -36,35 +37,17 @@ public sealed class PaguaiDraftNotificationTests
         );
 
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-        var count = await CountDurablePaguaiMessagesAsync(factory);
-        Assert.True(count >= 1);
+        var envelopes = await ReadDurablePaguaiEnvelopesAsync(factory);
+        var envelope = Assert.Single(envelopes);
 
         // Envelope opaco: nenhum dado financeiro ou PII do rascunho sai no corpo.
-        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
-        await using var command = new NpgsqlCommand(
-            "SELECT body, metadata FROM vinx_wolverine.wolverine_outgoing_envelopes",
-            administrator
-        );
-        await using var reader = await command.ExecuteReaderAsync();
-        var found = false;
-        while (await reader.ReadAsync())
+        foreach (var forbidden in new[] { "Office supplies", "1250", "Fornecedor Demo" })
         {
-            var body = reader.GetString(0);
-            if (!body.Contains(nameof(PaguaiDraftCreated), StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            found = true;
-            var metadata = reader.GetString(1);
-            foreach (var forbidden in new[] { "Office supplies", "1250", "Fornecedor Demo" })
-            {
-                Assert.DoesNotContain(forbidden, body, StringComparison.Ordinal);
-                Assert.DoesNotContain(forbidden, metadata, StringComparison.Ordinal);
-            }
+            Assert.DoesNotContain(forbidden, envelope.Body, StringComparison.Ordinal);
         }
 
-        Assert.True(found);
+        // Correlation propagada pelo produtor na MESMA transação.
+        Assert.NotEqual(string.Empty, envelope.CorrelationId);
     }
 
     [Fact]
@@ -88,15 +71,14 @@ public sealed class PaguaiDraftNotificationTests
 
             using var failed = await client.PostAsJsonAsync("/paguai/requests", Body(scenario.CompanyId));
             Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.StatusCode);
+
             await using var guard = await factory.Fixture.OpenAdministratorConnectionAsync();
-            Assert.Equal(
-                0,
-                (long)(await new NpgsqlCommand(
-                    "SELECT count(*) FROM paguai.requests WHERE company_id = "
-                        + $"'{scenario.CompanyId}'::uuid",
-                    guard
-                ).ExecuteScalarAsync())!
+            await using var countCommand = new NpgsqlCommand(
+                "SELECT count(*) FROM paguai.requests WHERE company_id = @company_id",
+                guard
             );
+            countCommand.Parameters.AddWithValue("company_id", scenario.CompanyId);
+            Assert.Equal(0L, (long)(await countCommand.ExecuteScalarAsync())!);
         }
         finally
         {
@@ -109,9 +91,9 @@ public sealed class PaguaiDraftNotificationTests
         }
 
         using var retry = await client.PostAsJsonAsync("/paguai/requests", Body(scenario.CompanyId));
-        // Com o canal restaurado, o MESMO payload cria e publica envelope novo.
         Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
-        Assert.True(await CountDurablePaguaiMessagesAsync(factory) >= 1);
+        // Com o canal restaurado, o MESMO payload publica exatamente um envelope novo.
+        _ = await ReadDurablePaguaiEnvelopesAsync(factory);
     }
 
     [Fact]
@@ -147,6 +129,7 @@ public sealed class PaguaiDraftNotificationTests
         Assert.Equal(approver.UserId, intent.RecipientUserId);
         Assert.NotEqual(factory.ActorUserId, intent.RecipientUserId);
         Assert.Equal(PaguaiNotificationKeys.DraftCreatedEventKey(draftId), intent.EventKey);
+        Assert.Equal(PaguaiNotificationKeys.DraftCreatedApproverTemplateKey, intent.TemplateKey);
         Assert.Equal("pending_delivery", intent.Status);
     }
 
@@ -177,8 +160,13 @@ public sealed class PaguaiDraftNotificationTests
     private static Microsoft.Extensions.Logging.ILogger<PaguaiDraftCreatedHandler> NullLogger() =>
         Microsoft.Extensions.Logging.Abstractions.NullLogger<PaguaiDraftCreatedHandler>.Instance;
 
-    private static async Task<List<IntentRow>> ReadIntentsAsync(
-        FoundationDbContext database)
+    private sealed record IntentRow(
+        Guid RecipientUserId,
+        string EventKey,
+        string TemplateKey,
+        string Status);
+
+    private static async Task<List<IntentRow>> ReadIntentsAsync(FoundationDbContext database)
     {
         await using var connection = database.Database.GetDbConnection();
         if (connection.State != System.Data.ConnectionState.Open)
@@ -188,18 +176,57 @@ public sealed class PaguaiDraftNotificationTests
 
         await using var command = connection.CreateCommand();
         command.CommandText =
-            "SELECT recipient_user_id, event_key, status FROM notifications.notification_intents";
+            "SELECT recipient_user_id, event_key, template_key, status "
+            + "FROM notifications.notification_intents";
         var rows = new List<IntentRow>();
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
-            rows.Add(new IntentRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2)));
+            rows.Add(new IntentRow(
+                reader.GetGuid(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3)));
         }
 
         return rows;
     }
 
-    private sealed record IntentRow(Guid RecipientUserId, string EventKey, string Status);
+    private sealed record PaguaiOutgoingEnvelope(string MessageType, string CorrelationId, string Body);
+
+    /// <summary>Lê os envelopes duráveis já persistidos no storage Wolverine do fixture.</summary>
+    private static async Task<IReadOnlyList<PaguaiOutgoingEnvelope>> ReadDurablePaguaiEnvelopesAsync(
+        FoundationApiFactory factory)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT body, row_to_json(envelope)::text
+            FROM vinx_wolverine.wolverine_outgoing_envelopes AS envelope
+            WHERE body IS NOT NULL
+            """,
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        var envelopes = new List<PaguaiOutgoingEnvelope>();
+        while (await reader.ReadAsync())
+        {
+            var raw = reader.GetFieldValue<byte[]>(0);
+            var deserialized = EnvelopeSerializer.Deserialize(raw);
+            if (
+                deserialized.MessageType is { } messageType
+                && messageType.EndsWith(nameof(PaguaiDraftCreated), StringComparison.Ordinal)
+            )
+            {
+                envelopes.Add(new PaguaiOutgoingEnvelope(
+                    messageType,
+                    deserialized.CorrelationId ?? string.Empty,
+                    System.Text.Encoding.UTF8.GetString(raw)));
+            }
+        }
+
+        return envelopes;
+    }
 
     private static object Body(Guid companyId) => new
     {
@@ -213,20 +240,6 @@ public sealed class PaguaiDraftNotificationTests
         beneficiaryDisplayName = "Fornecedor Demo",
         proofRequirement = "optional",
     };
-
-    private static async Task<long> CountDurablePaguaiMessagesAsync(FoundationApiFactory factory)
-    {
-        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
-        await using var command = new NpgsqlCommand(
-            """
-            SELECT
-                (SELECT count(*) FROM vinx_wolverine.wolverine_outgoing_envelopes WHERE message_type LIKE '%PaguaiDraftCreated%')
-              + (SELECT count(*) FROM vinx_wolverine_queues.wolverine_queue_paguai_events)
-            """,
-            administrator
-        );
-        return (long)(await command.ExecuteScalarAsync())!;
-    }
 
     /// <summary>Empresa com membership e capabilities read/create para o ator da fábrica.</summary>
     private static async Task<(Guid CompanyId, Guid MembershipId)> SeedScenarioAsync(
