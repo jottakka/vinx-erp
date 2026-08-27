@@ -26,6 +26,8 @@
 | SLA | `isOverdue` é derivado sem persistência e não marca estados terminais. | `AtendimentoCardEndpointTests.Overdue_is_derived_without_changing_terminal_state` |
 | Ordenação | Fila usa `createdAt DESC, id DESC`. | `AtendimentoCardEndpointTests.Queue_order_is_created_desc_then_id_desc` |
 | Migration | Up preenche defaults em cartões legados; Down recusa cada campo não-default e preserva estado em falha. | `AtendimentoCardMigrationTests.Operational_metadata_up_preserves_legacy_cards_with_defaults`; `AtendimentoCardMigrationTests.Operational_metadata_migration_fails_closed_for_each_non_default_field`; `AtendimentoCardSchemaTests.Operational_metadata_schema_preserves_rls_grants_and_order_index` |
+| Recuperação/current | Um `current` atrasado de `integrity_conflict` só publica pela geração vigente de recuperação e fila e nunca rebaixa a versão publicada (nem o detalhe aberto). | `atendimento-page.test.tsx` (Vitest) |
+| Resultado ambíguo | 2xx não parseável e falha de transporte pós-POST são marcados `mayHaveCommitted`; a página bloqueia o cartão até readback autorizado e invalida quando o readback falha; create repete o mesmo comando após resultado inconclusivo. | `atendimento-client.test.ts`, `atendimento-page.test.tsx` (Vitest) |
 
 Comandos de verificação do gate (não executados neste closeout):
 

@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { isCanonicalUuid } from "../../shared/http/bff-response";
+import {
+  fetchSameOriginBff,
+  isCanonicalUuid,
+} from "../../shared/http/bff-response";
 
 export type AtendimentoColumn =
   | "novo"
@@ -17,7 +20,16 @@ export type AtendimentoCard = {
   assigneeMembershipId: string | null;
   attachmentFileId: string | null;
   participantMembershipIds: readonly string[];
+  priority: AtendimentoPriority;
+  channel: AtendimentoChannel;
+  slaDueAt: string | null;
+  isOverdue: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
 };
+
+export type AtendimentoPriority = "critica" | "alta" | "media" | "baixa";
+export type AtendimentoChannel = "whatsapp" | "email" | "web" | "manual";
 
 export type AtendimentoAssignmentOption = {
   membershipId: string;
@@ -27,17 +39,52 @@ export type AtendimentoAssignmentOption = {
 export type AtendimentoCreateOptions = {
   attachmentFileId?: string | null;
   participantMembershipIds?: readonly string[];
+  priority?: AtendimentoPriority;
+  channel?: AtendimentoChannel;
+  slaDueAt?: string | null;
 };
+
+const atendimentoIdSchema = z.string().refine(isCanonicalUuid);
+
+const atendimentoCardSchema = z
+  .object({
+    id: atendimentoIdSchema,
+    companyId: atendimentoIdSchema,
+    title: z.string().min(1).max(200),
+    description: z.string().min(1).max(4000),
+    column: z.enum(["novo", "em_andamento", "concluido", "cancelado"]),
+    version: z.number().int().positive(),
+    assigneeMembershipId: atendimentoIdSchema.nullable(),
+    attachmentFileId: atendimentoIdSchema.nullable(),
+    participantMembershipIds: z.array(atendimentoIdSchema),
+    priority: z.enum(["critica", "alta", "media", "baixa"]),
+    channel: z.enum(["whatsapp", "email", "web", "manual"]),
+    slaDueAt: z.string().datetime({ offset: true }).nullable(),
+    isOverdue: z.boolean(),
+    createdAt: z.string().datetime({ offset: true }).nullable(),
+    updatedAt: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict();
+const atendimentoCardsSchema = z.array(atendimentoCardSchema);
+
+function parseCard(value: unknown): AtendimentoCard | null {
+  const parsed = atendimentoCardSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 
 type CommandResult =
   | { ok: true; card: AtendimentoCard }
-  | { ok: false; code: string; current?: AtendimentoCard };
+  | {
+      ok: false;
+      code: string;
+      current?: AtendimentoCard;
+      mayHaveCommitted?: true;
+    };
 
 const basePath = "/atendimento/cards";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const antiforgeryHeaderName = "X-CSRF-TOKEN";
 
-const atendimentoIdSchema = z.string().refine(isCanonicalUuid);
 const assignmentOptionsSchema = z.array(
   z
     .object({
@@ -75,32 +122,59 @@ async function getAntiforgeryToken(): Promise<string | null> {
 }
 
 async function command(path: string, body: object): Promise<CommandResult> {
-  try {
-    const requestToken = await getAntiforgeryToken();
-    if (!requestToken) return { code: "atendimento_unavailable", ok: false };
+  const requestToken = await getAntiforgeryToken();
+  if (!requestToken) return { code: "atendimento_unavailable", ok: false };
 
-    const response = await request(path, {
+  // Falha de transporte após o disparo do POST e 2xx com corpo que não valida
+  // podem representar um commit no servidor: o resultado é ambíguo
+  // (mayHaveCommitted), nunca uma falha definitiva, e a página reconcilia por
+  // readback em vez de reenviar.
+  const outcome = await fetchSameOriginBff(
+    fetch,
+    path,
+    {
       body: JSON.stringify(body),
       headers: {
         "Content-Type": "application/json",
         [antiforgeryHeaderName]: requestToken,
       },
+      mayHaveCommittedOnAbort: true,
       method: "POST",
-    });
-    if (response.ok)
-      return { card: (await response.json()) as AtendimentoCard, ok: true };
-    const error = (await response.json().catch(() => null)) as {
-      code?: string;
-      current?: AtendimentoCard;
-    } | null;
+    },
+    (kind, { mayHaveCommittedOnAbort }) => ({
+      kind,
+      mayHaveCommitted: mayHaveCommittedOnAbort,
+    }),
+  );
+  if (!("response" in outcome)) {
     return {
-      code: error?.code ?? "atendimento_unavailable",
-      current: error?.current,
+      code: "atendimento_unavailable",
+      ...(outcome.mayHaveCommitted ? { mayHaveCommitted: true } : {}),
       ok: false,
     };
-  } catch {
-    return { code: "atendimento_unavailable", ok: false };
   }
+  const response = outcome.response;
+  if (response.ok) {
+    const card = parseCard(await response.json().catch(() => null));
+    return card
+      ? { card, ok: true }
+      : {
+          code: "atendimento_unavailable",
+          mayHaveCommitted: true,
+          ok: false,
+        };
+  }
+  const error = (await response.json().catch(() => null)) as {
+    code?: string;
+    current?: unknown;
+  } | null;
+  const current =
+    error?.current === undefined ? undefined : parseCard(error.current);
+  return {
+    code: error?.code ?? "atendimento_unavailable",
+    ...(current ? { current } : {}),
+    ok: false,
+  };
 }
 
 export const atendimentoClient = {
@@ -109,9 +183,9 @@ export const atendimentoClient = {
       const response = await request(
         `${basePath}?companyId=${encodeURIComponent(companyId)}`,
       );
-      return response.ok
-        ? ((await response.json()) as AtendimentoCard[])
-        : null;
+      if (!response.ok) return null;
+      const parsed = atendimentoCardsSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
@@ -140,14 +214,20 @@ export const atendimentoClient = {
     {
       attachmentFileId = null,
       participantMembershipIds = [],
+      priority = "media",
+      channel = "web",
+      slaDueAt = null,
     }: AtendimentoCreateOptions = {},
   ) {
     return command(basePath, {
       attachmentFileId,
+      channel,
       companyId,
       description,
       participantMembershipIds: [...participantMembershipIds],
+      priority,
       requestId,
+      slaDueAt,
       title,
     });
   },

@@ -18,25 +18,37 @@ import { z } from "zod";
 import { CompanySelect } from "../../shared/ui/company-select";
 import type { AuthorizedCompanyMembership } from "../auth/session-contract";
 import { createAtendimentoAttachmentUploader } from "./atendimento-attachment-uploader";
-import type { AtendimentoAssignmentOption } from "./atendimento-client";
+import type {
+  AtendimentoAssignmentOption,
+  AtendimentoChannel,
+  AtendimentoPriority,
+} from "./atendimento-client";
+import {
+  channelLabels,
+  priorityPresentation,
+} from "./atendimento-presentation";
 
 export type AtendimentoCreateValues = z.infer<typeof schema>;
 const schema = z.object({
+  channel: z.enum(["whatsapp", "email", "web", "manual"]),
   description: z
     .string()
     .trim()
     .min(1, "Informe uma descrição.")
     .max(4000, "A descrição deve ter no máximo 4.000 caracteres."),
+  priority: z.enum(["critica", "alta", "media", "baixa"]),
+  slaDueAt: z.string(),
   title: z
     .string()
     .trim()
     .min(1, "Informe um título.")
     .max(200, "O título deve ter no máximo 200 caracteres."),
 });
-type Values = z.output<typeof schema> & {
+type Values = Omit<z.output<typeof schema>, "slaDueAt"> & {
   attachmentFileId?: string;
   participantMembershipIds: readonly string[];
   requestId: string;
+  slaDueAt: string | null;
 };
 export type AtendimentoCreateSubmitResult =
   | { ok: true }
@@ -64,6 +76,9 @@ type CreatePayload = {
   companyId: string;
   description: string;
   participantMembershipIds: readonly string[];
+  priority: AtendimentoPriority;
+  channel: AtendimentoChannel;
+  slaDueAt: string | null;
   title: string;
 };
 type CreateAttempt = {
@@ -82,6 +97,9 @@ function sameCreatePayload(left: CreatePayload, right: CreatePayload) {
   return (
     left.attachmentKey === right.attachmentKey &&
     left.companyId === right.companyId &&
+    left.priority === right.priority &&
+    left.channel === right.channel &&
+    left.slaDueAt === right.slaDueAt &&
     left.description === right.description &&
     left.title === right.title &&
     left.participantMembershipIds.length ===
@@ -105,7 +123,13 @@ export function AtendimentoCreateDialog({
   uploader: providedUploader,
 }: Props) {
   const form = useForm<AtendimentoCreateValues>({
-    defaultValues: { description: "", title: "" },
+    defaultValues: {
+      channel: "web",
+      description: "",
+      priority: "media",
+      slaDueAt: "",
+      title: "",
+    },
     resolver: zodResolver(schema),
   });
   const uploadRef = useRef<AbortController | null>(null);
@@ -132,7 +156,13 @@ export function AtendimentoCreateDialog({
     setError(null);
     setParticipantMembershipIds([]);
     if (attachmentInputRef.current) attachmentInputRef.current.value = "";
-    form.reset({ description: "", title: "" });
+    form.reset({
+      channel: "web",
+      description: "",
+      priority: "media",
+      slaDueAt: "",
+      title: "",
+    });
   }
   function close() {
     if (phase !== "idle") return;
@@ -155,15 +185,29 @@ export function AtendimentoCreateDialog({
     setAttachment(null);
     setError(null);
     setParticipantMembershipIds([]);
-    form.reset({ description: "", title: "" });
+    form.reset({
+      channel: "web",
+      description: "",
+      priority: "media",
+      slaDueAt: "",
+      title: "",
+    });
   }, [companyId, form, open]);
   async function submit(values: AtendimentoCreateValues) {
     if (phase !== "idle") return;
+    const slaDate = values.slaDueAt ? new Date(values.slaDueAt) : null;
+    if (slaDate && Number.isNaN(slaDate.getTime())) {
+      setError("Informe um prazo de SLA válido.");
+      return;
+    }
     const payload: CreatePayload = {
       attachmentKey: attachmentKey(attachment),
+      channel: values.channel,
       companyId,
       description: values.description,
       participantMembershipIds: [...new Set(participantMembershipIds)].sort(),
+      priority: values.priority,
+      slaDueAt: slaDate ? slaDate.toISOString() : null,
       title: values.title,
     };
     const currentAttempt = createAttemptRef.current;
@@ -199,9 +243,12 @@ export function AtendimentoCreateDialog({
     setPhase("creating");
     const result = await onSubmit({
       attachmentFileId,
+      channel: payload.channel,
       description: payload.description,
       participantMembershipIds: payload.participantMembershipIds,
+      priority: payload.priority,
       requestId: attempt.requestId,
+      slaDueAt: payload.slaDueAt,
       title: payload.title,
     });
     if (epoch !== epochRef.current || createAttemptRef.current !== attempt)
@@ -275,6 +322,76 @@ export function AtendimentoCreateDialog({
               />
             </Box>
           </Stack>
+          <Stack direction={{ md: "row", xs: "column" }} spacing={2}>
+            <TextField
+              disabled={phase !== "idle"}
+              fullWidth
+              label="Prioridade"
+              select
+              value={form.watch("priority")}
+              {...form.register("priority")}
+              onChange={(event) => {
+                setError(null);
+                form.setValue(
+                  "priority",
+                  event.target.value as AtendimentoPriority,
+                  { shouldDirty: true },
+                );
+              }}
+            >
+              <MenuItem value="critica">
+                {priorityPresentation.critica.label}
+              </MenuItem>
+              <MenuItem value="alta">
+                {priorityPresentation.alta.label}
+              </MenuItem>
+              <MenuItem value="media">
+                {priorityPresentation.media.label}
+              </MenuItem>
+              <MenuItem value="baixa">
+                {priorityPresentation.baixa.label}
+              </MenuItem>
+            </TextField>
+            <TextField
+              disabled={phase !== "idle"}
+              fullWidth
+              label="Canal"
+              select
+              value={form.watch("channel")}
+              {...form.register("channel")}
+              onChange={(event) => {
+                setError(null);
+                form.setValue(
+                  "channel",
+                  event.target.value as AtendimentoChannel,
+                  { shouldDirty: true },
+                );
+              }}
+            >
+              <MenuItem value="web">{channelLabels.web}</MenuItem>
+              <MenuItem value="whatsapp">{channelLabels.whatsapp}</MenuItem>
+              <MenuItem value="email">{channelLabels.email}</MenuItem>
+              <MenuItem value="manual">{channelLabels.manual}</MenuItem>
+            </TextField>
+          </Stack>
+          <TextField
+            disabled={phase !== "idle"}
+            fullWidth
+            helperText="Data limite operacional; não agenda uma ação."
+            label="Prazo de SLA"
+            value={form.watch("slaDueAt")}
+            {...form.register("slaDueAt")}
+            onChange={(event) => {
+              setError(null);
+              form.setValue("slaDueAt", event.target.value, {
+                shouldDirty: true,
+              });
+            }}
+            slotProps={{
+              htmlInput: { type: "datetime-local" },
+              inputLabel: { shrink: true },
+            }}
+          />
           <TextField
             label="Pessoas envolvidas"
             disabled={phase !== "idle"}

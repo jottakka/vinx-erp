@@ -28,6 +28,7 @@ import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
+import { StatusChip } from "../../shared/ui/status-chip";
 import {
   hasCompanyCapability,
   resolveCompanyEntityPermissions,
@@ -36,13 +37,21 @@ import { useSession } from "../auth/session-provider";
 import {
   type AtendimentoAssignmentOption,
   type AtendimentoCard,
+  type AtendimentoChannel,
   type AtendimentoColumn,
+  type AtendimentoPriority,
   atendimentoClient,
 } from "./atendimento-client";
 import {
   type AtendimentoAttachmentUploader,
   AtendimentoCreateDialog,
 } from "./atendimento-create-dialog";
+import {
+  channelLabels,
+  formatAtendimentoDate,
+  isAtendimentoOverdue,
+  priorityPresentation,
+} from "./atendimento-presentation";
 
 const columns: readonly {
   id: AtendimentoColumn;
@@ -75,6 +84,8 @@ type CardMutationLease = {
 function messageFor(code: string) {
   if (code === "integrity_conflict")
     return "O cartão foi atualizado enquanto você atuava. Verifique o estado atual da fila.";
+  if (code === "outcome_unconfirmed")
+    return "Não foi possível confirmar o resultado da ação. O cartão foi sincronizado com o estado atual.";
   if (code === "capability_denied" || code === "membership_required")
     return "Sua sessão não tem permissão para esta ação nesta empresa.";
   return "Não foi possível concluir a ação. Tente novamente.";
@@ -139,6 +150,12 @@ export function AtendimentoPage({
   const assignmentAbort = useRef<AbortController | null>(null);
   const mutationGenerations = useRef(new Map<string, number>());
   const pendingMutations = useRef(new Map<string, number>());
+  const [recoveringCardKeys, setRecoveringCardKeys] = useState<
+    readonly string[]
+  >([]);
+  const reloadSequence = useRef(0);
+  const queueReloadToken = useRef(0);
+  const recoveryTokens = useRef(new Map<string, number>());
 
   const createCompanies = useMemo(
     () =>
@@ -185,6 +202,17 @@ export function AtendimentoPage({
   }, [companyId, createCompanies]);
 
   useEffect(() => {
+    queueReloadToken.current = ++reloadSequence.current;
+    assignmentEpoch.current++;
+    assignmentAbort.current?.abort();
+    setStatusMenu(null);
+    setActionsMenu(null);
+    setViewingCard(null);
+    setAssigningCard(null);
+    setAssignmentOptions([]);
+    setAssigneeMembershipId("");
+    setCancellingCard(null);
+    setCancellationReason("");
     if (!requestedCompanies.length) {
       setCards([]);
       return;
@@ -192,7 +220,6 @@ export function AtendimentoPage({
     let active = true;
     setLoading(true);
     setError(null);
-    setViewingCard(null);
     void Promise.all(
       requestedCompanies.map(async (company) => ({
         companyId: company.companyId,
@@ -259,6 +286,9 @@ export function AtendimentoPage({
     description: string;
     attachmentFileId?: string;
     participantMembershipIds: readonly string[];
+    priority: AtendimentoPriority;
+    channel: AtendimentoChannel;
+    slaDueAt: string | null;
   }): Promise<{ ok: true } | { ok: false; message: string }> {
     if (!selectedCompany || !permissions.canCreate)
       return {
@@ -272,7 +302,10 @@ export function AtendimentoPage({
       values.description,
       {
         attachmentFileId: values.attachmentFileId ?? null,
+        channel: values.channel,
         participantMembershipIds: values.participantMembershipIds,
+        priority: values.priority,
+        slaDueAt: values.slaDueAt,
       },
     );
     if (!result.ok) {
@@ -336,20 +369,33 @@ export function AtendimentoPage({
   }
 
   async function move(card: AtendimentoCard, column: AtendimentoColumn) {
-    if (card.column === column || card.column === "cancelado") return;
+    if (
+      card.column === column ||
+      card.column === "cancelado" ||
+      isRecoveringCard(card)
+    )
+      return;
     const lease = beginCardMutation(card);
     if (!lease) return;
     try {
       const result = await atendimentoClient.move(card.companyId, card, column);
-      if (!result.ok) return recover(result.code, result.current);
+      if (!result.ok)
+        return await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
       applyCardSnapshot(result.card, lease);
+      closeCardMenus(card.companyId, card.id);
     } finally {
       finishCardMutation(lease);
     }
   }
 
   async function assign(card: AtendimentoCard) {
-    if (!assigneeMembershipId.trim()) return;
+    if (isRecoveringCard(card) || !assigneeMembershipId.trim()) return;
     const lease = beginCardMutation(card);
     if (!lease) return;
     setAssigning(true);
@@ -360,10 +406,17 @@ export function AtendimentoPage({
         assigneeMembershipId.trim(),
       );
       if (!result.ok) {
-        recover(result.code, result.current);
+        await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
         return;
       }
       applyCardSnapshot(result.card, lease);
+      closeCardMenus(card.companyId, card.id);
       setAssigningCard(null);
       setAssigneeMembershipId("");
     } finally {
@@ -373,6 +426,7 @@ export function AtendimentoPage({
   }
 
   async function openAssignment(card: AtendimentoCard) {
+    if (isRecoveringCard(card)) return;
     assignmentAbort.current?.abort();
     const controller = new AbortController();
     assignmentAbort.current = controller;
@@ -392,7 +446,7 @@ export function AtendimentoPage({
 
   async function cancel(card: AtendimentoCard) {
     const reason = cancellationReason.trim();
-    if (!reason || reason.length > 500) return;
+    if (isRecoveringCard(card) || !reason || reason.length > 500) return;
     const lease = beginCardMutation(card);
     if (!lease) return;
     setCancelling(true);
@@ -403,10 +457,17 @@ export function AtendimentoPage({
         reason,
       );
       if (!result.ok) {
-        recover(result.code, result.current);
+        await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
         return;
       }
       applyCardSnapshot(result.card, lease);
+      closeCardMenus(card.companyId, card.id);
       setCancellingCard(null);
       setCancellationReason("");
     } finally {
@@ -415,9 +476,135 @@ export function AtendimentoPage({
     }
   }
 
-  function recover(code: string, current?: AtendimentoCard) {
-    if (current) applyCardSnapshot(current);
-    setError(messageFor(code));
+  function applyRecoveredCard(recovered: AtendimentoCard) {
+    applyCardSnapshot(recovered);
+  }
+
+  async function reloadAfterConflict(
+    code: string,
+    companyId: string,
+    cardId: string,
+    key: string,
+    token: number,
+    expectedQueueToken: number,
+  ) {
+    const refreshedCards = await atendimentoClient.list(companyId);
+    if (
+      recoveryTokens.current.get(key) !== token ||
+      queueReloadToken.current !== expectedQueueToken
+    )
+      return;
+    if (!refreshedCards) {
+      invalidateCard(companyId, cardId);
+      setError(
+        "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
+      );
+      return;
+    }
+    const refreshed = refreshedCards.find(
+      (item) => item.id === cardId && item.companyId === companyId,
+    );
+    if (refreshed) {
+      applyRecoveredCard(refreshed);
+      setError(messageFor(code));
+      return;
+    }
+    invalidateCard(companyId, cardId);
+    setError("O atendimento não está mais disponível nesta empresa.");
+  }
+
+  function recoveryKey(companyId: string, cardId: string) {
+    return `${companyId}:${cardId}`;
+  }
+
+  function isRecoveringCard(card: AtendimentoCard) {
+    return (
+      recoveryTokens.current.has(recoveryKey(card.companyId, card.id)) ||
+      recoveringCardKeys.includes(recoveryKey(card.companyId, card.id))
+    );
+  }
+
+  function closeCardMenus(companyId: string, cardId: string) {
+    const key = recoveryKey(companyId, cardId);
+    setStatusMenu((menu) =>
+      menu && recoveryKey(menu.card.companyId, menu.card.id) === key
+        ? null
+        : menu,
+    );
+    setActionsMenu((menu) =>
+      menu && recoveryKey(menu.card.companyId, menu.card.id) === key
+        ? null
+        : menu,
+    );
+  }
+
+  function invalidateCard(companyId: string, cardId: string) {
+    setCards((cards) =>
+      cards.filter(
+        (card) => card.id !== cardId || card.companyId !== companyId,
+      ),
+    );
+    setViewingCard((card) =>
+      card?.id === cardId && card.companyId === companyId ? null : card,
+    );
+    setAssigningCard((card) =>
+      card?.id === cardId && card.companyId === companyId ? null : card,
+    );
+    setCancellingCard((card) =>
+      card?.id === cardId && card.companyId === companyId ? null : card,
+    );
+    closeCardMenus(companyId, cardId);
+  }
+
+  async function recover(
+    code: string,
+    current: AtendimentoCard | undefined,
+    companyId: string,
+    cardId: string,
+    mayHaveCommitted = false,
+  ): Promise<void> {
+    const key = recoveryKey(companyId, cardId);
+    const token = ++reloadSequence.current;
+    const expectedQueueToken = queueReloadToken.current;
+    recoveryTokens.current.set(key, token);
+    setRecoveringCardKeys((keys) =>
+      keys.includes(key) ? keys : [...keys, key],
+    );
+    closeCardMenus(companyId, cardId);
+    try {
+      const validCurrent =
+        current?.id === cardId && current.companyId === companyId;
+      if (validCurrent && !mayHaveCommitted) {
+        // Um current atrasado só pode publicar se ainda for a geração vigente
+        // da recuperação e da fila: uma fila mais nova já é a autoridade
+        // visual, e o publicador nunca rebaixa a versão do cartão.
+        if (
+          recoveryTokens.current.get(key) === token &&
+          queueReloadToken.current === expectedQueueToken
+        ) {
+          applyRecoveredCard(current);
+          setError(messageFor(code));
+        }
+        return;
+      }
+      if (code === "integrity_conflict" || mayHaveCommitted) {
+        await reloadAfterConflict(
+          mayHaveCommitted ? "outcome_unconfirmed" : code,
+          companyId,
+          cardId,
+          key,
+          token,
+          expectedQueueToken,
+        );
+        return;
+      }
+      setError(messageFor(code));
+    } finally {
+      if (recoveryTokens.current.get(key) === token) {
+        recoveryTokens.current.delete(key);
+        setRecoveringCardKeys((keys) => keys.filter((item) => item !== key));
+      }
+    }
   }
 
   function handleDrop(column: AtendimentoColumn) {
@@ -588,10 +775,12 @@ export function AtendimentoPage({
                   .filter((card) => card.column === column.id)
                   .map((card) => {
                     const mutationPending = isCardMutationPending(card);
+                    const cardRecovering = isRecoveringCard(card);
                     const cardMovable =
                       canEditCard(card) &&
                       card.column !== "cancelado" &&
-                      !mutationPending;
+                      !mutationPending &&
+                      !cardRecovering;
                     return (
                       <Card
                         key={card.id}
@@ -661,6 +850,25 @@ export function AtendimentoPage({
                                 variant="outlined"
                               />
                             ) : null}
+                            <StatusChip
+                              label={priorityPresentation[card.priority].label}
+                              tone={priorityPresentation[card.priority].tone}
+                            />
+                            <Chip
+                              label={channelLabels[card.channel]}
+                              size="small"
+                              variant="outlined"
+                            />
+                            {formatAtendimentoDate(card.slaDueAt) ? (
+                              <Chip
+                                label={`Prazo: ${formatAtendimentoDate(card.slaDueAt)}`}
+                                size="small"
+                                variant="outlined"
+                              />
+                            ) : null}
+                            {isAtendimentoOverdue(card) ? (
+                              <StatusChip label="Atrasado" tone="error" />
+                            ) : null}
                           </Stack>
                         </CardContent>
                         <CardActions
@@ -680,13 +888,14 @@ export function AtendimentoPage({
                           </Button>
                           {canEditCard(card) && card.column !== "cancelado" ? (
                             <Button
-                              disabled={mutationPending}
-                              onClick={(event) =>
+                              disabled={mutationPending || cardRecovering}
+                              onClick={(event) => {
+                                if (isRecoveringCard(card)) return;
                                 setStatusMenu({
                                   anchorEl: event.currentTarget,
                                   card,
-                                })
-                              }
+                                });
+                              }}
                               size="small"
                             >
                               Alterar status
@@ -696,13 +905,14 @@ export function AtendimentoPage({
                           card.column !== "cancelado" ? (
                             <IconButton
                               aria-label="Mais ações"
-                              disabled={mutationPending}
-                              onClick={(event) =>
+                              disabled={mutationPending || cardRecovering}
+                              onClick={(event) => {
+                                if (isRecoveringCard(card)) return;
                                 setActionsMenu({
                                   anchorEl: event.currentTarget,
                                   card,
-                                })
-                              }
+                                });
+                              }}
                               size="small"
                             >
                               <MoreVertOutlinedIcon />
@@ -755,6 +965,10 @@ export function AtendimentoPage({
                 <MenuItem
                   key={destination.id}
                   onClick={() => {
+                    if (isRecoveringCard(statusMenu.card)) {
+                      setStatusMenu(null);
+                      return;
+                    }
                     void move(statusMenu.card, destination.id);
                     setStatusMenu(null);
                   }}
@@ -772,6 +986,10 @@ export function AtendimentoPage({
         {actionsMenu && canAssignCard(actionsMenu.card) ? (
           <MenuItem
             onClick={() => {
+              if (isRecoveringCard(actionsMenu.card)) {
+                setActionsMenu(null);
+                return;
+              }
               void openAssignment(actionsMenu.card);
               setActionsMenu(null);
             }}
@@ -782,6 +1000,10 @@ export function AtendimentoPage({
         {actionsMenu && canCancelCard(actionsMenu.card) ? (
           <MenuItem
             onClick={() => {
+              if (isRecoveringCard(actionsMenu.card)) {
+                setActionsMenu(null);
+                return;
+              }
               setCancellingCard(actionsMenu.card);
               setActionsMenu(null);
             }}
@@ -846,7 +1068,10 @@ export function AtendimentoPage({
               assigning ||
               !assigningCard ||
               !assigneeMembershipId ||
-              (assigningCard ? isCardMutationPending(assigningCard) : false)
+              (assigningCard
+                ? isCardMutationPending(assigningCard) ||
+                  isRecoveringCard(assigningCard)
+                : false)
             }
             onClick={() => assigningCard && void assign(assigningCard)}
             variant="contained"
@@ -894,6 +1119,7 @@ export function AtendimentoPage({
             color="error"
             disabled={
               !cancellingCard ||
+              isRecoveringCard(cancellingCard) ||
               !cancellationReason.trim() ||
               cancellationReason.trim().length > 500 ||
               cancelling ||
@@ -951,6 +1177,25 @@ function ViewCardDialog({
               size="small"
               variant="outlined"
             />
+            <StatusChip
+              label={priorityPresentation[card.priority].label}
+              tone={priorityPresentation[card.priority].tone}
+            />
+            <Chip
+              label={channelLabels[card.channel]}
+              size="small"
+              variant="outlined"
+            />
+            {formatAtendimentoDate(card.slaDueAt) ? (
+              <Chip
+                label={`Prazo: ${formatAtendimentoDate(card.slaDueAt)}`}
+                size="small"
+                variant="outlined"
+              />
+            ) : null}
+            {isAtendimentoOverdue(card) ? (
+              <StatusChip label="Atrasado" tone="error" />
+            ) : null}
           </Stack>
         </Stack>
       ) : null}

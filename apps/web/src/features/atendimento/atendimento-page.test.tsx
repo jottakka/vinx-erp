@@ -30,6 +30,12 @@ const alfaCard: AtendimentoCard = {
   description: "Visível somente para Alfa",
   id: "33333333-3333-4333-8333-333333333333",
   participantMembershipIds: [],
+  priority: "critica",
+  channel: "whatsapp",
+  slaDueAt: "2026-08-28T18:00:00.000Z",
+  isOverdue: true,
+  createdAt: "2026-08-26T12:00:00.000Z",
+  updatedAt: "2026-08-26T13:00:00.000Z",
   title: "Cartão Alfa",
   version: 1,
 };
@@ -41,6 +47,12 @@ const betaCard: AtendimentoCard = {
   description: "Não pode aparecer na fila Alfa",
   id: "44444444-4444-4444-8444-844444444444",
   participantMembershipIds: [],
+  priority: "baixa",
+  channel: "email",
+  slaDueAt: null,
+  isOverdue: false,
+  createdAt: "2026-08-26T11:00:00.000Z",
+  updatedAt: "2026-08-26T11:30:00.000Z",
   title: "Cartão Beta",
   version: 1,
 };
@@ -137,6 +149,82 @@ beforeEach(() =>
 );
 
 describe("AtendimentoPage", () => {
+  it("shows closed priority and channel labels, localized SLA, and server-authorized overdue state", async () => {
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+
+    renderPage();
+
+    expect(await screen.findByText("Crítica")).toBeVisible();
+    expect(screen.getByText("Crítica").closest(".MuiChip-root")).toHaveClass(
+      "MuiChip-colorError",
+    );
+    expect(screen.getByText("WhatsApp")).toBeVisible();
+    const slaDueAt = alfaCard.slaDueAt;
+    if (slaDueAt === null) throw new Error("Expected SLA deadline");
+    const localizedDeadline = new Intl.DateTimeFormat("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date(slaDueAt));
+    expect(screen.getByText(`Prazo: ${localizedDeadline}`)).toBeVisible();
+    expect(screen.getByText("Atrasado")).toBeVisible();
+    expect(screen.queryByText(alfaCard.id)).not.toBeInTheDocument();
+    expect(screen.queryByText("critica")).not.toBeInTheDocument();
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Visualizar" }));
+    const detail = await screen.findByRole("dialog");
+    expect(within(detail).getByText("Crítica")).toBeVisible();
+    expect(within(detail).getByText("WhatsApp")).toBeVisible();
+    expect(
+      within(detail).getByText(`Prazo: ${localizedDeadline}`),
+    ).toBeVisible();
+    expect(within(detail).getByText("Atrasado")).toBeVisible();
+  });
+
+  it("shows all professional priority and channel labels and never overdue on terminal cards", async () => {
+    const cards = [
+      {
+        ...alfaCard,
+        id: "a",
+        priority: "alta" as const,
+        channel: "web" as const,
+      },
+      {
+        ...alfaCard,
+        id: "b",
+        priority: "media" as const,
+        channel: "manual" as const,
+        isOverdue: true,
+        column: "concluido" as const,
+      },
+      {
+        ...alfaCard,
+        id: "c",
+        priority: "baixa" as const,
+        channel: "email" as const,
+        isOverdue: true,
+        column: "cancelado" as const,
+      },
+    ];
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue(cards);
+
+    renderPage();
+
+    expect(await screen.findByText("Alta")).toBeVisible();
+    expect(screen.getByText("Alta").closest(".MuiChip-root")).toHaveClass(
+      "MuiChip-colorWarning",
+    );
+    expect(screen.getByText("Média")).toBeVisible();
+    expect(screen.getByText("Baixa")).toBeVisible();
+    expect(screen.getByText("Web")).toBeVisible();
+    expect(screen.getByText("Manual")).toBeVisible();
+    expect(screen.getByText("E-mail")).toBeVisible();
+    expect(screen.getAllByText("Atrasado")).toHaveLength(1);
+    expect(screen.queryByText("alta")).not.toBeInTheDocument();
+    expect(screen.queryByText("media")).not.toBeInTheDocument();
+    expect(screen.queryByText("baixa")).not.toBeInTheDocument();
+  });
   it("aggregates every authorized company, labels each card, and renders the four real state columns", async () => {
     vi.spyOn(atendimentoClient, "list")
       .mockResolvedValueOnce([alfaCard])
@@ -238,7 +326,13 @@ describe("AtendimentoPage", () => {
       ),
       "Novo cartão",
       "Descrição do cartão",
-      { attachmentFileId: null, participantMembershipIds: [] },
+      {
+        attachmentFileId: null,
+        channel: "web",
+        participantMembershipIds: [],
+        priority: "media",
+        slaDueAt: null,
+      },
     );
     await waitFor(() =>
       expect(screen.getAllByText("Novo cartão").length).toBeGreaterThanOrEqual(
@@ -326,7 +420,10 @@ describe("AtendimentoPage", () => {
       "Tente novamente",
       {
         attachmentFileId,
+        channel: "web",
         participantMembershipIds: ["88888888-8888-4888-8888-888888888888"],
+        priority: "media",
+        slaDueAt: null,
       },
     );
     expect(screen.getByRole("dialog")).toBeVisible();
@@ -347,6 +444,7 @@ describe("AtendimentoPage", () => {
       .spyOn(atendimentoClient, "create")
       .mockResolvedValueOnce({
         code: "atendimento_unavailable",
+        mayHaveCommitted: true,
         ok: false,
       } as Awaited<ReturnType<typeof atendimentoClient.create>>)
       .mockResolvedValueOnce({
@@ -1085,6 +1183,383 @@ describe("AtendimentoPage", () => {
       id: alfaCard.id,
       version: 2,
     });
+  });
+
+  it("refetches the affected card when an integrity conflict has no valid current", async () => {
+    const user = userEvent.setup();
+    const refreshed = { ...alfaCard, version: 2, title: "Cartão atualizado" };
+    const refreshedCards = deferred<AtendimentoCard[] | null>();
+    vi.spyOn(atendimentoClient, "list")
+      .mockResolvedValueOnce([alfaCard])
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(refreshedCards.promise);
+    const assign = vi
+      .spyOn(atendimentoClient, "assign")
+      .mockResolvedValueOnce({ code: "integrity_conflict", ok: false })
+      .mockResolvedValueOnce({ card: refreshed, ok: true });
+    vi.spyOn(atendimentoClient, "assignmentOptions").mockResolvedValue([
+      {
+        displayName: "Maria Silva",
+        membershipId: "88888888-8888-4888-8888-888888888888",
+      },
+    ]);
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Atribuir responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("combobox", { name: "Responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Maria Silva" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar atribuição" }),
+    );
+
+    await waitFor(() =>
+      expect(atendimentoClient.list).toHaveBeenCalledTimes(3),
+    );
+    const pendingConfirm = screen.getByRole("button", {
+      name: "Atribuindo…",
+    });
+    expect(pendingConfirm).toBeDisabled();
+    expect(assign).toHaveBeenCalledTimes(1);
+    refreshedCards.resolve([refreshed]);
+    expect(await screen.findByText("Cartão atualizado")).toBeVisible();
+    expect(screen.getByRole("dialog")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar atribuição" }),
+    );
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(2));
+    expect(assign.mock.calls[1]?.[1]).toMatchObject({
+      id: alfaCard.id,
+      version: 2,
+    });
+  });
+
+  it("blocks stale menu actions during delayed recovery and closes them on failure", async () => {
+    const user = userEvent.setup();
+    const delayedRecovery = deferred<AtendimentoCard[] | null>();
+    const moveResult =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return delayedRecovery.promise;
+    });
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockReturnValue(moveResult.promise);
+    const assignmentOptions = vi
+      .spyOn(atendimentoClient, "assignmentOptions")
+      .mockResolvedValue([]);
+
+    renderPage();
+    // Referências capturadas antes do menu: com o menu aberto o board fica
+    // aria-hidden para queries de papel acessível.
+    const card = (await screen.findByText(alfaCard.title)).closest(
+      ".MuiCard-root",
+    ) as HTMLElement;
+    const targetColumn = screen.getByRole("heading", {
+      name: "Em andamento",
+    }).parentElement as HTMLElement;
+
+    // Menu capturado antes da mutação: com o lock por cartão compartilhado,
+    // "Mais ações" fica desabilitado enquanto um move está pendente.
+    await user.click(screen.getByRole("button", { name: "Mais ações" }));
+    const actionsMenu = await screen.findByRole("menu");
+    const assignItem = within(actionsMenu).getByRole("menuitem", {
+      name: "Atribuir responsável",
+    });
+    const cancelItem = within(actionsMenu).getByRole("menuitem", {
+      name: "Cancelar atendimento",
+    });
+
+    fireEvent.dragStart(card);
+    fireEvent.drop(targetColumn);
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+
+    moveResult.resolve({ code: "integrity_conflict", ok: false });
+    await waitFor(() => expect(alfaReads).toBe(2));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(assignItem);
+      fireEvent.click(cancelItem);
+    });
+    expect(assignmentOptions).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    delayedRecovery.resolve(null);
+    await waitFor(() => {
+      expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(
+        "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("keeps a newer queue snapshot when an older conflict reload finishes late", async () => {
+    const user = userEvent.setup();
+    const staleRecovery = {
+      ...alfaCard,
+      title: "Recuperação antiga",
+      version: 2,
+    };
+    const newestQueueCard = {
+      ...alfaCard,
+      title: "Fila mais recente",
+      version: 3,
+    };
+    const delayedRecovery = deferred<AtendimentoCard[] | null>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      if (alfaReads === 2) return delayedRecovery.promise;
+      return Promise.resolve([newestQueueCard]);
+    });
+    vi.spyOn(atendimentoClient, "move").mockResolvedValue({
+      code: "integrity_conflict",
+      ok: false,
+    });
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(alfaReads).toBe(2));
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Alfa" }));
+    await user.keyboard("{Escape}");
+    expect(await screen.findByText(newestQueueCard.title)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Visualizar" }));
+    expect(
+      within(await screen.findByRole("dialog")).getByText(
+        newestQueueCard.title,
+      ),
+    ).toBeVisible();
+
+    await act(async () => {
+      delayedRecovery.resolve([staleRecovery]);
+      await delayedRecovery.promise;
+    });
+
+    expect(screen.queryByText(staleRecovery.title)).not.toBeInTheDocument();
+    expect(screen.getAllByText(newestQueueCard.title).length).toBeGreaterThan(
+      1,
+    );
+    expect(
+      screen.queryByText(
+        "O cartão foi atualizado enquanto você atuava. Verifique o estado atual da fila.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a newer queue snapshot when a delayed valid current arrives", async () => {
+    const user = userEvent.setup();
+    const moveResult =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    const newestQueueCard = {
+      ...alfaCard,
+      title: "Fila mais recente",
+      version: 3,
+    };
+    const delayedCurrent = {
+      ...alfaCard,
+      title: "Current atrasado",
+      version: 2,
+    };
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return Promise.resolve([newestQueueCard]);
+    });
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockReturnValue(moveResult.promise);
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+
+    // Reload normal da fila publica a versão 3 enquanto a resposta da mutação
+    // ainda não chegou; o detalhe é aberto já na versão nova.
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Alfa" }));
+    await user.keyboard("{Escape}");
+    expect(await screen.findByText(newestQueueCard.title)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Visualizar" }));
+    expect(
+      within(await screen.findByRole("dialog")).getByText(
+        newestQueueCard.title,
+      ),
+    ).toBeVisible();
+
+    moveResult.resolve({
+      code: "integrity_conflict",
+      current: delayedCurrent,
+      ok: false,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+
+    await waitFor(() => expect(alfaReads).toBeGreaterThanOrEqual(1));
+    expect(screen.queryByText(delayedCurrent.title)).not.toBeInTheDocument();
+    expect(screen.getAllByText(newestQueueCard.title).length).toBeGreaterThan(
+      1,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(newestQueueCard.title)).toBeVisible();
+    expect(within(dialog).queryByText(delayedCurrent.title)).toBeNull();
+  });
+
+  it("blocks and reads back a card after a possibly committed command outcome", async () => {
+    const user = userEvent.setup();
+    const readback = deferred<AtendimentoCard[] | null>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return readback.promise;
+    });
+    const move = vi.spyOn(atendimentoClient, "move").mockResolvedValue({
+      code: "atendimento_unavailable",
+      mayHaveCommitted: true,
+      ok: false,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(alfaReads).toBe(2));
+
+    expect(
+      screen.getByRole("button", { name: "Alterar status" }),
+    ).toBeDisabled();
+
+    const refreshed = {
+      ...alfaCard,
+      column: "em_andamento" as const,
+      title: "Sincronizado",
+      version: 2,
+    };
+    readback.resolve([refreshed]);
+    expect(await screen.findByText("Sincronizado")).toBeVisible();
+    expect(
+      screen.getByText(
+        "Não foi possível confirmar o resultado da ação. O cartão foi sincronizado com o estado atual.",
+      ),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Alterar status" }),
+      ).toBeEnabled(),
+    );
+  });
+
+  it("invalidates a card when the possibly committed outcome cannot be read back", async () => {
+    const user = userEvent.setup();
+    const readback = deferred<AtendimentoCard[] | null>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return readback.promise;
+    });
+    vi.spyOn(atendimentoClient, "move").mockResolvedValue({
+      code: "atendimento_unavailable",
+      mayHaveCommitted: true,
+      ok: false,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(alfaReads).toBe(2));
+
+    readback.resolve(null);
+    await waitFor(() =>
+      expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("reports reload failure instead of claiming an integrity conflict was synchronized", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list")
+      .mockResolvedValueOnce([alfaCard])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(null);
+    vi.spyOn(atendimentoClient, "assignmentOptions").mockResolvedValue([
+      {
+        displayName: "Maria Silva",
+        membershipId: "88888888-8888-4888-8888-888888888888",
+      },
+    ]);
+    vi.spyOn(atendimentoClient, "assign").mockResolvedValue({
+      code: "integrity_conflict",
+      ok: false,
+    });
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Atribuir responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("combobox", { name: "Responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Maria Silva" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar atribuição" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
+      ),
+    ).toBeVisible();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText("A fila foi sincronizada."),
+    ).not.toBeInTheDocument();
   });
 
   it("suppresses a duplicate cancellation confirmation while the first request is pending", async () => {
