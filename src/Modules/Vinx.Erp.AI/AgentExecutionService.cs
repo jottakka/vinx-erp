@@ -363,6 +363,7 @@ public sealed class AgentExecutionService(
     {
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await ApplyContextAsync(command, ledger.CompanyId, cancellationToken).ConfigureAwait(false);
+        TrackLedgerMutation(database, ledger);
         var (status, reasonCode, auditOutcome) = outcome is null
             ? (ledger.State == AgentExecutionLedgerState.Ambiguous ? "ambiguous" : "failed_closed", ledger.ReasonCode, AuditOutcome.Failure)
             : ToAudit(outcome);
@@ -380,6 +381,28 @@ public sealed class AgentExecutionService(
             JsonSerializer.Serialize(new AgentExecutionAuditMetadata(status, reasonCode))), cancellationToken).ConfigureAwait(false);
         await database.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reanexa somente o estado mutável quando outra fronteira do mesmo escopo
+    /// limpou o tracker durante OCR; identidade e hash continuam imutáveis.
+    /// </summary>
+    private static void TrackLedgerMutation(
+        FoundationDbContext database,
+        AgentExecutionLedger ledger)
+    {
+        var entry = database.Entry(ledger);
+        if (entry.State != EntityState.Detached)
+        {
+            return;
+        }
+
+        database.AgentExecutionLedger.Attach(ledger);
+        entry = database.Entry(ledger);
+        entry.Property(candidate => candidate.State).IsModified = true;
+        entry.Property(candidate => candidate.SafeResultJson).IsModified = true;
+        entry.Property(candidate => candidate.ReasonCode).IsModified = true;
+        entry.Property(candidate => candidate.UpdatedAt).IsModified = true;
     }
 
     private async Task AppendConflictAuditAsync(
@@ -507,6 +530,7 @@ public sealed class AgentExecutionService(
                 command.Actor,
                 ledger.CompanyId,
                 cancellationToken).ConfigureAwait(false);
+            TrackLedgerMutation(database, ledger);
             await database.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }

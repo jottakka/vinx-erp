@@ -220,6 +220,9 @@ public sealed class InboundAttachmentMaterializer(
         catch
         {
             var rollbackKnown = await TryRollbackAsync(transaction).ConfigureAwait(false);
+            // Libera a transação envenenada (ack pós-commit deixa CurrentTransaction
+            // ativo) antes da releitura de recuperação abrir a própria transação.
+            await transaction.DisposeAsync().ConfigureAwait(false);
             database.ChangeTracker.Clear();
             var recovered = await TryReadExistingAsync(
                 request,
