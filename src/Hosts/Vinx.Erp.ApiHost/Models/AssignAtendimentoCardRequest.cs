@@ -14,6 +14,7 @@ public sealed class AssignAtendimentoCardRequest
     [NonEmptyGuid]
     public Guid RequestId { get; init; }
 
+    [Required]
     [Range(1, long.MaxValue)]
     public long ExpectedVersion { get; init; }
 
