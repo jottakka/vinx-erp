@@ -112,8 +112,20 @@ public sealed record DemandOperationResult(
     DemandOperationState State,
     DemandResponse? Demand = null,
     DemandResponse? Current = null,
-    IReadOnlyList<DemandBoardCardResponse>? Board = null,
+    DemandBoardPage? BoardPage = null,
     DemandDetailResponse? Detail = null,
     RoutineResponse? Routine = null,
     IReadOnlyList<RoutineResponse>? Routines = null
+);
+
+/// <summary>
+/// Envelope paginado do quadro: continuação opaca por cursor (createdAt+id),
+/// total para barra de progresso e hasMore explícito — nada de truncamento
+/// silencioso.
+/// </summary>
+public sealed record DemandBoardPage(
+    IReadOnlyList<DemandBoardCardResponse> Items,
+    int Total,
+    bool HasMore,
+    string? NextCursor
 );

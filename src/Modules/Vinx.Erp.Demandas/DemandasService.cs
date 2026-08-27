@@ -53,7 +53,8 @@ public sealed class DemandasService(
     private const string Module = "demandas";
     private const string Operation = "demandas_command";
     private const string ResourceType = "demand";
-    private const int MaximumBoardRows = 400;
+    private const int MaximumBoardRows = 200;
+    private const int BoardPageSize = 100;
     private const string ReadBoardAction = "demandas.demand.board.read";
     private const string ReadDetailAction = "demandas.demand.detail.read";
 
@@ -67,6 +68,8 @@ public sealed class DemandasService(
         string? search = null,
         string? priority = null,
         Guid? responsibleMembershipId = null,
+        int limit = 100,
+        string? after = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -104,13 +107,37 @@ public sealed class DemandasService(
                 query = query.Where(demand => demand.ResponsibleMembershipId == responsible);
             }
 
-            var demands = await query.OrderBy(demand => demand.CreatedAt).Take(MaximumBoardRows).ToListAsync(cancellationToken);
+            const int pageSize = BoardPageSize <= 0 ? 100 : BoardPageSize;
+            if (!string.IsNullOrWhiteSpace(after))
+            {
+                if (!BoardCursor.TryDecode(after, out var decoded))
+                {
+                    return new(DemandOperationState.Invalid);
+                }
+
+                query = query.Where(demand =>
+                    demand.CreatedAt > decoded.OccurredAt
+                    || (demand.CreatedAt == decoded.OccurredAt && demand.Id.CompareTo(decoded.Id) > 0));
+            }
+
+            var total = await query.CountAsync(cancellationToken);
+            var demands = await query
+                .OrderBy(demand => demand.CreatedAt)
+                .ThenBy(demand => demand.Id)
+                .Take(Math.Min(pageSize, MaximumBoardRows))
+                .ToListAsync(cancellationToken);
             var cards = demands.Select(demand => ToBoardCard(demand, now)).ToArray();
+            var hasMore = total > cards.Length;
+            string? nextCursor = hasMore && demands.Count > 0
+                ? BoardCursor.Encode(demands[^1].CreatedAt, demands[^1].Id)
+                : null;
+
+
 
             await AppendAuditAsync(actor, companyId, ReadBoardAction, null, AuditOutcome.Success, null, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             LogInformation("succeeded", "board_read");
-            return new(DemandOperationState.Success, Board: cards);
+            return new(DemandOperationState.Success, BoardPage: new DemandBoardPage(cards, total, hasMore, nextCursor));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -421,7 +448,7 @@ public sealed class DemandasService(
             await transaction.CommitAsync(cancellationToken);
             await FlushNotificationsAsync(actor, command.CompanyId, demandId, pending, cancellationToken);
             LogInformation("succeeded", "advance");
-            return new(DemandOperationState.Success, Demand: ToResponse(await ReloadResponseSourceAsync(command.CompanyId, demandId, cancellationToken) ?? demand, DateTimeOffset.UtcNow));
+            return new(DemandOperationState.Success, Demand: ToResponse(demand, DateTimeOffset.UtcNow));
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
@@ -559,7 +586,7 @@ public sealed class DemandasService(
             await transaction.CommitAsync(cancellationToken);
             await FlushNotificationsAsync(actor, command.CompanyId, demandId, pending, cancellationToken);
             LogInformation("succeeded", "checklist_complete");
-            return new(DemandOperationState.Success, Demand: ToResponse(await ReloadResponseSourceAsync(command.CompanyId, demandId, cancellationToken) ?? demand, DateTimeOffset.UtcNow));
+            return new(DemandOperationState.Success, Demand: ToResponse(demand, DateTimeOffset.UtcNow));
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
@@ -649,6 +676,7 @@ public sealed class DemandasService(
                 var stageRules = await LoadStageRulesForDemandAsync(demand, cancellationToken);
                 demand.StageCycleCount += 1;
                 var restartFrom = demand.Stage;
+                await ResetChecklistOnReinitiationAsync(demand, cancellationToken);
                 demand.Stage = DemandStages.Initiation;
                 demand.StageStartedAt = now;
                 demand.StageDueAt = ComputeStageDueAt(stageRules, DemandStages.Initiation, now);
@@ -658,7 +686,7 @@ public sealed class DemandasService(
                 [
                     new(
                         demand.StageCycleCount,
-                        DemandNotificationKinds.Assigned,
+                        DemandNotificationKinds.Reassigned,
                         DedupUsers(await MembershipUserAsync(command.CompanyId, command.NewResponsibleMembershipId, cancellationToken), demand.CreatedByUserId)
                     ),
                 ];
@@ -960,6 +988,7 @@ public sealed class DemandasService(
             demand.OverdueSince = null;
             demand.StageCycleCount += 1;
             var stageRules = await LoadStageRulesForDemandAsync(demand, cancellationToken);
+            await ResetChecklistOnReinitiationAsync(demand, cancellationToken);
             demand.Stage = DemandStages.Initiation;
             demand.StageStartedAt = now;
             demand.StageDueAt = ComputeStageDueAt(stageRules, DemandStages.Initiation, now);
@@ -1550,6 +1579,40 @@ public sealed class DemandasService(
 
     // ================= Helpers privados =================
 
+    /// <summary>
+    /// Re-iniciação zera o checklist e reaplica o padrão da rotina (paridade
+    /// 0055): sem comando de exclusão de item, itens concluídos travariam o
+    /// próximo gatilho de checklist.
+    /// </summary>
+    private async Task ResetChecklistOnReinitiationAsync(Demand demand, CancellationToken cancellationToken)
+    {
+        var items = await database.DemandChecklistItems
+            .Where(item => item.CompanyId == demand.CompanyId && item.DemandId == demand.Id)
+            .ToListAsync(cancellationToken);
+        database.DemandChecklistItems.RemoveRange(items);
+
+        if (demand.RoutineId is not { } routineId)
+        {
+            return;
+        }
+
+        var routine = await database.DemandRoutines.AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.CompanyId == demand.CompanyId && candidate.Id == routineId, cancellationToken);
+        var position = 0;
+        foreach (var text in routine?.DefaultChecklistItems ?? [])
+        {
+            database.DemandChecklistItems.Add(new DemandChecklistItem
+            {
+                Id = Guid.NewGuid(),
+                CompanyId = demand.CompanyId,
+                DemandId = demand.Id,
+                Text = text,
+                Position = position++,
+            });
+        }
+    }
+
+
     private static DemandOperationResult IdempotencyRaceAsync() => new(DemandOperationState.Unavailable);
 
     private static DemandOperationResult? ValidGuard(Guid companyId, Guid requestId, long expectedVersion) =>
@@ -1680,16 +1743,6 @@ public sealed class DemandasService(
 
     private Task<Demand?> FindDemandAsync(Guid companyId, Guid demandId, CancellationToken cancellationToken) =>
         database.Demands.AsNoTracking().SingleOrDefaultAsync(candidate => candidate.CompanyId == companyId && candidate.Id == demandId, cancellationToken);
-
-    private async Task<Demand?> ReloadResponseSourceAsync(Guid companyId, Guid demandId, CancellationToken cancellationToken)
-    {
-        await foreach (var ignored in database.Demands.AsNoTracking().Where(candidate => false).AsAsyncEnumerable().WithCancellation(cancellationToken))
-        {
-            _ = ignored;
-        }
-
-        return null;
-    }
 
     private async Task<List<DemandStageRule>> LoadStageRulesForDemandAsync(Demand demand, CancellationToken cancellationToken)
     {

@@ -36,7 +36,9 @@ public sealed class DemandasController(DemandasService service) : ControllerBase
         [FromQuery] string? search,
         [FromQuery] string? priority,
         [FromQuery] Guid? responsibleMembershipId,
-        CancellationToken cancellationToken
+        [FromQuery] int limit = 100,
+        [FromQuery] string? after = null,
+        CancellationToken cancellationToken = default
     )
     {
         if (companyId is null)
@@ -51,8 +53,15 @@ public sealed class DemandasController(DemandasService service) : ControllerBase
             search,
             priority,
             responsibleMembershipId,
+            limit,
+            after,
             cancellationToken
         );
+        if (result.State == DemandOperationState.Success && result.BoardPage is not null)
+        {
+            return Ok(result.BoardPage);
+        }
+
         return ToResult(result);
     }
 
@@ -284,7 +293,7 @@ public sealed class DemandasController(DemandasService service) : ControllerBase
                 result.Routine
             ),
             DemandOperationState.Replay or DemandOperationState.Success => Ok(
-                result.Demand ?? result.Routine ?? (object?)result.Board ?? result.Detail
+                result.Demand ?? result.Routine ?? (object?)result.BoardPage?.Items ?? result.Detail
                     ?? (object?)result.Routines
             ),
             DemandOperationState.Invalid or DemandOperationState.RoutineInvalid =>

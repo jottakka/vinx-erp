@@ -300,3 +300,18 @@ public sealed class UpdateRoutineStatusRequest
 }
 
 internal sealed record DemandConflictResponse(string Code, DemandResponse? Current);
+
+public sealed class ApprovalDecisionRequest
+{
+    [Required]
+    [NonEmptyGuid]
+    public Guid CompanyId { get; init; }
+
+    [Required]
+    [NonEmptyGuid]
+    public Guid RequestId { get; init; }
+
+    [Required]
+    [Range(1, long.MaxValue)]
+    public long ExpectedVersion { get; init; }
+}

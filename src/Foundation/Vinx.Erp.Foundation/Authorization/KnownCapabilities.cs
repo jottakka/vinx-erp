@@ -76,31 +76,31 @@ public static class KnownCapabilities
     // mesma derivação das capabilities anteriores.
     public const string DemandasDemandRead = "demandas.demand.read";
     public static readonly Guid DemandasDemandReadId = Guid.Parse(
-        "bc930337-b719-55f4-ac18-07737819a41e"
+        "6ff8b25a-1c37-58cc-894b-97221467c3d4"
     );
 
     public const string DemandasDemandCreate = "demandas.demand.create";
     public static readonly Guid DemandasDemandCreateId = Guid.Parse(
-        "56c7bc47-2682-505c-a9ac-0d5edd66bfa7"
+        "d3c10860-a26c-5eac-b684-8e2faac9ad99"
     );
 
     public const string DemandasDemandAdvance = "demandas.demand.advance";
     public static readonly Guid DemandasDemandAdvanceId = Guid.Parse(
-        "0118c23a-d23b-5831-b0d4-692fbd97ba90"
+        "74403a29-bdae-55a9-b43b-774eca3f03b2"
     );
 
     public const string DemandasDemandAssign = "demandas.demand.assign";
     public static readonly Guid DemandasDemandAssignId = Guid.Parse(
-        "daae4b93-cee8-53a1-b895-b1f49767a9e9"
+        "00b09e31-8693-5b62-b59a-cad5994f3378"
     );
 
     public const string DemandasParticipantsManage = "demandas.demand.participants.manage";
     public static readonly Guid DemandasParticipantsManageId = Guid.Parse(
-        "b36182a1-a821-5fa6-8c6e-d522c4d449f1"
+        "d207f7a5-7fdb-5a7d-a87c-2b4210f36712"
     );
 
     public const string DemandasRoutineManage = "demandas.routine.manage";
     public static readonly Guid DemandasRoutineManageId = Guid.Parse(
-        "76d3135a-7d8a-557e-99a8-d5a785f1f818"
+        "ec28a347-1ade-5586-bf33-e6f1cbd59620"
     );
 }

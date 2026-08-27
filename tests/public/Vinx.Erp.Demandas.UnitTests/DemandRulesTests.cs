@@ -295,3 +295,27 @@ public sealed class DemandRulesTests
         Assert.False(DemandRules.CanResumeOverdue(IsOverdue: false, Now.AddHours(1), Now));
     }
 }
+
+public sealed class BoardCursorTests
+{
+    [Fact]
+    public void Cursor_round_trips_created_at_and_id()
+    {
+        var at = new DateTimeOffset(2026, 8, 26, 12, 34, 56, TimeSpan.Zero);
+        var id = Guid.NewGuid();
+        var encoded = DemandRules.EncodeBoardCursor(at, id);
+
+        Assert.True(DemandRules.TryDecodeBoardCursor(encoded, out var decoded));
+        Assert.Equal(at, decoded.OccurredAt);
+        Assert.Equal(id, decoded.Id);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("!!!not-base64url")]
+    [InlineData("AAAA")]
+    public void Malformed_cursors_are_rejected(string candidate)
+    {
+        Assert.False(DemandRules.TryDecodeBoardCursor(candidate, out _));
+    }
+}

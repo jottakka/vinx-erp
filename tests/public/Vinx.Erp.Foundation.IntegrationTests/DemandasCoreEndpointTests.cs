@@ -129,9 +129,9 @@ public sealed class DemandasCoreEndpointTests
 
         using var response = await client.GetAsync($"/demandas/board?companyId={scenario.CompanyId}");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var board = await response.Content.ReadFromJsonAsync<List<DemandBoardCardContract>>();
+        var board = await response.Content.ReadFromJsonAsync<BoardPageContract>();
         Assert.NotNull(board);
-        var card = board!.Single(candidate => candidate.Id == demand.Id);
+        var card = board!.Items.Single(candidate => candidate.Id == demand.Id);
         Assert.True(card.IsOverdue);
     }
 
@@ -307,6 +307,13 @@ private static async Task<DemandSeed> CreateInRoutineAsync(HttpClient client, Ro
         Guid Id,
         bool IsOverdue,
         string Stage
+    );
+
+    private sealed record BoardPageContract(
+        IReadOnlyList<DemandBoardCardContract> Items,
+        int Total,
+        bool HasMore,
+        string? NextCursor
     );
 
 #pragma warning disable IDE0051 // Payload tipados usados pelos testes via JSON anônimo; tipos mantidos para clareza de contrato.

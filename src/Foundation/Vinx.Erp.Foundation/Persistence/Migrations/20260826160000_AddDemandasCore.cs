@@ -15,12 +15,12 @@ public sealed class AddDemandasCore : Migration
             """
             INSERT INTO foundation.capabilities (id, name, description, created_at)
             VALUES
-                ('bc930337-b719-55f4-ac18-07737819a41e', 'demandas.demand.read', 'Consultar o quadro e detalhes de Demandas', clock_timestamp()),
-                ('56c7bc47-2682-505c-a9ac-0d5edd66bfa7', 'demandas.demand.create', 'Criar demanda', clock_timestamp()),
-                ('0118c23a-d23b-5831-b0d4-692fbd97ba90', 'demandas.demand.advance', 'Avançar etapa e concluir itens de checklist', clock_timestamp()),
-                ('daae4b93-cee8-53a1-b895-b1f49767a9e9', 'demandas.demand.assign', 'Trocar responsável, pausar automação e retomar demanda', clock_timestamp()),
-                ('b36182a1-a821-5fa6-8c6e-d522c4d449f1', 'demandas.demand.participants.manage', 'Gerenciar participantes e supervisor da demanda', clock_timestamp()),
-                ('76d3135a-7d8a-557e-99a8-d5a785f1f818', 'demandas.routine.manage', 'Gerenciar rotinas e gatilhos do fluxo', clock_timestamp())
+                ('6ff8b25a-1c37-58cc-894b-97221467c3d4', 'demandas.demand.read', 'Consultar o quadro e detalhes de Demandas', clock_timestamp()),
+                ('d3c10860-a26c-5eac-b684-8e2faac9ad99', 'demandas.demand.create', 'Criar demanda', clock_timestamp()),
+                ('74403a29-bdae-55a9-b43b-774eca3f03b2', 'demandas.demand.advance', 'Avançar etapa e concluir itens de checklist', clock_timestamp()),
+                ('00b09e31-8693-5b62-b59a-cad5994f3378', 'demandas.demand.assign', 'Trocar responsável, pausar automação e retomar demanda', clock_timestamp()),
+                ('d207f7a5-7fdb-5a7d-a87c-2b4210f36712', 'demandas.demand.participants.manage', 'Gerenciar participantes e supervisor da demanda', clock_timestamp()),
+                ('ec28a347-1ade-5586-bf33-e6f1cbd59620', 'demandas.routine.manage', 'Gerenciar rotinas e gatilhos do fluxo', clock_timestamp())
             ON CONFLICT (name) DO NOTHING;
 
             CREATE SCHEMA demandas;
@@ -234,6 +234,76 @@ public sealed class AddDemandasCore : Migration
                 WITH CHECK (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid);
 
             GRANT USAGE ON SCHEMA demandas TO vinx_runtime;
+            -- Catálogo legível para o dono de provisionamento assim que existir
+            -- grant vivo (padrão capabilities_permissions_owner_granted_select).
+            CREATE POLICY role_capabilities_demandas_owner_read
+                ON foundation.role_capabilities FOR SELECT TO vinx_provisioning_owner USING (true);
+            CREATE POLICY capabilities_demandas_owner_read
+                ON foundation.capabilities FOR SELECT TO vinx_provisioning_owner
+                USING (
+                    EXISTS (
+                        SELECT 1 FROM foundation.role_capabilities AS grant_record
+                        WHERE grant_record.capability_id = capabilities.id
+                          AND grant_record.deleted_at IS NULL
+                          AND grant_record.capability_id IN (
+                              '6ff8b25a-1c37-58cc-894b-97221467c3d4'::uuid,
+                              'd3c10860-a26c-5eac-b684-8e2faac9ad99'::uuid,
+                              '74403a29-bdae-55a9-b43b-774eca3f03b2'::uuid,
+                              '00b09e31-8693-5b62-b59a-cad5994f3378'::uuid,
+                              'd207f7a5-7fdb-5a7d-a87c-2b4210f36712'::uuid,
+                              'ec28a347-1ade-5586-bf33-e6f1cbd59620'::uuid)));
+
+            CREATE FUNCTION demandas.enumerate_automation_companies()
+            RETURNS TABLE (company_id uuid)
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path TO demandas, pg_catalog, foundation, pg_temp
+            AS $function$
+                SELECT DISTINCT candidate.company_id
+                FROM demandas.demands AS candidate
+                WHERE candidate.deleted_at IS NULL
+                  AND candidate.closed_at IS NULL
+                ORDER BY candidate.company_id;
+            $function$;
+            ALTER FUNCTION demandas.enumerate_automation_companies()
+                OWNER TO vinx_demandas_owner;
+            REVOKE ALL ON FUNCTION demandas.enumerate_automation_companies()
+                FROM PUBLIC, vinx_migrator;
+            GRANT EXECUTE ON FUNCTION demandas.enumerate_automation_companies()
+                TO vinx_worker;
+
+            CREATE FUNCTION demandas.demand_responsible_user(p_demand_id uuid)
+            RETURNS uuid
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path TO demandas, pg_catalog, foundation, pg_temp
+            AS $function$
+                SELECT responsible.user_id
+                FROM demandas.demands AS demand
+                INNER JOIN foundation.memberships AS responsible
+                    ON responsible.company_id = demand.company_id
+                   AND responsible.id = demand.responsible_membership_id
+                WHERE demand.id = p_demand_id
+                  AND demand.deleted_at IS NULL;
+            $function$;
+            ALTER FUNCTION demandas.demand_responsible_user(uuid)
+                OWNER TO vinx_demandas_owner;
+            REVOKE ALL ON FUNCTION demandas.demand_responsible_user(uuid)
+                FROM PUBLIC, vinx_migrator;
+            GRANT EXECUTE ON FUNCTION demandas.demand_responsible_user(uuid)
+                TO vinx_worker;
+
+            GRANT USAGE ON SCHEMA demandas TO vinx_worker;
+            GRANT SELECT ON demandas.demand_routine_stages,
+                demandas.demand_participants TO vinx_worker;
+            GRANT SELECT, UPDATE ON demandas.demands TO vinx_worker;
+            GRANT SELECT, INSERT ON demandas.demand_events TO vinx_worker;
+            -- Geração do número sequencial exige USAGE na identidade.
+            GRANT USAGE, SELECT ON SEQUENCE demandas.demands_demand_number_seq
+                TO vinx_runtime;
+
             GRANT SELECT, INSERT, UPDATE ON demandas.demands TO vinx_runtime;
             GRANT SELECT, INSERT, UPDATE ON demandas.demand_routines TO vinx_runtime;
             GRANT SELECT, INSERT, UPDATE ON demandas.demand_routine_stages TO vinx_runtime;
@@ -247,7 +317,11 @@ public sealed class AddDemandasCore : Migration
     protected override void Down(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
-            REVOKE ALL ON demandas.demand_events, demandas.demand_checklist_items,
+            DROP FUNCTION demandas.enumerate_automation_companies();
+            DROP FUNCTION demandas.demand_responsible_user(uuid);
+            DROP POLICY capabilities_demandas_owner_read ON foundation.capabilities;
+            DROP POLICY role_capabilities_demandas_owner_read ON foundation.role_capabilities;
+                        REVOKE ALL ON demandas.demand_events, demandas.demand_checklist_items,
                 demandas.demand_participants, demandas.demands, demandas.demand_routine_stages,
                 demandas.demand_routines FROM vinx_runtime;
             DROP TABLE demandas.demand_events;
@@ -256,18 +330,20 @@ public sealed class AddDemandasCore : Migration
             DROP TABLE demandas.demands;
             DROP TABLE demandas.demand_routine_stages;
             DROP TABLE demandas.demand_routines;
+            REVOKE USAGE, SELECT ON SEQUENCE demandas.demands_demand_number_seq FROM vinx_runtime;
+            REVOKE ALL ON SCHEMA demandas FROM vinx_worker;
             REVOKE USAGE ON SCHEMA demandas FROM vinx_runtime;
             DROP SCHEMA demandas;
             DO $block$
             BEGIN
                 DELETE FROM foundation.capabilities
                 WHERE (id, name) IN (
-                    ('bc930337-b719-55f4-ac18-07737819a41e'::uuid, 'demandas.demand.read'),
-                    ('56c7bc47-2682-505c-a9ac-0d5edd66bfa7'::uuid, 'demandas.demand.create'),
-                    ('0118c23a-d23b-5831-b0d4-692fbd97ba90'::uuid, 'demandas.demand.advance'),
-                    ('daae4b93-cee8-53a1-b895-b1f49767a9e9'::uuid, 'demandas.demand.assign'),
-                    ('b36182a1-a821-5fa6-8c6e-d522c4d449f1'::uuid, 'demandas.demand.participants.manage'),
-                    ('76d3135a-7d8a-557e-99a8-d5a785f1f818'::uuid, 'demandas.routine.manage'));
+                    ('6ff8b25a-1c37-58cc-894b-97221467c3d4'::uuid, 'demandas.demand.read'),
+                    ('d3c10860-a26c-5eac-b684-8e2faac9ad99'::uuid, 'demandas.demand.create'),
+                    ('74403a29-bdae-55a9-b43b-774eca3f03b2'::uuid, 'demandas.demand.advance'),
+                    ('00b09e31-8693-5b62-b59a-cad5994f3378'::uuid, 'demandas.demand.assign'),
+                    ('d207f7a5-7fdb-5a7d-a87c-2b4210f36712'::uuid, 'demandas.demand.participants.manage'),
+                    ('ec28a347-1ade-5586-bf33-e6f1cbd59620'::uuid, 'demandas.routine.manage'));
             EXCEPTION
                 WHEN foreign_key_violation THEN
                     RAISE EXCEPTION 'cannot downgrade demandas capability catalog while capabilities are referenced'
