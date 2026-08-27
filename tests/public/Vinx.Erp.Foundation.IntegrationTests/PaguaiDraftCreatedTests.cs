@@ -11,10 +11,13 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
+using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Paguai;
 using Wolverine;
+using Wolverine.EntityFrameworkCore;
 using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Serialization;
 using Xunit;
@@ -30,7 +33,7 @@ public sealed class PaguaiDraftCreatedTests
     public async Task Created_draft_publishes_one_opaque_event_and_replay_keeps_one_envelope()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var scenario = await SeedScenarioAsync(factory, approverCount: 1, approveTemplate: true);
+        var scenario = await SeedScenarioAsync(factory, approverCount: 2, approveTemplate: true);
         using var client = factory.CreateClient();
         var requestId = Guid.NewGuid();
 
@@ -73,7 +76,7 @@ public sealed class PaguaiDraftCreatedTests
     public async Task Outbox_persistence_failure_rolls_back_draft_receipt_audit_and_envelope_then_retry_recovers()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var scenario = await SeedScenarioAsync(factory, approverCount: 1, approveTemplate: true);
+        var scenario = await SeedScenarioAsync(factory, approverCount: 2, approveTemplate: true);
         using var client = factory.CreateClient();
         var requestId = Guid.NewGuid();
         await SetOutboxInsertAsync(factory, granted: false);
@@ -138,14 +141,47 @@ public sealed class PaguaiDraftCreatedTests
             Assert.Equal("in_app", intent.Channel);
             Assert.Equal(TemplateKey, intent.TemplateKey);
             Assert.Equal($"paguai.{draftId:N}.draft-created", intent.EventKey);
-            Assert.Equal($"/paguai/requests/{draftId:D}", intent.DeepLinkSelector);
+            Assert.Equal("/paguai", intent.DeepLinkSelector);
         });
+
+        var deliveries = await Task.WhenAll(
+            intents.Select(intent =>
+                NotificationIntentSeed.WaitUntilDeliveryAsync(
+                    factory,
+                    intent.Id,
+                    "delivered",
+                    TimeSpan.FromSeconds(30)
+                )
+            )
+        );
+        Assert.All(deliveries, delivery => Assert.Equal("delivered", delivery.Status));
+        await using (var inboxScope = factory.Services.CreateAsyncScope())
+        {
+            var approverIntent = Assert.Single(
+                intents,
+                intent => intent.RecipientUserId == scenario.ApproverUserIds[0]
+            );
+            var inbox = await inboxScope.ServiceProvider
+                .GetRequiredService<NotificationInboxService>()
+                .ListAsync(
+                    new ActorContext(scenario.ApproverUserIds[0], factory.CorrelationId),
+                    cursor: null,
+                    limit: 20,
+                    CancellationToken.None
+                );
+            var item = Assert.Single(inbox.Page!.Items, item => item.Id == approverIntent.Id);
+            Assert.Equal("Pagaí", item.Source);
+            Assert.Equal("Novo rascunho para aprovação", item.Event);
+            Assert.Equal("paguai", item.Action!.Kind);
+            Assert.Equal("/paguai", item.Action.Href);
+        }
 
         await WaitForPaguaiWorkerQueueToDrainAsync(factory);
         Assert.Equal(
             scenario.ApproverUserIds.Count,
             (await ReadIntentsAsync(factory, draftId)).Count
         );
+        Assert.Equal(0, await CountPaguaiDeadLettersAsync(factory));
     }
 
     [Fact]
@@ -200,10 +236,72 @@ public sealed class PaguaiDraftCreatedTests
     }
 
     [Fact]
-    public async Task Worker_uses_only_the_narrow_paguai_draft_notification_function_with_current_approvers_and_worker_audit()
+    public async Task Worker_outbox_persistence_failure_rolls_back_intents_audits_and_delivery_envelopes_then_recovers()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory, approverCount: 1, approveTemplate: true);
+        using var client = factory.CreateClient();
+        using var created = await client.PostAsJsonAsync(
+            "/paguai/requests",
+            NewDraft(scenario.CompanyId, Guid.NewGuid())
+        );
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var draftId = await ReadDraftIdAsync(created);
+        var correlationId = Guid.NewGuid();
+        await SetWorkerOutboxInsertAsync(factory, granted: false);
+        try
+        {
+            await using var worker = new NotificationWorkerHostFactory(
+                factory.Fixture.WorkerConnectionString
+            );
+            await using (var scope = worker.Services.CreateAsyncScope())
+            {
+                var handler = new WorkerHostTypes.PaguaiDraftCreatedHandler(
+                    scope.ServiceProvider.GetRequiredService<FoundationDbContext>(),
+                    scope.ServiceProvider.GetRequiredService<IDbContextOutbox>(),
+                    NullLogger<WorkerHostTypes.PaguaiDraftCreatedHandler>.Instance
+                );
+                await Assert.ThrowsAnyAsync<Exception>(() =>
+                    handler.Handle(
+                        new PaguaiDraftCreated(scenario.CompanyId, draftId, factory.ActorUserId),
+                        new Envelope { CorrelationId = correlationId.ToString("D") },
+                        CancellationToken.None
+                    )
+                );
+            }
+
+            Assert.Empty(await ReadIntentsAsync(factory, draftId));
+            Assert.Equal(0, await CountPaguaiIntentAuditsAsync(factory, scenario.CompanyId));
+            Assert.Equal(0, await CountWorkerOutgoingEnvelopesAsync(factory));
+        }
+        finally
+        {
+            await SetWorkerOutboxInsertAsync(factory, granted: true);
+        }
+
+        await using (var worker = new NotificationWorkerHostFactory(factory.Fixture.WorkerConnectionString))
+        await using (var scope = worker.Services.CreateAsyncScope())
+        {
+            var handler = new WorkerHostTypes.PaguaiDraftCreatedHandler(
+                scope.ServiceProvider.GetRequiredService<FoundationDbContext>(),
+                scope.ServiceProvider.GetRequiredService<IDbContextOutbox>(),
+                NullLogger<WorkerHostTypes.PaguaiDraftCreatedHandler>.Instance
+            );
+            await handler.Handle(
+                new PaguaiDraftCreated(scenario.CompanyId, draftId, factory.ActorUserId),
+                new Envelope { CorrelationId = correlationId.ToString("D") },
+                CancellationToken.None
+            );
+        }
+
+        Assert.Single(await WaitForIntentsAsync(factory, draftId, expectedCount: 1));
+    }
+
+    [Fact]
+    public async Task Worker_uses_only_the_narrow_paguai_draft_notification_function_with_current_approvers_and_worker_audit()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory, approverCount: 2, approveTemplate: true);
         using var client = factory.CreateClient();
         using var created = await client.PostAsJsonAsync(
             "/paguai/requests",
@@ -266,8 +364,24 @@ public sealed class PaguaiDraftCreatedTests
 
         await using var worker = new NpgsqlConnection(factory.Fixture.WorkerConnectionString);
         await worker.OpenAsync();
+        var createdRows = await EnqueuePaguaiDraftCreatedAsync(
+            worker,
+            scenario.CompanyId,
+            draftId,
+            factory.ActorUserId,
+            correlationId
+        );
+        Assert.Equal(scenario.ApproverUserIds.Count, createdRows.Count);
+        Assert.All(createdRows, row =>
+        {
+            Assert.Equal("created", row.Status);
+            Assert.NotNull(row.DeliveryId);
+        });
         Assert.Equal(
-            "created",
+            scenario.ApproverUserIds.Count,
+            createdRows.Select(row => row.DeliveryId).Distinct().Count()
+        );
+        var replay = Assert.Single(
             await EnqueuePaguaiDraftCreatedAsync(
                 worker,
                 scenario.CompanyId,
@@ -276,16 +390,8 @@ public sealed class PaguaiDraftCreatedTests
                 correlationId
             )
         );
-        Assert.Equal(
-            "replay",
-            await EnqueuePaguaiDraftCreatedAsync(
-                worker,
-                scenario.CompanyId,
-                draftId,
-                factory.ActorUserId,
-                correlationId
-            )
-        );
+        Assert.Equal("replay", replay.Status);
+        Assert.Null(replay.DeliveryId);
 
         var mismatch = await Assert.ThrowsAsync<PostgresException>(() =>
             EnqueuePaguaiDraftCreatedAsync(
@@ -323,8 +429,7 @@ public sealed class PaguaiDraftCreatedTests
             NewDraft(scenario.CompanyId, Guid.NewGuid())
         );
         Assert.Equal(HttpStatusCode.Created, noApproverDraft.StatusCode);
-        Assert.Equal(
-            "no_current_approvers",
+        var noApprovers = Assert.Single(
             await EnqueuePaguaiDraftCreatedAsync(
                 worker,
                 scenario.CompanyId,
@@ -333,6 +438,8 @@ public sealed class PaguaiDraftCreatedTests
                 correlationId
             )
         );
+        Assert.Equal("no_current_approvers", noApprovers.Status);
+        Assert.Null(noApprovers.DeliveryId);
 
         await using (var administrator = await factory.Fixture.OpenAdministratorConnectionAsync())
         await using (var audit = new NpgsqlCommand(
@@ -478,6 +585,7 @@ public sealed class PaguaiDraftCreatedTests
         await using var scope = factory.Services.CreateAsyncScope();
         var handler = new WorkerHostTypes.PaguaiDraftCreatedHandler(
             scope.ServiceProvider.GetRequiredService<FoundationDbContext>(),
+            scope.ServiceProvider.GetRequiredService<IDbContextOutbox>(),
             NullLogger<WorkerHostTypes.PaguaiDraftCreatedHandler>.Instance
         );
         using var cancellation = new CancellationTokenSource();
@@ -604,7 +712,7 @@ public sealed class PaguaiDraftCreatedTests
         await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
             """
-            SELECT company_id, recipient_user_id, channel, event_key, template_key, deep_link_selector
+            SELECT id, company_id, recipient_user_id, channel, event_key, template_key, deep_link_selector
             FROM notifications.notification_intents
             WHERE event_key = @event_key
             ORDER BY recipient_user_id
@@ -620,10 +728,11 @@ public sealed class PaguaiDraftCreatedTests
                 new IntentRow(
                     reader.GetGuid(0),
                     reader.GetGuid(1),
-                    reader.GetString(2),
+                    reader.GetGuid(2),
                     reader.GetString(3),
                     reader.GetString(4),
-                    reader.GetString(5)
+                    reader.GetString(5),
+                    reader.GetString(6)
                 )
             );
         }
@@ -631,7 +740,7 @@ public sealed class PaguaiDraftCreatedTests
         return rows;
     }
 
-    private static async Task<string> EnqueuePaguaiDraftCreatedAsync(
+    private static async Task<IReadOnlyList<PaguaiEnqueueRow>> EnqueuePaguaiDraftCreatedAsync(
         NpgsqlConnection connection,
         Guid companyId,
         Guid draftId,
@@ -640,14 +749,21 @@ public sealed class PaguaiDraftCreatedTests
     )
     {
         await using var command = new NpgsqlCommand(
-            "SELECT status FROM notifications.enqueue_paguai_draft_created_notification(@company_id, @draft_id, @requester_user_id, @correlation_id)",
+            "SELECT status, delivery_id FROM notifications.enqueue_paguai_draft_created_notification(@company_id, @draft_id, @requester_user_id, @correlation_id)",
             connection
         );
         command.Parameters.AddWithValue("company_id", companyId);
         command.Parameters.AddWithValue("draft_id", draftId);
         command.Parameters.AddWithValue("requester_user_id", requesterUserId);
         command.Parameters.AddWithValue("correlation_id", correlationId);
-        return (string)(await command.ExecuteScalarAsync())!;
+        var rows = new List<PaguaiEnqueueRow>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new PaguaiEnqueueRow(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetGuid(1)));
+        }
+
+        return rows;
     }
 
     private static async Task WaitForPaguaiWorkerQueueToDrainAsync(FoundationApiFactory factory)
@@ -829,6 +945,43 @@ public sealed class PaguaiDraftCreatedTests
         await command.ExecuteNonQueryAsync();
     }
 
+    private static async Task SetWorkerOutboxInsertAsync(
+        FoundationApiFactory factory,
+        bool granted
+    )
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"{(granted ? "GRANT" : "REVOKE")} INSERT ON vinx_wolverine_worker.wolverine_outgoing_envelopes {(granted ? "TO" : "FROM")} vinx_worker",
+            connection
+        );
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<long> CountPaguaiIntentAuditsAsync(
+        FoundationApiFactory factory,
+        Guid companyId
+    )
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM audit.audit_events WHERE requested_company_id = @company_id AND action = 'notification.intent.enqueue'",
+            connection
+        );
+        command.Parameters.AddWithValue("company_id", companyId);
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static async Task<long> CountWorkerOutgoingEnvelopesAsync(FoundationApiFactory factory)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM vinx_wolverine_worker.wolverine_outgoing_envelopes",
+            connection
+        );
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
     private static async Task AssertCreateSideEffectsAsync(
         FoundationApiFactory factory,
         Guid companyId,
@@ -990,6 +1143,7 @@ public sealed class PaguaiDraftCreatedTests
     );
 
     private sealed record IntentRow(
+        Guid Id,
         Guid CompanyId,
         Guid RecipientUserId,
         string Channel,
@@ -997,6 +1151,8 @@ public sealed class PaguaiDraftCreatedTests
         string TemplateKey,
         string DeepLinkSelector
     );
+
+    private sealed record PaguaiEnqueueRow(string Status, Guid? DeliveryId);
 
     private sealed record PaguaiDeadLetter(byte[] Body, string ExceptionType, string ExceptionMessage);
 }

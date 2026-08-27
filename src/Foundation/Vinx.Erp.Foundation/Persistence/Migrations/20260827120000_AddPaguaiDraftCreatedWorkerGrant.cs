@@ -28,7 +28,7 @@ public partial class AddPaguaiDraftCreatedWorkerGrant : Migration
                 p_draft_id uuid,
                 p_requester_user_id uuid,
                 p_correlation_id uuid)
-            RETURNS TABLE (status text)
+            RETURNS TABLE (status text, delivery_id uuid)
             LANGUAGE plpgsql
             SECURITY DEFINER
             SET search_path TO pg_catalog, notifications, paguai, foundation, audit, pg_temp
@@ -37,9 +37,9 @@ public partial class AddPaguaiDraftCreatedWorkerGrant : Migration
                 v_recipient_user_id uuid;
                 v_delivery_id uuid;
                 v_recipient_count integer := 0;
-                v_created_count integer := 0;
+                v_created boolean := false;
                 v_event_key text := 'paguai.' || replace(p_draft_id::text, '-', '') || '.draft-created';
-                v_deep_link_selector text := '/paguai/requests/' || p_draft_id::text;
+                v_deep_link_selector text := '/paguai';
             BEGIN
                 IF p_company_id IS NULL OR p_company_id = '00000000-0000-0000-0000-000000000000'::uuid
                     OR p_draft_id IS NULL OR p_draft_id = '00000000-0000-0000-0000-000000000000'::uuid
@@ -71,7 +71,7 @@ public partial class AddPaguaiDraftCreatedWorkerGrant : Migration
                       AND template.template_key = 'paguai.draft-created'
                       AND template.is_approved)
                 THEN
-                    RETURN QUERY SELECT 'template_unavailable'::text;
+                    RETURN QUERY SELECT 'template_unavailable'::text, NULL::uuid;
                     RETURN;
                 END IF;
 
@@ -112,21 +112,20 @@ public partial class AddPaguaiDraftCreatedWorkerGrant : Migration
                     RETURNING id INTO v_delivery_id;
 
                     IF v_delivery_id IS NOT NULL THEN
-                        v_created_count := v_created_count + 1;
+                        v_created := true;
                         PERFORM audit.append_event(
                             p_requester_user_id, 'company', p_company_id, 'worker',
                             'notification.intent.enqueue', 'notification_intent', v_delivery_id,
                             'success', p_correlation_id, NULL,
                             jsonb_build_object('channel', 'in_app', 'event_key', v_event_key));
+                        RETURN QUERY SELECT 'created'::text, v_delivery_id;
                     END IF;
                 END LOOP;
 
                 IF v_recipient_count = 0 THEN
-                    RETURN QUERY SELECT 'no_current_approvers'::text;
-                ELSIF v_created_count = 0 THEN
-                    RETURN QUERY SELECT 'replay'::text;
-                ELSE
-                    RETURN QUERY SELECT 'created'::text;
+                    RETURN QUERY SELECT 'no_current_approvers'::text, NULL::uuid;
+                ELSIF NOT v_created THEN
+                    RETURN QUERY SELECT 'replay'::text, NULL::uuid;
                 END IF;
             END;
             $function$;

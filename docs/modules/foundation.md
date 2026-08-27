@@ -263,11 +263,17 @@ produtor Pagaí: `PaguaiDraftCreated` leva somente `CompanyId`, `DraftId` e
 e chama somente `notifications.enqueue_paguai_draft_created_notification`;
 a função `SECURITY DEFINER` valida o rascunho, empresa e solicitante, resolve
 os aprovadores atuais, exclui o solicitante e fixa internamente canal `in_app`,
-template, chave idempotente `paguai.<draftId:N>.draft-created` e deep-link do
-rascunho. Apenas `vinx_worker` a executa; não recebe a função genérica de
-intents nem acesso direto às tabelas Pagaí ou de notificações. Template ausente
-ou reprovado é falha best-effort registrada em `Warning`; não desfaz o rascunho
-confirmado.
+template, chave idempotente `paguai.<draftId:N>.draft-created` e deep-link
+`/paguai`. Para cada intent nova, devolve seu id de delivery; o handler grava
+na mesma transação os envelopes `NotificationDeliveryRequested` e só tenta o
+flush após o commit. O `vinx_worker` não tem DML direto nas tabelas de negócio
+ou de intents e não tem `EXECUTE` no helper genérico
+`notifications.enqueue_notification_intent`; ele opera apenas pelas funções
+worker-only estreitas `enqueue_paguai_draft_created_notification`,
+`accept_notification_delivery`, `claim_notification_delivery`,
+`finalize_notification_delivery` e `release_notification_delivery`. Template
+ausente ou reprovado é falha best-effort registrada em `Warning`; não desfaz o
+rascunho confirmado.
 
 A fatia #48 estende a máquina de estados do worker
 (`pending_provider → provider_in_flight →
