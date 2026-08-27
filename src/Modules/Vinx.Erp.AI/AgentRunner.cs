@@ -218,7 +218,13 @@ public sealed class AgentRunner(
             }
 
             var gatedStatus = MapOutputGateStatus(gated.Status);
-            return Finish(gatedStatus, gated.ReasonCode, actor, stopwatch, text: gated.Text);
+            return Finish(
+                gatedStatus,
+                gated.ReasonCode,
+                actor,
+                stopwatch,
+                text: gated.Text,
+                paguaiProposal: gated.PaguaiProposal);
         }
 
         if (toolCall is not null)
@@ -365,10 +371,18 @@ public sealed class AgentRunner(
         Stopwatch stopwatch,
         string? text = null,
         string? proposedActionName = null,
+        PaguaiDocumentProposal? paguaiProposal = null,
         Exception? exception = null)
     {
         stopwatch.Stop();
-        var outcome = new AgentOutcome(status, reasonCode, text, proposedActionName, actor.CorrelationId, stopwatch.Elapsed);
+        var outcome = new AgentOutcome(
+            status,
+            reasonCode,
+            text,
+            proposedActionName,
+            actor.CorrelationId,
+            stopwatch.Elapsed,
+            paguaiProposal);
         AgentTelemetry.RecordExecution(status, reasonCode);
 
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = actor.CorrelationId });

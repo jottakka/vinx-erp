@@ -1,7 +1,11 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Vinx.Erp.AI;
+using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Guardrails;
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
+using Vinx.Erp.AI.UnitTests.DocumentContext;
+using Vinx.Erp.AI.UnitTests.Providers;
 using Vinx.Erp.Foundation.Identity;
 using Xunit;
 
@@ -221,6 +225,62 @@ public sealed class AgentRunnerGateIntegrationTests
         Assert.Equal(0, model.CallCount);
     }
 
+    [Fact]
+    public async Task Paguai_structured_response_completes_with_only_the_typed_proposal()
+    {
+        const string structuredJson = """
+            {
+              "status": "proposal",
+              "reason": null,
+              "proposal": {
+                "title": "Fatura de energia",
+                "description": "Pagamento mensal",
+                "amount": "250.00",
+                "currency": "BRL",
+                "dueDate": "2026-09-10",
+                "beneficiaryDisplayName": "Companhia de energia",
+                "proofRequirement": "optional",
+                "invoiceFileId": "11111111-1111-4111-8111-111111111111",
+                "confidence": 0.90,
+                "sourceReferences": [
+                  { "field": "amount", "source": "11111111111141118111111111111111:p1" },
+                  { "field": "dueDate", "source": "11111111111141118111111111111111:p1" },
+                  { "field": "beneficiaryDisplayName", "source": "11111111111141118111111111111111:p1" }
+                ]
+              }
+            }
+            """;
+        var source = new FakeAuthorizedDocumentSource(id => id == PaguaiFileId
+            ? FakeAuthorizedDocumentSource.Clean(id, "application/pdf", TestDocumentFixtures.PdfWithText("fatura"))
+            : null);
+        var profile = PaguaiProfile();
+        var model = TestAgentModel.Text(structuredJson);
+        var runner = new AgentRunner(
+            new SequenceContextResolver(SequenceContextResolver.Resolved(AlfaCompanyId)),
+            model,
+            NullLogger<AgentRunner>.Instance,
+            profileId => profileId == profile.ProfileId ? profile : null,
+            outputGate: Gate(),
+            documentContextNormalizer: Normalizer(source));
+
+        var outcome = await runner.RunAsync(
+            new ActorContext(Guid.NewGuid(), Guid.NewGuid()),
+            profile.ProfileId,
+            "extraia a fatura",
+            AlfaCompanyId,
+            [PaguaiFileId],
+            CancellationToken.None);
+
+        Assert.Equal(AgentOutcomeStatus.Completed, outcome.Status);
+        Assert.Equal(AgentOutputGate.Ok, outcome.ReasonCode);
+        Assert.Null(outcome.Text);
+        var proposal = Assert.IsType<PaguaiDocumentProposal>(outcome.PaguaiProposal);
+        Assert.Equal(250m, proposal.Amount);
+        Assert.Equal(PaguaiFileId, proposal.InvoiceFileId);
+        Assert.DoesNotContain(structuredJson, outcome.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, model.CallCount);
+    }
+
     private const string TestProfileId = "test_summarize_v1";
 
     private static AgentOutputGate Gate() => new(new SourceAuthorizationGate());
@@ -248,6 +308,31 @@ public sealed class AgentRunnerGateIntegrationTests
         AllowedTools: [],
         SourcesRequired: sourcesRequired,
         RequiredOutputFields: requiredOutputFields);
+
+    private static AgentTaskProfile PaguaiProfile() => new(
+        AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+        AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+        AgentJourneyScope.Company,
+        AgentCapabilities.Read,
+        new AgentModelSelection("test-provider", "test-model"),
+        TimeSpan.FromSeconds(30),
+        TurnLimit: 1,
+        MaxTotalTokens: 8_000,
+        AllowedTools: [],
+        AllowDocumentAttachments: true);
+
+    private static DocumentContextNormalizer Normalizer(FakeAuthorizedDocumentSource source)
+    {
+        var visionProfile = DocumentContextLimitsTests.VisionProfile();
+        return new DocumentContextNormalizer(
+            source,
+            new DocumentVisionOcr(new OpenAiCompatibleChatClient(
+                visionProfile,
+                new HttpClient(TestProviderHandler.RespondsWith("{}")))),
+            DocumentContextLimits.FromVisionProfile(
+                visionProfile,
+                new HashSet<string>(StringComparer.Ordinal) { "fiscal" }));
+    }
 
     private static (AgentRunner Runner, TestAgentModel Model) CreateRunner(
         TestAgentModel model,

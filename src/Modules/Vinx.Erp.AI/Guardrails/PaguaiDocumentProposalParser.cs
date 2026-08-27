@@ -14,6 +14,9 @@ public static class PaguaiDocumentProposalParser
     private const string LowConfidence = "low_confidence";
     private const string InsufficientEvidence = "insufficient_evidence";
     private const double MinimumConfidence = 0.80;
+    private const int TitleMaximumLength = 200;
+    private const int DescriptionMaximumLength = 4_000;
+    private const int BeneficiaryDisplayNameMaximumLength = 200;
 
     private static readonly IReadOnlySet<string> EnvelopeFields = new HashSet<string>(StringComparer.Ordinal)
     {
@@ -64,7 +67,7 @@ public static class PaguaiDocumentProposalParser
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.AuthorizedSourceReferences);
 
-        if (string.IsNullOrWhiteSpace(request.StructuredJson))
+        if (request.FileRecordId == Guid.Empty || string.IsNullOrWhiteSpace(request.StructuredJson))
         {
             return Invalid();
         }
@@ -115,10 +118,14 @@ public static class PaguaiDocumentProposalParser
             || !proposalElement.TryGetProperty("sourceReferences", out var sourceReferencesElement)
             || !PaguaiAmountRules.TryParseText(amountText, out var amount)
             || !PaguaiAmountRules.IsValid(amount)
+            || !IsTrimmedNonEmptyWithin(title, TitleMaximumLength)
+            || !IsTrimmedNonEmptyWithin(description, DescriptionMaximumLength)
+            || !IsTrimmedNonEmptyWithin(beneficiaryDisplayName, BeneficiaryDisplayNameMaximumLength)
             || currency != "BRL"
             || !TryParseCanonicalDate(dueDateText, out var dueDate)
             || proofRequirement is not ("optional" or "required")
             || !Guid.TryParseExact(invoiceFileIdText, "D", out var invoiceFileId)
+            || invoiceFileId == Guid.Empty
             || invoiceFileId != request.FileRecordId
             || confidenceElement.ValueKind != JsonValueKind.Number
             || !confidenceElement.TryGetDouble(out var confidence)
@@ -182,7 +189,7 @@ public static class PaguaiDocumentProposalParser
             coveredFields.Add(field);
         }
 
-        if (!coveredFields.SetEquals(RequiredSourceFields))
+        if (parsed.Count != RequiredSourceFields.Count || !coveredFields.SetEquals(RequiredSourceFields))
         {
             return false;
         }
@@ -219,6 +226,11 @@ public static class PaguaiDocumentProposalParser
             && (reason = element.GetString() ?? string.Empty) is not null
             && ClarificationReasons.Contains(reason);
     }
+
+    private static bool IsTrimmedNonEmptyWithin(string value, int maximumLength) =>
+        value.Length > 0
+        && value.Length <= maximumLength
+        && value == value.Trim();
 
     private static bool TryParseCanonicalDate(string value, out DateOnly dueDate) =>
         DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out dueDate)

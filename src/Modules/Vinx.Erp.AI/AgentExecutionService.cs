@@ -303,7 +303,7 @@ public sealed class AgentExecutionService(
 
     private static AgentOutcome ToSafePersistedOutcome(AgentOutcome outcome) =>
         outcome.Status == AgentOutcomeStatus.RequiresConfirmation
-            ? outcome with { ProposedActionName = null }
+            ? outcome with { ProposedActionName = null, PaguaiProposal = null }
             : outcome;
 
     private static (string Status, string ReasonCode, AuditOutcome Outcome) ToAudit(AgentOutcome outcome) => outcome.Status switch

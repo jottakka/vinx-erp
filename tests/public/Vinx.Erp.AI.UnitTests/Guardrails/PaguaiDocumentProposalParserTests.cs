@@ -231,8 +231,83 @@ public sealed class PaguaiDocumentProposalParserTests
         },
     };
 
-    private static PaguaiDocumentProposalParseRequest Request(string structuredJson) => new(
-        FileId,
+    [Theory]
+    [MemberData(nameof(InvalidProposalTextValues))]
+    public void Proposal_rejects_empty_whitespace_and_oversized_text_fields(string structuredJson)
+    {
+        var result = PaguaiDocumentProposalParser.Parse(Request(structuredJson));
+
+        Assert.Equal(PaguaiProposalParseStatus.Invalid, result.Status);
+        Assert.Equal("schema_invalid", result.Reason);
+        Assert.Null(result.Proposal);
+    }
+
+    [Fact]
+    public void Proposal_rejects_empty_expected_and_invoice_file_ids()
+    {
+        var result = PaguaiDocumentProposalParser.Parse(Request(ValidProposalJson.Replace(
+            "\"invoiceFileId\": \"11111111-1111-4111-8111-111111111111\"",
+            "\"invoiceFileId\": \"00000000-0000-0000-0000-000000000000\"",
+            StringComparison.Ordinal), Guid.Empty));
+
+        Assert.Equal(PaguaiProposalParseStatus.Invalid, result.Status);
+        Assert.Equal("schema_invalid", result.Reason);
+        Assert.Null(result.Proposal);
+    }
+
+    [Fact]
+    public void Proposal_requires_exactly_one_authorized_source_for_each_financial_field()
+    {
+        var structuredJson = ValidProposalJson.Replace(
+            "{ \"field\": \"beneficiaryDisplayName\", \"source\": \"11111111111141118111111111111111:p1\" }",
+            "{ \"field\": \"beneficiaryDisplayName\", \"source\": \"11111111111141118111111111111111:p1\" }, { \"field\": \"amount\", \"source\": \"11111111111141118111111111111111:p1\" }",
+            StringComparison.Ordinal);
+
+        var result = PaguaiDocumentProposalParser.Parse(Request(structuredJson));
+
+        Assert.Equal(PaguaiProposalParseStatus.NeedsClarification, result.Status);
+        Assert.Equal("insufficient_evidence", result.Reason);
+        Assert.Null(result.Proposal);
+    }
+
+    public static TheoryData<string> InvalidProposalTextValues => new()
+    {
+        ValidProposalJson.Replace("\"title\": \"Fatura de energia\"", "\"title\": \"\"", StringComparison.Ordinal),
+        ValidProposalJson.Replace("\"title\": \"Fatura de energia\"", "\"title\": \"   \"", StringComparison.Ordinal),
+        ValidProposalJson.Replace("\"title\": \"Fatura de energia\"", $"\"title\": \"{new string('t', 201)}\"", StringComparison.Ordinal),
+        ValidProposalJson.Replace("\"description\": \"Pagamento mensal\"", "\"description\": \"\"", StringComparison.Ordinal),
+        ValidProposalJson.Replace("\"description\": \"Pagamento mensal\"", "\"description\": \"   \"", StringComparison.Ordinal),
+        ValidProposalJson.Replace("\"description\": \"Pagamento mensal\"", $"\"description\": \"{new string('d', 4_001)}\"", StringComparison.Ordinal),
+        ValidProposalJson.Replace("\"beneficiaryDisplayName\": \"Companhia de energia\"", "\"beneficiaryDisplayName\": \"\"", StringComparison.Ordinal),
+        ValidProposalJson.Replace("\"beneficiaryDisplayName\": \"Companhia de energia\"", "\"beneficiaryDisplayName\": \"   \"", StringComparison.Ordinal),
+        ValidProposalJson.Replace("\"beneficiaryDisplayName\": \"Companhia de energia\"", $"\"beneficiaryDisplayName\": \"{new string('b', 201)}\"", StringComparison.Ordinal),
+    };
+
+    private const string ValidProposalJson = """
+        {
+          "status": "proposal",
+          "reason": null,
+          "proposal": {
+            "title": "Fatura de energia",
+            "description": "Pagamento mensal",
+            "amount": "250.00",
+            "currency": "BRL",
+            "dueDate": "2026-09-10",
+            "beneficiaryDisplayName": "Companhia de energia",
+            "proofRequirement": "optional",
+            "invoiceFileId": "11111111-1111-4111-8111-111111111111",
+            "confidence": 0.80,
+            "sourceReferences": [
+              { "field": "amount", "source": "11111111111141118111111111111111:p1" },
+              { "field": "dueDate", "source": "11111111111141118111111111111111:p1" },
+              { "field": "beneficiaryDisplayName", "source": "11111111111141118111111111111111:p1" }
+            ]
+          }
+        }
+        """;
+
+    private static PaguaiDocumentProposalParseRequest Request(string structuredJson, Guid? fileRecordId = null) => new(
+        fileRecordId ?? FileId,
         new HashSet<string>(StringComparer.Ordinal)
         {
             "11111111111141118111111111111111:p1",
