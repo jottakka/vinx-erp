@@ -23,7 +23,7 @@ public sealed class InboundWhatsAppAgentAdapterTests
             new Uri("https://erp.example.test/base/"));
 
         Assert.Equal(
-            "Documento pronto para revisão: https://erp.example.test/base/paguai/draft-proposals/507d5665-d4d8-4db5-9cb6-d1fc43492eb6",
+            "Documento pronto para revisão: https://erp.example.test/base/paguai?proposal=507d5665-d4d8-4db5-9cb6-d1fc43492eb6",
             reply);
     }
 }

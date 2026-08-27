@@ -29,7 +29,7 @@ public sealed class MetaWhatsAppInvoiceExtractionTests
             new Uri("https://erp.example.test/"));
 
         Assert.Equal(
-            "Documento pronto para revisão: https://erp.example.test/paguai/draft-proposals/d9510d25-1489-4b34-8931-8b940afccbb9",
+            "Documento pronto para revisão: https://erp.example.test/paguai?proposal=d9510d25-1489-4b34-8931-8b940afccbb9",
             reply);
     }
 

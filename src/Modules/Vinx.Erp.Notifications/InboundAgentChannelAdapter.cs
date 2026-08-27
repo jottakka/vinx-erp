@@ -214,7 +214,7 @@ public sealed class InboundAgentChannelAdapter(
                 : webAppBaseUri.AbsoluteUri + "/";
             var review = new Uri(
                 new Uri(baseText, UriKind.Absolute),
-                $"paguai/draft-proposals/{proposalId:D}");
+                $"paguai?proposal={proposalId:D}");
             return $"Documento pronto para revisão: {review.AbsoluteUri}";
         }
 
