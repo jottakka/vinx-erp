@@ -93,6 +93,55 @@ public static class E2eFixtureHostOptions
     }
 }
 
+/// <summary>Compõe os únicos perfis de agente permitidos pelo host E2E descartável.</summary>
+public static class E2eFixtureAgentConfiguration
+{
+    public static E2eFixtureAgentConfigurationResult Create(E2eFixtureAgentMode mode) => mode switch
+    {
+        E2eFixtureAgentMode.Deterministic => new(
+            new DeterministicE2eAgentModel(),
+            new AgentRunOptions
+            {
+                Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                Endpoint = new Uri("https://agent-provider.example/v1"),
+                Model = "test-agent-model",
+                Vision = new AgentRunVisionOptions
+                {
+                    Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                    Endpoint = new Uri("https://agent-provider.example/v1"),
+                    Model = "test-agent-model",
+                    ApprovedHosts = ["agent-provider.example"],
+                    AllowedClassifications = ["agentic_attachment"],
+                },
+            },
+            new E2eFixtureAttachmentStorage()),
+        E2eFixtureAgentMode.Real => new(
+            null,
+            new AgentRunOptions
+            {
+                Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                Endpoint = new Uri("https://opencode.ai/zen/go/v1"),
+                Model = "deepseek-v4-flash-vision-exp",
+                ApprovedHosts = ["opencode.ai"],
+                Vision = new AgentRunVisionOptions
+                {
+                    Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                    Endpoint = new Uri("https://opencode.ai/zen/go/v1"),
+                    Model = "deepseek-v4-flash-vision-exp",
+                    ApprovedHosts = ["opencode.ai"],
+                    AllowedClassifications = ["agentic_attachment"],
+                },
+            },
+            new E2eFixtureAttachmentStorage()),
+        _ => throw new InvalidOperationException("The E2E agent mode was invalid."),
+    };
+}
+
+public sealed record E2eFixtureAgentConfigurationResult(
+    IAgentModel? Model,
+    AgentRunOptions Options,
+    E2eFixtureAttachmentStorage Storage);
+
 public static class E2eFixtureHostProcessPolicy
 {
     /// <summary>Reconhece apenas cancelamento solicitado sem falha agregada de cleanup.</summary>

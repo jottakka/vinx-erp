@@ -67,6 +67,28 @@ public sealed class E2eFixtureHostOptionsTests
         Assert.Equal(DeterministicE2eAgentModel.ResponseText, normal.Text);
     }
 
+    [Fact]
+    public void Real_agent_configuration_fixes_main_and_vision_profiles_without_a_bindable_key()
+    {
+        var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Real);
+
+        Assert.Null(configuration.Model);
+        Assert.Equal(new Uri("https://opencode.ai/zen/go/v1"), configuration.Options.Endpoint);
+        Assert.Equal("deepseek-v4-flash-vision-exp", configuration.Options.Model);
+        Assert.Equal(["opencode.ai"], configuration.Options.ApprovedHosts);
+        var vision = Assert.IsType<AgentRunVisionOptions>(configuration.Options.Vision);
+        Assert.Equal(new Uri("https://opencode.ai/zen/go/v1"), vision.Endpoint);
+        Assert.Equal("deepseek-v4-flash-vision-exp", vision.Model);
+        Assert.Equal(["opencode.ai"], vision.ApprovedHosts);
+        Assert.Equal(["agentic_attachment"], vision.AllowedClassifications);
+        Assert.DoesNotContain(
+            typeof(AgentRunOptions).GetProperties(),
+            property => string.Equals(property.Name, "ApiKey", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            typeof(AgentRunVisionOptions).GetProperties(),
+            property => string.Equals(property.Name, "ApiKey", StringComparison.Ordinal));
+    }
+
     [Theory]
     [MemberData(nameof(InvalidArguments))]
     public void TryParse_rejects_missing_duplicate_extra_or_unknown_arguments(string[] arguments)
