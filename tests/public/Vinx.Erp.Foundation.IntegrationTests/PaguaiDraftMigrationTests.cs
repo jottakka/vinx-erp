@@ -424,8 +424,41 @@ public sealed class PaguaiDraftMigrationTests
             ProofRequirement = "required",
             InvoiceFileId = invoice.Id,
         };
-        administrator.PaguaiRequests.Add(draft);
-        await administrator.SaveChangesAsync();
+        // A coluna source_proposal_id só existe a partir de 20260827121200;
+        // o fixture migra apenas até 20260826150000, então o insert é SQL cru
+        // com o conjunto de colunas disponível nesse estado histórico.
+        await using var insertConnection = await fixture.OpenAdministratorConnectionAsync();
+        await using var insert = new NpgsqlCommand(
+            """
+            INSERT INTO paguai.requests (
+                id, company_id, requester_user_id, request_id, title, description,
+                amount, currency, due_date, beneficiary_display_name,
+                proof_requirement, invoice_file_id, source_inbound_message_id,
+                state, version, created_at)
+            VALUES (
+                @id, @company_id, @requester_user_id, @request_id, @title,
+                @description, @amount, @currency, @due_date,
+                @beneficiary_display_name, @proof_requirement, @invoice_file_id,
+                NULL, @state, @version, clock_timestamp())
+            """,
+            insertConnection);
+        insert.Parameters.AddWithValue("id", draft.Id);
+        insert.Parameters.AddWithValue("company_id", draft.CompanyId);
+        insert.Parameters.AddWithValue("requester_user_id", draft.RequesterUserId);
+        insert.Parameters.AddWithValue("request_id", draft.RequestId);
+        insert.Parameters.AddWithValue("title", draft.Title);
+        insert.Parameters.AddWithValue("description", draft.Description);
+        insert.Parameters.AddWithValue("amount", draft.Amount);
+        insert.Parameters.AddWithValue("currency", draft.Currency);
+        insert.Parameters.AddWithValue("due_date", draft.DueDate);
+        insert.Parameters.AddWithValue(
+            "beneficiary_display_name",
+            draft.BeneficiaryDisplayName);
+        insert.Parameters.AddWithValue("proof_requirement", draft.ProofRequirement);
+        insert.Parameters.AddWithValue("invoice_file_id", draft.InvoiceFileId!.Value);
+        insert.Parameters.AddWithValue("state", draft.State);
+        insert.Parameters.AddWithValue("version", draft.Version);
+        await insert.ExecuteNonQueryAsync();
         return draft;
     }
 }

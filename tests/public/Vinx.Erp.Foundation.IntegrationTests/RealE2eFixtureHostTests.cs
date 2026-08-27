@@ -69,7 +69,7 @@ public sealed class RealE2eFixtureHostTests
         Assert.Equal("/", host.Origin.AbsolutePath);
         Assert.Empty(host.Origin.Query);
         Assert.Empty(host.Origin.Fragment);
-        Assert.False(await host.WolverineStorageExistsAsync());
+        Assert.True(await host.WolverineStorageExistsAsync());
 
         using var client = CreateClient(host.Origin);
         using var health = await client.GetAsync("/health");
@@ -369,7 +369,10 @@ public sealed class RealE2eFixtureHostTests
             {
                 Assert.Equal(HttpStatusCode.Created, confirmed.StatusCode);
                 using var draft = JsonDocument.Parse(await confirmed.Content.ReadAsStringAsync());
-                Assert.Equal(proposalId, draft.RootElement.GetProperty("sourceProposalId").GetGuid());
+                // O contrato público do rascunho não expõe sourceProposalId;
+                // o vínculo com a proposta é verificado direto no banco abaixo.
+                Assert.NotEqual(Guid.Empty, draft.RootElement.GetProperty("id").GetGuid());
+                Assert.Equal("rascunho", draft.RootElement.GetProperty("state").GetString());
             }
 
             await using (var administrator = await sharedHost.OpenAdministratorConnectionAsync())

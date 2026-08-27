@@ -88,6 +88,7 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
             sharedHost._fixtureCleanupResource = sharedHost._fixtureOwner;
             await sharedHost._fixtureOwner.StartAsync();
             await sharedHost._fixtureOwner.MigrateAsync();
+            await WolverineStorageDeployment.ApplyAsync(sharedHost._fixtureOwner);
 
             phase = E2eFixtureHostFailurePhase.Seed;
             var receipt = await E2eFixtureSeeder.SeedAsync(sharedHost._fixtureOwner, cancellationToken);

@@ -213,6 +213,11 @@ public sealed class MetaWhatsAppInboundTests
             SELECT body, false
             FROM vinx_wolverine.wolverine_outgoing_envelopes
             WHERE body IS NOT NULL
+            UNION ALL
+            SELECT body, execution_time IS NOT NULL
+            FROM vinx_wolverine.wolverine_incoming_envelopes
+            WHERE body IS NOT NULL
+              AND status = 'Scheduled'
             """,
             connection);
         await using var reader = await command.ExecuteReaderAsync();

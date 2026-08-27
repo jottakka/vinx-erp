@@ -92,6 +92,8 @@ public sealed class AuditPrivilegeTests
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_provisioning_owner'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_employee_directory_owner'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_worker_owner'),
+                          -- O worker do agente audita decisões após reautorizar o contexto.
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_worker'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_notifications_owner'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_permissions_owner'),
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_identity_owner')))

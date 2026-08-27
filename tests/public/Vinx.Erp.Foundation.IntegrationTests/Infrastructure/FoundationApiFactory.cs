@@ -194,7 +194,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             testFileStorage: testFileStorage,
             testAgentModel: testAgentModel,
             testAgentRunOptions: testAgentRunOptions,
-            provisionWolverineStorage: false,
+            provisionWolverineStorage: true,
             disableWolverineForE2e: true);
 
         try
@@ -542,7 +542,6 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             if (_disableWolverineForE2e)
             {
                 services.DisableAllExternalWolverineTransports();
-                services.DisableAllWolverineMessagePersistence();
             }
 
             services.AddTransient<IStartupFilter, AllowAnonymousTestEndpointStartupFilter>();
