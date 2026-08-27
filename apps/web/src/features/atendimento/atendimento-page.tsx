@@ -91,6 +91,10 @@ function messageFor(code: string) {
   return "Não foi possível concluir a ação. Tente novamente.";
 }
 
+function cardMutationKey(card: AtendimentoCard) {
+  return `${card.companyId}:${card.id}`;
+}
+
 export function AtendimentoPage({
   attachmentUploader,
   title = "Atendimento",
@@ -313,10 +317,6 @@ export function AtendimentoPage({
     }
     setCards((current) => [...current, result.card]);
     return { ok: true };
-  }
-
-  function cardMutationKey(card: AtendimentoCard) {
-    return `${card.companyId}:${card.id}`;
   }
 
   // Lock por cartão compartilhado por move/assign/cancel: nenhuma mutação do
