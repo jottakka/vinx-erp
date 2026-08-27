@@ -116,6 +116,52 @@ public sealed class AgentContextPolicyTests
     }
 
     [Fact]
+    public void Paguai_profile_requires_exact_company_capabilities()
+    {
+        var actor = new ActorContext(Guid.NewGuid(), Guid.NewGuid());
+        Assert.True(AgentTaskProfileCatalog.TryGet(
+            AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+            out var profile));
+        var required = new[]
+        {
+            KnownCapabilities.AiRead,
+            KnownCapabilities.FilesReadOcr,
+            KnownCapabilities.PaguaiDraftCreate,
+        };
+
+        var resolved = AgentPolicy.EvaluateContext(
+            Snapshot(MembershipWithCapabilities(required)),
+            new AgentContextRequest(actor, profile!, AlfaCompanyId));
+
+        Assert.Equal(AgentContextResolutionStatus.Resolved, resolved.Status);
+
+        foreach (var omitted in required)
+        {
+            var denied = AgentPolicy.EvaluateContext(
+                Snapshot(MembershipWithCapabilities(required.Where(name => name != omitted))),
+                new AgentContextRequest(actor, profile!, AlfaCompanyId));
+
+            Assert.Equal(AgentContextResolutionStatus.Denied, denied.Status);
+            Assert.Equal("capability_denied", denied.ReasonCode);
+            Assert.Null(denied.Context);
+        }
+
+        var wrongScope = MembershipWithCapabilities(required);
+        wrongScope = wrongScope with
+        {
+            Capabilities = wrongScope.Capabilities.Select(capability =>
+                capability.Name == KnownCapabilities.PaguaiDraftCreate
+                    ? capability with { Scopes = new HashSet<CapabilityScope> { CapabilityScope.Self } }
+                    : capability).ToArray(),
+        };
+        var wrongScopeResolution = AgentPolicy.EvaluateContext(
+            Snapshot(wrongScope),
+            new AgentContextRequest(actor, profile!, AlfaCompanyId));
+        Assert.Equal(AgentContextResolutionStatus.Denied, wrongScopeResolution.Status);
+        Assert.Equal("capability_denied", wrongScopeResolution.ReasonCode);
+    }
+
+    [Fact]
     public void Revoked_membership_not_reused()
     {
         // O resolver real é selado sobre o FoundationDbContext; a sequência abaixo
@@ -191,4 +237,13 @@ public sealed class AgentContextPolicyTests
 
     private static EffectiveCapability ReadCapability() =>
         new(AgentCapabilities.Read, new HashSet<CapabilityScope> { CapabilityScope.Company });
+
+    private static MembershipCapabilitySummary MembershipWithCapabilities(IEnumerable<string> capabilityNames) =>
+        new(
+            Guid.NewGuid(),
+            AlfaCompanyId,
+            "Alfa",
+            capabilityNames.Select(name => new EffectiveCapability(
+                name,
+                new HashSet<CapabilityScope> { CapabilityScope.Company })).ToArray());
 }

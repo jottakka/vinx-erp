@@ -460,7 +460,16 @@ internal sealed class WorkerAgentRunOptions
                     || !ExactApprovedHostPolicy.Matches(Endpoint, ApprovedHosts)
                     || new OpenAiCompatibleOptions.Validator()
                         .ValidateForRuntimeCredential(null, ToProviderOptions()).Failed))
-            || (Vision is not null && !Vision.IsValid()))
+            || (Vision is not null
+                && (!Vision.IsValid()
+                    || Provider is null
+                    || !string.Equals(Provider, Vision.Provider, StringComparison.Ordinal)
+                    || !string.Equals(Model, Vision.Model, StringComparison.Ordinal)
+                    || !ExactApprovedHostPolicy.ProfilesMatch(
+                        Endpoint,
+                        ApprovedHosts,
+                        Vision.Endpoint,
+                        Vision.ApprovedHosts))))
         {
             throw new InvalidOperationException("Agent run configuration is invalid.");
         }

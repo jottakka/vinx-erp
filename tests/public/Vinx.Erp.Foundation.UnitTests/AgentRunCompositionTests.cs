@@ -172,6 +172,10 @@ public sealed class AgentRunCompositionTests
     public void Complete_document_vision_configuration_registers_the_normalizer_as_scoped()
     {
         var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "https://VISION.EXAMPLE.COM/v1/"),
+            ("AgentRun:Model", "approved-vision-model"),
+            ("AgentRun:ApprovedHosts:0", " vision.example.com. "),
             ("AgentRun:Vision:Provider", AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Vision:Endpoint", "https://VISION.EXAMPLE.COM/v1/"),
             ("AgentRun:Vision:Model", "approved-vision-model"),
@@ -194,6 +198,10 @@ public sealed class AgentRunCompositionTests
     public void Vision_runtime_profile_rejects_a_parent_allowlist_entry()
     {
         var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "https://vision.opencode.ai/zen/go/v1/"),
+            ("AgentRun:Model", "approved-vision-model"),
+            ("AgentRun:ApprovedHosts:0", "vision.opencode.ai"),
             ("AgentRun:Vision:Provider", AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Vision:Endpoint", "https://vision.opencode.ai/zen/go/v1/"),
             ("AgentRun:Vision:Model", "approved-vision-model"),
@@ -202,6 +210,38 @@ public sealed class AgentRunCompositionTests
 
         Assert.Throws<InvalidOperationException>(
             () => CreateBaseServices().AddAgentRunSurface(configuration, ReadDedicatedCredential));
+    }
+
+    [Fact]
+    public void Vision_requires_the_identical_main_profile()
+    {
+        AssertInvalid(CreateMatchingOptions(includeMain: false));
+
+        var differentEndpoint = CreateMatchingOptions();
+        differentEndpoint.Vision!.Endpoint = new Uri("https://other.example/v1/");
+        differentEndpoint.Vision.ApprovedHosts = ["other.example"];
+        AssertInvalid(differentEndpoint);
+
+        var differentModel = CreateMatchingOptions();
+        differentModel.Vision!.Model = "different-model";
+        AssertInvalid(differentModel);
+
+        var differentHosts = CreateMatchingOptions();
+        differentHosts.Vision!.ApprovedHosts = ["api.example", "other.example"];
+        AssertInvalid(differentHosts);
+
+        var normalizedEquivalent = CreateMatchingOptions();
+        normalizedEquivalent.Endpoint = new Uri("https://API.EXAMPLE/v1/");
+        normalizedEquivalent.ApprovedHosts = [" api.example. ", "SECOND.EXAMPLE"];
+        normalizedEquivalent.Timeout = TimeSpan.FromSeconds(12);
+        normalizedEquivalent.Vision!.Endpoint = new Uri("https://api.example:443/v1/");
+        normalizedEquivalent.Vision.ApprovedHosts = ["second.example.", "api.example"];
+        normalizedEquivalent.Vision.Timeout = TimeSpan.FromSeconds(45);
+
+        normalizedEquivalent.Validate();
+
+        static void AssertInvalid(AgentRunOptions options) =>
+            Assert.Throws<InvalidOperationException>(options.Validate);
     }
 
     [Theory]
@@ -260,6 +300,22 @@ public sealed class AgentRunCompositionTests
             .AddInMemoryCollection(
                 pairs.Select(pair => new KeyValuePair<string, string?>(pair.Key, pair.Value)))
             .Build();
+
+    private static AgentRunOptions CreateMatchingOptions(bool includeMain = true) => new()
+    {
+        Provider = includeMain ? AgentRunOptions.OpenAiCompatibleProvider : null,
+        Endpoint = includeMain ? new Uri("https://api.example/v1/") : null,
+        Model = includeMain ? "approved-model" : null,
+        ApprovedHosts = includeMain ? ["api.example"] : [],
+        Vision = new AgentRunVisionOptions
+        {
+            Provider = AgentRunOptions.OpenAiCompatibleProvider,
+            Endpoint = new Uri("https://api.example/v1/"),
+            Model = "approved-model",
+            ApprovedHosts = ["api.example"],
+            AllowedClassifications = ["agentic_attachment"],
+        },
+    };
 
     private static string? ReadDedicatedCredential(string name) =>
         name == "VINX_AGENT_PROVIDER_API_KEY" ? "synthetic-test-key" : null;

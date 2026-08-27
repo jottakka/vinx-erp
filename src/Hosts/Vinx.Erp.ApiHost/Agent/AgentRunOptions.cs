@@ -46,6 +46,11 @@ public sealed class AgentRunOptions
 
         if (string.IsNullOrWhiteSpace(Provider))
         {
+            if (Vision is not null)
+            {
+                throw new InvalidOperationException("Agent document vision requires the main provider profile.");
+            }
+
             // Sem provider o runner falha fechado (provider_not_configured):
             // nenhuma outra configuração é exigida.
             return;
@@ -82,6 +87,18 @@ public sealed class AgentRunOptions
         if (!HasExactApprovedHost(Endpoint, ApprovedHosts))
         {
             throw new InvalidOperationException("Agent provider endpoint must match an approved host exactly.");
+        }
+
+        if (Vision is not null
+            && (!string.Equals(Provider, Vision.Provider, StringComparison.Ordinal)
+                || !string.Equals(Model, Vision.Model, StringComparison.Ordinal)
+                || !ExactApprovedHostPolicy.ProfilesMatch(
+                    Endpoint,
+                    ApprovedHosts,
+                    Vision.Endpoint,
+                    Vision.ApprovedHosts)))
+        {
+            throw new InvalidOperationException("Agent document vision must use the main provider profile.");
         }
     }
 

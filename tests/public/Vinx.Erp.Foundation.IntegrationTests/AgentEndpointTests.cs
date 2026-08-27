@@ -203,6 +203,35 @@ public sealed class AgentEndpointTests
     }
 
     [Fact]
+    public async Task Paguai_journey_without_draft_create_never_calls_vision_or_main_provider()
+    {
+        var model = ControlledAgentModel.Text(ModelText);
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            fileStorage: new E2eFixtureAttachmentStorage(),
+            agentModel: model,
+            agentRunOptions: ConfiguredOptions(includeVision: true));
+        var scenario = await SeedScenarioAsync(factory);
+        var fileId = await SeedPaguaiImageWithoutDraftCapabilityAsync(
+            factory,
+            scenario.AlfaCompanyId);
+        var request = new AgentRunRequest(
+            Guid.NewGuid(),
+            AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+            E2eFixtureAttachmentStorage.PaguaiPrompt,
+            scenario.AlfaCompanyId,
+            [fileId]);
+
+        using var response = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
+
+        response.EnsureSuccessStatusCode();
+        var result = await ReadResponseAsync(response);
+        Assert.Equal("denied", result.Status);
+        Assert.Equal("capability_denied", result.ReasonCode);
+        Assert.Equal(0, factory.AgentVisionCallCount);
+        Assert.Equal(0, model.CallCount);
+    }
+
+    [Fact]
     public async Task Anonymous_request_is_unauthorized()
     {
         // Sem token o challenge é real: nenhum serviço de aplicação roda.
@@ -394,6 +423,46 @@ public sealed class AgentEndpointTests
         Assert.Equal(0, model.CallCount);
     }
 
+    [Theory]
+    [InlineData(AgentExecutionLedgerState.Claimed)]
+    [InlineData(AgentExecutionLedgerState.VisionInFlight)]
+    [InlineData(AgentExecutionLedgerState.ModelInFlight)]
+    public async Task Concurrent_stale_replays_return_one_stable_terminal_result_without_500_or_provider_call(
+        AgentExecutionLedgerState staleState)
+    {
+        var model = ControlledAgentModel.Text(ModelText);
+        await using var factory = await CreateConfiguredFactoryAsync(model);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.AlfaCompanyId, "resuma o replay interrompido");
+        await SeedStaleInFlightLedgerAsync(factory, scenario.AlfaCompanyId, request, staleState);
+
+        var responses = await Task.WhenAll(
+            factory.CreateClient().PostAsJsonAsync("/agent/runs", request),
+            factory.CreateClient().PostAsJsonAsync("/agent/runs", request));
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode));
+        var expectedCode = staleState == AgentExecutionLedgerState.Claimed
+            ? "agent_unavailable"
+            : "execution_ambiguous";
+        foreach (var response in responses)
+        {
+            Assert.Equal(expectedCode, (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+            response.Dispose();
+        }
+
+        Assert.Equal(0, model.CallCount);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var ledger = await administrator.AgentExecutionLedger.SingleAsync();
+        Assert.Equal(
+            staleState == AgentExecutionLedgerState.Claimed
+                ? AgentExecutionLedgerState.FailedClosed
+                : AgentExecutionLedgerState.Ambiguous,
+            ledger.State);
+        Assert.Single(await administrator.AuditEvents
+            .Where(audit => audit.Action == "agent.run")
+            .ToListAsync());
+    }
+
     [Fact]
     public async Task Provider_not_configured_returns_503_provider_not_configured()
     {
@@ -574,9 +643,9 @@ public sealed class AgentEndpointTests
             ? new AgentRunVisionOptions
             {
                 Provider = AgentRunOptions.OpenAiCompatibleProvider,
-                Endpoint = new Uri("https://vision-provider.example/v1"),
-                Model = "test-vision-model",
-                ApprovedHosts = ["vision-provider.example"],
+                Endpoint = new Uri("https://agent-provider.example/v1"),
+                Model = "test-agent-model",
+                ApprovedHosts = ["agent-provider.example"],
                 AllowedClassifications = ["fiscal"],
             }
             : null,
@@ -714,6 +783,56 @@ public sealed class AgentEndpointTests
         }
 
         return company.Id;
+    }
+
+    private static async Task<Guid> SeedPaguaiImageWithoutDraftCapabilityAsync(
+        FoundationApiFactory factory,
+        Guid companyId)
+    {
+        var fileId = Guid.NewGuid();
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new Npgsql.NpgsqlCommand(
+            """
+            INSERT INTO foundation.role_capabilities (
+                id, company_id, role_id, capability_id, scope,
+                created_by_user_id, updated_by_user_id, request_id,
+                created_at, updated_at)
+            SELECT gen_random_uuid(), @company_id, role.id, capability.id, 'company',
+                @actor, @actor, gen_random_uuid(), clock_timestamp(), clock_timestamp()
+            FROM foundation.roles AS role
+            CROSS JOIN foundation.capabilities AS capability
+            WHERE role.company_id = @company_id
+                AND capability.name = 'foundation.files.read-ocr'
+            LIMIT 1;
+
+            INSERT INTO foundation.files (
+                id, company_id, uploader_membership_id, original_file_name,
+                extension, size_bytes, mime_type, checksum, classification,
+                origin, retention_until, provider_key, processing_state,
+                scan_engine, scan_engine_version, scan_signature_version,
+                scanned_at, created_by_user_id, updated_by_user_id, request_id,
+                created_at, updated_at)
+            SELECT @file_id, @company_id, membership.id,
+                'nota-fiscal-sintetica.png', '.png', @size_bytes,
+                'image/png', @checksum, 'agentic_attachment', 'integration_test',
+                clock_timestamp() + interval '30 days', @provider_key, 'confirmed',
+                'TestScanner', '1', 'test-signature', clock_timestamp(),
+                @actor, @actor, gen_random_uuid(), clock_timestamp(), clock_timestamp()
+            FROM foundation.memberships AS membership
+            WHERE membership.company_id = @company_id
+                AND membership.user_id = @actor
+                AND membership.deleted_at IS NULL
+            LIMIT 1;
+            """,
+            administrator);
+        command.Parameters.AddWithValue("company_id", companyId);
+        command.Parameters.AddWithValue("actor", factory.ActorUserId);
+        command.Parameters.AddWithValue("file_id", fileId);
+        command.Parameters.AddWithValue("size_bytes", E2eFixtureAttachmentStorage.Content.LongLength);
+        command.Parameters.AddWithValue("checksum", E2eFixtureAttachmentStorage.Checksum);
+        command.Parameters.AddWithValue("provider_key", E2eFixtureAttachmentStorage.ProviderKey);
+        Assert.Equal(2, await command.ExecuteNonQueryAsync());
+        return fileId;
     }
 
     private static ChatResponse TextResponse(string text) => new(new ChatMessage(ChatRole.Assistant, text));

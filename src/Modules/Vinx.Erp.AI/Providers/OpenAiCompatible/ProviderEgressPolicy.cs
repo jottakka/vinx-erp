@@ -179,6 +179,7 @@ public static class ProviderEgressPolicy
             "240.0.0.0/4",     // reservada (classe E + broadcast)
             // IPv6
             "fc00::/7",        // ULA privada
+            "fec0::/10",       // site-local depreciada RFC3879
             "fe80::/10",       // link-local
             "ff00::/8",        // multicast
             "2001:db8::/32",   // documentação

@@ -71,6 +71,22 @@ public sealed class OpenAiCompatibleTransportTests
     }
 
     [Fact]
+    public async Task ResolveApprovedAddressesAsync_rejects_deprecated_site_local_literal_and_mixed_results()
+    {
+        await Assert.ThrowsAsync<ProviderEgressRejectedException>(() =>
+            OpenAiCompatibleTransport.ResolveApprovedAddressesAsync(
+                new Uri("https://api.example.test"),
+                (_, _) => Task.FromResult(new[] { IPAddress.Parse("fec0::1") }),
+                CancellationToken.None));
+
+        await Assert.ThrowsAsync<ProviderEgressRejectedException>(() =>
+            OpenAiCompatibleTransport.ResolveApprovedAddressesAsync(
+                new Uri("https://api.example.test"),
+                (_, _) => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8"), IPAddress.Parse("fec0::1") }),
+                CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ResolveApprovedAddressesAsync_propagates_cancellation()
     {
         using var cancellation = new CancellationTokenSource();

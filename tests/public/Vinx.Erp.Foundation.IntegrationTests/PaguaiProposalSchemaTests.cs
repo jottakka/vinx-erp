@@ -40,7 +40,7 @@ public sealed class PaguaiProposalSchemaTests
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
-        Assert.True(reader.GetBoolean(4));
+        Assert.False(reader.GetBoolean(4));
         Assert.False(reader.GetBoolean(5));
         Assert.Contains("app.company_id", reader.GetString(6));
         Assert.Contains("app.user_id", reader.GetString(6));
@@ -77,5 +77,69 @@ public sealed class PaguaiProposalSchemaTests
         Assert.Contains("state", reader.GetString(2), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("pending", reader.GetString(2), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("source_proposal_id", reader.GetString(3));
+    }
+
+    [Fact]
+    public async Task Proposal_payload_columns_are_not_updatable_by_runtime_or_worker()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        var lifecycleColumns = new[]
+        {
+            "state",
+            "result_draft_id",
+            "resolution_request_id",
+            "resolved_at",
+            "row_version",
+        };
+        var immutableColumns = new[]
+        {
+            "id",
+            "company_id",
+            "actor_user_id",
+            "request_id",
+            "file_record_id",
+            "title",
+            "description",
+            "amount",
+            "currency",
+            "due_date",
+            "beneficiary_display_name",
+            "proof_requirement",
+            "confidence",
+            "source_references",
+            "policy_version",
+            "payload_hash",
+            "created_at",
+            "expires_at",
+        };
+
+        foreach (var role in new[] { "vinx_runtime", "vinx_worker" })
+        {
+            foreach (var column in lifecycleColumns)
+            {
+                Assert.True(await HasUpdatePrivilegeAsync(administrator, role, column));
+            }
+
+            foreach (var column in immutableColumns)
+            {
+                Assert.False(await HasUpdatePrivilegeAsync(administrator, role, column));
+            }
+        }
+    }
+
+    private static async Task<bool> HasUpdatePrivilegeAsync(
+        NpgsqlConnection connection,
+        string role,
+        string column)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT has_column_privilege(@role, 'paguai.draft_proposals', @column, 'UPDATE')",
+            connection);
+        command.Parameters.AddWithValue("role", role);
+        command.Parameters.AddWithValue("column", column);
+        return (bool)(await command.ExecuteScalarAsync())!;
     }
 }

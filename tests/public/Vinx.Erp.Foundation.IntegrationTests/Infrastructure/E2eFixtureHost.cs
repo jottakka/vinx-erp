@@ -359,6 +359,7 @@ public sealed class E2eFixtureHost : IAsyncDisposable
     public Uri Origin { get; }
     public string ProfileName { get; }
     public E2eDatasetReceipt Receipt { get; }
+    internal int AgentVisionCallCount => _factory.AgentVisionCallCount;
     internal string DatabaseHost { get; }
     internal int DatabasePort { get; }
     internal string DatabaseName { get; }

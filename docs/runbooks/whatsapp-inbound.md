@@ -26,6 +26,12 @@ OCR/provider e chama o mesmo núcleo de Web e Telegram. Documento segue
 download, quarentena, scan, `FileRecord` confirmado e contexto OCR efêmero;
 mídia, número, texto, prompt e credencial não entram no envelope. A resposta
 conserva a barreira de ambiguidade e não confirma Pagaí nem entrega externa.
+Se houver queda depois do terminal do ledger e antes da resposta, uma redelivery
+recupera somente o ledger correspondente em `completed`, `failed_closed` ou
+`ambiguous`, reutiliza o `agent_file_id` confirmado e converge a mesma barreira.
+Ledger ausente ou ainda em `claimed`/`*_in_flight` permanece no-op para
+reconciliação manual; não há timer, reset automático, novo OCR ou nova chamada
+ao modelo.
 
 ## Variáveis de ambiente
 

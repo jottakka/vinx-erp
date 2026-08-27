@@ -1,6 +1,7 @@
 using System.Globalization;
+using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Npgsql;
 using Vinx.Erp.Foundation.Files;
@@ -28,7 +29,15 @@ public sealed class E2eFixtureAttachmentStorage : FileStorage
     public const string ProviderKey = "e2e/alfa/agentic-attachment";
     public const string PaguaiPrompt = "gere a proposta Pagaí sintética da nota E2E";
 
-    public static readonly byte[] Content = BuildPdf();
+    public static readonly IReadOnlyList<string> VisibleInvoiceLines =
+    [
+        "VINX NOTA E2E",
+        "FORNECEDOR E2E",
+        "BRL 250.00",
+        "2026-09-10",
+    ];
+
+    public static readonly byte[] Content = BuildInvoicePng();
     public static readonly string Checksum = $"sha256:{Convert.ToHexString(SHA256.HashData(Content)).ToLowerInvariant()}";
 
     public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -46,7 +55,7 @@ public sealed class E2eFixtureAttachmentStorage : FileStorage
     public Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken)
     {
         EnsureExactKey(providerKey);
-        return Task.FromResult(new StorageObjectMetadata(ProviderKey, Content.LongLength, "application/pdf", Checksum));
+        return Task.FromResult(new StorageObjectMetadata(ProviderKey, Content.LongLength, "image/png", Checksum));
     }
 
     public Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken) =>
@@ -78,41 +87,143 @@ public sealed class E2eFixtureAttachmentStorage : FileStorage
         }
     }
 
-    private static byte[] BuildPdf()
+    private static byte[] BuildInvoicePng()
     {
-        const string text = "Nota fiscal sintetica E2E";
-        var content = $"BT /F1 12 Tf 50 780 Td ({text}) Tj ET";
-        var objects = new[]
-        {
-            "<</Type/Catalog/Pages 2 0 R>>",
-            "<</Type/Pages/Kids[3 0 R]/Count 1>>",
-            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</Font<</F1 4 0 R>>>>/Contents 5 0 R>>",
-            "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
-            $"<</Length {content.Length}>>\nstream\n{content}\nendstream",
-        };
+        const int width = 800;
+        const int height = 360;
+        const int scale = 8;
+        const int originX = 40;
+        const int originY = 28;
+        const int lineAdvance = 80;
+        var pixels = Enumerable.Repeat((byte)255, width * height).ToArray();
 
-        using var buffer = new MemoryStream();
-        using var writer = new StreamWriter(buffer, Encoding.ASCII, leaveOpen: true);
-        writer.Write("%PDF-1.4\n");
-        var offsets = new List<long>();
-        for (var index = 0; index < objects.Length; index++)
+        for (var lineIndex = 0; lineIndex < VisibleInvoiceLines.Count; lineIndex++)
         {
-            offsets.Add(buffer.Position);
-            writer.Write($"{index + 1} 0 obj\n{objects[index]}\nendobj\n");
-            writer.Flush();
+            var line = VisibleInvoiceLines[lineIndex];
+            for (var characterIndex = 0; characterIndex < line.Length; characterIndex++)
+            {
+                var glyph = Glyph(line[characterIndex]);
+                for (var row = 0; row < glyph.Length; row++)
+                {
+                    for (var column = 0; column < 5; column++)
+                    {
+                        if ((glyph[row] & (1 << (4 - column))) == 0)
+                        {
+                            continue;
+                        }
+
+                        var left = originX + (characterIndex * 6 * scale) + (column * scale);
+                        var top = originY + (lineIndex * lineAdvance) + (row * scale);
+                        for (var y = top; y < top + scale; y++)
+                        {
+                            Array.Fill(pixels, (byte)0, (y * width) + left, scale);
+                        }
+                    }
+                }
+            }
         }
 
-        var xrefOffset = buffer.Position;
-        writer.Write($"xref\n0 {objects.Length + 1}\n0000000000 65535 f \n");
-        foreach (var offset in offsets)
-        {
-            writer.Write($"{offset:D10} 00000 n \n");
-        }
-
-        writer.Write($"trailer\n<</Size {objects.Length + 1}/Root 1 0 R>>\nstartxref\n{xrefOffset}\n%%EOF\n");
-        writer.Flush();
-        return buffer.ToArray();
+        return EncodeGrayscalePng(pixels, width, height);
     }
+
+    private static byte[] Glyph(char value) => value switch
+    {
+        ' ' => [0, 0, 0, 0, 0, 0, 0],
+        '-' => [0, 0, 0, 0b11111, 0, 0, 0],
+        '.' => [0, 0, 0, 0, 0, 0b01100, 0b01100],
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        'C' => [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
+        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+        'I' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+        '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+        '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+        '3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+        '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+        '5' => [0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110],
+        '6' => [0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+        '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+        '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+        '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110],
+        _ => throw new InvalidOperationException("The synthetic invoice contains an unsupported glyph."),
+    };
+
+    private static byte[] EncodeGrayscalePng(byte[] pixels, int width, int height)
+    {
+        var scanlines = new byte[checked((width + 1) * height)];
+        for (var row = 0; row < height; row++)
+        {
+            Buffer.BlockCopy(pixels, row * width, scanlines, (row * (width + 1)) + 1, width);
+        }
+
+        byte[] compressed;
+        using (var compressedBuffer = new MemoryStream())
+        {
+            using (var compressor = new ZLibStream(
+                compressedBuffer,
+                CompressionLevel.SmallestSize,
+                leaveOpen: true))
+            {
+                compressor.Write(scanlines);
+            }
+
+            compressed = compressedBuffer.ToArray();
+        }
+
+        using var png = new MemoryStream();
+        png.Write([137, 80, 78, 71, 13, 10, 26, 10]);
+        Span<byte> header = stackalloc byte[13];
+        BinaryPrimitives.WriteInt32BigEndian(header[..4], width);
+        BinaryPrimitives.WriteInt32BigEndian(header.Slice(4, 4), height);
+        header[8] = 8;
+        header[9] = 0;
+        WritePngChunk(png, "IHDR", header);
+        WritePngChunk(png, "IDAT", compressed);
+        WritePngChunk(png, "IEND", []);
+        return png.ToArray();
+    }
+
+    private static void WritePngChunk(Stream destination, string type, ReadOnlySpan<byte> data)
+    {
+        Span<byte> length = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32BigEndian(length, data.Length);
+        destination.Write(length);
+        var typeBytes = System.Text.Encoding.ASCII.GetBytes(type);
+        destination.Write(typeBytes);
+        destination.Write(data);
+        var checksumInput = new byte[typeBytes.Length + data.Length];
+        typeBytes.CopyTo(checksumInput, 0);
+        data.CopyTo(checksumInput.AsSpan(typeBytes.Length));
+        Span<byte> checksum = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(checksum, Crc32(checksumInput));
+        destination.Write(checksum);
+    }
+
+    private static uint Crc32(ReadOnlySpan<byte> data)
+    {
+        var checksum = uint.MaxValue;
+        foreach (var value in data)
+        {
+            checksum ^= value;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                checksum = (checksum >> 1) ^ ((checksum & 1) == 0 ? 0 : 0xedb88320u);
+            }
+        }
+
+        return ~checksum;
+    }
+
 }
 
 public static class E2eFixtureProfileCatalog
@@ -384,10 +495,10 @@ public static class E2eFixtureSeeder
                         Id = MariaAlfaAgenticAttachmentId,
                         CompanyId = AlfaCompanyId,
                         UploaderMembershipId = MariaAlfaMembershipId,
-                        OriginalFileName = "nota-fiscal-sintetica.pdf",
-                        Extension = ".pdf",
+                        OriginalFileName = "nota-fiscal-sintetica.png",
+                        Extension = ".png",
                         SizeBytes = E2eFixtureAttachmentStorage.Content.LongLength,
-                        MimeType = "application/pdf",
+                        MimeType = "image/png",
                         Checksum = E2eFixtureAttachmentStorage.Checksum,
                         Classification = "agentic_attachment",
                         Origin = "e2e_fixture",

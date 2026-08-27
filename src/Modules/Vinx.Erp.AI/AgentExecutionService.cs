@@ -154,10 +154,10 @@ public sealed class AgentExecutionService(
             cancellationToken).ConfigureAwait(false);
 
         return materialized is
-            {
-                State: PaguaiProposalOperationState.Created or PaguaiProposalOperationState.Replay,
-                Proposal: { } persisted,
-            }
+        {
+            State: PaguaiProposalOperationState.Created or PaguaiProposalOperationState.Replay,
+            Proposal: { } persisted,
+        }
                 ? AgentExecutionResult.Completed(result.Outcome!, persisted.Id)
                 : materialized.State == PaguaiProposalOperationState.IdempotencyConflict
                     ? AgentExecutionResult.Conflict()
@@ -235,12 +235,93 @@ public sealed class AgentExecutionService(
             AgentExecutionLedgerState.FailedClosed => AgentExecutionResult.FailedClosed(ledger.ReasonCode!),
             AgentExecutionLedgerState.Claimed
                 when DateTimeOffset.UtcNow - ledger.UpdatedAt >= InFlightStaleAfter =>
-                await FailClosedAsync(ledger, command, StaleInFlightReason, cancellationToken).ConfigureAwait(false),
+                await ReconcileStaleClaimedAsync(
+                    ledger,
+                    command,
+                    payloadHash,
+                    cancellationToken).ConfigureAwait(false),
             AgentExecutionLedgerState.VisionInFlight or AgentExecutionLedgerState.ModelInFlight
                 when DateTimeOffset.UtcNow - ledger.UpdatedAt >= InFlightStaleAfter =>
-                await MarkAmbiguousAsync(ledger, command, StaleInFlightReason, cancellationToken).ConfigureAwait(false),
+                await ReconcileStaleInFlightAsync(
+                    ledger,
+                    command,
+                    payloadHash,
+                    cancellationToken).ConfigureAwait(false),
             _ => AgentExecutionResult.InProgress(),
         };
+    }
+
+    private async Task<AgentExecutionResult> ReconcileStaleClaimedAsync(
+        AgentExecutionLedger ledger,
+        AgentCommand command,
+        string payloadHash,
+        CancellationToken cancellationToken)
+    {
+        ledger.FailClosed(StaleInFlightReason, command.Actor.UserId, command.RequestId);
+        return await PersistStaleTerminalOrReadWinnerAsync(
+            ledger,
+            command,
+            payloadHash,
+            AgentExecutionResult.FailedClosed(StaleInFlightReason),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<AgentExecutionResult> ReconcileStaleInFlightAsync(
+        AgentExecutionLedger ledger,
+        AgentCommand command,
+        string payloadHash,
+        CancellationToken cancellationToken)
+    {
+        ledger.MarkAmbiguous(StaleInFlightReason, command.Actor.UserId, command.RequestId);
+        return await PersistStaleTerminalOrReadWinnerAsync(
+            ledger,
+            command,
+            payloadHash,
+            AgentExecutionResult.Ambiguous(StaleInFlightReason),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<AgentExecutionResult> PersistStaleTerminalOrReadWinnerAsync(
+        AgentExecutionLedger ledger,
+        AgentCommand command,
+        string payloadHash,
+        AgentExecutionResult transitionedResult,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await PersistTerminalAsync(
+                ledger,
+                command,
+                outcome: null,
+                cancellationToken).ConfigureAwait(false);
+            return transitionedResult;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            database.ChangeTracker.Clear();
+            await using var transaction = await database.Database
+                .BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await ApplyContextAsync(command, ledger.CompanyId, cancellationToken).ConfigureAwait(false);
+            var winner = await FindAsync(command, ledger.CompanyId, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            if (winner is null
+                || !string.Equals(winner.PayloadHash, payloadHash, StringComparison.Ordinal))
+            {
+                return AgentExecutionResult.FailedClosed(UnavailableReason);
+            }
+
+            return winner.State switch
+            {
+                AgentExecutionLedgerState.Completed => DeserializeCompleted(winner),
+                AgentExecutionLedgerState.FailedClosed =>
+                    AgentExecutionResult.FailedClosed(winner.ReasonCode!),
+                AgentExecutionLedgerState.Ambiguous =>
+                    AgentExecutionResult.Ambiguous(winner.ReasonCode!),
+                _ => AgentExecutionResult.InProgress(),
+            };
+        }
     }
 
     private async Task<AgentExecutionResult> MarkAmbiguousAsync(

@@ -110,8 +110,9 @@ printf %s '' | pbcopy
   Beta; Clara, somente de Gama.
 - Unidades, equipes, cargos, assignments e capabilities distintos por empresa.
 - Employees em cada empresa, quatro rascunhos Paguai, cinco cards Atendimento,
-  notificações entregues e um anexo sintético confirmado `agentic_attachment`
-  de Maria/Alfa. Não há token, endereço de canal, OCR bruto ou saída de provider.
+  notificações entregues e um único PNG sintético sem metadados, confirmado
+  como `agentic_attachment` de Maria/Alfa, com favorecido, valor e vencimento
+  visíveis. Não há token, endereço de canal, OCR bruto ou saída de provider.
 
 No modo compartilhado, seed e verify executam uma vez antes dos dois Kestrels.
 Uma mutação de Maria é persistida no mesmo PostgreSQL usado por Clara; Clara só
@@ -127,7 +128,8 @@ automática e prova a ordem autorização-modelo com os principals reais do
 fixture; ela não consulta provider externo nem avalia qualidade de resposta.
 
 Maria/Alfa também possui um roteiro Pagaí compilado: o anexo sintético passa
-pela fonte autorizada real, gera proposta tipada, permite a confirmação e cria
+pela fonte autorizada real, cruza uma vez a visão determinística fechada, chama
+uma vez o modelo principal, gera proposta tipada, permite a confirmação e cria
 um único rascunho vinculado à proposta. A execução contra PostgreSQL/containers
 permanece uma evidência runtime pendente; não a trate como já demonstrada neste
 checkout sem executar a fatia focada aprovada.

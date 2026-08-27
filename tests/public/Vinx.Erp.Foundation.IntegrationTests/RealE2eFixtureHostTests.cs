@@ -220,7 +220,7 @@ public sealed class RealE2eFixtureHostTests
     }
 
     [Fact]
-    public async Task Shared_host_seeds_once_and_keeps_profile_RLS_isolated()
+    public async Task Shared_host_seeded_paguai_artifact_invokes_vision_once_and_main_model_once()
     {
         SharedE2eFixtureHost? sharedHost = null;
         var agentModel = new DeterministicE2eAgentModel();
@@ -308,8 +308,12 @@ public sealed class RealE2eFixtureHostTests
             Assert.Equal(1, agentModel.LastMessageCount);
             Assert.Equal(AgentRunOptions.OpenAiCompatibleProvider, agentModel.LastSelection?.ProviderId);
             Assert.Equal("test-agent-model", agentModel.LastSelection?.ModelId);
+            Assert.Equal(0, sharedHost.MariaAgentVisionCallCount);
+            Assert.Equal(0, sharedHost.ClaraAgentVisionCallCount);
 
             var proposalRunRequestId = Guid.NewGuid();
+            var mainCallsBeforePaguai = agentModel.CallCount;
+            var visionCallsBeforePaguai = sharedHost.MariaAgentVisionCallCount;
             Guid proposalId;
             using (var mariaPaguaiAgentResponse = await mariaClient.PostAsJsonAsync(
                 "/agent/runs",
@@ -327,7 +331,9 @@ public sealed class RealE2eFixtureHostTests
                 Assert.Null(result.Text);
             }
 
-            Assert.Equal(2, agentModel.CallCount);
+            Assert.Equal(mainCallsBeforePaguai + 1, agentModel.CallCount);
+            Assert.Equal(visionCallsBeforePaguai + 1, sharedHost.MariaAgentVisionCallCount);
+            Assert.Equal(0, sharedHost.ClaraAgentVisionCallCount);
             using (var proposal = await GetJsonAsync(
                 mariaClient,
                 $"/paguai/draft-proposals/{proposalId}?companyId={alfaCompanyId}"))
@@ -352,6 +358,7 @@ public sealed class RealE2eFixtureHostTests
             }
 
             Assert.Equal(2, agentModel.CallCount);
+            Assert.Equal(1, sharedHost.MariaAgentVisionCallCount);
             var proposalAntiforgery = await GetAntiforgeryTokenAsync(mariaClient);
             using (var confirmation = new HttpRequestMessage(
                 HttpMethod.Post,

@@ -104,6 +104,15 @@ public sealed class InboundAttachmentMaterializer(
             return InboundAttachmentMaterializationResult.Failed("capability_missing");
         }
 
+        var fileId = request.InboundMessageId;
+        var existing = await FindExistingAsync(request, fileId, cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            return IsMatchingConfirmedFile(existing, request, fileName, extension, checksum)
+                ? InboundAttachmentMaterializationResult.Confirmed(fileId)
+                : InboundAttachmentMaterializationResult.Failed("document_rejected");
+        }
+
         MalwareScanVerdict verdict;
         using (var scanTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
@@ -143,7 +152,6 @@ public sealed class InboundAttachmentMaterializer(
                     : "document_scan_unavailable");
         }
 
-        var fileId = Guid.NewGuid();
         var file = new FileRecord(
             fileId,
             request.CompanyId,
@@ -178,10 +186,10 @@ public sealed class InboundAttachmentMaterializer(
                 "Inbound attachment storage failed transiently.");
         }
 
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken)
-                .ConfigureAwait(false);
             await FoundationRlsContext.ApplyCommandAsync(
                 database.Database,
                 request.Actor,
@@ -190,7 +198,10 @@ public sealed class InboundAttachmentMaterializer(
             if (!await IsAuthorizedInCurrentTransactionAsync(request, cancellationToken).ConfigureAwait(false))
             {
                 await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-                await DeleteUploadedObjectAsync(file.ProviderKey).ConfigureAwait(false);
+                database.ChangeTracker.Clear();
+                await DeleteIfUnownedAfterRollbackAsync(
+                    request,
+                    file).ConfigureAwait(false);
                 return InboundAttachmentMaterializationResult.Failed("capability_missing");
             }
 
@@ -208,7 +219,27 @@ public sealed class InboundAttachmentMaterializer(
         }
         catch
         {
-            await DeleteUploadedObjectAsync(file.ProviderKey).ConfigureAwait(false);
+            var rollbackKnown = await TryRollbackAsync(transaction).ConfigureAwait(false);
+            database.ChangeTracker.Clear();
+            var recovered = await TryReadExistingAsync(
+                request,
+                fileId,
+                CancellationToken.None).ConfigureAwait(false);
+            if (recovered.ReadSucceeded && recovered.File is not null)
+            {
+                if (IsMatchingConfirmedFile(recovered.File, request, fileName, extension, checksum))
+                {
+                    return InboundAttachmentMaterializationResult.Confirmed(fileId);
+                }
+
+                throw;
+            }
+
+            if (rollbackKnown && recovered.ReadSucceeded)
+            {
+                await DeleteUploadedObjectAsync(file.ProviderKey).ConfigureAwait(false);
+            }
+
             throw;
         }
     }
@@ -229,6 +260,97 @@ public sealed class InboundAttachmentMaterializer(
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
         database.ChangeTracker.Clear();
         return allowed;
+    }
+
+    private async Task<FileRecord?> FindExistingAsync(
+        InboundAttachmentMaterializationRequest request,
+        Guid fileId,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await FoundationRlsContext.ApplyCommandAsync(
+            database.Database,
+            request.Actor,
+            request.CompanyId,
+            cancellationToken).ConfigureAwait(false);
+        var existing = await database.Files
+            .IgnoreQueryFilters()
+            .SingleOrDefaultAsync(file => file.Id == fileId, cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+        database.ChangeTracker.Clear();
+        return existing;
+    }
+
+    private async Task<(bool ReadSucceeded, FileRecord? File)> TryReadExistingAsync(
+        InboundAttachmentMaterializationRequest request,
+        Guid fileId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (true, await FindExistingAsync(request, fileId, cancellationToken).ConfigureAwait(false));
+        }
+        catch
+        {
+            return (false, null);
+        }
+    }
+
+    private async Task DeleteIfUnownedAfterRollbackAsync(
+        InboundAttachmentMaterializationRequest request,
+        FileRecord file)
+    {
+        var recovered = await TryReadExistingAsync(
+            request,
+            file.Id,
+            CancellationToken.None).ConfigureAwait(false);
+        if (!recovered.ReadSucceeded || recovered.File is not null)
+        {
+            return;
+        }
+
+        await DeleteUploadedObjectAsync(file.ProviderKey).ConfigureAwait(false);
+    }
+
+    private static bool IsMatchingConfirmedFile(
+        FileRecord file,
+        InboundAttachmentMaterializationRequest request,
+        string fileName,
+        string extension,
+        string checksum) =>
+        file.Id == request.InboundMessageId
+        && file.CompanyId == request.CompanyId
+        && file.UploaderMembershipId == request.MembershipId
+        && file.OriginalFileName == fileName
+        && file.Extension == extension
+        && file.SizeBytes == request.Bytes.Length
+        && file.MimeType == request.MimeType
+        && string.Equals(file.Checksum, checksum, StringComparison.OrdinalIgnoreCase)
+        && file.Classification == "agentic_attachment"
+        && file.Origin == "agent_channel"
+        && file.ProviderKey == $"quarantine/{request.CompanyId:N}/{request.InboundMessageId:N}"
+        && file.ProcessingState == FileRecord.ConfirmedState
+        && file.DeletedAt is null
+        && file.RetentionUntil > DateTimeOffset.UtcNow
+        && !string.IsNullOrWhiteSpace(file.ScanEngine)
+        && !string.IsNullOrWhiteSpace(file.ScanEngineVersion)
+        && !string.IsNullOrWhiteSpace(file.ScanSignatureVersion)
+        && file.ScannedAtUtc is not null;
+
+    private static async Task<bool> TryRollbackAsync(
+        Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction)
+    {
+        try
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private async Task<bool> IsAuthorizedInCurrentTransactionAsync(

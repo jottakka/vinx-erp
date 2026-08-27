@@ -12,8 +12,8 @@ using Vinx.Erp.Foundation.Persistence;
 namespace Vinx.Erp.Foundation.Persistence.Migrations
 {
     [DbContext(typeof(FoundationDbContext))]
-    [Migration("20260826230754_AddAgentExecutionLedger")]
-    partial class AddAgentExecutionLedger
+    [Migration("20260827080100_AddAgentExecutionLedgerConcurrencyAndChannelIntegrity")]
+    partial class AddAgentExecutionLedgerConcurrencyAndChannelIntegrity
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -156,6 +156,13 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("request_id");
 
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("row_version");
+
                     b.Property<string>("SafeResultJson")
                         .HasColumnType("jsonb")
                         .HasColumnName("safe_result_json");
@@ -182,6 +189,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.ToTable("agent_execution_ledger", "foundation", t =>
                         {
+                            t.HasCheckConstraint("ck_agent_execution_ledger_channel_inbound_message", "(channel = 'web' AND inbound_message_id IS NULL) OR (channel IN ('whatsapp', 'telegram') AND inbound_message_id IS NOT NULL)");
+
                             t.HasCheckConstraint("ck_agent_execution_ledger_payload_hash_format", "payload_hash ~ '^[0-9a-f]{64}$'");
 
                             t.HasCheckConstraint("ck_agent_execution_ledger_state", "state IN ('claimed', 'vision_in_flight', 'model_in_flight', 'completed', 'failed_closed', 'ambiguous')");

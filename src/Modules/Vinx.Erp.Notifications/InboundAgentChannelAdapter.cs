@@ -62,44 +62,56 @@ public sealed class InboundAgentChannelAdapter(
         IReadOnlyList<Guid> attachments = [];
         if (claim.MessageType is "image" or "document")
         {
-            InboundAttachmentMaterializationResult materialized;
-            try
+            if (claim.IsTerminalRecovery)
             {
-                materialized = await MaterializeWhatsAppAttachmentAsync(
-                    claim,
-                    actor,
-                    envelope.InboundMessageId,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (NotificationProviderTransientException)
-            {
-                await ReleaseAsync(envelope.InboundMessageId, CancellationToken.None)
-                    .ConfigureAwait(false);
-                throw;
-            }
-            if (!materialized.IsConfirmed)
-            {
-                await FinalizeAsync(
-                    envelope.InboundMessageId,
-                    "failed",
-                    materialized.FailureReason ?? "document_rejected",
-                    cancellationToken).ConfigureAwait(false);
-                return;
-            }
+                if (claim.AgentFileId is not { } recoveredFileId)
+                {
+                    return;
+                }
 
-            attachments = [materialized.ConfirmedFileId!.Value];
-            if (!await ExecuteBooleanFunctionAsync(
-                    "SELECT notifications.record_inbound_whatsapp_agent_file(@inbound_id, @file_id)",
-                    cancellationToken,
-                    ("inbound_id", envelope.InboundMessageId),
-                    ("file_id", materialized.ConfirmedFileId.Value)).ConfigureAwait(false))
+                attachments = [recoveredFileId];
+            }
+            else
             {
-                await FinalizeAsync(
-                    envelope.InboundMessageId,
-                    "failed",
-                    "agent_failed",
-                    CancellationToken.None).ConfigureAwait(false);
-                return;
+                InboundAttachmentMaterializationResult materialized;
+                try
+                {
+                    materialized = await MaterializeWhatsAppAttachmentAsync(
+                        claim,
+                        actor,
+                        envelope.InboundMessageId,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (NotificationProviderTransientException)
+                {
+                    await ReleaseAsync(envelope.InboundMessageId, CancellationToken.None)
+                        .ConfigureAwait(false);
+                    throw;
+                }
+                if (!materialized.IsConfirmed)
+                {
+                    await FinalizeAsync(
+                        envelope.InboundMessageId,
+                        "failed",
+                        materialized.FailureReason ?? "document_rejected",
+                        cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                attachments = [materialized.ConfirmedFileId!.Value];
+                if (!await ExecuteBooleanFunctionAsync(
+                        "SELECT notifications.record_inbound_whatsapp_agent_file(@inbound_id, @file_id)",
+                        cancellationToken,
+                        ("inbound_id", envelope.InboundMessageId),
+                        ("file_id", materialized.ConfirmedFileId.Value)).ConfigureAwait(false))
+                {
+                    await FinalizeAsync(
+                        envelope.InboundMessageId,
+                        "failed",
+                        "agent_failed",
+                        CancellationToken.None).ConfigureAwait(false);
+                    return;
+                }
             }
         }
 
@@ -144,6 +156,11 @@ public sealed class InboundAgentChannelAdapter(
                 Module,
                 "ambiguous",
                 "execution_unconfirmed");
+            return;
+        }
+
+        if (claim.IsTerminalRecovery && execution.Disposition == AgentExecutionDisposition.Conflict)
+        {
             return;
         }
 
@@ -259,62 +276,74 @@ public sealed class InboundAgentChannelAdapter(
         IReadOnlyList<Guid> attachments = [];
         if (claim.MessageType is "photo" or "document")
         {
-            InboundAttachmentMaterializationResult materialized;
-            try
+            if (claim.IsTerminalRecovery)
             {
-                var media = await new TelegramMediaClient(
-                        httpClientFactory.CreateClient(TelegramClient.HttpClientName),
-                        telegramOptions)
-                    .DownloadAsync(
-                        claim.MediaId!,
-                        claim.MediaType!,
-                        checked((int)DocumentUploadPolicy.MaxSizeBytes),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                materialized = await attachmentMaterializer.MaterializeAsync(
-                    new InboundAttachmentMaterializationRequest(
+                if (claim.AgentFileId is not { } recoveredFileId)
+                {
+                    return;
+                }
+
+                attachments = [recoveredFileId];
+            }
+            else
+            {
+                InboundAttachmentMaterializationResult materialized;
+                try
+                {
+                    var media = await new TelegramMediaClient(
+                            httpClientFactory.CreateClient(TelegramClient.HttpClientName),
+                            telegramOptions)
+                        .DownloadAsync(
+                            claim.MediaId!,
+                            claim.MediaType!,
+                            checked((int)DocumentUploadPolicy.MaxSizeBytes),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    materialized = await attachmentMaterializer.MaterializeAsync(
+                        new InboundAttachmentMaterializationRequest(
+                            inboundMessageId,
+                            actor,
+                            claim.CompanyId,
+                            claim.MembershipId,
+                            media.MediaType,
+                            media.Bytes),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (NotificationProviderTransientException)
+                {
+                    await ReleaseTelegramAsync(inboundMessageId, CancellationToken.None)
+                        .ConfigureAwait(false);
+                    throw;
+                }
+                catch (InboundTelegramMediaException)
+                {
+                    materialized = InboundAttachmentMaterializationResult.Failed("media_unavailable");
+                }
+
+                if (!materialized.IsConfirmed)
+                {
+                    await FinalizeTelegramAsync(
                         inboundMessageId,
-                        actor,
-                        claim.CompanyId,
-                        claim.MembershipId,
-                        media.MediaType,
-                        media.Bytes),
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (NotificationProviderTransientException)
-            {
-                await ReleaseTelegramAsync(inboundMessageId, CancellationToken.None)
-                    .ConfigureAwait(false);
-                throw;
-            }
-            catch (InboundTelegramMediaException)
-            {
-                materialized = InboundAttachmentMaterializationResult.Failed("media_unavailable");
-            }
+                        "failed",
+                        materialized.FailureReason ?? "document_rejected",
+                        cancellationToken).ConfigureAwait(false);
+                    return;
+                }
 
-            if (!materialized.IsConfirmed)
-            {
-                await FinalizeTelegramAsync(
-                    inboundMessageId,
-                    "failed",
-                    materialized.FailureReason ?? "document_rejected",
-                    cancellationToken).ConfigureAwait(false);
-                return;
-            }
-
-            attachments = [materialized.ConfirmedFileId!.Value];
-            if (!await ExecuteBooleanFunctionAsync(
-                    "SELECT notifications.record_inbound_telegram_agent_file(@inbound_id, @file_id)",
-                    cancellationToken,
-                    ("inbound_id", inboundMessageId),
-                    ("file_id", materialized.ConfirmedFileId.Value)).ConfigureAwait(false))
-            {
-                await FinalizeTelegramAsync(
-                    inboundMessageId,
-                    "failed",
-                    "agent_failed",
-                    CancellationToken.None).ConfigureAwait(false);
-                return;
+                attachments = [materialized.ConfirmedFileId!.Value];
+                if (!await ExecuteBooleanFunctionAsync(
+                        "SELECT notifications.record_inbound_telegram_agent_file(@inbound_id, @file_id)",
+                        cancellationToken,
+                        ("inbound_id", inboundMessageId),
+                        ("file_id", materialized.ConfirmedFileId.Value)).ConfigureAwait(false))
+                {
+                    await FinalizeTelegramAsync(
+                        inboundMessageId,
+                        "failed",
+                        "agent_failed",
+                        CancellationToken.None).ConfigureAwait(false);
+                    return;
+                }
             }
         }
 
@@ -359,6 +388,11 @@ public sealed class InboundAgentChannelAdapter(
                 Module,
                 "ambiguous",
                 "execution_unconfirmed");
+            return;
+        }
+
+        if (claim.IsTerminalRecovery && execution.Disposition == AgentExecutionDisposition.Conflict)
+        {
             return;
         }
 
@@ -559,7 +593,7 @@ public sealed class InboundAgentChannelAdapter(
         await using var command = connection.CreateCommand();
         command.CommandText =
             "SELECT status, claimed, message_type, wa_id, media_id, caption, user_text, "
-            + "resolved_user_id, resolved_company_id, resolved_membership_id "
+            + "resolved_user_id, resolved_company_id, resolved_membership_id, agent_file_id "
             + "FROM notifications.claim_inbound_whatsapp_agent(@inbound_id)";
         AddParameter(command, "inbound_id", inboundMessageId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -585,7 +619,8 @@ public sealed class InboundAgentChannelAdapter(
             reader.IsDBNull(6) ? null : reader.GetString(6),
             reader.GetGuid(7),
             reader.GetGuid(8),
-            reader.GetGuid(9));
+            reader.GetGuid(9),
+            reader.IsDBNull(10) ? null : reader.GetGuid(10));
     }
 
     private async Task<TelegramClaim> ClaimTelegramAsync(
@@ -601,7 +636,7 @@ public sealed class InboundAgentChannelAdapter(
         await using var command = connection.CreateCommand();
         command.CommandText =
             "SELECT status, claimed, message_type, media_id, media_mime_type, text_body, "
-            + "resolved_user_id, resolved_company_id, resolved_membership_id "
+            + "resolved_user_id, resolved_company_id, resolved_membership_id, agent_file_id "
             + "FROM notifications.claim_inbound_telegram_agent(@inbound_id)";
         AddParameter(command, "inbound_id", inboundMessageId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -625,7 +660,8 @@ public sealed class InboundAgentChannelAdapter(
             reader.IsDBNull(5) ? null : reader.GetString(5),
             reader.GetGuid(6),
             reader.GetGuid(7),
-            reader.GetGuid(8));
+            reader.GetGuid(8),
+            reader.IsDBNull(9) ? null : reader.GetGuid(9));
     }
 
     private Task<bool> ReleaseTelegramAsync(Guid inboundMessageId, CancellationToken cancellationToken) =>
@@ -782,10 +818,13 @@ public sealed class InboundAgentChannelAdapter(
         string? UserText,
         Guid UserId,
         Guid CompanyId,
-        Guid MembershipId)
+        Guid MembershipId,
+        Guid? AgentFileId)
     {
+        public bool IsTerminalRecovery => Status == "terminal_recovery";
+
         public static WhatsAppClaim NotClaimed(string status) =>
-            new(status, false, string.Empty, string.Empty, null, null, null, Guid.Empty, Guid.Empty, Guid.Empty);
+            new(status, false, string.Empty, string.Empty, null, null, null, Guid.Empty, Guid.Empty, Guid.Empty, null);
     }
 
     private sealed record TelegramClaim(
@@ -797,9 +836,12 @@ public sealed class InboundAgentChannelAdapter(
         string? TextBody,
         Guid UserId,
         Guid CompanyId,
-        Guid MembershipId)
+        Guid MembershipId,
+        Guid? AgentFileId)
     {
+        public bool IsTerminalRecovery => Status == "terminal_recovery";
+
         public static TelegramClaim NotClaimed(string status) =>
-            new(status, false, string.Empty, null, null, null, Guid.Empty, Guid.Empty, Guid.Empty);
+            new(status, false, string.Empty, null, null, null, Guid.Empty, Guid.Empty, Guid.Empty, null);
     }
 }

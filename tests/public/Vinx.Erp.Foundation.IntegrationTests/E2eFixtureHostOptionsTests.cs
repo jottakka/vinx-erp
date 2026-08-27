@@ -1,5 +1,8 @@
 using System.Globalization;
+using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Extensions.AI;
 using Vinx.Erp.AI;
 using Vinx.Erp.ApiHost.Agent;
@@ -78,6 +81,67 @@ public sealed class E2eFixtureHostOptionsTests
         var vision = Assert.IsType<AgentRunVisionOptions>(configuration.Options.Vision);
         Assert.Equal(new Uri("https://agent-provider.example/v1"), vision.Endpoint);
         Assert.Equal(["agent-provider.example"], vision.ApprovedHosts);
+    }
+
+    [Fact]
+    public void Synthetic_paguai_artifact_is_a_visible_metadata_free_invoice_image()
+    {
+        Assert.Equal(
+            ["VINX NOTA E2E", "FORNECEDOR E2E", "BRL 250.00", "2026-09-10"],
+            E2eFixtureAttachmentStorage.VisibleInvoiceLines);
+        var content = E2eFixtureAttachmentStorage.Content;
+        Assert.True(content.AsSpan(0, 8).SequenceEqual(
+            new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }));
+
+        var position = 8;
+        var idat = new MemoryStream();
+        var width = 0;
+        var height = 0;
+        var chunks = new List<string>();
+        while (position < content.Length)
+        {
+            var length = BinaryPrimitives.ReadInt32BigEndian(content.AsSpan(position, 4));
+            var type = Encoding.ASCII.GetString(content, position + 4, 4);
+            var data = content.AsSpan(position + 8, length);
+            chunks.Add(type);
+            if (type == "IHDR")
+            {
+                width = BinaryPrimitives.ReadInt32BigEndian(data[..4]);
+                height = BinaryPrimitives.ReadInt32BigEndian(data.Slice(4, 4));
+                Assert.Equal(8, data[8]);
+                Assert.Equal(0, data[9]);
+            }
+            else if (type == "IDAT")
+            {
+                idat.Write(data);
+            }
+
+            position += 12 + length;
+        }
+
+        Assert.Equal(["IHDR", "IDAT", "IEND"], chunks);
+        Assert.True(width >= 600);
+        Assert.True(height >= 240);
+        idat.Position = 0;
+        using var decompressor = new ZLibStream(idat, CompressionMode.Decompress);
+        using var raw = new MemoryStream();
+        decompressor.CopyTo(raw);
+        var scanlines = raw.ToArray();
+        Assert.Equal((width + 1) * height, scanlines.Length);
+        var darkPixels = 0;
+        for (var row = 0; row < height; row++)
+        {
+            Assert.Equal(0, scanlines[row * (width + 1)]);
+            foreach (var value in scanlines.AsSpan((row * (width + 1)) + 1, width))
+            {
+                if (value < 128)
+                {
+                    darkPixels++;
+                }
+            }
+        }
+
+        Assert.True(darkPixels > 10_000);
     }
 
     [Fact]

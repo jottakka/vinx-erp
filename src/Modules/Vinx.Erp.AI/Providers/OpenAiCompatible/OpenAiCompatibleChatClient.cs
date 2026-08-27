@@ -168,6 +168,10 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             response.AdditionalProperties["CorrelationId"] = correlationId;
             return response;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception exception) when (
             exception is not OpenAiCompatibleProviderException
             and not OpenAiCompatibleRequestValidationException)

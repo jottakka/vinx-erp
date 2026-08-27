@@ -151,32 +151,37 @@ cliente browser.
 A execução supervisionada do agente fica no mesmo ApiHost e é composta
 server-side pela seção `AgentRun` da configuração. Sem chave de provider a
 superfície sobe normalmente e falha fechado: um `POST /agent/runs` autenticado
-retorna `503` com `{"code":"provider_not_configured"}` e nada persiste —
-o `requestId` pode retentar quando o provider for configurado. Esse é o
-estado esperado para desenvolvimento local sem custos nem chave.
+retorna `503` com `{"code":"provider_not_configured"}`. O ledger persiste
+`failed_closed`; o mesmo `requestId` reproduz esse terminal e uma nova tentativa
+exige outro `requestId`. Esse é o estado esperado para desenvolvimento local
+sem custos nem chave.
 
 Com uma chave real obtida pelo fluxo seguro do time, exporte no processo antes
 de `dotnet run` (a chave vai somente ao cofre de configuração do host; nunca a
 `VITE_*`, arquivo versionado ou log):
 
 ```bash
+VINX_AGENT_PROVIDER_API_KEY="$AGENT_RUN_API_KEY" \
 AgentRun__Provider=openai_compatible \
 AgentRun__Endpoint=https://provider.example/v1 \
 AgentRun__Model=modelo-aprovado \
-AgentRun__ApiKey=$AGENT_RUN_API_KEY \
+AgentRun__ApprovedHosts__0=provider.example \
 ASPNETCORE_ENVIRONMENT=Development \
 ASPNETCORE_URLS=http://127.0.0.1:5080 \
   dotnet run --project src/Hosts/Vinx.Erp.ApiHost
 ```
 
-O provider aprovado é `openai_compatible` ou `deepseek`; o endpoint precisa ser
-HTTPS absoluto — a política de egress do módulo rejeita loopback, então testar
-com provider real em máquina local exige um proxy com terminação TLS — e
-configuração inválida derruba o host na partida. A jornada
+O único protocolo de runtime é `openai_compatible`. Endpoint e allowlist usam
+host exato normalizado e HTTPS; o transporte revalida todos os endereços DNS no
+instante da conexão, sem proxy, redirect ou retry. Se `AgentRun:Vision` estiver
+presente, provider, endpoint normalizado, modelo e conjunto exato de hosts devem
+ser idênticos ao perfil principal; timeout e classificações continuam próprios.
+Configuração inválida derruba o host na partida. A jornada
 `read_only_summarize_v1` exige sessão
 autenticada, `companyId` de uma empresa com membership e a capability `ai.read`
 em escopo Company. A matriz completa de desfechos (replay por `requestId`,
-`requires_confirmation` opaco, timeout 504 `agent_timeout`) está em
+`requires_confirmation` opaco, terminais duráveis e timeout 504
+`agent_timeout`) está em
 `docs/verification/issue-138-agent-api-test-cases.md`.
 
 ## Executar o MCP C#

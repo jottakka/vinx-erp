@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -147,7 +147,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                 REVOKE ALL ON TABLE paguai.draft_proposals FROM PUBLIC;
                 GRANT USAGE ON SCHEMA paguai TO vinx_runtime;
-                GRANT SELECT, INSERT, UPDATE ON TABLE paguai.draft_proposals TO vinx_runtime;
+                GRANT SELECT, INSERT ON TABLE paguai.draft_proposals TO vinx_runtime;
+                GRANT UPDATE (state, result_draft_id, resolution_request_id, resolved_at, row_version)
+                    ON TABLE paguai.draft_proposals TO vinx_runtime;
                 """);
         }
 

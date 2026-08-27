@@ -1,9 +1,11 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Vinx.Erp.AI;
@@ -19,6 +21,8 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 
 public sealed class PaguaiProposalEndpointTests
 {
+    private const string AntiforgeryHeader = "X-CSRF-TOKEN";
+
     [Fact]
     public async Task Completed_ledger_replay_materializes_and_returns_the_same_proposal_id()
     {
@@ -165,6 +169,64 @@ public sealed class PaguaiProposalEndpointTests
     }
 
     [Fact]
+    public async Task Bearer_cannot_confirm_or_reject_and_browser_cookie_requires_antiforgery()
+    {
+        var provider = new BrowserSessionProviderHandler();
+        await using var factory = await FoundationApiFactory
+            .CreateWithJwtBearerAndBrowserSessionProviderAsync(provider);
+        provider.ResponseFactory = _ => BrowserSessionProviderResponse(
+            factory.CreateJwtToken(JwtTokenVariation.Valid));
+        var scenario = await SeedScenarioAsync(factory);
+        var bearerProposal = await CreateProposalAsync(factory, scenario);
+        var missingCsrfFile = await SeedAgenticFileAsync(
+            factory, scenario.CompanyId, scenario.MembershipId, "missing-csrf");
+        var missingCsrfProposal = await CreateProposalAsync(
+            factory, scenario with { FileId = missingCsrfFile.Id }, Guid.NewGuid());
+        var browserProposalFile = await SeedAgenticFileAsync(
+            factory, scenario.CompanyId, scenario.MembershipId, "browser-csrf");
+        var browserProposal = await CreateProposalAsync(
+            factory, scenario with { FileId = browserProposalFile.Id }, Guid.NewGuid());
+
+        using (var bearer = factory.CreateClient())
+        {
+            bearer.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                factory.CreateJwtToken(JwtTokenVariation.Valid));
+            using var confirm = await bearer.PostAsJsonAsync(
+                $"/paguai/draft-proposals/{bearerProposal.Id}/confirm",
+                new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() });
+            using var reject = await bearer.PostAsJsonAsync(
+                $"/paguai/draft-proposals/{bearerProposal.Id}/reject",
+                new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() });
+
+            Assert.Equal(HttpStatusCode.Forbidden, confirm.StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, reject.StatusCode);
+        }
+
+        using var browser = factory.CreateClient(
+            new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using var signIn = await SignInAsync(browser);
+        Assert.Equal(HttpStatusCode.NoContent, signIn.StatusCode);
+
+        using var missingCsrf = await browser.PostAsJsonAsync(
+            $"/paguai/draft-proposals/{missingCsrfProposal.Id}/confirm",
+            new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() });
+        Assert.Equal(HttpStatusCode.BadRequest, missingCsrf.StatusCode);
+
+        var antiforgeryToken = await GetAntiforgeryTokenAsync(browser);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/paguai/draft-proposals/{browserProposal.Id}/confirm")
+        {
+            Content = JsonContent.Create(
+                new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() }),
+        };
+        request.Headers.Add(AntiforgeryHeader, antiforgeryToken);
+        using var accepted = await browser.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Created, accepted.StatusCode);
+    }
+
+    [Fact]
     public async Task Same_request_with_another_proposal_returns_payload_conflict()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -300,8 +362,11 @@ public sealed class PaguaiProposalEndpointTests
                 parameter.TryGetProperty("name", out var name)
                 && name.GetString() == "X-CSRF-TOKEN"
                 && parameter.GetProperty("in").GetString() == "header"
-                && (!parameter.TryGetProperty("required", out var required)
-                    || !required.GetBoolean()));
+                && parameter.GetProperty("required").GetBoolean());
+            var security = operation.GetProperty("security").EnumerateArray().ToArray();
+            Assert.Single(security);
+            Assert.True(security[0].TryGetProperty("BrowserSessionCookie", out _));
+            Assert.False(security[0].TryGetProperty("Bearer", out _));
         }
     }
 
@@ -569,6 +634,51 @@ public sealed class PaguaiProposalEndpointTests
             "GRANT EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) TO vinx_runtime;",
             connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<HttpResponseMessage> SignInAsync(HttpClient client)
+    {
+        var antiforgeryToken = await GetAntiforgeryTokenAsync(client);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/foundation/identity/browser-session")
+        {
+            Content = JsonContent.Create(new
+            {
+                email = "same-address@example.test",
+                password = "safe-test-password",
+            }),
+        };
+        request.Headers.Add(AntiforgeryHeader, antiforgeryToken);
+        return await client.SendAsync(request);
+    }
+
+    private static async Task<string> GetAntiforgeryTokenAsync(HttpClient client)
+    {
+        using var response = await client.GetAsync(
+            "/foundation/identity/browser-session/antiforgery");
+        response.EnsureSuccessStatusCode();
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return payload.RootElement.GetProperty("requestToken").GetString()
+            ?? throw new Xunit.Sdk.XunitException("The antiforgery token was empty.");
+    }
+
+    private static HttpResponseMessage BrowserSessionProviderResponse(string accessToken) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { access_token = accessToken }),
+        };
+
+    private sealed class BrowserSessionProviderHandler : HttpMessageHandler
+    {
+        public Func<HttpRequestMessage, HttpResponseMessage>? ResponseFactory { get; set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(ResponseFactory?.Invoke(request)
+                ?? throw new InvalidOperationException(
+                    "The browser session provider response was not configured."));
     }
 
     private sealed record Scenario(

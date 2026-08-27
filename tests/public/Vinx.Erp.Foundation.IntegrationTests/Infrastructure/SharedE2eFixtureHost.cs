@@ -57,6 +57,10 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
     internal E2eDatasetReceipt Receipt => _receipt
         ?? throw new InvalidOperationException("The shared fixture receipt is not available.");
 
+    internal int MariaAgentVisionCallCount => RequireMariaHost().AgentVisionCallCount;
+
+    internal int ClaraAgentVisionCallCount => RequireClaraHost().AgentVisionCallCount;
+
     internal Task<NpgsqlConnection> OpenAdministratorConnectionAsync() =>
         RequireFixtureOwner().OpenAdministratorConnectionAsync();
 

@@ -49,6 +49,8 @@ public sealed class PaguaiController(
     }
 
     [HttpPost("draft-proposals/{id:guid}/confirm")]
+    [Authorize(Policy = BrowserBffAuthenticationExtensions.BrowserSessionPolicyName)]
+    [BrowserBffCookieOnlyEndpointMetadata]
     [PaguaiAntiforgeryRequiredMetadata]
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status201Created)]
@@ -85,6 +87,8 @@ public sealed class PaguaiController(
     }
 
     [HttpPost("draft-proposals/{id:guid}/reject")]
+    [Authorize(Policy = BrowserBffAuthenticationExtensions.BrowserSessionPolicyName)]
+    [BrowserBffCookieOnlyEndpointMetadata]
     [PaguaiAntiforgeryRequiredMetadata]
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

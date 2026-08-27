@@ -12,7 +12,7 @@ using Vinx.Erp.Foundation.Persistence;
 namespace Vinx.Erp.Foundation.Persistence.Migrations
 {
     [DbContext(typeof(FoundationDbContext))]
-    [Migration("20260827014234_AddPaguaiDraftProposals")]
+    [Migration("20260827080200_AddPaguaiDraftProposals")]
     partial class AddPaguaiDraftProposals
     {
         /// <inheritdoc />

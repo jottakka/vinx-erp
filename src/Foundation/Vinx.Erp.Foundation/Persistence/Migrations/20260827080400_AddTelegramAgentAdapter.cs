@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
@@ -518,7 +518,8 @@ public partial class AddTelegramAgentAdapter : Migration
             RETURNS TABLE (
                 status text, claimed boolean, message_type text, media_id text,
                 media_mime_type text, text_body text, resolved_user_id uuid,
-                resolved_company_id uuid, resolved_membership_id uuid)
+                resolved_company_id uuid, resolved_membership_id uuid,
+                agent_file_id uuid)
             LANGUAGE plpgsql SECURITY DEFINER
             SET search_path TO pg_catalog, notifications, pg_temp
             AS $function$
@@ -526,6 +527,7 @@ public partial class AddTelegramAgentAdapter : Migration
                 v_row notifications.inbound_telegram_messages%ROWTYPE;
                 v_requires_file boolean;
                 v_authorized boolean;
+                v_terminal_recovery boolean;
             BEGIN
                 IF p_inbound_id IS NULL THEN
                     RAISE EXCEPTION 'inbound telegram agent id is required' USING ERRCODE = '22023';
@@ -534,15 +536,42 @@ public partial class AddTelegramAgentAdapter : Migration
                 WHERE message.id = p_inbound_id FOR UPDATE;
                 IF NOT FOUND OR v_row.resolution_state <> 'admitted' THEN
                     RETURN QUERY SELECT 'not_admitted'::text, false, NULL::text, NULL::text,
-                        NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid;
+                        NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid;
                     RETURN;
                 END IF;
-                IF v_row.agent_status <> 'agent_pending' THEN
-                    RETURN QUERY SELECT v_row.agent_status, false, NULL::text, NULL::text,
-                        NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid;
-                    RETURN;
-                END IF;
+
                 v_requires_file := v_row.message_type IN ('photo', 'document');
+                PERFORM set_config('app.user_id', v_row.resolved_user_id::text, true);
+                PERFORM set_config('app.company_id', v_row.resolved_company_id::text, true);
+                SELECT v_row.agent_status = 'agent_in_flight'
+                    AND (NOT v_requires_file OR EXISTS (
+                        SELECT 1
+                        FROM foundation.files AS file
+                        WHERE file.id = v_row.agent_file_id
+                            AND file.company_id = v_row.resolved_company_id
+                            AND file.uploader_membership_id = v_row.resolved_membership_id
+                            AND file.processing_state = 'confirmed'
+                            AND file.classification = 'agentic_attachment'
+                            AND file.deleted_at IS NULL))
+                    AND EXISTS (
+                        SELECT 1
+                        FROM foundation.agent_execution_ledger AS execution
+                        WHERE execution.company_id = v_row.resolved_company_id
+                            AND execution.actor_user_id = v_row.resolved_user_id
+                            AND execution.channel = 'telegram'
+                            AND execution.inbound_message_id = p_inbound_id
+                            AND execution.request_id = p_inbound_id
+                            AND execution.journey = CASE
+                                WHEN v_row.message_type = 'document'
+                                    THEN 'paguai_from_document_v1'
+                                ELSE 'read_only_summarize_v1' END
+                            AND execution.state IN ('completed', 'failed_closed', 'ambiguous'))
+                INTO v_terminal_recovery;
+                IF v_row.agent_status <> 'agent_pending' AND NOT v_terminal_recovery THEN
+                    RETURN QUERY SELECT v_row.agent_status, false, NULL::text, NULL::text,
+                        NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid;
+                    RETURN;
+                END IF;
                 SELECT EXISTS (
                     SELECT 1 FROM foundation.memberships AS membership
                     JOIN foundation.companies AS company ON company.id = membership.company_id
@@ -562,7 +591,8 @@ public partial class AddTelegramAgentAdapter : Migration
                             AND grant_row.deleted_at IS NULL AND grant_row.scope = 'company'
                             AND capability.name = 'ai.read')
                     AND (NOT v_requires_file OR (
-                        SELECT count(DISTINCT capability.name) = 2
+                        SELECT count(DISTINCT capability.name) = CASE
+                            WHEN v_row.message_type = 'document' THEN 3 ELSE 2 END
                         FROM foundation.role_assignments AS assignment
                         JOIN foundation.roles AS role ON role.id = assignment.role_id
                         JOIN foundation.role_capabilities AS grant_row
@@ -572,8 +602,10 @@ public partial class AddTelegramAgentAdapter : Migration
                             AND assignment.membership_id = v_row.resolved_membership_id
                             AND assignment.deleted_at IS NULL AND role.deleted_at IS NULL
                             AND grant_row.deleted_at IS NULL AND grant_row.scope = 'company'
-                            AND capability.name IN (
-                                'foundation.files.upload', 'foundation.files.read-ocr')))
+                            AND (capability.name IN (
+                                    'foundation.files.upload', 'foundation.files.read-ocr')
+                                OR (v_row.message_type = 'document'
+                                    AND capability.name = 'paguai.draft.create'))))
                     INTO v_authorized;
                 IF NOT v_authorized THEN
                     UPDATE notifications.inbound_telegram_messages
@@ -582,7 +614,15 @@ public partial class AddTelegramAgentAdapter : Migration
                         agent_failure_reason = 'capability_missing'
                     WHERE id = p_inbound_id;
                     RETURN QUERY SELECT 'capability_missing'::text, false, NULL::text, NULL::text,
-                        NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid;
+                        NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid;
+                    RETURN;
+                END IF;
+
+                IF v_terminal_recovery THEN
+                    RETURN QUERY SELECT 'terminal_recovery'::text, true, v_row.message_type,
+                        v_row.media_id, v_row.media_mime_type, v_row.text_body,
+                        v_row.resolved_user_id, v_row.resolved_company_id,
+                        v_row.resolved_membership_id, v_row.agent_file_id;
                     RETURN;
                 END IF;
                 UPDATE notifications.inbound_telegram_messages
@@ -590,7 +630,8 @@ public partial class AddTelegramAgentAdapter : Migration
                 WHERE id = p_inbound_id;
                 RETURN QUERY SELECT 'agent_in_flight'::text, true, v_row.message_type,
                     v_row.media_id, v_row.media_mime_type, v_row.text_body,
-                    v_row.resolved_user_id, v_row.resolved_company_id, v_row.resolved_membership_id;
+                    v_row.resolved_user_id, v_row.resolved_company_id,
+                    v_row.resolved_membership_id, NULL::uuid;
             END;
             $function$;
 
@@ -599,10 +640,22 @@ public partial class AddTelegramAgentAdapter : Migration
             RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
             SET search_path TO pg_catalog, notifications, pg_temp
             AS $function$
+            DECLARE
+                v_user_id uuid;
+                v_company_id uuid;
             BEGIN
                 IF p_inbound_id IS NULL OR p_file_id IS NULL THEN
                     RAISE EXCEPTION 'inbound telegram agent file is invalid' USING ERRCODE = '22023';
                 END IF;
+                SELECT message.resolved_user_id, message.resolved_company_id
+                INTO v_user_id, v_company_id
+                FROM notifications.inbound_telegram_messages AS message
+                WHERE message.id = p_inbound_id;
+                IF NOT FOUND THEN
+                    RETURN false;
+                END IF;
+                PERFORM set_config('app.user_id', v_user_id::text, true);
+                PERFORM set_config('app.company_id', v_company_id::text, true);
                 UPDATE notifications.inbound_telegram_messages AS message
                 SET agent_file_id = p_file_id
                 WHERE message.id = p_inbound_id
@@ -850,6 +903,15 @@ public partial class AddTelegramAgentAdapter : Migration
                     AND intent.status = 'provider_in_flight'
                     AND intent.provider_attempt_id = p_attempt_id
                     AND contact.is_validated
+                    AND (intent.telegram_agent_text IS NULL OR EXISTS (
+                        SELECT 1
+                        FROM foundation.memberships AS membership
+                        JOIN foundation.companies AS company
+                            ON company.id = membership.company_id
+                            AND company.deleted_at IS NULL
+                        WHERE membership.company_id = intent.company_id
+                            AND membership.user_id = intent.recipient_user_id
+                            AND membership.deleted_at IS NULL))
                     AND ((intent.telegram_agent_text IS NOT NULL)
                         OR (template.is_approved AND template.telegram_text IS NOT NULL));
                 IF NOT FOUND THEN RETURN QUERY SELECT NULL::text, NULL::text, NULL::text; END IF;

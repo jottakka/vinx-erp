@@ -217,7 +217,7 @@ public sealed class DeepSeekChatClientContractTests
     }
 
     [Fact]
-    public async Task Caller_cancellation_is_classified_as_cancelled_without_retry()
+    public async Task Caller_cancellation_is_propagated_without_retry()
     {
         var handler = new TestProviderHandler(async (_, cancellation) =>
         {
@@ -227,10 +227,9 @@ public sealed class DeepSeekChatClientContractTests
         using var client = CreateClient(handler, Approved(o => o.Timeout = TimeSpan.FromSeconds(30)));
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
 
-        var exception = await Assert.ThrowsAsync<DeepSeekProviderException>(
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => client.GetResponseAsync([UserMessage("cancele")], options: null, cancellationToken: cancellation.Token));
 
-        Assert.Equal(DeepSeekFailureKind.Cancelled, exception.Kind);
         Assert.Equal(1, handler.CallCount);
     }
 

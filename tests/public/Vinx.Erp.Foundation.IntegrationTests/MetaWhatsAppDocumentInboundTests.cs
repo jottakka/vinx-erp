@@ -105,6 +105,37 @@ public sealed class MetaWhatsAppDocumentInboundTests
         Assert.Equal(0, await scenario.CountFilesAsync());
     }
 
+    [Fact]
+    public async Task Accepted_upload_with_lost_ack_reuses_one_storage_key_and_file_record()
+    {
+        await using var scenario = await Scenario.CreateAsync(MalwareScanStatus.Clean);
+        var inboundId = Guid.NewGuid();
+
+        var first = await scenario.MaterializeAsync(ValidPng, "image/png", inboundId);
+        var replay = await scenario.MaterializeAsync(ValidPng, "image/png", inboundId);
+
+        Assert.Equal(inboundId, first.ConfirmedFileId);
+        Assert.Equal(first.ConfirmedFileId, replay.ConfirmedFileId);
+        Assert.Single(scenario.Storage.Uploaded);
+        Assert.Equal(1, scenario.Scanner.Calls);
+        Assert.Equal(1, await scenario.CountFilesAsync());
+    }
+
+    [Fact]
+    public async Task Commit_ack_loss_never_deletes_a_committed_file_object()
+    {
+        await using var scenario = await Scenario.CreateAsync(MalwareScanStatus.Clean);
+        var inboundId = Guid.NewGuid();
+        CommitAcknowledgementFailure.Arm(scenario.Factory.Fixture);
+
+        var result = await scenario.MaterializeAsync(ValidPng, "image/png", inboundId);
+
+        Assert.Equal(inboundId, result.ConfirmedFileId);
+        Assert.Single(scenario.Storage.Uploaded);
+        Assert.Equal(0, scenario.Storage.DeleteCalls);
+        Assert.Equal(1, await scenario.CountFilesAsync());
+    }
+
     private sealed class Scenario : IAsyncDisposable
     {
         private Scenario(
@@ -142,7 +173,9 @@ public sealed class MetaWhatsAppDocumentInboundTests
             var options = new DbContextOptionsBuilder<FoundationDbContext>()
                 .UseNpgsql(factory.Fixture.WorkerConnectionString)
                 .UseSnakeCaseNamingConvention()
-                .AddInterceptors(new RowVersionInterceptor())
+                .AddInterceptors(
+                    new RowVersionInterceptor(),
+                    new CommitAcknowledgementFailureInterceptor())
                 .Options;
             return new Scenario(
                 factory,
@@ -155,7 +188,8 @@ public sealed class MetaWhatsAppDocumentInboundTests
 
         public Task<InboundAttachmentMaterializationResult> MaterializeAsync(
             byte[] bytes,
-            string mimeType)
+            string mimeType,
+            Guid? inboundMessageId = null)
         {
             var materializer = new InboundAttachmentMaterializer(
                 Database,
@@ -165,7 +199,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
                 new CapabilityEvaluator(Database));
             return materializer.MaterializeAsync(
                 new InboundAttachmentMaterializationRequest(
-                    Guid.NewGuid(),
+                    inboundMessageId ?? Guid.NewGuid(),
                     new ActorContext(Seed.RecipientUserId, Guid.NewGuid()),
                     Seed.CompanyId,
                     MembershipId,
@@ -229,7 +263,11 @@ public sealed class MetaWhatsAppDocumentInboundTests
 
     private sealed class ControlledStorage : FileStorage
     {
+        private int deleteCalls;
+
         public Dictionary<string, byte[]> Uploaded { get; } = new(StringComparer.Ordinal);
+
+        public int DeleteCalls => Volatile.Read(ref deleteCalls);
 
         public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -245,6 +283,7 @@ public sealed class MetaWhatsAppDocumentInboundTests
 
         public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref deleteCalls);
             Uploaded.Remove(providerKey);
             return Task.CompletedTask;
         }

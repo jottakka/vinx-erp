@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Vinx.Erp.Foundation.Persistence.Migrations;
 
 [DbContext(typeof(FoundationDbContext))]
-[Migration("20260827020000_AddWhatsAppAgentAdapter")]
+[Migration("20260827080300_AddWhatsAppAgentAdapter")]
 public partial class AddWhatsAppAgentAdapter : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder) =>
@@ -18,11 +18,21 @@ public partial class AddWhatsAppAgentAdapter : Migration
                 foundation.agent_execution_ledger, foundation.users TO vinx_worker;
             GRANT INSERT, UPDATE ON TABLE foundation.files TO vinx_worker;
             GRANT REFERENCES (id) ON TABLE foundation.files TO vinx_notifications_owner;
+            GRANT SELECT (
+                id, company_id, uploader_membership_id, processing_state,
+                classification, deleted_at)
+                ON TABLE foundation.files TO vinx_notifications_owner;
+            GRANT SELECT (
+                company_id, actor_user_id, channel, inbound_message_id,
+                request_id, journey, state)
+                ON TABLE foundation.agent_execution_ledger TO vinx_notifications_owner;
             GRANT INSERT ON TABLE foundation.agent_execution_ledger TO vinx_worker;
             GRANT UPDATE (state, safe_result_json, reason_code, updated_at, row_version)
                 ON TABLE foundation.agent_execution_ledger TO vinx_worker;
-            GRANT USAGE ON SCHEMA paguai, audit TO vinx_worker;
-            GRANT SELECT, INSERT, UPDATE ON TABLE paguai.draft_proposals TO vinx_worker;
+            GRANT USAGE ON SCHEMA audit TO vinx_worker;
+            GRANT SELECT, INSERT ON TABLE paguai.draft_proposals TO vinx_worker;
+            GRANT UPDATE (state, result_draft_id, resolution_request_id, resolved_at, row_version)
+                ON TABLE paguai.draft_proposals TO vinx_worker;
             SET ROLE vinx_authorization_owner;
             GRANT EXECUTE ON FUNCTION foundation.current_actor_memberships() TO vinx_worker;
             RESET ROLE;
@@ -38,7 +48,8 @@ public partial class AddWhatsAppAgentAdapter : Migration
                 USING (name IN (
                     'foundation.files.upload',
                     'foundation.files.read-ocr',
-                    'ai.read'));
+                    'ai.read',
+                    'paguai.draft.create'));
 
             GRANT CREATE ON SCHEMA notifications TO vinx_notifications_owner;
             SET ROLE vinx_notifications_owner;
@@ -97,7 +108,8 @@ public partial class AddWhatsAppAgentAdapter : Migration
                 user_text text,
                 resolved_user_id uuid,
                 resolved_company_id uuid,
-                resolved_membership_id uuid)
+                resolved_membership_id uuid,
+                agent_file_id uuid)
             LANGUAGE plpgsql SECURITY DEFINER
             SET search_path TO pg_catalog, notifications, pg_temp
             AS $function$
@@ -106,6 +118,7 @@ public partial class AddWhatsAppAgentAdapter : Migration
                 v_user_text text;
                 v_requires_file boolean;
                 v_authorized boolean;
+                v_terminal_recovery boolean;
             BEGIN
                 IF p_inbound_id IS NULL THEN
                     RAISE EXCEPTION 'inbound whatsapp message id is required' USING ERRCODE = '22023';
@@ -118,26 +131,57 @@ public partial class AddWhatsAppAgentAdapter : Migration
 
                 IF NOT FOUND OR v_row.resolution_state <> 'admitted' THEN
                     RETURN QUERY SELECT 'not_found'::text, false, NULL::text, NULL::text,
-                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid;
+                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid,
+                        NULL::uuid;
                     RETURN;
                 END IF;
 
-                IF v_row.agent_status <> 'agent_pending' THEN
+                v_requires_file := v_row.message_type IN ('image', 'document');
+                PERFORM set_config('app.user_id', v_row.resolved_user_id::text, true);
+                PERFORM set_config('app.company_id', v_row.resolved_company_id::text, true);
+                SELECT v_row.agent_status = 'agent_in_flight'
+                    AND (NOT v_requires_file OR EXISTS (
+                        SELECT 1
+                        FROM foundation.files AS file
+                        WHERE file.id = v_row.agent_file_id
+                            AND file.company_id = v_row.resolved_company_id
+                            AND file.uploader_membership_id = v_row.resolved_membership_id
+                            AND file.processing_state = 'confirmed'
+                            AND file.classification = 'agentic_attachment'
+                            AND file.deleted_at IS NULL))
+                    AND EXISTS (
+                        SELECT 1
+                        FROM foundation.agent_execution_ledger AS execution
+                        WHERE execution.company_id = v_row.resolved_company_id
+                            AND execution.actor_user_id = v_row.resolved_user_id
+                            AND execution.channel = 'whatsapp'
+                            AND execution.inbound_message_id = p_inbound_id
+                            AND execution.request_id = p_inbound_id
+                            AND execution.journey = CASE
+                                WHEN v_row.message_type = 'document'
+                                    THEN 'paguai_from_document_v1'
+                                ELSE 'read_only_summarize_v1' END
+                            AND execution.state IN ('completed', 'failed_closed', 'ambiguous'))
+                INTO v_terminal_recovery;
+
+                IF v_row.agent_status <> 'agent_pending' AND NOT v_terminal_recovery THEN
                     RETURN QUERY SELECT v_row.agent_status, false, NULL::text, NULL::text,
-                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid;
+                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid,
+                        NULL::uuid;
                     RETURN;
                 END IF;
 
-                IF v_row.message_type = 'text' AND EXISTS (
+                IF NOT v_terminal_recovery AND v_row.message_type = 'text' AND EXISTS (
                     SELECT 1
                     FROM notifications.inbound_whatsapp_messages AS image
                     WHERE image.correlated_text_id = v_row.id) THEN
                     RETURN QUERY SELECT 'correlated'::text, false, NULL::text, NULL::text,
-                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid;
+                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid,
+                        NULL::uuid;
                     RETURN;
                 END IF;
 
-                IF v_row.correlation_deadline > clock_timestamp()
+                IF NOT v_terminal_recovery AND v_row.correlation_deadline > clock_timestamp()
                     AND (
                         v_row.message_type = 'text'
                         OR (
@@ -145,11 +189,11 @@ public partial class AddWhatsAppAgentAdapter : Migration
                             AND v_row.caption IS NULL
                             AND v_row.correlated_text_id IS NULL)) THEN
                     RETURN QUERY SELECT 'correlation_pending'::text, false, NULL::text, NULL::text,
-                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid;
+                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid,
+                        NULL::uuid;
                     RETURN;
                 END IF;
 
-                v_requires_file := v_row.message_type IN ('image', 'document');
                 SELECT EXISTS (
                     SELECT 1
                     FROM foundation.memberships AS membership
@@ -175,7 +219,8 @@ public partial class AddWhatsAppAgentAdapter : Migration
                             AND grant_row.scope = 'company'
                             AND capability.name = 'ai.read')
                     AND (NOT v_requires_file OR (
-                        SELECT count(DISTINCT capability.name) = 2
+                        SELECT count(DISTINCT capability.name) = CASE
+                            WHEN v_row.message_type = 'document' THEN 3 ELSE 2 END
                         FROM foundation.role_assignments AS assignment
                         JOIN foundation.roles AS role ON role.id = assignment.role_id
                         JOIN foundation.role_capabilities AS grant_row
@@ -188,9 +233,11 @@ public partial class AddWhatsAppAgentAdapter : Migration
                             AND role.deleted_at IS NULL
                             AND grant_row.deleted_at IS NULL
                             AND grant_row.scope = 'company'
-                            AND capability.name IN (
-                                'foundation.files.upload',
-                                'foundation.files.read-ocr')))
+                            AND (capability.name IN (
+                                    'foundation.files.upload',
+                                    'foundation.files.read-ocr')
+                                OR (v_row.message_type = 'document'
+                                    AND capability.name = 'paguai.draft.create'))))
                 INTO v_authorized;
 
                 IF NOT v_authorized THEN
@@ -204,7 +251,8 @@ public partial class AddWhatsAppAgentAdapter : Migration
                         replied_at = clock_timestamp()
                     WHERE message.id = p_inbound_id;
                     RETURN QUERY SELECT 'capability_missing'::text, false, NULL::text, NULL::text,
-                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid;
+                        NULL::text, NULL::text, NULL::text, NULL::uuid, NULL::uuid, NULL::uuid,
+                        NULL::uuid;
                     RETURN;
                 END IF;
 
@@ -221,6 +269,14 @@ public partial class AddWhatsAppAgentAdapter : Migration
                     v_user_text := v_row.text_body;
                 END IF;
 
+                IF v_terminal_recovery THEN
+                    RETURN QUERY SELECT 'terminal_recovery'::text, true, v_row.message_type,
+                        v_row.wa_id, v_row.media_id, v_row.caption, v_user_text,
+                        v_row.resolved_user_id, v_row.resolved_company_id,
+                        v_row.resolved_membership_id, v_row.agent_file_id;
+                    RETURN;
+                END IF;
+
                 UPDATE notifications.inbound_whatsapp_messages AS message
                 SET agent_status = 'agent_in_flight',
                     agent_started_at = clock_timestamp(),
@@ -230,7 +286,7 @@ public partial class AddWhatsAppAgentAdapter : Migration
                 RETURN QUERY SELECT 'agent_in_flight'::text, true, v_row.message_type,
                     v_row.wa_id, v_row.media_id, v_row.caption, v_user_text,
                     v_row.resolved_user_id, v_row.resolved_company_id,
-                    v_row.resolved_membership_id;
+                    v_row.resolved_membership_id, NULL::uuid;
             END;
             $function$;
 
@@ -241,10 +297,23 @@ public partial class AddWhatsAppAgentAdapter : Migration
             LANGUAGE plpgsql SECURITY DEFINER
             SET search_path TO pg_catalog, notifications, pg_temp
             AS $function$
+            DECLARE
+                v_user_id uuid;
+                v_company_id uuid;
             BEGIN
                 IF p_inbound_id IS NULL OR p_file_id IS NULL THEN
                     RAISE EXCEPTION 'inbound agent file parameters are invalid' USING ERRCODE = '22023';
                 END IF;
+
+                SELECT message.resolved_user_id, message.resolved_company_id
+                INTO v_user_id, v_company_id
+                FROM notifications.inbound_whatsapp_messages AS message
+                WHERE message.id = p_inbound_id;
+                IF NOT FOUND THEN
+                    RETURN false;
+                END IF;
+                PERFORM set_config('app.user_id', v_user_id::text, true);
+                PERFORM set_config('app.company_id', v_company_id::text, true);
 
                 UPDATE notifications.inbound_whatsapp_messages AS message
                 SET agent_file_id = p_file_id
@@ -414,6 +483,14 @@ public partial class AddWhatsAppAgentAdapter : Migration
             RESET ROLE;
             REVOKE CREATE ON SCHEMA notifications FROM vinx_notifications_owner;
             REVOKE REFERENCES (id) ON TABLE foundation.files FROM vinx_notifications_owner;
+            REVOKE SELECT (
+                id, company_id, uploader_membership_id, processing_state,
+                classification, deleted_at)
+                ON TABLE foundation.files FROM vinx_notifications_owner;
+            REVOKE SELECT (
+                company_id, actor_user_id, channel, inbound_message_id,
+                request_id, journey, state)
+                ON TABLE foundation.agent_execution_ledger FROM vinx_notifications_owner;
 
             DROP POLICY capabilities_notifications_owner_read ON foundation.capabilities;
             CREATE POLICY capabilities_notifications_owner_read ON foundation.capabilities
@@ -427,8 +504,10 @@ public partial class AddWhatsAppAgentAdapter : Migration
             SET ROLE vinx_authorization_owner;
             REVOKE EXECUTE ON FUNCTION foundation.current_actor_memberships() FROM vinx_worker;
             RESET ROLE;
-            REVOKE SELECT, INSERT, UPDATE ON TABLE paguai.draft_proposals FROM vinx_worker;
-            REVOKE USAGE ON SCHEMA paguai, audit FROM vinx_worker;
+            REVOKE SELECT, INSERT ON TABLE paguai.draft_proposals FROM vinx_worker;
+            REVOKE UPDATE (state, result_draft_id, resolution_request_id, resolved_at, row_version)
+                ON TABLE paguai.draft_proposals FROM vinx_worker;
+            REVOKE USAGE ON SCHEMA audit FROM vinx_worker;
             REVOKE INSERT, UPDATE ON TABLE foundation.files FROM vinx_worker;
             REVOKE SELECT ON TABLE foundation.companies, foundation.groups,
                 foundation.memberships, foundation.roles, foundation.role_assignments,

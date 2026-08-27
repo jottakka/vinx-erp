@@ -59,6 +59,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly TimeSpan? _testMalwareScanTimeout;
     private readonly IAgentModel? _testAgentModel;
     private readonly AgentRunOptions? _testAgentRunOptions;
+    private readonly DeterministicVisionHandler? _deterministicVisionHandler;
     private readonly IInterceptor? _testInterceptor;
     private readonly HttpMessageHandler? _browserSessionProviderHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
@@ -101,6 +102,9 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _testMalwareScanTimeout = testMalwareScanTimeout;
         _testAgentModel = testAgentModel;
         _testAgentRunOptions = testAgentRunOptions;
+        _deterministicVisionHandler = testAgentModel is not null && testAgentRunOptions?.Vision is not null
+            ? new DeterministicVisionHandler()
+            : null;
         _testInterceptor = testInterceptor;
         _browserSessionProviderHandler = browserSessionProviderHandler;
         if (fixture is not null && preparedFixtureAccess is not null)
@@ -133,6 +137,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     public int IdentityProviderCallCount => _countingIdentityProvider?.CallCount
         ?? throw new InvalidOperationException("The factory is not configured with a counting identity provider.");
     public ClaimsPrincipal? AuthenticatedJwtPrincipal { get; private set; }
+    public int AgentVisionCallCount => _deterministicVisionHandler?.CallCount ?? 0;
 
     internal static string ResolveE2eContentRoot() => Path.Combine(
         WolverineStorageDeployment.FindRepositoryRoot(),
@@ -578,14 +583,16 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             }
             if (_testAgentModel is not null && _testAgentRunOptions?.Vision is { } vision)
             {
-                // O cenário conserva a fonte autorizada real. A visão é inerte
-                // porque este teste termina na autorização, antes do OCR.
+                // A fonte autorizada permanece real; somente a fronteira de
+                // visão recebe uma resposta OCR fechada e contável, sem rede.
                 services.RemoveAll<DocumentContextNormalizer>();
                 services.AddScoped(serviceProvider => new DocumentContextNormalizer(
                     serviceProvider.GetRequiredService<IAuthorizedDocumentSource>(),
-                    new DocumentVisionOcr(CreateInertVisionClient(vision)),
+                    new DocumentVisionOcr(CreateDeterministicVisionClient(
+                        vision,
+                        _deterministicVisionHandler!)),
                     DocumentContextLimits.FromVisionProfile(
-                        ToInertVisionProfile(vision),
+                        ToDeterministicVisionProfile(vision),
                         new HashSet<string>(vision.AllowedClassifications, StringComparer.Ordinal))));
             }
             if (_useJwtBearer)
@@ -635,14 +642,18 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         });
     }
 
-    private static IChatClient CreateInertVisionClient(AgentRunVisionOptions vision)
+    private static IChatClient CreateDeterministicVisionClient(
+        AgentRunVisionOptions vision,
+        HttpMessageHandler handler)
     {
-        var profile = ToInertVisionProfile(vision);
-        profile.ApiKey = "test-only-inert";
-        return new OpenAiCompatibleChatClient(profile, new HttpClient(new InertVisionHandler()));
+        var profile = ToDeterministicVisionProfile(vision);
+        profile.ApiKey = "test-only-deterministic-vision";
+        return new OpenAiCompatibleChatClient(
+            profile,
+            new HttpClient(handler, disposeHandler: false));
     }
 
-    private static OpenAiCompatibleOptions ToInertVisionProfile(AgentRunVisionOptions vision) => new()
+    private static OpenAiCompatibleOptions ToDeterministicVisionProfile(AgentRunVisionOptions vision) => new()
     {
         Endpoint = vision.Endpoint,
         Model = vision.Model ?? string.Empty,
@@ -652,10 +663,55 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         ModuleTag = "ai/agent-document-vision",
     };
 
-    private sealed class InertVisionHandler : HttpMessageHandler
+    private sealed class DeterministicVisionHandler : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromException<HttpResponseMessage>(new InvalidOperationException("The test-only vision client must not be invoked."));
+        private int callCount;
+
+        public int CallCount => Volatile.Read(ref callCount);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref callCount);
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            if (!body.Contains("data:image/png;base64,", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The deterministic vision boundary requires one canonical PNG image.");
+            }
+
+            var ocr = JsonSerializer.Serialize(new
+            {
+                text = "Nota fiscal sintética E2E, valor 250,00 BRL, vencimento 10/09/2026, fornecedor E2E.",
+                confidence = 0.99,
+                language = "pt-BR",
+            });
+            var response = JsonSerializer.Serialize(new
+            {
+                id = "chatcmpl-e2e-vision",
+                @object = "chat.completion",
+                created = 1_755_000_000,
+                model = "test-agent-model",
+                choices = new[]
+                {
+                    new
+                    {
+                        index = 0,
+                        message = new { role = "assistant", content = ocr },
+                        finish_reason = "stop",
+                    },
+                },
+                usage = new { prompt_tokens = 10, completion_tokens = 5, total_tokens = 15 },
+            });
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    response,
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
+            };
+        }
     }
 
     public override ValueTask DisposeAsync() => DisposeResourcesAsync(primaryFailure: null);
