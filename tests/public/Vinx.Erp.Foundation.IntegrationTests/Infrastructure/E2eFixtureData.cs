@@ -715,6 +715,8 @@ public static class E2eFixtureSeeder
                     'size_bytes', size_bytes, 'mime_type', mime_type, 'checksum', checksum,
                     'classification', classification, 'origin', origin,
                     'provider_key', provider_key, 'processing_state', processing_state,
+                    'scan_engine', scan_engine, 'scan_engine_version', scan_engine_version,
+                    'scan_signature_version', scan_signature_version,
                     'actor_user_id', created_by_user_id, 'request_id', request_id) ORDER BY id)
                 FROM foundation.files) = (@seed::jsonb -> 'files')
             AND (SELECT jsonb_agg(jsonb_build_object(

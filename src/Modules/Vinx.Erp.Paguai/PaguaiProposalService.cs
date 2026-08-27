@@ -251,6 +251,31 @@ public sealed class PaguaiProposalService(
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
+    internal static bool TrySerializeCanonicalSources(
+        Guid invoiceFileId,
+        IReadOnlyList<PaguaiProposalSource>? sourceReferences,
+        out string canonicalSources)
+    {
+        canonicalSources = string.Empty;
+        if (invoiceFileId == Guid.Empty || sourceReferences is null || sourceReferences.Count != 3)
+        {
+            return false;
+        }
+
+        var requiredFields = new[] { "amount", "beneficiaryDisplayName", "dueDate" };
+        var sources = sourceReferences.OrderBy(source => source.Field, StringComparer.Ordinal).ToArray();
+        if (!sources.Select(source => source.Field).SequenceEqual(requiredFields, StringComparer.Ordinal)
+            || sources.Any(source => string.IsNullOrWhiteSpace(source.Source)
+                || !source.Source.StartsWith($"{invoiceFileId:N}:p", StringComparison.Ordinal)
+                || source.Source.Any(char.IsControl)))
+        {
+            return false;
+        }
+
+        canonicalSources = JsonSerializer.Serialize(sources);
+        return true;
+    }
+
     internal static PaguaiProposal ToView(PaguaiDraftProposal proposal) => new(
         proposal.Id,
         proposal.CompanyId,
@@ -277,28 +302,22 @@ public sealed class PaguaiProposalService(
         payloadHash = string.Empty;
         if (command.CompanyId == Guid.Empty
             || command.RequestId == Guid.Empty
-            || command.InvoiceFileId == Guid.Empty
             || !PaguaiAmountRules.IsValid(command.Amount)
-            || command.SourceReferences is null
-            || command.SourceReferences.Count != 3
             || string.IsNullOrWhiteSpace(command.PolicyVersion))
         {
             return false;
         }
 
-        var requiredFields = new[] { "amount", "beneficiaryDisplayName", "dueDate" };
-        var sources = command.SourceReferences.OrderBy(source => source.Field, StringComparer.Ordinal).ToArray();
-        if (!sources.Select(source => source.Field).SequenceEqual(requiredFields, StringComparer.Ordinal)
-            || sources.Any(source => string.IsNullOrWhiteSpace(source.Source)
-                || !source.Source.StartsWith($"{command.InvoiceFileId:N}:p", StringComparison.Ordinal)
-                || source.Source.Any(char.IsControl)))
+        if (!TrySerializeCanonicalSources(
+                command.InvoiceFileId,
+                command.SourceReferences,
+                out canonicalSources))
         {
             return false;
         }
 
         try
         {
-            canonicalSources = JsonSerializer.Serialize(sources);
             payloadHash = ComputePayloadHash(command, canonicalSources);
             _ = PaguaiDraftProposal.Create(
                 Guid.NewGuid(), command.CompanyId, Guid.NewGuid(), command.RequestId, command.InvoiceFileId,

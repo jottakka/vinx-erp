@@ -128,7 +128,7 @@ public sealed class PaguaiProposalEndpointTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal(
-            ["amount", "beneficiaryDisplayName", "companyId", "confidence", "createdAt", "description",
+            ["amount", "beneficiaryDisplayName", "companyId", "confidence", "createdAt", "currency", "description",
                 "dueDate", "expiresAt", "id", "invoiceFileId", "proofRequirement", "sourceReferences",
                 "state", "title"],
             body.RootElement.EnumerateObject().Select(property => property.Name).Order().ToArray());
@@ -295,11 +295,35 @@ public sealed class PaguaiProposalEndpointTests
         {
             var operation = document.RootElement.GetProperty("paths")
                 .GetProperty($"/paguai/draft-proposals/{{id}}/{suffix}").GetProperty("post");
-            Assert.Contains(operation.GetProperty("parameters").EnumerateArray(), parameter =>
-                parameter.GetProperty("name").GetString() == "X-CSRF-TOKEN"
+            Assert.Contains(operation.GetProperty("parameters").EnumerateArray()
+                .Select(parameter => ResolveParameter(document.RootElement, parameter)), parameter =>
+                parameter.TryGetProperty("name", out var name)
+                && name.GetString() == "X-CSRF-TOKEN"
                 && parameter.GetProperty("in").GetString() == "header"
-                && parameter.GetProperty("required").GetBoolean());
+                && (!parameter.TryGetProperty("required", out var required)
+                    || !required.GetBoolean()));
         }
+    }
+
+    private static JsonElement ResolveParameter(JsonElement document, JsonElement parameter)
+    {
+        var resolved = parameter;
+        for (var depth = 0; depth < 8; depth++)
+        {
+            if (!resolved.TryGetProperty("$ref", out var reference))
+            {
+                return resolved;
+            }
+
+            const string prefix = "#/components/parameters/";
+            var referenceValue = reference.GetString()
+                ?? throw new InvalidOperationException("The OpenAPI parameter reference was empty.");
+            Assert.StartsWith(prefix, referenceValue, StringComparison.Ordinal);
+            resolved = document.GetProperty("components").GetProperty("parameters")
+                .GetProperty(referenceValue[prefix.Length..]);
+        }
+
+        throw new InvalidOperationException("The OpenAPI parameter reference chain was recursive.");
     }
 
     private static async Task<PaguaiProposal> CreateProposalAsync(

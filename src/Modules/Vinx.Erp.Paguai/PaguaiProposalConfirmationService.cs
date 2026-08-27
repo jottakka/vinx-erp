@@ -331,6 +331,15 @@ public sealed class PaguaiProposalConfirmationService(
     {
         try
         {
+            var sources = JsonSerializer.Deserialize<PaguaiProposalSource[]>(proposal.SourceReferences) ?? [];
+            if (!PaguaiProposalService.TrySerializeCanonicalSources(
+                    proposal.FileRecordId,
+                    sources,
+                    out var canonicalSources))
+            {
+                return false;
+            }
+
             var command = new CreatePaguaiProposalCommand(
                 proposal.CompanyId,
                 proposal.RequestId,
@@ -343,11 +352,11 @@ public sealed class PaguaiProposalConfirmationService(
                 proposal.ProofRequirement,
                 proposal.FileRecordId,
                 proposal.Confidence,
-                JsonSerializer.Deserialize<PaguaiProposalSource[]>(proposal.SourceReferences) ?? [],
+                sources,
                 proposal.PolicyVersion);
             return string.Equals(
                 proposal.PayloadHash,
-                PaguaiProposalService.ComputePayloadHash(command, proposal.SourceReferences),
+                PaguaiProposalService.ComputePayloadHash(command, canonicalSources),
                 StringComparison.Ordinal);
         }
         catch (JsonException)

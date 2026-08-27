@@ -8,7 +8,7 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed partial class TelegramNotificationIntentTests
 {
     private const string BeforeTelegramNotificationChannel =
-        "20260824235249_AddAiReadCapability";
+        "20260825140000_AddMemberInvitationProviderDelivery";
     private const string TelegramNotificationChannelMigration =
         "20260826120000_AddTelegramNotificationChannel";
 
@@ -35,7 +35,10 @@ public sealed partial class TelegramNotificationIntentTests
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
-        await fixture.MigrateAsync();
+        await using (var migrator = fixture.CreateMigratorDbContext())
+        {
+            await migrator.Database.MigrateAsync(TelegramNotificationChannelMigration);
+        }
         var legacy = await SeedLegacyNotificationStateAsync(fixture);
 
         await using (var migrator = fixture.CreateMigratorDbContext())
@@ -59,7 +62,10 @@ public sealed partial class TelegramNotificationIntentTests
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
-        await fixture.MigrateAsync();
+        await using (var migration = fixture.CreateMigratorDbContext())
+        {
+            await migration.Database.MigrateAsync(TelegramNotificationChannelMigration);
+        }
         var legacy = await SeedLegacyNotificationStateAsync(fixture);
         await InsertTelegramTemplateStateAsync(fixture, legacy);
 

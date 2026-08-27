@@ -381,6 +381,7 @@ builder.Host.UseWolverine(options =>
     // global e fixado pelo primeiro host; amarrar explicitamente evita que
     // este worker adote outro assembly (GH-3521).
     options.ApplicationAssembly = typeof(Program).Assembly;
+    options.CodeGeneration.AlwaysUseServiceLocationFor<AgentRunner>();
     options.UseEntityFrameworkCoreTransactions();
     options.Discovery.DisableConventionalDiscovery(true);
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();
