@@ -1022,12 +1022,21 @@
           "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
+      "vinx.erp.paguai": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.11, )",
+          "Npgsql": "[10.0.3, )",
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
       "vinx.erp.workerhost": {
         "type": "Project",
         "dependencies": {
           "Vinx.Erp.Demandas": "[1.0.0, )",
           "Vinx.Erp.Foundation": "[1.0.0, )",
           "Vinx.Erp.Notifications": "[1.0.0, )",
+          "Vinx.Erp.Paguai": "[1.0.0, )",
           "WolverineFx.Postgresql": "[6.29.2, )",
           "WolverineFx.RuntimeCompilation": "[6.29.2, )"
         }
