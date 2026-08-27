@@ -456,9 +456,17 @@ public sealed class DemandasService(
         }
         catch (DemandasTransitionBlockedException)
         {
+            // Auditoria da negação em transação PRÓPRIA após o rollback do
+            // fluxo (regra da casa: tentativa negada é evidência durável).
             database.ChangeTracker.Clear();
             LogInformation("denied", "approval_prepare_denied");
-            return new(DemandOperationState.IllegalTransition);
+            return await DeniedAsync(
+                actor,
+                command.CompanyId,
+                "demandas.demand.advance",
+                DemandOperationState.IllegalTransition,
+                cancellationToken
+            );
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
@@ -639,9 +647,17 @@ public sealed class DemandasService(
         }
         catch (DemandasTransitionBlockedException)
         {
+            // Mesma garantia do avanço: negação auditada fora da transação
+            // ambiente que acabou de sofrer rollback.
             database.ChangeTracker.Clear();
             LogInformation("denied", "approval_prepare_denied");
-            return new(DemandOperationState.IllegalTransition);
+            return await DeniedAsync(
+                actor,
+                command.CompanyId,
+                "demandas.demand.checklist.complete",
+                DemandOperationState.IllegalTransition,
+                cancellationToken
+            );
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
