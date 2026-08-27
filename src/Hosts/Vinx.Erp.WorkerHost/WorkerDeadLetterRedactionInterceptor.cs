@@ -2,6 +2,7 @@ using System.Text.Json;
 using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Notifications;
+using Vinx.Erp.Paguai;
 using Wolverine;
 using Wolverine.Persistence.Durability;
 
@@ -23,6 +24,21 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
         if (exception is InboundTelegramDeadLetterException telegramException)
         {
             return ValueTask.FromResult<Exception?>(RedactTelegramException(telegramException));
+        }
+
+        if (exception is WorkerPaguaiDraftCreatedDeadLetterException paguaiException)
+        {
+            return ValueTask.FromResult<Exception?>(RedactPaguaiException(paguaiException));
+        }
+
+        if (envelope.Message is PaguaiDraftCreated)
+        {
+            return ValueTask.FromResult<Exception?>(
+                new WorkerPaguaiDraftCreatedDeadLetterException(
+                    WorkerPaguaiDraftCreatedDeadLetterException.UnexpectedExceptionType,
+                    "Paguai draft notification failed unexpectedly."
+                )
+            );
         }
 
         return ValueTask.FromResult<Exception?>(
@@ -53,6 +69,29 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
             _ => new(
                 InboundTelegramDeadLetterException.UnexpectedExceptionType,
                 "Inbound Telegram receipt failed unexpectedly."
+            ),
+        };
+
+    private static WorkerPaguaiDraftCreatedDeadLetterException RedactPaguaiException(
+        WorkerPaguaiDraftCreatedDeadLetterException exception
+    ) =>
+        exception.ExceptionType switch
+        {
+            WorkerPaguaiDraftCreatedDeadLetterException.InvalidExceptionType => new(
+                WorkerPaguaiDraftCreatedDeadLetterException.InvalidExceptionType,
+                "Paguai draft notification rejected the envelope."
+            ),
+            WorkerPaguaiDraftCreatedDeadLetterException.RetryExhaustedExceptionType => new(
+                WorkerPaguaiDraftCreatedDeadLetterException.RetryExhaustedExceptionType,
+                "Paguai draft notification exhausted transient retries."
+            ),
+            WorkerPaguaiDraftCreatedDeadLetterException.UnexpectedExceptionType => new(
+                WorkerPaguaiDraftCreatedDeadLetterException.UnexpectedExceptionType,
+                "Paguai draft notification failed unexpectedly."
+            ),
+            _ => new(
+                WorkerPaguaiDraftCreatedDeadLetterException.UnexpectedExceptionType,
+                "Paguai draft notification failed unexpectedly."
             ),
         };
 
@@ -107,6 +146,12 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
                     redactedTelegram,
                     SerializerOptions
                 );
+                envelope.Headers.Clear();
+                break;
+            case PaguaiDraftCreated:
+                var redactedPaguai = new PaguaiDraftCreated(Guid.Empty, Guid.Empty, Guid.Empty);
+                envelope.Message = redactedPaguai;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(redactedPaguai, SerializerOptions);
                 envelope.Headers.Clear();
                 break;
             default:

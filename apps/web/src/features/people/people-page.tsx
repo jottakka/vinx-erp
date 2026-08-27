@@ -7,18 +7,22 @@ import {
   Card,
   CardContent,
   CircularProgress,
-  MenuItem,
+  IconButton,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import type { MutableRefObject, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { CompanyProvider } from "../../shared/ui/company-context";
+import { AuthorizedCompanyFilter } from "../../shared/ui/authorized-company-filter";
+import { CompanyIdentity } from "../../shared/ui/company-identity";
+import { CompanySelect } from "../../shared/ui/company-select";
+import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
+import { normalizeSearchText } from "../../shared/ui/search-text";
 import { hasCompanyCapability } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
@@ -32,21 +36,23 @@ import { EmployeeProfileDialog } from "./employee-profile-dialog";
 
 const employeeCapability = "foundation.employees.create";
 const employeeFormSchema = z.object({
-  displayName: z.string().trim().min(1, "Informe um nome válido.").max(200),
+  displayName: z
+    .string()
+    .trim()
+    .min(1, "Informe um nome válido.")
+    .max(200, "O nome deve ter no máximo 200 caracteres."),
   email: z
     .string()
     .trim()
     .min(1, "Informe um e-mail válido.")
-    .max(320)
+    .max(320, "O e-mail deve ter no máximo 320 caracteres.")
     .email("Informe um e-mail válido."),
 });
-
 type EmployeeForm = z.infer<typeof employeeFormSchema>;
 type PeoplePageProps = {
   gateway?: EmployeeDirectoryGateway;
   createRequestId?: () => string;
 };
-
 type Feedback = "success" | "error" | null;
 type DirectoryOperation = {
   command: EmployeeDirectoryCreateCommand;
@@ -61,18 +67,31 @@ type RefreshReconciliation = {
   phase: "accepted" | "pending" | "rejected";
   purpose: "authorization" | "creation" | "recovery";
 };
+type DirectoryRow = EmployeeDirectoryItem & {
+  company: { companyId: string; companyName: string };
+};
 
-export function PeoplePage({
+export function PeoplePage(props: PeoplePageProps): ReactElement {
+  const { bootstrap, isSigningOut } = useSession();
+  const lastUserId = useRef<string | null>(null);
+  if (bootstrap?.user.id) lastUserId.current = bootstrap.user.id;
+  const ownerKey = isSigningOut
+    ? "signed-out"
+    : (bootstrap?.user.id ?? lastUserId.current ?? "anonymous");
+  return <PeoplePageContent key={ownerKey} {...props} />;
+}
+
+function PeoplePageContent({
   gateway = createEmployeeDirectoryClient(),
   createRequestId = () => crypto.randomUUID(),
 }: PeoplePageProps): ReactElement {
   const { bootstrap, refreshBootstrap, status } = useSession();
   const queryClient = useQueryClient();
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
-  const [selectedCompanyUserId, setSelectedCompanyUserId] = useState("");
-  const [viewOwnerUserId, setViewOwnerUserId] = useState("");
-  const [profileEmployee, setProfileEmployee] =
-    useState<EmployeeDirectoryItem | null>(null);
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([]);
+  const [createCompanyId, setCreateCompanyId] = useState("");
+  const [search, setSearch] = useState("");
+  const [creationOpen, setCreationOpen] = useState(false);
+  const [profile, setProfile] = useState<DirectoryRow | null>(null);
   const [attempt, setAttempt] = useState<DirectoryOperation | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pendingRefresh, setPendingRefresh] =
@@ -81,14 +100,15 @@ export function PeoplePage({
     useState<ConfirmedOperation | null>(null);
   const [isRefreshingKnownCreation, setIsRefreshingKnownCreation] =
     useState(false);
-  const processedDirectoryFailure = useRef<string | null>(null);
   const operationGeneration = useRef(0);
   const inFlight = useRef(false);
-  const refreshGate = useRef(false);
-  const authorizationRefreshInFlight = useRef(false);
   const attemptRef = useRef<DirectoryOperation | null>(null);
-  const selectedCompanyIdRef = useRef("");
+  const processedFailures = useRef(new Set<string>());
+  const authorizationRefreshInFlight = useRef(false);
+  const refreshGate = useRef(false);
   const currentUserIdRef = useRef<string | null>(null);
+  const viewOwnerUserId = useRef<string | null>(null);
+  const createCompanyIdRef = useRef("");
   const form = useForm<EmployeeForm>({
     defaultValues: { displayName: "", email: "" },
     resolver: zodResolver(employeeFormSchema),
@@ -100,41 +120,74 @@ export function PeoplePage({
       ),
     [bootstrap],
   );
-  const selectedCompany = eligibleCompanies.find(
-    (company) =>
-      company.companyId === selectedCompanyId &&
-      selectedCompanyUserId === bootstrap?.user.id,
+  const eligibleIds = useMemo(
+    () => new Set(eligibleCompanies.map((company) => company.companyId)),
+    [eligibleCompanies],
   );
-  const userId = bootstrap?.user.id;
-  selectedCompanyIdRef.current = selectedCompany?.companyId ?? "";
-  currentUserIdRef.current = userId ?? null;
-  const queryKey = [
-    "employee-directory",
-    userId ?? "none",
-    selectedCompany?.companyId ?? "none",
-  ] as const;
-  const directory = useQuery({
-    enabled: Boolean(
-      selectedCompany &&
-        userId &&
+  const concreteCompanyIds = useMemo(() => {
+    const selected = selectedCompanyIds.filter((id) => eligibleIds.has(id));
+    return selected.length
+      ? selected
+      : eligibleCompanies.map((company) => company.companyId);
+  }, [eligibleCompanies, eligibleIds, selectedCompanyIds]);
+  const listQueries = useQueries({
+    queries: concreteCompanyIds.map((companyId) => ({
+      enabled:
+        Boolean(bootstrap?.user.id) &&
         !knownCreatedOperation &&
         !refreshGate.current,
-    ),
-    queryFn: ({ signal }) =>
-      selectedCompany
-        ? gateway.list(selectedCompany.companyId, signal)
-        : Promise.resolve({
-            error: { kind: "invalid_request" as const },
-            ok: false as const,
-          }),
-    queryKey,
-    retry: false,
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        gateway.list(companyId, signal),
+      queryKey: [
+        "employee-directory",
+        bootstrap?.user.id ?? "none",
+        companyId,
+      ] as const,
+      retry: false,
+    })),
   });
+  const userId = bootstrap?.user.id;
+  currentUserIdRef.current = userId ?? null;
+  createCompanyIdRef.current = createCompanyId;
+
+  useEffect(() => {
+    if (!userId) return;
+    if (viewOwnerUserId.current && viewOwnerUserId.current !== userId) {
+      operationGeneration.current += 1;
+      setSelectedCompanyIds([]);
+      setCreateCompanyId("");
+      setCreationOpen(false);
+      form.reset();
+      setAttempt(null);
+      attemptRef.current = null;
+      setFeedback(null);
+      setProfile(null);
+      setKnownCreatedOperation(null);
+      setPendingRefresh(null);
+      refreshGate.current = false;
+      authorizationRefreshInFlight.current = false;
+    }
+    viewOwnerUserId.current = userId;
+  }, [form, userId]);
+
+  useEffect(() => {
+    if (!bootstrap) return;
+    const valid = selectedCompanyIds.filter((id) => eligibleIds.has(id));
+    if (valid.length !== selectedCompanyIds.length)
+      setSelectedCompanyIds(valid);
+    if (createCompanyId && !eligibleIds.has(createCompanyId)) {
+      operationGeneration.current += 1;
+      setCreateCompanyId("");
+      form.reset();
+      setAttempt(null);
+      attemptRef.current = null;
+      setFeedback(null);
+    }
+  }, [bootstrap, createCompanyId, eligibleIds, form, selectedCompanyIds]);
 
   const beginAuthorizationReconciliation = useCallback(
     async (operation: ConfirmedOperation) => {
       if (authorizationRefreshInFlight.current) return;
-
       authorizationRefreshInFlight.current = true;
       refreshGate.current = true;
       queryClient.removeQueries({ queryKey: operation.queryKey });
@@ -143,10 +196,10 @@ export function PeoplePage({
         phase: "pending",
         purpose: "authorization",
       });
-      const refreshAccepted = await refreshBootstrap();
+      const accepted = await refreshBootstrap();
       setPendingRefresh({
         operation,
-        phase: refreshAccepted ? "accepted" : "rejected",
+        phase: accepted ? "accepted" : "rejected",
         purpose: "authorization",
       });
     },
@@ -154,142 +207,78 @@ export function PeoplePage({
   );
 
   useEffect(() => {
-    if (!directory.data || directory.data.ok) return;
-    const failureKey = `${selectedCompanyId}:${directory.data.error.kind}`;
-    if (processedDirectoryFailure.current === failureKey) return;
-    processedDirectoryFailure.current = failureKey;
-
-    if (isAuthorizationFailure(directory.data.error)) {
-      if (!selectedCompany || !userId) return;
-      void beginAuthorizationReconciliation({
-        companyId: selectedCompany.companyId,
-        generation: operationGeneration.current,
-        queryKey,
-        userId,
-      });
-    }
+    listQueries.forEach((query, index) => {
+      const result = query.data;
+      if (!result || result.ok || !isAuthorizationFailure(result.error)) return;
+      const companyId = concreteCompanyIds[index];
+      if (
+        !companyId ||
+        processedFailures.current.has(`${companyId}:${result.error.kind}`)
+      )
+        return;
+      processedFailures.current.add(`${companyId}:${result.error.kind}`);
+      if (userId)
+        void beginAuthorizationReconciliation({
+          companyId,
+          generation: operationGeneration.current,
+          queryKey: ["employee-directory", userId, companyId],
+          userId,
+        });
+    });
   }, [
     beginAuthorizationReconciliation,
-    directory.data,
-    queryKey,
-    selectedCompany,
-    selectedCompanyId,
+    concreteCompanyIds,
+    listQueries,
     userId,
   ]);
 
-  const hasDefinitiveBootstrap = Boolean(bootstrap) || status !== "pending";
-  const selectedCompanyInvalid =
-    selectedCompanyId !== "" &&
-    (!bootstrap ||
-      selectedCompanyUserId !== userId ||
-      !eligibleCompanies.some(
-        (company) => company.companyId === selectedCompanyId,
-      ));
-  const preservesKnownCreation =
-    !bootstrap &&
-    ((pendingRefresh?.purpose === "creation" &&
-      pendingRefresh.phase !== "accepted") ||
-      knownCreatedOperation);
-  const hasOwnedView = Boolean(
-    selectedCompanyId ||
-      viewOwnerUserId ||
-      attempt ||
-      feedback ||
-      knownCreatedOperation ||
-      pendingRefresh,
-  );
-  const directoryAuthorizationFailure = Boolean(
-    directory.data &&
-      !directory.data.ok &&
-      isAuthorizationFailure(directory.data.error),
-  );
-  const authorizationReconciliation =
-    directoryAuthorizationFailure ||
-    pendingRefresh?.purpose === "authorization";
-  const mustNeutralizeOwnedView =
-    authorizationReconciliation ||
-    (hasDefinitiveBootstrap &&
-      hasOwnedView &&
-      !preservesKnownCreation &&
-      (!bootstrap || selectedCompanyInvalid || viewOwnerUserId !== userId));
-
   useEffect(() => {
-    if (!mustNeutralizeOwnedView || authorizationReconciliation) return;
-
-    operationGeneration.current += 1;
-    processedDirectoryFailure.current = null;
-    setSelectedCompanyId("");
-    setSelectedCompanyUserId("");
-    setViewOwnerUserId("");
-    setAttempt(null);
-    attemptRef.current = null;
-    setFeedback(null);
-    setKnownCreatedOperation(null);
-    setProfileEmployee(null);
-    setPendingRefresh(null);
-    refreshGate.current = false;
-    form.reset();
-  }, [authorizationReconciliation, form, mustNeutralizeOwnedView]);
-
-  useEffect(() => {
-    if (!pendingRefresh) return;
-
-    if (pendingRefresh.phase === "pending") return;
-
+    if (!pendingRefresh || pendingRefresh.phase === "pending") return;
+    const current = pendingRefresh.operation;
     if (pendingRefresh.purpose === "authorization") {
       operationGeneration.current += 1;
-      processedDirectoryFailure.current = null;
-      setSelectedCompanyId("");
-      setSelectedCompanyUserId("");
-      setViewOwnerUserId("");
+      setSelectedCompanyIds((ids) => ids.filter((id) => eligibleIds.has(id)));
       setAttempt(null);
       attemptRef.current = null;
+      setProfile(null);
       setFeedback(null);
-      setKnownCreatedOperation(null);
-      setProfileEmployee(null);
       authorizationRefreshInFlight.current = false;
       refreshGate.current = false;
-      form.reset();
       setPendingRefresh(null);
       return;
     }
-
     if (pendingRefresh.phase === "rejected") {
       if (
         pendingRefresh.purpose === "creation" &&
-        pendingRefresh.operation.generation === operationGeneration.current
+        current.generation === operationGeneration.current
       ) {
         form.reset();
-        setKnownCreatedOperation(pendingRefresh.operation);
+        setKnownCreatedOperation(current);
       }
       refreshGate.current = false;
       setPendingRefresh(null);
       return;
     }
-
     if (
       isCurrentEligibleOperation(
-        pendingRefresh.operation,
+        current,
         operationGeneration,
-        selectedCompany,
+        createCompanyIdRef,
         userId,
       )
     ) {
       if (pendingRefresh.purpose === "creation") {
         form.reset();
         setFeedback("success");
+        setCreationOpen(false);
       }
       setKnownCreatedOperation(null);
-      void queryClient.invalidateQueries({
-        queryKey: pendingRefresh.operation.queryKey,
-      });
-    } else if (pendingRefresh.purpose === "recovery") {
+      void queryClient.invalidateQueries({ queryKey: current.queryKey });
+    } else if (pendingRefresh.purpose === "recovery")
       setKnownCreatedOperation(null);
-    }
-
     refreshGate.current = false;
     setPendingRefresh(null);
-  }, [form, pendingRefresh, queryClient, selectedCompany, userId]);
+  }, [eligibleIds, form, pendingRefresh, queryClient, userId]);
 
   const mutation = useMutation({
     mutationFn: (operation: DirectoryOperation) =>
@@ -302,12 +291,11 @@ export function PeoplePage({
         !isCurrentOperation(
           operation,
           operationGeneration,
-          selectedCompanyIdRef,
+          createCompanyIdRef,
           currentUserIdRef,
         )
-      ) {
+      )
         return;
-      }
       if (!result.ok) {
         if (isAmbiguous(result.error)) {
           setAttempt(operation);
@@ -315,70 +303,81 @@ export function PeoplePage({
           return;
         }
         if (isAuthorizationFailure(result.error)) {
-          setAttempt(null);
-          attemptRef.current = null;
           await beginAuthorizationReconciliation(
             toConfirmedOperation(operation),
           );
           return;
         }
-        setAttempt(null);
-        attemptRef.current = null;
         setFeedback("error");
         return;
       }
-
-      setAttempt(null);
-      attemptRef.current = null;
-      const confirmedOperation = toConfirmedOperation(operation);
+      const confirmed = toConfirmedOperation(operation);
       refreshGate.current = true;
       setPendingRefresh({
-        operation: confirmedOperation,
+        operation: confirmed,
         phase: "pending",
         purpose: "creation",
       });
-      const refreshAccepted = await refreshBootstrap();
+      const accepted = await refreshBootstrap();
+      if (!accepted) {
+        if (
+          isCurrentOperation(
+            operation,
+            operationGeneration,
+            createCompanyIdRef,
+            currentUserIdRef,
+          )
+        ) {
+          form.reset();
+          setKnownCreatedOperation(confirmed);
+        }
+        refreshGate.current = false;
+        setPendingRefresh(null);
+        return;
+      }
       setPendingRefresh({
-        operation: confirmedOperation,
-        phase: refreshAccepted ? "accepted" : "rejected",
+        operation: confirmed,
+        phase: "accepted",
         purpose: "creation",
       });
     },
   });
 
-  const abandonAttempt = () => {
+  const resetCreation = () => {
     operationGeneration.current += 1;
+    form.reset();
+    setFeedback(null);
     setAttempt(null);
     attemptRef.current = null;
-    setFeedback(null);
+    setCreateCompanyId("");
   };
-  const updateForm = () => {
-    setViewOwnerUserId(userId ?? "");
-    abandonAttempt();
+  const changeCreateCompany = (companyId: string) => {
+    if (companyId !== createCompanyId) {
+      operationGeneration.current += 1;
+      form.reset();
+      setAttempt(null);
+      attemptRef.current = null;
+      setFeedback(null);
+    }
+    setCreateCompanyId(companyId);
   };
-  const selectCompany = (companyId: string) => {
-    processedDirectoryFailure.current = null;
-    if (selectedCompanyId && companyId !== selectedCompanyId) form.reset();
-    setSelectedCompanyId(companyId);
-    setSelectedCompanyUserId(userId ?? "");
-    setViewOwnerUserId(userId ?? "");
-    setProfileEmployee(null);
-    abandonAttempt();
+  const openCreation = () => {
+    resetCreation();
+    setCreationOpen(true);
   };
   const reserve = (values: EmployeeForm) => {
     if (
-      !selectedCompany ||
+      !createCompanyId ||
       !userId ||
       knownCreatedOperation ||
       attemptRef.current ||
       pendingRefresh ||
       mutation.isPending ||
       inFlight.current
-    ) {
+    )
       return;
-    }
     const command = {
-      companyId: selectedCompany.companyId,
+      companyId: createCompanyId,
       displayName: values.displayName.trim(),
       email: values.email.trim(),
       requestId: createRequestId(),
@@ -387,53 +386,40 @@ export function PeoplePage({
     setFeedback(null);
     mutation.mutate({
       command,
-      companyId: selectedCompany.companyId,
+      companyId: createCompanyId,
       generation: operationGeneration.current,
-      queryKey,
+      queryKey: ["employee-directory", userId, createCompanyId],
       userId,
     });
   };
   const retry = () => {
+    const operation = attemptRef.current;
     if (
-      !attemptRef.current ||
+      !operation ||
       inFlight.current ||
       !isCurrentOperation(
-        attemptRef.current,
+        operation,
         operationGeneration,
-        selectedCompanyIdRef,
+        createCompanyIdRef,
         currentUserIdRef,
       )
-    ) {
+    )
       return;
-    }
     inFlight.current = true;
-    setFeedback(null);
-    mutation.mutate(attemptRef.current);
+    mutation.mutate(operation);
   };
-  const refreshKnownCreation = async () => {
-    if (isRefreshingKnownCreation || !knownCreatedOperation) return;
-    setIsRefreshingKnownCreation(true);
-    const operation = knownCreatedOperation;
-    refreshGate.current = true;
-    setPendingRefresh({
-      operation,
-      phase: "pending",
-      purpose: "recovery",
-    });
-    const refreshAccepted = await refreshBootstrap();
-    setPendingRefresh({
-      operation,
-      phase: refreshAccepted ? "accepted" : "rejected",
-      purpose: "recovery",
-    });
-    setIsRefreshingKnownCreation(false);
+  const retryQueries = () => {
+    listQueries
+      .filter((query) => query.isError || (query.data && !query.data.ok))
+      .forEach((query) => void query.refetch());
   };
 
-  if (mustNeutralizeOwnedView) {
+  if (
+    pendingRefresh?.purpose === "authorization" &&
+    pendingRefresh.phase === "pending"
+  )
     return <CircularProgress aria-label="Atualizando pessoas" />;
-  }
-
-  if (knownCreatedOperation) {
+  if (knownCreatedOperation)
     return (
       <Stack spacing={3}>
         <PageHeader
@@ -442,7 +428,7 @@ export function PeoplePage({
           title="Pessoas"
         />
         <Alert severity="info">
-          A reserva foi concluída, mas a sessão precisa ser atualizada.
+          O cadastro foi concluído, mas a sessão precisa ser atualizada.
         </Alert>
         <Button
           disabled={isRefreshingKnownCreation}
@@ -453,15 +439,19 @@ export function PeoplePage({
         </Button>
       </Stack>
     );
-  }
-
-  if (!bootstrap) return <CircularProgress aria-label="Carregando pessoas" />;
-
-  if (eligibleCompanies.length === 0) {
+  if (!bootstrap)
+    return (
+      <CircularProgress
+        aria-label={
+          status === "pending" ? "Carregando pessoas" : "Atualizando pessoas"
+        }
+      />
+    );
+  if (eligibleCompanies.length === 0)
     return (
       <Stack spacing={3}>
         <PageHeader
-          description="Consulte pessoas das empresas que estão disponíveis para sua sessão."
+          description="Consulte pessoas das empresas disponíveis para sua sessão."
           eyebrow="Pessoas"
           title="Pessoas"
         />
@@ -470,177 +460,286 @@ export function PeoplePage({
         </Alert>
       </Stack>
     );
-  }
 
-  const directoryFailure = directory.data && !directory.data.ok;
-  const profileCompanyName = selectedCompany?.companyName ?? "Empresa";
+  const normalizedSearch = normalizeSearchText(search);
+  const rows = listQueries.flatMap((query, index): DirectoryRow[] => {
+    const result = query.data;
+    const company = eligibleCompanies.find(
+      (item) => item.companyId === concreteCompanyIds[index],
+    );
+    if (!result?.ok || !company) return [];
+    return result.items.map((employee) => ({ ...employee, company }));
+  });
+  const visibleRows = rows
+    .filter((row) =>
+      normalizeSearchText(row.displayName).includes(normalizedSearch),
+    )
+    .sort(
+      (left, right) =>
+        left.displayName
+          .trim()
+          .localeCompare(right.displayName.trim(), "pt-BR", {
+            sensitivity: "base",
+          }) ||
+        left.company.companyName.localeCompare(
+          right.company.companyName,
+          "pt-BR",
+          { sensitivity: "base" },
+        ) ||
+        left.employeeId.localeCompare(right.employeeId) ||
+        left.membershipId.localeCompare(right.membershipId),
+    );
+  const isLoading = listQueries.some((query) => query.isPending);
+  const failures = listQueries.filter(
+    (query) => query.data && !query.data.ok,
+  ).length;
+  const selectedCreateCompany = eligibleCompanies.find(
+    (company) => company.companyId === createCompanyId,
+  );
 
   return (
-    <CompanyProvider company={selectedCompany ?? null}>
-      <Stack spacing={3}>
-        <PageHeader
-          description="Selecione uma empresa para consultar funcionários e, se tiver permissão, reservar um novo localmente."
-          eyebrow="Pessoas"
-          title="Pessoas"
-        />
-        <Card component="section" variant="outlined">
-          <CardContent>
+    <Stack spacing={3}>
+      <PageHeader
+        description="Consulte pessoas por empresa e cadastre funcionários sem conceder acesso ao sistema."
+        eyebrow="Pessoas"
+        title="Pessoas"
+      />
+      <Card component="section" variant="outlined">
+        <CardContent>
+          <Stack spacing={2}>
+            <AuthorizedCompanyFilter
+              companies={eligibleCompanies}
+              label="Empresas"
+              onChange={setSelectedCompanyIds}
+              selectedCompanyIds={selectedCompanyIds}
+            />
+            <TextField
+              label="Buscar por nome"
+              onChange={(event) => setSearch(event.target.value)}
+              value={search}
+            />
             <Stack
-              component="form"
-              noValidate
-              onSubmit={form.handleSubmit(reserve)}
-              spacing={2}
+              direction={{ sm: "row", xs: "column" }}
+              spacing={1}
+              sx={{
+                alignItems: { sm: "center", xs: "stretch" },
+                justifyContent: "space-between",
+              }}
             >
-              <TextField
-                label="Empresa"
-                onChange={(event) => selectCompany(event.target.value)}
-                select
-                value={selectedCompany?.companyId ?? ""}
-              >
-                <MenuItem value="">Selecione uma empresa</MenuItem>
-                {eligibleCompanies.map((company) => (
-                  <MenuItem key={company.companyId} value={company.companyId}>
-                    {company.companyName}
-                  </MenuItem>
-                ))}
-              </TextField>
-              <TextField
-                {...form.register("displayName", { onChange: updateForm })}
-                error={Boolean(form.formState.errors.displayName)}
-                helperText={form.formState.errors.displayName?.message}
-                label="Nome"
-              />
-              <TextField
-                {...form.register("email", { onChange: updateForm })}
-                error={Boolean(form.formState.errors.email)}
-                helperText={form.formState.errors.email?.message}
-                label="E-mail"
-                type="email"
-              />
+              <Typography color="text.secondary" variant="body2">
+                {visibleRows.length} funcionário
+                {visibleRows.length === 1 ? "" : "s"}
+              </Typography>
+              {search ? (
+                <IconButton
+                  aria-label="Limpar busca"
+                  onClick={() => setSearch("")}
+                  size="small"
+                >
+                  <Typography variant="caption">Limpar</Typography>
+                </IconButton>
+              ) : null}
               <Button
-                disabled={
-                  !selectedCompany ||
-                  Boolean(attempt) ||
-                  Boolean(pendingRefresh) ||
-                  mutation.isPending
-                }
+                onClick={openCreation}
                 startIcon={<PersonAddAltOutlinedIcon />}
-                type="submit"
                 variant="contained"
               >
-                Reservar funcionário
+                Cadastrar funcionário
               </Button>
-              <Typography color="text.secondary" variant="caption">
-                Reservar cria um registro local de funcionário nesta empresa;
-                não envia convite nem acesso.
-              </Typography>
-              {attempt && !mutation.isPending ? (
-                <Button onClick={retry} variant="outlined">
-                  Tentar novamente
-                </Button>
-              ) : null}
-              {feedback === "success" ? (
-                <Alert severity="success">Funcionário reservado.</Alert>
-              ) : null}
-              {feedback === "error" ? (
-                <Alert severity="error">
-                  Não foi possível concluir esta reserva.
-                </Alert>
-              ) : null}
             </Stack>
-          </CardContent>
-        </Card>
-        {selectedCompany ? (
-          <Card component="section" variant="outlined">
-            <CardContent>
-              <Stack spacing={1}>
-                <Typography component="h2" variant="h6">
-                  Funcionários
-                </Typography>
-                {directory.isPending ? (
-                  <CircularProgress
-                    aria-label="Carregando funcionários"
-                    size={24}
+          </Stack>
+        </CardContent>
+      </Card>
+      {feedback === "success" ? (
+        <Alert severity="success">Funcionário cadastrado.</Alert>
+      ) : null}
+      <Card component="section" variant="outlined">
+        <CardContent>
+          <Stack spacing={1}>
+            <Typography component="h2" variant="h6">
+              Funcionários
+            </Typography>
+            {isLoading ? (
+              <CircularProgress
+                aria-label="Carregando funcionários"
+                size={24}
+              />
+            ) : null}
+            {failures ? (
+              <Alert severity="error">
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <span>Não foi possível carregar parte das pessoas.</span>
+                  <Button onClick={retryQueries} size="small">
+                    Tentar novamente
+                  </Button>
+                </Stack>
+              </Alert>
+            ) : null}
+            {!isLoading && !failures && !rows.length ? (
+              <Typography color="text.secondary">
+                Nenhum funcionário encontrado.
+              </Typography>
+            ) : null}
+            {!isLoading && rows.length && !visibleRows.length ? (
+              <Typography color="text.secondary">
+                Nenhum funcionário corresponde à busca.
+              </Typography>
+            ) : null}
+            {visibleRows.map((row) => (
+              <Button
+                key={`${row.company.companyId}:${row.employeeId}`}
+                onClick={() => setProfile(row)}
+                startIcon={<PersonOutlinedIcon />}
+                sx={{
+                  justifyContent: "flex-start",
+                  textAlign: "left",
+                  width: "100%",
+                }}
+                variant="outlined"
+              >
+                <Stack spacing={0.25} sx={{ alignItems: "flex-start" }}>
+                  <Typography>{row.displayName}</Typography>
+                  <CompanyIdentity
+                    companyId={row.company.companyId}
+                    companyName={row.company.companyName}
                   />
-                ) : null}
-                {directoryFailure || directory.isError ? (
-                  <Alert severity="error">
-                    Não foi possível carregar as pessoas.
-                  </Alert>
-                ) : null}
-                {directory.data?.ok && directory.data.items.length === 0 ? (
-                  <Typography color="text.secondary">
-                    Nenhum funcionário reservado.
-                  </Typography>
-                ) : null}
-                {directory.data?.ok
-                  ? directory.data.items.map((employee) => (
-                      <Button
-                        key={employee.employeeId}
-                        onClick={() => setProfileEmployee(employee)}
-                        startIcon={<PersonOutlinedIcon />}
-                        sx={{ justifyContent: "flex-start", width: "100%" }}
-                        variant="outlined"
-                      >
-                        {employee.displayName}
-                      </Button>
-                    ))
-                  : null}
-              </Stack>
-            </CardContent>
-          </Card>
-        ) : null}
-        <EmployeeProfileDialog
-          companyName={profileCompanyName}
-          employee={profileEmployee}
-          onClose={() => setProfileEmployee(null)}
-          open={Boolean(profileEmployee)}
-        />
-      </Stack>
-    </CompanyProvider>
+                </Stack>
+              </Button>
+            ))}
+          </Stack>
+        </CardContent>
+      </Card>
+      <EntityDialog
+        description="Este cadastro não envia convite nem concede acesso ao sistema."
+        onClose={() => {
+          setCreationOpen(false);
+          resetCreation();
+        }}
+        open={creationOpen}
+        title="Cadastrar funcionário"
+      >
+        <Stack
+          component="form"
+          noValidate
+          onSubmit={form.handleSubmit(reserve)}
+          spacing={2}
+        >
+          <CompanySelect
+            companies={eligibleCompanies}
+            label="Empresa"
+            onChange={changeCreateCompany}
+            value={createCompanyId}
+          />
+          <TextField
+            {...form.register("displayName")}
+            error={Boolean(form.formState.errors.displayName)}
+            helperText={form.formState.errors.displayName?.message}
+            label="Nome"
+            slotProps={{ htmlInput: { maxLength: 200 } }}
+          />
+          <TextField
+            {...form.register("email")}
+            error={Boolean(form.formState.errors.email)}
+            helperText={form.formState.errors.email?.message}
+            label="E-mail"
+            slotProps={{ htmlInput: { maxLength: 320 } }}
+            type="email"
+          />
+          <Button
+            disabled={
+              !selectedCreateCompany ||
+              Boolean(attempt) ||
+              Boolean(pendingRefresh) ||
+              mutation.isPending
+            }
+            startIcon={<PersonAddAltOutlinedIcon />}
+            type="submit"
+            variant="contained"
+          >
+            Cadastrar funcionário
+          </Button>
+          {attempt && !mutation.isPending ? (
+            <Button onClick={retry} variant="outlined">
+              Tentar novamente
+            </Button>
+          ) : null}
+          {feedback === "success" ? (
+            <Alert severity="success">Funcionário cadastrado.</Alert>
+          ) : null}
+          {feedback === "error" ? (
+            <Alert severity="error">
+              Não foi possível concluir o cadastro.
+            </Alert>
+          ) : null}
+        </Stack>
+      </EntityDialog>
+      <EmployeeProfileDialog
+        companyId={profile?.company.companyId}
+        companyName={profile?.company.companyName}
+        employee={profile}
+        onClose={() => setProfile(null)}
+        open={Boolean(profile)}
+      />
+    </Stack>
   );
+
+  async function refreshKnownCreation() {
+    if (isRefreshingKnownCreation || !knownCreatedOperation) return;
+    setIsRefreshingKnownCreation(true);
+    const operation = knownCreatedOperation;
+    refreshGate.current = true;
+    setPendingRefresh({ operation, phase: "pending", purpose: "recovery" });
+    const accepted = await refreshBootstrap();
+    setPendingRefresh({
+      operation,
+      phase: accepted ? "accepted" : "rejected",
+      purpose: "recovery",
+    });
+    setIsRefreshingKnownCreation(false);
+  }
 }
 
-function isAuthorizationFailure(failure: EmployeeDirectoryFailure): boolean {
+function isAuthorizationFailure(failure: EmployeeDirectoryFailure) {
   return failure.kind === "unauthorized" || failure.kind === "forbidden";
 }
-
-function isAmbiguous(failure: EmployeeDirectoryFailure): boolean {
+function isAmbiguous(failure: EmployeeDirectoryFailure) {
   return (
     failure.kind === "network" ||
     failure.kind === "unavailable" ||
     failure.mayHaveCommitted === true
   );
 }
-
 function isCurrentOperation(
   operation: DirectoryOperation,
-  operationGeneration: MutableRefObject<number>,
-  selectedCompanyId: MutableRefObject<string>,
+  generation: MutableRefObject<number>,
+  companyId: MutableRefObject<string>,
   userId: MutableRefObject<string | null>,
-): boolean {
+) {
   return (
-    operation.generation === operationGeneration.current &&
-    operation.companyId === selectedCompanyId.current &&
+    operation.generation === generation.current &&
+    operation.companyId === companyId.current &&
     operation.userId === userId.current
   );
 }
-
 function isCurrentEligibleOperation(
   operation: ConfirmedOperation,
-  operationGeneration: MutableRefObject<number>,
-  selectedCompany:
-    | { companyId: string; capabilities: readonly unknown[] }
-    | undefined,
+  generation: MutableRefObject<number>,
+  companyId: MutableRefObject<string>,
   userId: string | undefined,
-): boolean {
+) {
   return (
-    operation.generation === operationGeneration.current &&
-    operation.companyId === selectedCompany?.companyId &&
+    operation.generation === generation.current &&
+    operation.companyId === companyId.current &&
     operation.userId === userId
   );
 }
-
 function toConfirmedOperation(
   operation: DirectoryOperation,
 ): ConfirmedOperation {

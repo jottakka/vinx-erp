@@ -1,12 +1,15 @@
 import {
-  alpha,
   createTheme,
   type StorageManager,
   type Theme,
 } from "@mui/material/styles";
 import "./theme-augmentation";
 import { darkPalette, lightPalette } from "./palette-primitives";
-import { displayFontFamily, vinxFieldBorder } from "./surface-tokens";
+import {
+  displayFontFamily,
+  vinxFieldBorder,
+  vinxFieldFill,
+} from "./surface-tokens";
 import type { Density } from "./visual-preferences";
 
 export type VinxLayoutTokens = {
@@ -182,23 +185,23 @@ export function createVinxTheme(density: Density): Theme & {
         styleOverrides: {
           root: ({ theme }) => ({
             borderRadius: 10,
-            backgroundColor: alpha("#292521", 0.03),
+            backgroundColor: vinxFieldFill.rest,
             transition: theme.transitions.create("background-color", {
               duration: theme.transitions.duration.shortest,
             }),
             "&:hover:not(.Mui-focused)": {
-              backgroundColor: alpha("#292521", 0.05),
+              backgroundColor: vinxFieldFill.hover,
             },
             "&.Mui-focused": {
-              backgroundColor: alpha("#292521", 0.02),
+              backgroundColor: vinxFieldFill.focus,
             },
             [theme.getColorSchemeSelector("dark")]: {
-              backgroundColor: alpha("#f2ece3", 0.04),
+              backgroundColor: vinxFieldFill.darkRest,
               "&:hover:not(.Mui-focused)": {
-                backgroundColor: alpha("#f2ece3", 0.07),
+                backgroundColor: vinxFieldFill.darkHover,
               },
               "&.Mui-focused": {
-                backgroundColor: alpha("#f2ece3", 0.03),
+                backgroundColor: vinxFieldFill.darkFocus,
               },
             },
             "&:hover:not(.Mui-focused):not(.Mui-disabled) .MuiOutlinedInput-notchedOutline":

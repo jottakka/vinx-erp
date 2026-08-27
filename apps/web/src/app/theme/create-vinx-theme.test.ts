@@ -4,7 +4,7 @@ import {
   createVinxTheme,
   vinxTheme,
 } from "./create-vinx-theme";
-import { vinxFieldBorder } from "./surface-tokens";
+import { vinxFieldBorder, vinxShadow } from "./surface-tokens";
 import { readDensity } from "./visual-preferences";
 
 function relativeLuminance(color: string) {
@@ -101,6 +101,20 @@ describe("vinx semantic theme", () => {
     expect(vinxTheme.colorSchemes.light.palette.navigation).toBeDefined();
   });
 
+  it("uses the established blue and slate visual primitives", () => {
+    expect(vinxTheme.colorSchemes.light.palette.primary.main).toBe("#0f5b78");
+    expect(vinxTheme.colorSchemes.light.palette.navigation.main).toBe(
+      "#102a43",
+    );
+    expect(vinxTheme.colorSchemes.light.palette.background.default).toBe(
+      "#f7fafc",
+    );
+    expect(vinxTheme.colorSchemes.dark.palette.background.default).toBe(
+      "#0b1726",
+    );
+    expect(vinxShadow.card).not.toContain("30, 21, 14");
+  });
+
   it("derives smaller usable layout tokens for compact density", () => {
     const comfortable = createVinxTheme("comfortable");
     const compact = createVinxTheme("compact");
@@ -163,6 +177,19 @@ describe("vinx semantic theme", () => {
           contrastRatio(slot.contrastText, slot.main),
         ).toBeGreaterThanOrEqual(4.5);
       }
+    }
+  });
+
+  it("keeps the Gamma company accent distinct from the warning semantic", () => {
+    for (const [scheme, palette] of palettes) {
+      expect(
+        palette.companyAccent.gamma.main,
+        `${scheme} Gamma must not reuse warning as page primary`,
+      ).not.toBe(palette.warning.main);
+      expect(
+        palette.companyAccent.gamma.main,
+        `${scheme} Gamma must remain contrast-safe for contained actions`,
+      ).toMatch(/^#(?:[3456789a-f][\da-f]){3}$/i);
     }
   });
 

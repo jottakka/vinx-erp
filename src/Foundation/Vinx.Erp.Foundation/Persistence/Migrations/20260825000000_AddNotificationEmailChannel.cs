@@ -261,9 +261,19 @@ public partial class AddNotificationEmailChannel : Migration
             REVOKE CREATE ON SCHEMA notifications FROM vinx_notifications_owner;
             """);
 
+    // Down simétrico ao Up: após a barreira fail-closed contra estado de e-mail,
+    // restaura as funções anteriores (enqueue_notification_intent e
+    // set_channel_preference) no corpo exato criado pelo Up de
+    // AddNotificationIntentOutbox — mesma coreografia de grants do próprio Up
+    // (GRANT CREATE → SET ROLE → REVOKE PUBLIC/vinx_migrator → GRANT EXECUTE
+    // vinx_runtime → RESET ROLE → REVOKE CREATE) — para que downgrades profundos
+    // encontrem o estado pós-outbox em vez de morrerem no DROP não idempotente do
+    // Down da própria AddNotificationIntentOutbox (20260818120000).
     protected override void Down(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
+            RESET ROLE;
+            GRANT CREATE ON SCHEMA notifications TO vinx_notifications_owner;
             SET ROLE vinx_notifications_owner;
             DO $block$
             BEGIN
@@ -283,34 +293,8 @@ public partial class AddNotificationEmailChannel : Migration
                 FROM PUBLIC, vinx_worker, vinx_migrator;
             DROP FUNCTION notifications.get_notification_email_delivery_target(uuid, uuid);
 
-            ALTER TABLE notifications.notification_templates
-                DROP CONSTRAINT notification_templates_email_subject_check,
-                DROP CONSTRAINT notification_templates_email_body_check,
-                DROP COLUMN email_subject,
-                DROP COLUMN email_body_html,
-                DROP CONSTRAINT notification_templates_channel_check,
-                ADD CONSTRAINT notification_templates_channel_check
-                    CHECK (channel IN ('in_app', 'whatsapp'));
-            ALTER TABLE notifications.notification_intents
-                DROP CONSTRAINT notification_intents_channel_check,
-                ADD CONSTRAINT notification_intents_channel_check
-                    CHECK (channel IN ('in_app', 'whatsapp'));
-            ALTER TABLE notifications.notification_preferences
-                DROP CONSTRAINT notification_preferences_channel_check,
-                ADD CONSTRAINT notification_preferences_channel_check
-                    CHECK (channel IN ('whatsapp'));
-            RESET ROLE;
-            REVOKE SELECT (id, email) ON TABLE foundation.users FROM vinx_notifications_owner;
-
-            -- Restaura as funções da era pré-e-mail (padrão do Down do canal
-            -- Telegram): DROP sem recriação deixa o Down de 20260818120000 com
-            -- 42883, pois ele REVOKE/DROP a função que ele próprio criou. O
-            -- CREATE OR REPLACE exige janela transiente de CREATE no schema.
-            GRANT CREATE ON SCHEMA notifications TO vinx_notifications_owner;
-            SET ROLE vinx_notifications_owner;
-            REVOKE ALL ON FUNCTION notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text)
-                FROM PUBLIC, vinx_runtime, vinx_migrator;
-            CREATE OR REPLACE FUNCTION notifications.enqueue_notification_intent(
+            DROP FUNCTION notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text);
+            CREATE FUNCTION notifications.enqueue_notification_intent(
                 p_company_id uuid,
                 p_recipient_user_id uuid,
                 p_event_key text,
@@ -410,7 +394,8 @@ public partial class AddNotificationEmailChannel : Migration
             GRANT EXECUTE ON FUNCTION notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text)
                 TO vinx_runtime;
 
-            CREATE OR REPLACE FUNCTION notifications.set_channel_preference(
+            DROP FUNCTION notifications.set_channel_preference(uuid, uuid, text, boolean);
+            CREATE FUNCTION notifications.set_channel_preference(
                 p_company_id uuid,
                 p_user_id uuid,
                 p_channel text,
@@ -464,7 +449,25 @@ public partial class AddNotificationEmailChannel : Migration
                 FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION notifications.set_channel_preference(uuid, uuid, text, boolean)
                 TO vinx_runtime;
+
+            ALTER TABLE notifications.notification_templates
+                DROP CONSTRAINT notification_templates_email_subject_check,
+                DROP CONSTRAINT notification_templates_email_body_check,
+                DROP COLUMN email_subject,
+                DROP COLUMN email_body_html,
+                DROP CONSTRAINT notification_templates_channel_check,
+                ADD CONSTRAINT notification_templates_channel_check
+                    CHECK (channel IN ('in_app', 'whatsapp'));
+            ALTER TABLE notifications.notification_intents
+                DROP CONSTRAINT notification_intents_channel_check,
+                ADD CONSTRAINT notification_intents_channel_check
+                    CHECK (channel IN ('in_app', 'whatsapp'));
+            ALTER TABLE notifications.notification_preferences
+                DROP CONSTRAINT notification_preferences_channel_check,
+                ADD CONSTRAINT notification_preferences_channel_check
+                    CHECK (channel IN ('whatsapp'));
             RESET ROLE;
+            REVOKE SELECT (id, email) ON TABLE foundation.users FROM vinx_notifications_owner;
             REVOKE CREATE ON SCHEMA notifications FROM vinx_notifications_owner;
             """);
 }

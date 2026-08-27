@@ -1,6 +1,6 @@
 import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
 import DragIndicatorOutlinedIcon from "@mui/icons-material/DragIndicatorOutlined";
-import PersonAddAltOutlinedIcon from "@mui/icons-material/PersonAddAltOutlined";
+import MoreVertOutlinedIcon from "@mui/icons-material/MoreVertOutlined";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import {
   Alert,
@@ -10,70 +10,183 @@ import {
   CardActions,
   CardContent,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  Menu,
+  MenuItem,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AuthorizedCompanyFilter } from "../../shared/ui/authorized-company-filter";
 import { CompanyProvider } from "../../shared/ui/company-context";
-import { CompanySelect } from "../../shared/ui/company-select";
+import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
-import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
+import { StatusChip } from "../../shared/ui/status-chip";
+import {
+  hasCompanyCapability,
+  resolveCompanyEntityPermissions,
+} from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
+  type AtendimentoAssignmentOption,
   type AtendimentoCard,
+  type AtendimentoChannel,
   type AtendimentoColumn,
+  type AtendimentoPriority,
   atendimentoClient,
 } from "./atendimento-client";
-import { AtendimentoCreateDialog } from "./atendimento-create-dialog";
+import {
+  type AtendimentoAttachmentUploader,
+  AtendimentoCreateDialog,
+} from "./atendimento-create-dialog";
+import {
+  channelLabels,
+  formatAtendimentoDate,
+  isAtendimentoOverdue,
+  priorityPresentation,
+} from "./atendimento-presentation";
 
-const columns: readonly { id: AtendimentoColumn; label: string }[] = [
-  { id: "novo", label: "Novo" },
-  { id: "em_andamento", label: "Em andamento" },
-  { id: "concluido", label: "Concluído" },
+const columns: readonly {
+  id: AtendimentoColumn;
+  label: string;
+  tone: "info" | "primary" | "success" | "error";
+}[] = [
+  { id: "novo", label: "Novos", tone: "info" },
+  { id: "em_andamento", label: "Em andamento", tone: "primary" },
+  { id: "concluido", label: "Concluídos", tone: "success" },
+  { id: "cancelado", label: "Cancelados", tone: "error" },
 ];
+const workflowColumns = columns.filter((column) => column.id !== "cancelado");
 
 const readCapability = "service_desk.ticket.read_queue";
 const createCapability = "service_desk.ticket.create";
 const moveCapability = "service_desk.ticket.move";
 const assignCapability = "service_desk.ticket.assign";
+const cancelCapability = "service_desk.ticket.cancel";
+
+type CardMenuState = {
+  anchorEl: HTMLElement;
+  card: AtendimentoCard;
+};
+
+type CardMutationLease = {
+  key: string;
+  generation: number;
+};
 
 function messageFor(code: string) {
   if (code === "integrity_conflict")
-    return "O cartão foi atualizado por outra pessoa. A fila foi sincronizada.";
+    return "O cartão foi atualizado enquanto você atuava. Verifique o estado atual da fila.";
+  if (code === "outcome_unconfirmed")
+    return "Não foi possível confirmar o resultado da ação. O cartão foi sincronizado com o estado atual.";
   if (code === "capability_denied" || code === "membership_required")
     return "Sua sessão não tem permissão para esta ação nesta empresa.";
   return "Não foi possível concluir a ação. Tente novamente.";
 }
 
-export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
+function cardMutationKey(card: AtendimentoCard) {
+  return `${card.companyId}:${card.id}`;
+}
+
+export function AtendimentoPage({
+  attachmentUploader,
+  title = "Atendimento",
+}: {
+  attachmentUploader?: AtendimentoAttachmentUploader;
+  title?: string;
+}) {
   const { bootstrap } = useSession();
+  const sessionCompanies = useMemo(
+    () => bootstrap?.companies ?? [],
+    [bootstrap],
+  );
   const companies = useMemo(
     () =>
-      (bootstrap?.companies ?? []).filter((company) =>
+      sessionCompanies.filter((company) =>
         company.capabilities.some(
           (capability) =>
             capability.name === readCapability &&
             capability.scopes.includes("Company"),
         ),
       ),
-    [bootstrap],
+    [sessionCompanies],
   );
   const [companyId, setCompanyId] = useState("");
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<
+    readonly string[]
+  >([]);
   const [cards, setCards] = useState<AtendimentoCard[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [statusMenu, setStatusMenu] = useState<CardMenuState | null>(null);
+  const [actionsMenu, setActionsMenu] = useState<CardMenuState | null>(null);
   const [viewingCard, setViewingCard] = useState<AtendimentoCard | null>(null);
+  const [assigningCard, setAssigningCard] = useState<AtendimentoCard | null>(
+    null,
+  );
+  const [assignmentOptions, setAssignmentOptions] = useState<
+    readonly AtendimentoAssignmentOption[]
+  >([]);
+  const [createOptions, setCreateOptions] = useState<
+    readonly AtendimentoAssignmentOption[]
+  >([]);
   const [assigneeMembershipId, setAssigneeMembershipId] = useState("");
+  const [assigning, setAssigning] = useState(false);
+  const [cancellingCard, setCancellingCard] = useState<AtendimentoCard | null>(
+    null,
+  );
+  const [cancellationReason, setCancellationReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<AtendimentoColumn | null>(null);
+  const [pendingMutationKeys, setPendingMutationKeys] = useState<
+    readonly string[]
+  >([]);
+  const assignmentEpoch = useRef(0);
+  const assignmentAbort = useRef<AbortController | null>(null);
+  const mutationGenerations = useRef(new Map<string, number>());
+  const pendingMutations = useRef(new Map<string, number>());
+  const [recoveringCardKeys, setRecoveringCardKeys] = useState<
+    readonly string[]
+  >([]);
+  const reloadSequence = useRef(0);
+  const queueReloadToken = useRef(0);
+  const recoveryTokens = useRef(new Map<string, number>());
 
-  const selectedCompany = useMemo(
-    () => companies.find((company) => company.companyId === companyId),
-    [companies, companyId],
+  const createCompanies = useMemo(
+    () =>
+      sessionCompanies.filter((company) =>
+        hasCompanyCapability(company, createCapability),
+      ),
+    [sessionCompanies],
   );
+  const selectedCompany = useMemo(
+    () => createCompanies.find((company) => company.companyId === companyId),
+    [createCompanies, companyId],
+  );
+  const requestedCompanies = useMemo(() => {
+    const authorizedIds = new Set(
+      companies.map((company) => company.companyId),
+    );
+    const selected = selectedCompanyIds.filter((id) => authorizedIds.has(id));
+    return selected.length
+      ? companies.filter((company) => selected.includes(company.companyId))
+      : companies;
+  }, [companies, selectedCompanyIds]);
+  const visibleCards = useMemo(() => {
+    const requestedCompanyIds = new Set(
+      requestedCompanies.map((company) => company.companyId),
+    );
+    return cards.filter((card) => requestedCompanyIds.has(card.companyId));
+  }, [cards, requestedCompanies]);
 
   const permissions = useMemo(
     () =>
@@ -84,108 +197,484 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
     [selectedCompany],
   );
 
-  const canAssign = useMemo(
-    () =>
-      selectedCompany?.capabilities.some(
-        (capability) =>
-          capability.name === assignCapability &&
-          capability.scopes.includes("Company"),
-      ) ?? false,
-    [selectedCompany],
-  );
-
   useEffect(() => {
-    if (!companies.some((company) => company.companyId === companyId)) {
-      setCompanyId(companies[0]?.companyId ?? "");
+    if (!createCompanies.some((company) => company.companyId === companyId)) {
+      setAssigneeMembershipId("");
+      setCreateOptions([]);
+      setCompanyId(createCompanies[0]?.companyId ?? "");
     }
-  }, [companies, companyId]);
+  }, [companyId, createCompanies]);
 
   useEffect(() => {
-    if (!companyId) return;
+    queueReloadToken.current = ++reloadSequence.current;
+    assignmentEpoch.current++;
+    assignmentAbort.current?.abort();
+    setStatusMenu(null);
+    setActionsMenu(null);
+    setViewingCard(null);
+    setAssigningCard(null);
+    setAssignmentOptions([]);
+    setAssigneeMembershipId("");
+    setCancellingCard(null);
+    setCancellationReason("");
+    if (!requestedCompanies.length) {
+      setCards([]);
+      return;
+    }
     let active = true;
-    setCards([]);
     setLoading(true);
     setError(null);
-    setViewingCard(null);
-    void atendimentoClient.list(companyId).then((result) => {
+    void Promise.all(
+      requestedCompanies.map(async (company) => ({
+        companyId: company.companyId,
+        cards: await atendimentoClient.list(company.companyId),
+      })),
+    ).then((results) => {
       if (!active) return;
-      if (result)
-        setCards(result.filter((card) => card.companyId === companyId));
-      else setError("Não foi possível carregar a fila. Tente novamente.");
+      if (results.every((result) => result.cards !== null)) {
+        const loadedCards = results.flatMap(
+          (result) =>
+            result.cards?.filter(
+              (card) => card.companyId === result.companyId,
+            ) ?? [],
+        );
+        // Hidratação monotônica na ordem canônica da resposta: para cada
+        // companyId:cardId vale o snapshot de maior versão (um fila atrasada
+        // nunca rebaixa), a ordem vem de loadedCards (createdAt DESC, id DESC)
+        // e IDs ausentes da resposta são anexados depois. Sem o clear
+        // intermediário, um sucesso de mutação publicado durante o loading
+        // também não é descartado.
+        setCards((current) => {
+          const currentByKey = new Map(
+            current.map((card) => [cardMutationKey(card), card]),
+          );
+          const merged = new Map<string, AtendimentoCard>();
+          for (const loaded of loadedCards) {
+            const key = cardMutationKey(loaded);
+            const known = currentByKey.get(key);
+            merged.set(
+              key,
+              !known || loaded.version >= known.version ? loaded : known,
+            );
+          }
+          for (const card of current) {
+            const key = cardMutationKey(card);
+            if (!merged.has(key)) merged.set(key, card);
+          }
+          return [...merged.values()];
+        });
+      } else setError("Não foi possível carregar a fila. Tente novamente.");
       setLoading(false);
     });
     return () => {
       active = false;
     };
-  }, [companyId]);
+  }, [requestedCompanies]);
 
-  async function createCard(values: { title: string; description: string }) {
-    if (!companyId) return;
+  useEffect(() => {
+    const controller = new AbortController();
+    setCreateOptions([]);
+    if (!createOpen || !companyId || !permissions.canCreate)
+      return () => controller.abort();
+    void atendimentoClient
+      .assignmentOptions(companyId, controller.signal)
+      .then((options) => {
+        if (!controller.signal.aborted && options) setCreateOptions(options);
+      });
+    return () => controller.abort();
+  }, [companyId, createOpen, permissions.canCreate]);
+
+  async function createCard(values: {
+    requestId: string;
+    title: string;
+    description: string;
+    attachmentFileId?: string;
+    participantMembershipIds: readonly string[];
+    priority: AtendimentoPriority;
+    channel: AtendimentoChannel;
+    slaDueAt: string | null;
+  }): Promise<{ ok: true } | { ok: false; message: string }> {
+    if (!selectedCompany || !permissions.canCreate)
+      return {
+        message: "Não foi possível criar o atendimento. Tente novamente.",
+        ok: false,
+      };
     const result = await atendimentoClient.create(
       companyId,
+      values.requestId,
       values.title,
       values.description,
+      {
+        attachmentFileId: values.attachmentFileId ?? null,
+        channel: values.channel,
+        participantMembershipIds: values.participantMembershipIds,
+        priority: values.priority,
+        slaDueAt: values.slaDueAt,
+      },
     );
-    if (!result.ok) return setError(messageFor(result.code));
+    if (!result.ok) {
+      return { message: messageFor(result.code), ok: false };
+    }
     setCards((current) => [...current, result.card]);
+    return { ok: true };
+  }
+
+  // Lock por cartão compartilhado por move/assign/cancel: nenhuma mutação do
+  // mesmo companyId:cardId inicia enquanto outra estiver pendente, e uma
+  // resposta só é publicada pela geração vigente.
+  function beginCardMutation(card: AtendimentoCard): CardMutationLease | null {
+    const key = cardMutationKey(card);
+    if (pendingMutations.current.has(key)) return null;
+    const generation = (mutationGenerations.current.get(key) ?? 0) + 1;
+    mutationGenerations.current.set(key, generation);
+    pendingMutations.current.set(key, generation);
+    setPendingMutationKeys([...pendingMutations.current.keys()]);
+    return { generation, key };
+  }
+
+  function finishCardMutation(lease: CardMutationLease) {
+    if (pendingMutations.current.get(lease.key) !== lease.generation) return;
+    pendingMutations.current.delete(lease.key);
+    setPendingMutationKeys([...pendingMutations.current.keys()]);
+  }
+
+  function isCardMutationPending(card: AtendimentoCard) {
+    return pendingMutationKeys.includes(cardMutationKey(card));
+  }
+
+  // Publicador único de cartões: nunca reduz a versão de uma entidade da
+  // mesma empresa/cartão, em nenhuma cópia aberta.
+  function applyCardSnapshot(
+    incoming: AtendimentoCard,
+    lease?: CardMutationLease,
+  ) {
+    if (lease && pendingMutations.current.get(lease.key) !== lease.generation)
+      return;
+    const replaces = (card: AtendimentoCard) =>
+      card.companyId === incoming.companyId && card.id === incoming.id
+        ? incoming.version >= card.version
+          ? incoming
+          : card
+        : card;
+    setCards((current) => current.map(replaces));
+    setStatusMenu((menu) =>
+      menu ? { ...menu, card: replaces(menu.card) } : menu,
+    );
+    setActionsMenu((menu) =>
+      menu ? { ...menu, card: replaces(menu.card) } : menu,
+    );
+    setViewingCard((card) => (card ? replaces(card) : card));
+    setAssigningCard((card) => (card ? replaces(card) : card));
+    setCancellingCard((card) => (card ? replaces(card) : card));
   }
 
   async function move(card: AtendimentoCard, column: AtendimentoColumn) {
-    if (card.column === column) return;
-    const result = await atendimentoClient.move(companyId, card, column);
-    if (!result.ok) return recover(result.code, result.current);
-    setCards((current) =>
-      current.map((item) => (item.id === card.id ? result.card : item)),
-    );
+    if (
+      card.column === column ||
+      card.column === "cancelado" ||
+      isRecoveringCard(card)
+    )
+      return;
+    const lease = beginCardMutation(card);
+    if (!lease) return;
+    try {
+      const result = await atendimentoClient.move(card.companyId, card, column);
+      if (!result.ok)
+        return await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
+      applyCardSnapshot(result.card, lease);
+      closeCardMenus(card.companyId, card.id);
+    } finally {
+      finishCardMutation(lease);
+    }
   }
 
   async function assign(card: AtendimentoCard) {
-    if (!assigneeMembershipId.trim()) return;
-    const result = await atendimentoClient.assign(
-      companyId,
-      card,
-      assigneeMembershipId.trim(),
+    if (isRecoveringCard(card) || !assigneeMembershipId.trim()) return;
+    const lease = beginCardMutation(card);
+    if (!lease) return;
+    setAssigning(true);
+    try {
+      const result = await atendimentoClient.assign(
+        card.companyId,
+        card,
+        assigneeMembershipId.trim(),
+      );
+      if (!result.ok) {
+        await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
+        return;
+      }
+      applyCardSnapshot(result.card, lease);
+      closeCardMenus(card.companyId, card.id);
+      setAssigningCard(null);
+      setAssigneeMembershipId("");
+    } finally {
+      finishCardMutation(lease);
+      setAssigning(false);
+    }
+  }
+
+  async function openAssignment(card: AtendimentoCard) {
+    if (isRecoveringCard(card)) return;
+    assignmentAbort.current?.abort();
+    const controller = new AbortController();
+    assignmentAbort.current = controller;
+    const expectedEpoch = ++assignmentEpoch.current;
+    setAssigneeMembershipId("");
+    setAssignmentOptions([]);
+    setAssigningCard(card);
+    const options = await atendimentoClient.assignmentOptions(
+      card.companyId,
+      controller.signal,
     );
-    if (!result.ok) return recover(result.code, result.current);
-    setCards((current) =>
-      current.map((item) => (item.id === card.id ? result.card : item)),
+    if (assignmentEpoch.current === expectedEpoch && options)
+      setAssignmentOptions(options);
+    else if (assignmentEpoch.current === expectedEpoch)
+      setError("Não foi possível carregar as pessoas autorizadas.");
+  }
+
+  async function cancel(card: AtendimentoCard) {
+    const reason = cancellationReason.trim();
+    if (isRecoveringCard(card) || !reason || reason.length > 500) return;
+    const lease = beginCardMutation(card);
+    if (!lease) return;
+    setCancelling(true);
+    try {
+      const result = await atendimentoClient.cancel(
+        card.companyId,
+        card,
+        reason,
+      );
+      if (!result.ok) {
+        await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
+        return;
+      }
+      applyCardSnapshot(result.card, lease);
+      closeCardMenus(card.companyId, card.id);
+      setCancellingCard(null);
+      setCancellationReason("");
+    } finally {
+      finishCardMutation(lease);
+      setCancelling(false);
+    }
+  }
+
+  function applyRecoveredCard(recovered: AtendimentoCard) {
+    applyCardSnapshot(recovered);
+  }
+
+  async function reloadAfterConflict(
+    code: string,
+    companyId: string,
+    cardId: string,
+    key: string,
+    token: number,
+    expectedQueueToken: number,
+  ) {
+    const refreshedCards = await atendimentoClient.list(companyId);
+    if (
+      recoveryTokens.current.get(key) !== token ||
+      queueReloadToken.current !== expectedQueueToken
+    )
+      return;
+    if (!refreshedCards) {
+      invalidateCard(companyId, cardId);
+      setError(
+        "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
+      );
+      return;
+    }
+    const refreshed = refreshedCards.find(
+      (item) => item.id === cardId && item.companyId === companyId,
+    );
+    if (refreshed) {
+      applyRecoveredCard(refreshed);
+      setError(messageFor(code));
+      return;
+    }
+    invalidateCard(companyId, cardId);
+    setError("O atendimento não está mais disponível nesta empresa.");
+  }
+
+  function recoveryKey(companyId: string, cardId: string) {
+    return `${companyId}:${cardId}`;
+  }
+
+  function isRecoveringCard(card: AtendimentoCard) {
+    return (
+      recoveryTokens.current.has(recoveryKey(card.companyId, card.id)) ||
+      recoveringCardKeys.includes(recoveryKey(card.companyId, card.id))
     );
   }
 
-  function recover(code: string, current?: AtendimentoCard) {
-    if (current)
-      setCards((cards) =>
-        cards.map((card) => (card.id === current.id ? current : card)),
-      );
-    setError(messageFor(code));
+  function closeCardMenus(companyId: string, cardId: string) {
+    const key = recoveryKey(companyId, cardId);
+    setStatusMenu((menu) =>
+      menu && recoveryKey(menu.card.companyId, menu.card.id) === key
+        ? null
+        : menu,
+    );
+    setActionsMenu((menu) =>
+      menu && recoveryKey(menu.card.companyId, menu.card.id) === key
+        ? null
+        : menu,
+    );
+  }
+
+  function invalidateCard(companyId: string, cardId: string) {
+    setCards((cards) =>
+      cards.filter(
+        (card) => card.id !== cardId || card.companyId !== companyId,
+      ),
+    );
+    setViewingCard((card) =>
+      card?.id === cardId && card.companyId === companyId ? null : card,
+    );
+    setAssigningCard((card) =>
+      card?.id === cardId && card.companyId === companyId ? null : card,
+    );
+    setCancellingCard((card) =>
+      card?.id === cardId && card.companyId === companyId ? null : card,
+    );
+    closeCardMenus(companyId, cardId);
+  }
+
+  async function recover(
+    code: string,
+    current: AtendimentoCard | undefined,
+    companyId: string,
+    cardId: string,
+    mayHaveCommitted = false,
+  ): Promise<void> {
+    const key = recoveryKey(companyId, cardId);
+    const token = ++reloadSequence.current;
+    const expectedQueueToken = queueReloadToken.current;
+    recoveryTokens.current.set(key, token);
+    setRecoveringCardKeys((keys) =>
+      keys.includes(key) ? keys : [...keys, key],
+    );
+    closeCardMenus(companyId, cardId);
+    try {
+      const validCurrent =
+        current?.id === cardId && current.companyId === companyId;
+      if (validCurrent && !mayHaveCommitted) {
+        // Um current atrasado só pode publicar se ainda for a geração vigente
+        // da recuperação e da fila: uma fila mais nova já é a autoridade
+        // visual, e o publicador nunca rebaixa a versão do cartão.
+        if (
+          recoveryTokens.current.get(key) === token &&
+          queueReloadToken.current === expectedQueueToken
+        ) {
+          applyRecoveredCard(current);
+          setError(messageFor(code));
+        }
+        return;
+      }
+      if (code === "integrity_conflict" || mayHaveCommitted) {
+        await reloadAfterConflict(
+          mayHaveCommitted ? "outcome_unconfirmed" : code,
+          companyId,
+          cardId,
+          key,
+          token,
+          expectedQueueToken,
+        );
+        return;
+      }
+      setError(messageFor(code));
+    } finally {
+      if (recoveryTokens.current.get(key) === token) {
+        recoveryTokens.current.delete(key);
+        setRecoveringCardKeys((keys) => keys.filter((item) => item !== key));
+      }
+    }
   }
 
   function handleDrop(column: AtendimentoColumn) {
     if (!draggedCardId) return;
     const card = cards.find((item) => item.id === draggedCardId);
-    if (card && card.column !== column) void move(card, column);
+    if (card && column !== "cancelado" && card.column !== column)
+      void move(card, column);
     setDraggedCardId(null);
     setDropTarget(null);
   }
 
-  const selectedCompanyName = selectedCompany?.companyName ?? "Sem empresa";
+  function canEditCard(card: AtendimentoCard) {
+    return resolveCompanyEntityPermissions(
+      companies.find((company) => company.companyId === card.companyId),
+      { edit: moveCapability },
+    ).canEdit;
+  }
+
+  function canAssignCard(card: AtendimentoCard) {
+    return (
+      companies
+        .find((company) => company.companyId === card.companyId)
+        ?.capabilities.some(
+          (capability) =>
+            capability.name === assignCapability &&
+            capability.scopes.includes("Company"),
+        ) ?? false
+    );
+  }
+
+  function canCancelCard(card: AtendimentoCard) {
+    return (
+      companies
+        .find((company) => company.companyId === card.companyId)
+        ?.capabilities.some(
+          (capability) =>
+            capability.name === cancelCapability &&
+            capability.scopes.includes("Company"),
+        ) ?? false
+    );
+  }
 
   return (
     <CompanyProvider company={selectedCompany ?? null}>
       <Stack spacing={3}>
         <PageHeader
           actions={
-            permissions.canCreate ? (
+            createCompanies.length ? (
               <Button
                 onClick={() => setCreateOpen(true)}
                 startIcon={<AddOutlinedIcon />}
                 variant="contained"
               >
-                Novo cartão
+                Novo atendimento
               </Button>
-            ) : null
+            ) : (
+              <Tooltip title="Sua sessão não pode criar atendimentos.">
+                <span>
+                  <Button
+                    disabled
+                    startIcon={<AddOutlinedIcon />}
+                    variant="contained"
+                  >
+                    Novo atendimento
+                  </Button>
+                </span>
+              </Tooltip>
+            )
           }
-          description="Fila operacional por empresa, com cartões e histórico de movimentos. Arraste os cartões entre as colunas para movê-los."
+          description="Acompanhe e organize os atendimentos das empresas que você pode acessar."
           title={title}
         />
         {error ? (
@@ -193,27 +682,17 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
             {error}
           </Alert>
         ) : null}
-        <CompanySelect
+        <AuthorizedCompanyFilter
           companies={companies}
-          label="Empresa"
-          onChange={(nextCompanyId) => {
-            setAssigneeMembershipId("");
-            setCompanyId(nextCompanyId);
-          }}
-          value={companyId}
+          disabled={loading}
+          label="Filtrar empresas"
+          onChange={setSelectedCompanyIds}
+          selectedCompanyIds={selectedCompanyIds}
         />
-        {!selectedCompany ? (
+        {!companies.length ? (
           <Alert severity="info">
             Sua sessão não possui empresa com acesso à fila de {title}.
           </Alert>
-        ) : null}
-        {canAssign ? (
-          <TextField
-            helperText="Informe o identificador de membership ativo da empresa para atribuir um cartão."
-            label="Membership do responsável"
-            onChange={(event) => setAssigneeMembershipId(event.target.value)}
-            value={assigneeMembershipId}
-          />
         ) : null}
         {loading ? (
           <Typography aria-live="polite" role="status">
@@ -224,13 +703,18 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
           sx={{
             display: "grid",
             gap: 2,
-            gridTemplateColumns: { md: "repeat(3, 1fr)", xs: "1fr" },
+            gridTemplateColumns: {
+              lg: "repeat(4, 1fr)",
+              md: "repeat(2, 1fr)",
+              xs: "1fr",
+            },
           }}
         >
           {columns.map((column) => (
             <Box
               key={column.id}
               onDragOver={(event) => {
+                if (column.id === "cancelado") return;
                 event.preventDefault();
                 event.stopPropagation();
                 setDropTarget(column.id);
@@ -250,11 +734,13 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                 );
               }}
               onDrop={(event) => {
+                if (column.id === "cancelado") return;
                 event.preventDefault();
                 event.stopPropagation();
                 handleDrop(column.id);
               }}
               sx={{
+                "&[data-state-tone]": {},
                 bgcolor:
                   dropTarget === column.id
                     ? "action.selected"
@@ -274,6 +760,7 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                     },
                   ),
               }}
+              data-state-tone={column.tone}
             >
               <Typography
                 color="text.secondary"
@@ -284,104 +771,159 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
                 {column.label}
               </Typography>
               <Stack spacing={1.25}>
-                {cards
+                {visibleCards
                   .filter((card) => card.column === column.id)
-                  .map((card) => (
-                    <Card
-                      key={card.id}
-                      draggable={permissions.canEdit}
-                      onDragEnd={() => setDraggedCardId(null)}
-                      onDragStart={() => setDraggedCardId(card.id)}
-                      sx={{
-                        cursor: permissions.canEdit ? "grab" : "default",
-                        "&:active": {
-                          cursor: permissions.canEdit ? "grabbing" : "default",
-                        },
-                      }}
-                      variant="outlined"
-                    >
-                      <CardContent sx={{ pb: 1 }}>
-                        <Stack
-                          direction="row"
-                          spacing={1}
-                          sx={{ alignItems: "flex-start" }}
-                        >
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Typography variant="subtitle1">
-                              {card.title}
-                            </Typography>
-                            <Typography color="text.secondary">
-                              {card.description}
-                            </Typography>
-                          </Box>
-                          {permissions.canEdit ? (
-                            <DragIndicatorOutlinedIcon
-                              aria-hidden
-                              color="action"
-                              fontSize="small"
-                            />
-                          ) : null}
-                        </Stack>
-                        <Stack
-                          direction="row"
-                          spacing={0.75}
-                          sx={{ flexWrap: "wrap", mt: 1 }}
-                        >
-                          <Chip
-                            label={columnLabel(card.column)}
-                            size="small"
-                            variant="outlined"
-                          />
-                          {card.assigneeMembershipId ? (
+                  .map((card) => {
+                    const mutationPending = isCardMutationPending(card);
+                    const cardRecovering = isRecoveringCard(card);
+                    const cardMovable =
+                      canEditCard(card) &&
+                      card.column !== "cancelado" &&
+                      !mutationPending &&
+                      !cardRecovering;
+                    return (
+                      <Card
+                        key={card.id}
+                        draggable={cardMovable}
+                        onDragEnd={() => setDraggedCardId(null)}
+                        onDragStart={() => setDraggedCardId(card.id)}
+                        sx={{
+                          cursor: cardMovable ? "grab" : "default",
+                          "&:active": {
+                            cursor: cardMovable ? "grabbing" : "default",
+                          },
+                        }}
+                        variant="outlined"
+                      >
+                        <CardContent sx={{ pb: 1 }}>
+                          <Stack
+                            direction="row"
+                            spacing={1}
+                            sx={{ alignItems: "flex-start" }}
+                          >
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="subtitle1">
+                                {card.title}
+                              </Typography>
+                              <Typography color="text.secondary">
+                                {card.description}
+                              </Typography>
+                              <Box sx={{ mt: 1 }}>
+                                <CompanyIdentity
+                                  companyId={card.companyId}
+                                  companyName={
+                                    sessionCompanies.find(
+                                      (company) =>
+                                        company.companyId === card.companyId,
+                                    )?.companyName ?? "Empresa autorizada"
+                                  }
+                                />
+                              </Box>
+                            </Box>
+                            {cardMovable ? (
+                              <DragIndicatorOutlinedIcon
+                                aria-hidden
+                                color="action"
+                                fontSize="small"
+                              />
+                            ) : null}
+                          </Stack>
+                          <Stack
+                            direction="row"
+                            spacing={0.75}
+                            sx={{ flexWrap: "wrap", mt: 1 }}
+                          >
                             <Chip
-                              color="primary"
-                              label="Responsável atribuído"
+                              color={
+                                columns.find((item) => item.id === card.column)
+                                  ?.tone
+                              }
+                              label={columnLabel(card.column)}
                               size="small"
                               variant="outlined"
                             />
-                          ) : null}
-                        </Stack>
-                      </CardContent>
-                      <CardActions>
-                        <Button
-                          onClick={() => setViewingCard(card)}
-                          size="small"
-                          startIcon={<VisibilityOutlinedIcon />}
+                            {card.assigneeMembershipId ? (
+                              <Chip
+                                color="primary"
+                                label="Responsável atribuído"
+                                size="small"
+                                variant="outlined"
+                              />
+                            ) : null}
+                            <StatusChip
+                              label={priorityPresentation[card.priority].label}
+                              tone={priorityPresentation[card.priority].tone}
+                            />
+                            <Chip
+                              label={channelLabels[card.channel]}
+                              size="small"
+                              variant="outlined"
+                            />
+                            {formatAtendimentoDate(card.slaDueAt) ? (
+                              <Chip
+                                label={`Prazo: ${formatAtendimentoDate(card.slaDueAt)}`}
+                                size="small"
+                                variant="outlined"
+                              />
+                            ) : null}
+                            {isAtendimentoOverdue(card) ? (
+                              <StatusChip label="Atrasado" tone="error" />
+                            ) : null}
+                          </Stack>
+                        </CardContent>
+                        <CardActions
+                          sx={{
+                            alignItems: "center",
+                            flexWrap: "wrap",
+                            gap: 0.5,
+                            "& > :not(style) ~ :not(style)": { ml: 0 },
+                          }}
                         >
-                          Visualizar
-                        </Button>
-                        {permissions.canEdit
-                          ? columns
-                              .filter(
-                                (destination) => destination.id !== card.column,
-                              )
-                              .map((destination) => (
-                                <Button
-                                  key={destination.id}
-                                  onClick={() =>
-                                    void move(card, destination.id)
-                                  }
-                                  size="small"
-                                >
-                                  Mover para {destination.label}
-                                </Button>
-                              ))
-                          : null}
-                        {canAssign ? (
                           <Button
-                            disabled={!assigneeMembershipId.trim()}
-                            onClick={() => void assign(card)}
+                            onClick={() => setViewingCard(card)}
                             size="small"
-                            startIcon={<PersonAddAltOutlinedIcon />}
+                            startIcon={<VisibilityOutlinedIcon />}
                           >
-                            Atribuir
+                            Visualizar
                           </Button>
-                        ) : null}
-                      </CardActions>
-                    </Card>
-                  ))}
-                {cards.filter((card) => card.column === column.id).length ===
-                0 ? (
+                          {canEditCard(card) && card.column !== "cancelado" ? (
+                            <Button
+                              disabled={mutationPending || cardRecovering}
+                              onClick={(event) => {
+                                if (isRecoveringCard(card)) return;
+                                setStatusMenu({
+                                  anchorEl: event.currentTarget,
+                                  card,
+                                });
+                              }}
+                              size="small"
+                            >
+                              Alterar status
+                            </Button>
+                          ) : null}
+                          {(canAssignCard(card) || canCancelCard(card)) &&
+                          card.column !== "cancelado" ? (
+                            <IconButton
+                              aria-label="Mais ações"
+                              disabled={mutationPending || cardRecovering}
+                              onClick={(event) => {
+                                if (isRecoveringCard(card)) return;
+                                setActionsMenu({
+                                  anchorEl: event.currentTarget,
+                                  card,
+                                });
+                              }}
+                              size="small"
+                            >
+                              <MoreVertOutlinedIcon />
+                            </IconButton>
+                          ) : null}
+                        </CardActions>
+                      </Card>
+                    );
+                  })}
+                {visibleCards.filter((card) => card.column === column.id)
+                  .length === 0 ? (
                   <Typography color="text.secondary" variant="body2">
                     Nenhum cartão nesta coluna.
                   </Typography>
@@ -393,19 +935,203 @@ export function AtendimentoPage({ title = "Atendimento" }: { title?: string }) {
       </Stack>
 
       <AtendimentoCreateDialog
+        assignmentOptions={createOptions}
+        companies={createCompanies}
+        uploader={attachmentUploader}
+        companyId={companyId}
         onClose={() => setCreateOpen(false)}
+        onCompanyChange={(nextCompanyId) => {
+          setAssigneeMembershipId("");
+          setCreateOptions([]);
+          setCompanyId(nextCompanyId);
+        }}
         onSubmit={(values) => {
-          setCreateOpen(false);
-          void createCard(values);
+          return createCard(values);
         }}
         open={createOpen}
       />
 
+      <Menu
+        anchorEl={statusMenu?.anchorEl ?? null}
+        onClose={() => setStatusMenu(null)}
+        open={Boolean(statusMenu)}
+      >
+        {statusMenu
+          ? workflowColumns
+              .filter(
+                (destination) => destination.id !== statusMenu.card.column,
+              )
+              .map((destination) => (
+                <MenuItem
+                  key={destination.id}
+                  onClick={() => {
+                    if (isRecoveringCard(statusMenu.card)) {
+                      setStatusMenu(null);
+                      return;
+                    }
+                    void move(statusMenu.card, destination.id);
+                    setStatusMenu(null);
+                  }}
+                >
+                  {destination.label}
+                </MenuItem>
+              ))
+          : null}
+      </Menu>
+      <Menu
+        anchorEl={actionsMenu?.anchorEl ?? null}
+        onClose={() => setActionsMenu(null)}
+        open={Boolean(actionsMenu)}
+      >
+        {actionsMenu && canAssignCard(actionsMenu.card) ? (
+          <MenuItem
+            onClick={() => {
+              if (isRecoveringCard(actionsMenu.card)) {
+                setActionsMenu(null);
+                return;
+              }
+              void openAssignment(actionsMenu.card);
+              setActionsMenu(null);
+            }}
+          >
+            Atribuir responsável
+          </MenuItem>
+        ) : null}
+        {actionsMenu && canCancelCard(actionsMenu.card) ? (
+          <MenuItem
+            onClick={() => {
+              if (isRecoveringCard(actionsMenu.card)) {
+                setActionsMenu(null);
+                return;
+              }
+              setCancellingCard(actionsMenu.card);
+              setActionsMenu(null);
+            }}
+          >
+            Cancelar atendimento
+          </MenuItem>
+        ) : null}
+      </Menu>
+
       <ViewCardDialog
         card={viewingCard}
-        companyName={selectedCompanyName}
+        companyName={
+          sessionCompanies.find(
+            (company) => company.companyId === viewingCard?.companyId,
+          )?.companyName ?? "Empresa autorizada"
+        }
         onClose={() => setViewingCard(null)}
       />
+
+      <Dialog
+        fullWidth
+        maxWidth="sm"
+        onClose={() => {
+          if (assigning) return;
+          assignmentEpoch.current++;
+          assignmentAbort.current?.abort();
+          setAssigningCard(null);
+        }}
+        open={Boolean(assigningCard)}
+      >
+        <DialogTitle>Atribuir responsável</DialogTitle>
+        <DialogContent>
+          <TextField
+            disabled={assigning}
+            fullWidth
+            label="Responsável"
+            onChange={(event) => setAssigneeMembershipId(event.target.value)}
+            select
+            sx={{ mt: 1 }}
+            value={assigneeMembershipId}
+          >
+            {assignmentOptions.map((option) => (
+              <MenuItem key={option.membershipId} value={option.membershipId}>
+                {option.displayName}
+              </MenuItem>
+            ))}
+          </TextField>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            disabled={assigning}
+            onClick={() => {
+              assignmentEpoch.current++;
+              assignmentAbort.current?.abort();
+              setAssigningCard(null);
+            }}
+          >
+            Cancelar
+          </Button>
+          <Button
+            disabled={
+              assigning ||
+              !assigningCard ||
+              !assigneeMembershipId ||
+              (assigningCard
+                ? isCardMutationPending(assigningCard) ||
+                  isRecoveringCard(assigningCard)
+                : false)
+            }
+            onClick={() => assigningCard && void assign(assigningCard)}
+            variant="contained"
+          >
+            {assigning ? "Atribuindo…" : "Confirmar atribuição"}
+          </Button>
+        </DialogActions>
+        {assigning ? (
+          <Typography aria-live="polite" role="status" sx={{ px: 3, pb: 2 }}>
+            Atribuindo responsável…
+          </Typography>
+        ) : null}
+      </Dialog>
+
+      <Dialog
+        fullWidth
+        maxWidth="sm"
+        onClose={() => !cancelling && setCancellingCard(null)}
+        open={Boolean(cancellingCard)}
+      >
+        <DialogTitle>Cancelar atendimento</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            label="Motivo do cancelamento"
+            multiline
+            error={cancellationReason.trim().length > 500}
+            helperText={
+              cancellationReason.trim().length > 500
+                ? "Use no máximo 500 caracteres."
+                : undefined
+            }
+            onChange={(event) => setCancellationReason(event.target.value)}
+            slotProps={{ htmlInput: { maxLength: 501 } }}
+            sx={{ mt: 1 }}
+            value={cancellationReason}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={cancelling} onClick={() => setCancellingCard(null)}>
+            Voltar
+          </Button>
+          <Button
+            color="error"
+            disabled={
+              !cancellingCard ||
+              isRecoveringCard(cancellingCard) ||
+              !cancellationReason.trim() ||
+              cancellationReason.trim().length > 500 ||
+              cancelling ||
+              (cancellingCard ? isCardMutationPending(cancellingCard) : false)
+            }
+            onClick={() => cancellingCard && void cancel(cancellingCard)}
+            variant="contained"
+          >
+            {cancelling ? "Cancelando…" : "Confirmar cancelamento"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </CompanyProvider>
   );
 }
@@ -425,7 +1151,7 @@ function ViewCardDialog({
 }) {
   return (
     <EntityDialog
-      description={`Cartão de ${companyName}. Apenas leitura.`}
+      description={`Atendimento de ${companyName}.`}
       onClose={onClose}
       open={Boolean(card)}
       title="Visualizar atendimento"
@@ -451,10 +1177,26 @@ function ViewCardDialog({
               size="small"
               variant="outlined"
             />
+            <StatusChip
+              label={priorityPresentation[card.priority].label}
+              tone={priorityPresentation[card.priority].tone}
+            />
+            <Chip
+              label={channelLabels[card.channel]}
+              size="small"
+              variant="outlined"
+            />
+            {formatAtendimentoDate(card.slaDueAt) ? (
+              <Chip
+                label={`Prazo: ${formatAtendimentoDate(card.slaDueAt)}`}
+                size="small"
+                variant="outlined"
+              />
+            ) : null}
+            {isAtendimentoOverdue(card) ? (
+              <StatusChip label="Atrasado" tone="error" />
+            ) : null}
           </Stack>
-          <Typography color="text.secondary" variant="caption">
-            Versão {card.version}
-          </Typography>
         </Stack>
       ) : null}
     </EntityDialog>

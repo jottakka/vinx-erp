@@ -114,6 +114,31 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("assignee_membership_id");
 
+                    b.Property<Guid?>("AttachmentFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("attachment_file_id");
+
+                    b.Property<string>("CancellationReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("cancellation_reason");
+
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<Guid?>("CancelledByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("cancelled_by_user_id");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(12)
+                        .HasColumnType("character varying(12)")
+                        .HasDefaultValue("manual")
+                        .HasColumnName("channel");
+
                     b.Property<string>("Column")
                         .IsRequired()
                         .HasMaxLength(30)
@@ -151,6 +176,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("character varying(4000)")
                         .HasColumnName("description");
 
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("media")
+                        .HasColumnName("priority");
+
                     b.Property<Guid>("RequestId")
                         .HasColumnType("uuid")
                         .HasColumnName("request_id");
@@ -159,6 +192,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .IsConcurrencyToken()
                         .HasColumnType("bigint")
                         .HasColumnName("row_version");
+
+                    b.Property<DateTimeOffset?>("SlaDueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sla_due_at");
 
                     b.Property<string>("Title")
                         .IsRequired()
@@ -177,11 +214,44 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_atendimento_cards");
 
-                    b.HasIndex("CompanyId", "Id")
-                        .IsUnique()
-                        .HasDatabaseName("ix_atendimento_cards_company_id_id");
+                    b.HasAlternateKey("CompanyId", "Id")
+                        .HasName("uq_atendimento_cards_company_id_id");
+
+                    b.HasIndex("CancelledByUserId")
+                        .HasDatabaseName("ix_atendimento_cards_cancelled_by_user_id");
+
+                    b.HasIndex("CompanyId", "AttachmentFileId")
+                        .HasDatabaseName("ix_atendimento_cards_company_id_attachment_file_id");
+
+                    b.HasIndex("CompanyId", "CreatedAt", "Id")
+                        .HasDatabaseName("ix_atendimento_cards_company_id_created_at_id_live")
+                        .IsDescending(false, true, true)
+                        .HasFilter("deleted_at IS NULL");
 
                     b.ToTable("atendimento_cards", "service_desk");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCardParticipant", b =>
+                {
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<Guid>("CardId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("card_id");
+
+                    b.Property<Guid>("MembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("membership_id");
+
+                    b.HasKey("CompanyId", "CardId", "MembershipId")
+                        .HasName("pk_atendimento_card_participants");
+
+                    b.HasIndex("CompanyId", "MembershipId")
+                        .HasDatabaseName("ix_atendimento_card_participants_company_id_membership_id");
+
+                    b.ToTable("atendimento_card_participants", "service_desk");
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Capability", b =>
@@ -1366,6 +1436,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Property<Guid?>("ProofFileId")
                         .HasColumnType("uuid")
                         .HasColumnName("proof_file_id");
+                    b.Property<Guid?>("InvoiceFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invoice_file_id");
 
                     b.Property<string>("ProofRequirement")
                         .IsRequired()
@@ -1402,6 +1475,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_requests");
+
+                    b.HasIndex("CompanyId", "InvoiceFileId")
+                        .HasDatabaseName("ix_requests_company_id_invoice_file_id");
 
                     b.ToTable("requests", "paguai", t =>
                         {
@@ -1899,6 +1975,43 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCard", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("CancelledByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_atendimento_cards_users_cancelled_by_user_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.FileRecord", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "AttachmentFileId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_atendimento_cards_files_company_id_attachment_file_id");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCardParticipant", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.AtendimentoCard", "Card")
+                        .WithMany("Participants")
+                        .HasForeignKey("CompanyId", "CardId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_atendimento_card_participants_atendimento_cards_company_id_");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.Membership", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "MembershipId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_atendimento_card_participants_memberships_company_id_member");
+
+                    b.Navigation("Card");
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Company", b =>
                 {
                     b.HasOne("Vinx.Erp.Foundation.Domain.Group", "Group")
@@ -2021,6 +2134,16 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiRequest", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.FileRecord", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "InvoiceFileId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_requests_files_company_id_invoice_file_id");
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Role", b =>
                 {
                     b.HasOne("Vinx.Erp.Foundation.Domain.Company", "Company")
@@ -2139,6 +2262,11 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Navigation("RevokedByUser");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCard", b =>
+                {
+                    b.Navigation("Participants");
                 });
 #pragma warning restore 612, 618
         }

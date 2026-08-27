@@ -29,6 +29,8 @@ public sealed class PaguaiRequest
 
     /// <summary>Comprovante vinculado (foundation.files), um por rascunho; troca versionada audita a substituição.</summary>
     public Guid? ProofFileId { get; set; }
+    /// <summary>Fatura privada confirmada que fundamenta a solicitação, quando informada.</summary>
+    public Guid? InvoiceFileId { get; set; }
 
     /// <summary>Documento inbound que originou o rascunho; único por documento.</summary>
     public Guid? SourceInboundMessageId { get; set; }

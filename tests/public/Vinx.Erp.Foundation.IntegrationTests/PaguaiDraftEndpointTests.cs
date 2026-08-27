@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
@@ -27,6 +28,7 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var root = document.RootElement;
+        AssertPublicDraftPropertySet(root);
         Assert.NotEqual(Guid.Empty, ReadGuid(root, "id"));
         Assert.Equal(scenario.CompanyId, ReadGuid(root, "companyId"));
         Assert.Equal(request.RequestId, ReadGuid(root, "requestId"));
@@ -37,8 +39,221 @@ public sealed class PaguaiDraftEndpointTests
         Assert.Equal("2026-09-01", root.GetProperty("dueDate").GetString());
         Assert.Equal("Fornecedor Demo", root.GetProperty("beneficiaryDisplayName").GetString());
         Assert.Equal("required", root.GetProperty("proofRequirement").GetString());
+        Assert.Equal(request.InvoiceFileId, ReadNullableGuid(root, "invoiceFileId"));
         Assert.Equal("rascunho", root.GetProperty("state").GetString());
         Assert.Equal(1, root.GetProperty("version").GetInt32());
+    }
+
+    [Fact]
+    public async Task Confirmed_company_invoice_is_persisted_and_returned_by_create_list_and_detail()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var invoice = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with { InvoiceFileId = invoice.Id };
+        using var client = factory.CreateClient();
+
+        using var create = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        using var created = JsonDocument.Parse(await create.Content.ReadAsStringAsync());
+        var draftId = ReadGuid(created.RootElement, "id");
+        AssertPublicDraftPropertySet(created.RootElement);
+        Assert.Equal(invoice.Id, ReadNullableGuid(created.RootElement, "invoiceFileId"));
+
+        using var list = await client.GetAsync($"/paguai/requests?companyId={scenario.CompanyId}");
+        Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+        using var listed = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+        var listedDraft = Assert.Single(listed.RootElement.EnumerateArray());
+        AssertPublicDraftPropertySet(listedDraft);
+        Assert.Equal(invoice.Id, ReadNullableGuid(listedDraft, "invoiceFileId"));
+
+        using var detail = await client.GetAsync($"/paguai/requests/{draftId}?companyId={scenario.CompanyId}");
+        Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+        using var detailed = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+        AssertPublicDraftPropertySet(detailed.RootElement);
+        Assert.Equal(invoice.Id, ReadNullableGuid(detailed.RootElement, "invoiceFileId"));
+    }
+
+    [Fact]
+    public async Task Draft_creation_rejects_missing_foreign_soft_deleted_unconfirmed_and_wrong_classification_invoice_files_without_mutation()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var foreign = await SeedInvoiceFileAsync(
+            factory,
+            scenario,
+            confirmed: true,
+            companyId: scenario.ForeignCompanyId,
+            membershipId: scenario.ForeignMembershipId
+        );
+        var unconfirmed = await SeedInvoiceFileAsync(factory, scenario, confirmed: false);
+        var softDeleted = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        await SoftDeleteFileAsync(factory, softDeleted.Id);
+        var wrongClassification = await SeedInvoiceFileAsync(
+            factory,
+            scenario,
+            confirmed: true,
+            classification: "paguai_request_proof"
+        );
+        var invoiceIds = new[]
+        {
+            Guid.NewGuid(),
+            foreign.Id,
+            softDeleted.Id,
+            unconfirmed.Id,
+            wrongClassification.Id,
+        };
+        using var client = factory.CreateClient();
+
+        foreach (var invoiceId in invoiceIds)
+        {
+            var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with { InvoiceFileId = invoiceId };
+            using var response = await client.PostAsJsonAsync("/paguai/requests", request);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+            await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+        }
+    }
+
+    [Fact]
+    public async Task Invalid_invoice_file_reference_is_denied_with_exactly_one_stable_audit_event()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            InvoiceFileId = Guid.NewGuid(),
+        };
+
+        using var response = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+        await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var denial = Assert.Single(
+            await administrator
+                .AuditEvents.Where(auditEvent =>
+                    auditEvent.Action == "invoice_file_invalid"
+                    && auditEvent.RequestedCompanyId == scenario.CompanyId
+                )
+                .ToListAsync()
+        );
+        Assert.Equal("invoice_file_invalid", denial.Reason);
+        Assert.Null(denial.ResourceId);
+        Assert.Equal("{}", denial.MetadataJson);
+        Assert.Equal(factory.ActorUserId, denial.ActorUserId);
+    }
+
+    [Fact]
+    public async Task Draft_creation_rejects_an_expired_confirmed_company_invoice_without_draft_receipt_or_success_audit()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var expired = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        await ExpireFileRetentionAsync(factory, expired.Id);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            InvoiceFileId = expired.Id,
+        };
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+        await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var denial = Assert.Single(
+            await administrator
+                .AuditEvents.Where(auditEvent =>
+                    auditEvent.Action == "invoice_file_invalid"
+                    && auditEvent.RequestedCompanyId == scenario.CompanyId
+                )
+                .ToListAsync()
+        );
+        Assert.Equal("invoice_file_invalid", denial.Reason);
+    }
+
+    [Fact]
+    public async Task Replay_returns_the_existing_invoice_after_retention_expires_without_another_audit()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var invoice = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            InvoiceFileId = invoice.Id,
+        };
+        using var client = factory.CreateClient();
+
+        using var first = await client.PostAsJsonAsync("/paguai/requests", request);
+        await ExpireFileRetentionAsync(factory, invoice.Id);
+        using var replay = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        using var firstDocument = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        using var replayDocument = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+        Assert.Equal(
+            ReadGuid(firstDocument.RootElement, "id"),
+            ReadGuid(replayDocument.RootElement, "id")
+        );
+        Assert.Equal(invoice.Id, ReadNullableGuid(replayDocument.RootElement, "invoiceFileId"));
+        await AssertPersistedDraftAndReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(
+            1,
+            await administrator.AuditEvents.CountAsync(auditEvent =>
+                auditEvent.Action == "paguai.draft.create"
+                && auditEvent.RequestedCompanyId == scenario.CompanyId
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Draft_creation_rejects_an_empty_invoice_file_id_at_the_boundary()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            InvoiceFileId = Guid.Empty,
+        };
+
+        using var response = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+        await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+    }
+
+    [Fact]
+    public async Task Changing_only_the_invoice_file_id_conflicts_for_the_same_request_id()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var firstInvoice = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        var secondInvoice = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            InvoiceFileId = firstInvoice.Id,
+        };
+        using var client = factory.CreateClient();
+
+        using var first = await client.PostAsJsonAsync("/paguai/requests", request);
+        using var conflict = await client.PostAsJsonAsync(
+            "/paguai/requests",
+            request with { InvoiceFileId = secondInvoice.Id }
+        );
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        Assert.Equal("{\"code\":\"idempotency_conflict\"}", await conflict.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -162,12 +377,120 @@ public sealed class PaguaiDraftEndpointTests
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal(draftId, ReadGuid(document.RootElement, "id"));
         Assert.Equal("1250.00", document.RootElement.GetProperty("amount").GetString());
+        Assert.Null(ReadNullableGuid(document.RootElement, "invoiceFileId"));
         await using var audit = factory.Fixture.CreateAdministratorDbContext();
         Assert.Equal(
             0,
             await audit.AuditEvents.CountAsync(auditEvent =>
                 auditEvent.Action == "paguai.draft.create"
                 && auditEvent.RequestedCompanyId == request.CompanyId
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Legacy_decimal_receipt_replays_without_invoice_and_conflicts_when_an_invoice_is_added()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid());
+        var draftId = Guid.NewGuid();
+        var createdAt = DateTimeOffset.UtcNow;
+        var legacyResultJson = JsonSerializer.Serialize(
+            new
+            {
+                Id = draftId,
+                CompanyId = request.CompanyId,
+                RequestId = request.RequestId,
+                Title = request.Title,
+                Description = request.Description,
+                Amount = "1250.00",
+                Currency = request.Currency,
+                DueDate = request.DueDate,
+                BeneficiaryDisplayName = request.BeneficiaryDisplayName,
+                ProofRequirement = request.ProofRequirement,
+                State = "rascunho",
+                Version = 1,
+                CreatedAt = createdAt,
+            }
+        );
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            administrator.PaguaiRequests.Add(
+                new PaguaiRequest
+                {
+                    Id = draftId,
+                    CompanyId = request.CompanyId,
+                    RequesterUserId = factory.ActorUserId,
+                    RequestId = request.RequestId,
+                    Title = request.Title,
+                    Description = request.Description,
+                    Amount = 1250.00m,
+                    Currency = request.Currency,
+                    DueDate = request.DueDate,
+                    BeneficiaryDisplayName = request.BeneficiaryDisplayName,
+                    ProofRequirement = request.ProofRequirement,
+                    State = "rascunho",
+                    Version = 1,
+                    CreatedAt = createdAt,
+                }
+            );
+            administrator.IdempotencyRecords.Add(
+                new IdempotencyRecord(
+                    Guid.NewGuid(),
+                    request.CompanyId,
+                    factory.ActorUserId,
+                    "paguai.draft.create",
+                    request.RequestId,
+                    LegacyDecimalPayloadHash(request),
+                    legacyResultJson
+                )
+            );
+            await administrator.SaveChangesAsync();
+        }
+
+        var invoice = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        using var client = factory.CreateClient();
+        using var replay = await client.PostAsJsonAsync("/paguai/requests", request);
+        using var conflict = await client.PostAsJsonAsync(
+            "/paguai/requests",
+            request with { InvoiceFileId = invoice.Id }
+        );
+
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        using var replayDocument = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+        Assert.Equal(draftId, ReadGuid(replayDocument.RootElement, "id"));
+        Assert.Null(ReadNullableGuid(replayDocument.RootElement, "invoiceFileId"));
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        Assert.Equal("{\"code\":\"idempotency_conflict\"}", await conflict.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Replay_returns_the_existing_invoice_after_the_file_is_soft_deleted_without_another_audit()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var invoice = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with { InvoiceFileId = invoice.Id };
+        using var client = factory.CreateClient();
+
+        using var created = await client.PostAsJsonAsync("/paguai/requests", request);
+        await SoftDeleteFileAsync(factory, invoice.Id);
+        using var replay = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        using var createdDocument = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        using var replayDocument = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+        Assert.Equal(ReadGuid(createdDocument.RootElement, "id"), ReadGuid(replayDocument.RootElement, "id"));
+        Assert.Equal(invoice.Id, ReadNullableGuid(replayDocument.RootElement, "invoiceFileId"));
+        await using var audit = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(
+            1,
+            await audit.AuditEvents.CountAsync(auditEvent =>
+                auditEvent.Action == "paguai.draft.create"
+                && auditEvent.RequestedCompanyId == scenario.CompanyId
             )
         );
     }
@@ -372,6 +695,20 @@ public sealed class PaguaiDraftEndpointTests
         var properties = schema.GetProperty("properties");
         Assert.Equal("uuid", properties.GetProperty("companyId").GetProperty("format").GetString());
         Assert.Equal("uuid", properties.GetProperty("requestId").GetProperty("format").GetString());
+        var invoiceFileId = properties.GetProperty("invoiceFileId");
+        Assert.Equal("uuid", invoiceFileId.GetProperty("format").GetString());
+        Assert.Equal(
+            ["null", "string"],
+            invoiceFileId
+                .GetProperty("type")
+                .EnumerateArray()
+                .Select(value => value.GetString())
+                .Order()
+        );
+        Assert.DoesNotContain(
+            "invoiceFileId",
+            schema.GetProperty("required").EnumerateArray().Select(value => value.GetString())
+        );
         Assert.Equal(200, properties.GetProperty("title").GetProperty("maxLength").GetInt32());
         Assert.Equal(
             4000,
@@ -618,11 +955,58 @@ public sealed class PaguaiDraftEndpointTests
             .ToLowerInvariant();
     }
 
+    private static string LegacyDecimalPayloadHash(DraftRequest request)
+    {
+        var canonical = JsonSerializer.Serialize(
+            new
+            {
+                companyId = request.CompanyId,
+                requestId = request.RequestId,
+                title = request.Title,
+                description = request.Description,
+                amount = decimal.Parse(request.Amount, System.Globalization.CultureInfo.InvariantCulture),
+                currency = request.Currency,
+                dueDate = request.DueDate,
+                beneficiaryDisplayName = request.BeneficiaryDisplayName,
+                proofRequirement = request.ProofRequirement,
+            }
+        );
+        return Convert
+            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
+    }
+
     private static Guid ReadGuid(JsonElement root, string propertyName)
     {
         Assert.True(root.TryGetProperty(propertyName, out var property));
         Assert.True(Guid.TryParse(property.GetString(), out var value));
         return value;
+    }
+
+    private static void AssertPublicDraftPropertySet(JsonElement root) => Assert.Equal(
+        [
+            "amount",
+            "beneficiaryDisplayName",
+            "companyId",
+            "createdAt",
+            "currency",
+            "description",
+            "dueDate",
+            "id",
+            "invoiceFileId",
+            "proofRequirement",
+            "requestId",
+            "state",
+            "title",
+            "version",
+        ],
+        root.EnumerateObject().Select(property => property.Name).Order()
+    );
+
+    private static Guid? ReadNullableGuid(JsonElement root, string propertyName)
+    {
+        Assert.True(root.TryGetProperty(propertyName, out var property));
+        return property.ValueKind == JsonValueKind.Null ? null : property.GetGuid();
     }
 
     private static async Task RevokeAuditAppendAsync(FoundationApiFactory factory)
@@ -645,6 +1029,22 @@ public sealed class PaguaiDraftEndpointTests
         await command.ExecuteNonQueryAsync();
     }
 
+    private static async Task SoftDeleteFileAsync(FoundationApiFactory factory, Guid fileId)
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var file = await administrator.Files.SingleAsync(candidate => candidate.Id == fileId);
+        file.MarkDeleted("test", factory.ActorUserId, Guid.NewGuid());
+        await administrator.SaveChangesAsync();
+    }
+
+    private static async Task ExpireFileRetentionAsync(FoundationApiFactory factory, Guid fileId)
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        await administrator.Database.ExecuteSqlAsync(
+            $"UPDATE foundation.files SET retention_until = clock_timestamp() - interval '1 hour' WHERE id = {fileId}"
+        );
+    }
+
     private static async Task AssertNoPersistedDraftOrReceiptAsync(
         FoundationApiFactory factory,
         Guid companyId,
@@ -658,6 +1058,12 @@ public sealed class PaguaiDraftEndpointTests
                 && record.ActorUserId == factory.ActorUserId
                 && record.CommandName == "paguai.draft.create"
                 && record.RequestId == requestId
+            )
+        );
+        Assert.False(
+            await administrator.AuditEvents.AnyAsync(auditEvent =>
+                auditEvent.Action == "paguai.draft.create"
+                && auditEvent.RequestedCompanyId == companyId
             )
         );
         await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
@@ -717,6 +1123,13 @@ public sealed class PaguaiDraftEndpointTests
         var membership = new Membership(
             Guid.NewGuid(),
             company.Id,
+            factory.ActorUserId,
+            factory.ActorUserId,
+            requestId
+        );
+        var foreignMembership = new Membership(
+            Guid.NewGuid(),
+            foreignCompany.Id,
             factory.ActorUserId,
             factory.ActorUserId,
             requestId
@@ -784,6 +1197,7 @@ public sealed class PaguaiDraftEndpointTests
             company,
             foreignCompany,
             membership,
+            foreignMembership,
             role,
             readGrant,
             createGrant,
@@ -791,7 +1205,44 @@ public sealed class PaguaiDraftEndpointTests
         );
         await administrator.SaveChangesAsync();
 
-        return new Scenario(company.Id, foreignCompany.Id);
+        return new Scenario(company.Id, foreignCompany.Id, membership.Id, foreignMembership.Id);
+    }
+
+    private static async Task<FileRecord> SeedInvoiceFileAsync(
+        FoundationApiFactory factory,
+        Scenario scenario,
+        bool confirmed,
+        string classification = "paguai_request_invoice",
+        Guid? companyId = null,
+        Guid? membershipId = null
+    )
+    {
+        var requestId = Guid.NewGuid();
+        var file = new FileRecord(
+            Guid.NewGuid(),
+            companyId ?? scenario.CompanyId,
+            membershipId ?? scenario.MembershipId,
+            "invoice.pdf",
+            ".pdf",
+            1024,
+            "application/pdf",
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("paguai-invoice"))),
+            classification,
+            "integration-test",
+            DateTimeOffset.UtcNow.AddDays(1),
+            factory.ActorUserId,
+            requestId
+        );
+        if (confirmed)
+        {
+            file.MarkVerified(factory.ActorUserId, requestId);
+            file.MarkConfirmed(factory.ActorUserId, requestId);
+        }
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        administrator.Files.Add(file);
+        await administrator.SaveChangesAsync();
+        return file;
     }
 
     private sealed record DraftRequest(
@@ -803,8 +1254,14 @@ public sealed class PaguaiDraftEndpointTests
         string Currency,
         DateOnly DueDate,
         string BeneficiaryDisplayName,
-        string ProofRequirement
+        string ProofRequirement,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? InvoiceFileId = null
     );
 
-    private sealed record Scenario(Guid CompanyId, Guid ForeignCompanyId);
+    private sealed record Scenario(
+        Guid CompanyId,
+        Guid ForeignCompanyId,
+        Guid MembershipId,
+        Guid ForeignMembershipId
+    );
 }

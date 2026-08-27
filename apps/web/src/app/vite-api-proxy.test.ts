@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { resolve } from "node:path";
 import { http, passthrough } from "msw";
 import { createServer as createViteServer } from "vite";
 import { describe, expect, it } from "vitest";
@@ -27,6 +28,10 @@ describe("development API proxy", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
+      "^/atendimento/assignment-options(?:\\?|$)": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
       "^/atendimento/cards(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
@@ -44,6 +49,27 @@ describe("development API proxy", () => {
         changeOrigin: false,
       },
     });
+  });
+
+  it("proxies only assignment-options under Atendimento while keeping the SPA route local", () => {
+    const proxy = resolveDevelopmentApiProxy("http://127.0.0.1:5080");
+    expect(proxy).toBeDefined();
+    if (!proxy) {
+      throw new Error("Development API proxy was not configured");
+    }
+
+    expect(proxy["^/atendimento/assignment-options(?:\\?|$)"]).toEqual({
+      target: "http://127.0.0.1:5080",
+      changeOrigin: false,
+    });
+    expect(Object.keys(proxy)).not.toContain("/atendimento");
+
+    for (const context of Object.keys(proxy)) {
+      const matches = context.startsWith("^")
+        ? new RegExp(context).test("/atendimento")
+        : "/atendimento".startsWith(context);
+      expect(matches).toBe(false);
+    }
   });
 
   it.each(["/paguai", "/atendimento"])(
@@ -79,6 +105,18 @@ describe("development API proxy", () => {
     const vite = await createViteServer({
       ...config,
       logLevel: "error",
+      // O dev server precisa ancorar no app web, não no cwd: rodando a suíte
+      // a partir da raiz do repositório (`vitest --root apps/web`), o cwd é a
+      // raiz e o fallback de SPA não encontra index.html, devolvendo 404.
+      // O import.meta.url do runner do vitest não é file://, então o caminho
+      // vem do estado do teste atual: este arquivo vive em <web>/src/app,
+      // logo três níveis acima chegam em <web>, onde está o index.html.
+      root: resolve(
+        expect.getState().testPath ?? process.cwd(),
+        "..",
+        "..",
+        "..",
+      ),
       server: {
         ...(config.server ?? {}),
         host: "127.0.0.1",
@@ -112,11 +150,17 @@ describe("development API proxy", () => {
         "/atendimento/cards?companyId=test",
       );
 
-      const page = await fetch(`${origin}/agente`);
+      // Navegação de browser: o fallback de SPA só atende requisições que
+      // aceitam HTML, então o fetch emula o header que o browser enviaria.
+      const page = await fetch(`${origin}/agente`, {
+        headers: { accept: "text/html" },
+      });
       expect(page.headers.get("content-type")).toContain("text/html");
       expect(await page.text()).toContain('<div id="root"></div>');
 
-      const notificationsPage = await fetch(`${origin}/notificacoes`);
+      const notificationsPage = await fetch(`${origin}/notificacoes`, {
+        headers: { accept: "text/html" },
+      });
       expect(notificationsPage.headers.get("content-type")).toContain(
         "text/html",
       );
@@ -146,6 +190,10 @@ describe("web Vite configuration", () => {
 
     expect(config.server?.proxy).toEqual({
       "^/agent/runs(?:\\?.*)?$": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "^/atendimento/assignment-options(?:\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },

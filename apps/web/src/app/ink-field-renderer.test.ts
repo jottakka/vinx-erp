@@ -150,7 +150,7 @@ describe("InkFieldRenderer", () => {
 
     const toneCalls = gl.uniform3f.mock.calls;
     const mainTone = toneCalls.find(
-      (call) => Math.abs(call[1] - 0x92 / 255) < 0.002,
+      (call) => Math.abs(call[1] - 0x0f / 255) < 0.002,
     );
 
     expect(mainTone).toBeDefined();
@@ -180,7 +180,7 @@ describe("InkFieldRenderer", () => {
     renderer?.draw(restScene());
 
     const darkTone = gl.uniform3f.mock.calls.find(
-      (call) => Math.abs(call[1] - 0xcd / 255) < 0.002,
+      (call) => Math.abs(call[1] - 0x66 / 255) < 0.002,
     );
 
     expect(darkTone).toBeDefined();

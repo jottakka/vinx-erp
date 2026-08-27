@@ -31,6 +31,7 @@ public sealed class FoundationDbContext(DbContextOptions<FoundationDbContext> op
     public DbSet<DemandParticipant> DemandParticipants => Set<DemandParticipant>();
     public DbSet<DemandChecklistItem> DemandChecklistItems => Set<DemandChecklistItem>();
     public DbSet<DemandEvent> DemandEvents => Set<DemandEvent>();
+    public DbSet<AtendimentoCardParticipant> AtendimentoCardParticipants => Set<AtendimentoCardParticipant>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

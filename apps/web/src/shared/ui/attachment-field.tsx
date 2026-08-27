@@ -44,6 +44,7 @@ export type AttachmentUploader = (
 
 type AttachmentFieldProps = {
   accept: string;
+  disabled?: boolean;
   label: string;
   multiple?: boolean;
   onChange?: (values: readonly AttachmentFieldValue[]) => void;
@@ -58,6 +59,7 @@ type AttachmentFieldProps = {
  */
 export function AttachmentField({
   accept,
+  disabled = false,
   label,
   multiple = false,
   onChange,
@@ -65,8 +67,16 @@ export function AttachmentField({
   value,
 }: AttachmentFieldProps) {
   const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const localKeySequence = useRef(0);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  function emit(nextValue: readonly AttachmentFieldValue[]) {
+    valueRef.current = nextValue;
+    onChange?.(nextValue);
+  }
 
   function nextLocalKey() {
     localKeySequence.current += 1;
@@ -76,7 +86,7 @@ export function AttachmentField({
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    if (!files.length || uploading) return;
+    if (!files.length || uploading || disabled) return;
     void uploadSequence(files);
   }
 
@@ -92,8 +102,8 @@ export function AttachmentField({
       sizeBytes: file.size,
       state: "uploading" as const,
     }));
-    onChange?.([
-      ...value.filter((item) => item.state !== "uploading"),
+    emit([
+      ...valueRef.current.filter((item) => item.state !== "uploading"),
       ...pending.map((item) => ({
         fileId: item.fileId,
         fileName: item.fileName,
@@ -112,10 +122,15 @@ export function AttachmentField({
       }),
     );
 
-    onChange?.([
-      ...value.filter((item) => item.state !== "uploading"),
-      ...results.map(({ entry, result }) =>
-        result.ok
+    const resultsByLocalKey = new Map(
+      results.map(({ entry, result }) => [entry.localKey, { entry, result }]),
+    );
+    emit(
+      valueRef.current.map((item) => {
+        const completed = resultsByLocalKey.get(item.localKey);
+        if (!completed) return item;
+        const { entry, result } = completed;
+        return result.ok
           ? {
               fileId: result.fileId,
               fileName: result.fileName,
@@ -131,14 +146,15 @@ export function AttachmentField({
               mimeType: entry.mimeType,
               sizeBytes: entry.sizeBytes,
               state: "failed" as const,
-            },
-      ),
-    ]);
+            };
+      }),
+    );
     setUploading(false);
   }
 
   function remove(entry: AttachmentFieldValue) {
-    onChange?.(value.filter((item) => item.localKey !== entry.localKey));
+    if (disabled) return;
+    emit(valueRef.current.filter((item) => item.localKey !== entry.localKey));
   }
 
   return (
@@ -149,23 +165,25 @@ export function AttachmentField({
             {label}
           </Typography>
           <Button
-            component="label"
-            disabled={uploading}
+            aria-label={`Anexar arquivo: ${label}`}
+            disabled={disabled || uploading}
+            onClick={() => inputRef.current?.click()}
             size="small"
             startIcon={<AttachFileOutlinedIcon />}
           >
             Anexar
-            <input
-              accept={accept}
-              aria-label={`${label}: anexar arquivo`}
-              disabled={uploading}
-              id={inputId}
-              multiple={multiple}
-              onChange={selectFiles}
-              style={{ display: "none" }}
-              type="file"
-            />
           </Button>
+          <input
+            accept={accept}
+            aria-label={`${label}: anexar arquivo`}
+            disabled={disabled || uploading}
+            id={inputId}
+            multiple={multiple}
+            onChange={selectFiles}
+            ref={inputRef}
+            style={{ display: "none" }}
+            type="file"
+          />
         </Stack>
         {value.length ? (
           <Stack spacing={0.5}>
@@ -186,6 +204,7 @@ export function AttachmentField({
                 ) : null}
                 <IconButton
                   aria-label={`Remover ${entry.fileName}`}
+                  disabled={disabled}
                   onClick={() => remove(entry)}
                   size="small"
                 >

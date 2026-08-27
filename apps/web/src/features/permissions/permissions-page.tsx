@@ -29,6 +29,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useFeedback } from "../../shared/ui/feedback-provider";
 import { PageHeader } from "../../shared/ui/page-header";
+import { normalizeSearchText } from "../../shared/ui/search-text";
 import { hasCompanyCapability } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
@@ -103,9 +104,9 @@ export function PermissionsPage({
   const { notify } = useFeedback();
   const queryClient = useQueryClient();
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
-  const [manageDialogMemberId, setManageDialogMemberId] = useState<string | null>(
-    null,
-  );
+  const [manageDialogMemberId, setManageDialogMemberId] = useState<
+    string | null
+  >(null);
   const [manageDialogRoleId, setManageDialogRoleId] = useState("");
   const [manageDialogSourceId, setManageDialogSourceId] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
@@ -294,7 +295,7 @@ export function PermissionsPage({
 
   useEffect(() => {
     if (!readFailure) return;
-    const failureKey = selectedCompanyIdRef.current + ":" + readFailure.kind;
+    const failureKey = `${selectedCompanyIdRef.current}:${readFailure.kind}`;
     if (processedReadFailure.current === failureKey) return;
     processedReadFailure.current = failureKey;
 
@@ -508,7 +509,7 @@ export function PermissionsPage({
             {members.data?.ok ? (
               <Typography color="text.secondary">
                 {memberItems.length}{" "}
-                {memberItems.length === 1 ? "membro" : "membros"} ·{" "}
+                {memberItems.length === 1 ? "membro" : "membros"} {" · "}
                 {adminCount}{" "}
                 {adminCount === 1 ? "administrador" : "administradores"}
               </Typography>
@@ -556,7 +557,6 @@ export function PermissionsPage({
                   Membros
                 </Typography>
                 <TextField
-                  aria-label="Buscar membro"
                   disabled={!members.data?.ok}
                   label="Buscar membro"
                   onChange={(event) => setMemberSearch(event.target.value)}
@@ -665,7 +665,7 @@ export function PermissionsPage({
                                     ? "warning"
                                     : "default"
                                 }
-                                key={member.membershipId + "-invitation"}
+                                key={`${member.membershipId}-invitation`}
                                 label={
                                   invitationChipByStatus[
                                     member.invitationStatus
@@ -678,9 +678,7 @@ export function PermissionsPage({
                           </Stack>
                         </Stack>
                         <Button
-                          aria-label={
-                            "Gerenciar acesso de " + member.displayName
-                          }
+                          aria-label={`Gerenciar acesso de ${member.displayName}`}
                           onClick={() => {
                             setManageDialogMemberId(member.membershipId);
                             setManageDialogRoleId("");
@@ -805,8 +803,7 @@ export function PermissionsPage({
                   {memberItems
                     .filter(
                       (member) =>
-                        member.membershipId !==
-                        manageDialogMember.membershipId,
+                        member.membershipId !== manageDialogMember.membershipId,
                     )
                     .map((member) => (
                       <MenuItem
@@ -945,16 +942,6 @@ function assignableRoles(
     (role) =>
       !member.roles.some((memberRole) => memberRole.roleId === role.roleId),
   );
-}
-
-// Busca amigável para nomes em pt-BR: remove acentos e compara sem caixa,
-// para que quem busca "andre" encontre "André" e vice-versa.
-function normalizeSearchText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase("pt-BR")
-    .trim();
 }
 
 function isAuthorizationFailure(failure: PermissionsFailure): boolean {

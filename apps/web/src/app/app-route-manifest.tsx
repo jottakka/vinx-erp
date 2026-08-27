@@ -9,7 +9,6 @@ import PaymentsOutlinedIcon from "@mui/icons-material/PaymentsOutlined";
 import ScienceOutlinedIcon from "@mui/icons-material/ScienceOutlined";
 import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
 import SupportAgentOutlinedIcon from "@mui/icons-material/SupportAgentOutlined";
-import ViewKanbanOutlinedIcon from "@mui/icons-material/ViewKanbanOutlined";
 import { Skeleton, Stack } from "@mui/material";
 import { lazy, type ReactElement, Suspense } from "react";
 import { AtendimentoPage } from "../features/atendimento/atendimento-page";

@@ -45,7 +45,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     public const string TestAuthenticationScheme = "FoundationTest";
     public const string TelegramWebhookSecret = "telegram-integration-test-secret";
 
-    private readonly IFoundationFixtureLifecycle _fixture;
+    private readonly IFoundationFixtureAccess _fixtureAccess;
+    private readonly IFoundationFixtureLifecycle? _ownedFixture;
     private readonly TestPrincipalClaims _principalClaims;
     private readonly JwtTestAuthority? _jwtAuthority;
     private readonly CountingIdentityProvider? _countingIdentityProvider;
@@ -78,6 +79,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         AgentRunOptions? testAgentRunOptions = null,
         HttpMessageHandler? browserSessionProviderHandler = null,
         IFoundationFixtureLifecycle? fixture = null,
+        IFoundationFixtureAccess? preparedFixtureAccess = null,
         Func<ValueTask>? disposeHostAsync = null,
         Func<ValueTask>? disposeJwtAsync = null,
         bool provisionWolverineStorage = true,
@@ -98,7 +100,21 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _testAgentRunOptions = testAgentRunOptions;
         _testInterceptor = testInterceptor;
         _browserSessionProviderHandler = browserSessionProviderHandler;
-        _fixture = fixture ?? new FoundationPostgresFixture();
+        if (fixture is not null && preparedFixtureAccess is not null)
+        {
+            throw new ArgumentException("A factory cannot receive both a fixture owner and a prepared fixture access.");
+        }
+
+        if (preparedFixtureAccess is not null)
+        {
+            _fixtureAccess = preparedFixtureAccess;
+            _ownedFixture = null;
+        }
+        else
+        {
+            _ownedFixture = fixture ?? new FoundationPostgresFixture();
+            _fixtureAccess = _ownedFixture;
+        }
         _disposeHostAsync = disposeHostAsync;
         _disposeJwtAsync = disposeJwtAsync;
         _useJwtBearer = jwtAuthority is not null;
@@ -109,7 +125,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     public Guid ActorUserId { get; }
     public Guid CorrelationId { get; }
-    public FoundationPostgresFixture Fixture => _fixture as FoundationPostgresFixture
+    public FoundationPostgresFixture Fixture => _ownedFixture as FoundationPostgresFixture
         ?? throw new InvalidOperationException("The factory is configured with a test lifecycle double.");
     public int IdentityProviderCallCount => _countingIdentityProvider?.CallCount
         ?? throw new InvalidOperationException("The factory is not configured with a counting identity provider.");
@@ -188,6 +204,32 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             var combinedFailure = await DisposeAfterFailureAsync(factory, primaryFailure);
             throw new E2eFixtureHostException(E2eFixtureHostFailurePhase.Seed, combinedFailure);
         }
+    }
+
+    internal static E2eFixtureFactoryContext CreateWithPreparedE2eProfile(
+        string profileName,
+        FoundationPostgresFixtureLease fixtureLease,
+        E2eDatasetReceipt receipt,
+        IAgentModel? testAgentModel = null,
+        AgentRunOptions? testAgentRunOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(fixtureLease);
+        if (!E2eFixtureProfileCatalog.TryGet(profileName, out var profile) || profile is null)
+        {
+            throw new ArgumentException("Unknown E2E fixture profile.", nameof(profileName));
+        }
+
+        var correlationId = Guid.NewGuid();
+        var factory = new FoundationApiFactory(
+            profile.UserId,
+            correlationId,
+            CreateE2ePrincipalClaims(profile, correlationId),
+            testAgentModel: testAgentModel,
+            testAgentRunOptions: testAgentRunOptions,
+            preparedFixtureAccess: fixtureLease,
+            provisionWolverineStorage: false,
+            disableWolverineForE2e: true);
+        return new E2eFixtureFactoryContext(factory, profile, receipt);
     }
 
     private static async Task<FoundationApiFactory> CreateAsync(
@@ -298,6 +340,22 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         return await PrepareAsync(factory);
     }
 
+    internal static FoundationApiFactory CreateForPreparedLifecycleTest(
+        FoundationPostgresFixtureLease fixtureLease,
+        Func<ValueTask> disposeHostAsync,
+        Func<ValueTask> disposeJwtAsync)
+    {
+        return new FoundationApiFactory(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            CreateTestPrincipalClaims(null, null, null, null),
+            preparedFixtureAccess: fixtureLease,
+            disposeHostAsync: disposeHostAsync,
+            disposeJwtAsync: disposeJwtAsync,
+            provisionWolverineStorage: false,
+            disableWolverineForE2e: true);
+    }
+
     internal static async Task<FoundationApiFactory> CreateForSeedLifecycleTestAsync(
         IFoundationFixtureLifecycle fixture,
         Func<ValueTask> disposeHostAsync,
@@ -372,7 +430,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             builder.UseContentRoot(ResolveE2eContentRoot());
         }
 
-        builder.UseSetting("FOUNDATION_RUNTIME_CONNECTION", _fixture.RuntimeConnectionString);
+        builder.UseSetting("FOUNDATION_RUNTIME_CONNECTION", _fixtureAccess.RuntimeConnectionString);
         builder.UseSetting("SUPABASE_STORAGE_URL", "http://127.0.0.1:54321");
         builder.UseSetting("SUPABASE_STORAGE_SERVICE_ROLE_KEY", "test-service-role-key");
         builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.co/auth/v1");
@@ -466,7 +524,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             services.AddDbContext<FoundationDbContext>((_, options) =>
             {
                 options
-                    .UseNpgsql(_fixture.RuntimeConnectionString)
+                    .UseNpgsql(_fixtureAccess.RuntimeConnectionString)
                     .UseSnakeCaseNamingConvention()
                     .AddInterceptors(
                         new RowVersionInterceptor(),
@@ -552,9 +610,11 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             primaryFailure,
             DisposeHostAsync,
             DisposeJwtAsync,
-            _fixture.DisposeAsync);
+            DisposeOwnedFixtureAsync);
 
     private ValueTask DisposeHostAsync() => _disposeHostAsync?.Invoke() ?? base.DisposeAsync();
+
+    private ValueTask DisposeOwnedFixtureAsync() => _ownedFixture?.DisposeAsync() ?? ValueTask.CompletedTask;
 
     private ValueTask DisposeJwtAsync()
     {
@@ -573,12 +633,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     {
         try
         {
-            await factory._fixture.StartAsync();
-            await factory._fixture.MigrateAsync();
+            var fixture = factory._ownedFixture
+                ?? throw new InvalidOperationException("A prepared factory cannot prepare the shared fixture.");
+            await fixture.StartAsync();
+            await fixture.MigrateAsync();
             if (factory._provisionWolverineStorage
-                && factory._fixture is FoundationPostgresFixture fixture)
+                && fixture is FoundationPostgresFixture postgresFixture)
             {
-                await WolverineStorageDeployment.ApplyAsync(fixture);
+                await WolverineStorageDeployment.ApplyAsync(postgresFixture);
             }
             await factory.ConfigureDatabaseFailureAsync();
             if (seedAuthenticatedActor)
@@ -597,7 +659,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     private async Task SeedAuthenticatedActorAsync()
     {
-        await using var administrator = _fixture.CreateAdministratorDbContext();
+        await using var administrator = _fixtureAccess.CreateAdministratorDbContext();
         administrator.AddRange(
             new User(ActorUserId, "Ana", "same-address@example.test"),
             new ExternalIdentity(
@@ -611,7 +673,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private async Task ConfigureDatabaseFailureAsync()
     {
         if (_databaseFailurePoint != GateDatabaseFailurePoint.SelfSessionRevocation
-            || _fixture is not FoundationPostgresFixture fixture)
+            || _fixtureAccess is not FoundationPostgresFixture fixture)
         {
             return;
         }

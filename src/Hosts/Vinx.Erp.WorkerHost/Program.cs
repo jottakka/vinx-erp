@@ -6,10 +6,10 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Vinx.Erp.Foundation.Configuration;
 using Vinx.Erp.Foundation.Identity;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
-using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Demandas;
@@ -140,7 +140,6 @@ builder.Services.AddScoped<INotificationProvider, EmailNotificationProvider>();
 builder.Services.AddScoped<INotificationProvider, TelegramProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
 builder.Services.AddScoped<NotificationIntentService>();
-builder.Services.AddScoped<PaguaiApproverDirectory>();
 builder.Services.AddScoped<DemandasNotificationComposer>();
 builder.Services.AddScoped<DemandasAutomationScanService>();
 builder.Services.AddScoped<InboundWhatsAppInteractionService>();
@@ -370,6 +369,10 @@ builder.Host.UseWolverine(options =>
     options
         .PublishMessage<DemandasAutomationTick>()
         .ToPostgresqlQueue("demandas-automation");
+    options
+        .PublishMessage<NotificationDeliveryRequested>()
+        .ToPostgresqlQueue("notification-delivery")
+        .UseDurableOutbox();
 });
 
 

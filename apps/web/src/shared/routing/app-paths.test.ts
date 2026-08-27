@@ -18,7 +18,6 @@ describe("app route catalog", () => {
         navigation: true,
         path: "/atendimento",
       },
-      { group: "modules", label: "Kanban", navigation: true, path: "/kanban" },
       {
         group: "modules",
         label: "Demandas",

@@ -111,4 +111,12 @@ public static class KnownCapabilities
     public static readonly Guid DemandasRoutineManageId = Guid.Parse(
         "ec28a347-1ade-5586-bf33-e6f1cbd59620"
     );
+
+    // Cancelamento é terminal e irreversível, com ação de auditoria própria:
+    // capability dedicada em vez de reutilizar move (menor privilégio). UUID
+    // canônico por nome (UUIDv5 de https://vinx.erp/capabilities/service_desk.ticket.cancel).
+    public const string ServiceDeskTicketCancel = "service_desk.ticket.cancel";
+    public static readonly Guid ServiceDeskTicketCancelId = Guid.Parse(
+        "ffe3ae25-dab3-5aaa-acde-b56f9797ce01"
+    );
 }

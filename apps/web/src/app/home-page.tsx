@@ -202,11 +202,10 @@ export function HomePage({ navigationLinks }: HomePageProps) {
             Módulos
           </Typography>
           <Typography component="h2" variant="h6">
-            Estrutura em evolução
+            Áreas disponíveis
           </Typography>
           <Typography color="text.secondary">
-            Estas áreas serão disponibilizadas progressivamente, com destinos
-            honestos enquanto os módulos são preparados.
+            Acesse as áreas disponíveis para as empresas autorizadas.
           </Typography>
         </Stack>
         <Box
@@ -280,7 +279,7 @@ export function HomePage({ navigationLinks }: HomePageProps) {
                         {route.label}
                       </Typography>
                       <Chip
-                        label="Módulo em preparação"
+                        label="Disponível"
                         size="small"
                         sx={{ alignSelf: "flex-start" }}
                         variant="outlined"
@@ -296,7 +295,7 @@ export function HomePage({ navigationLinks }: HomePageProps) {
                       to={prototypePath}
                       variant="outlined"
                     >
-                      Abrir protótipo {route.label}
+                      Abrir demonstração do protótipo {route.label}
                     </Button>
                   </Box>
                 ) : null}
