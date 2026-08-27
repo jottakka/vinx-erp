@@ -10,9 +10,17 @@ namespace Vinx.Erp.WorkerHost;
 [InboundWhatsAppFailurePolicy]
 public sealed class InboundWhatsAppTextCorrelationExpiredHandler(
     FoundationDbContext database,
+    InboundAgentChannelAdapter? adapter,
     ILogger<InboundWhatsAppTextCorrelationExpiredHandler> logger
 )
 {
+    public InboundWhatsAppTextCorrelationExpiredHandler(
+        FoundationDbContext database,
+        ILogger<InboundWhatsAppTextCorrelationExpiredHandler> logger)
+        : this(database, null, logger)
+    {
+    }
+
     public async Task Handle(
         InboundWhatsAppTextCorrelationExpired message,
         CancellationToken cancellationToken
@@ -36,20 +44,40 @@ public sealed class InboundWhatsAppTextCorrelationExpiredHandler(
             message.InboundMessageId,
             cancellationToken
         );
-        var expired = await ExecuteAsync<bool>(
-            connection,
-            "SELECT notifications.expire_inbound_whatsapp_text(@inbound_id)",
-            message.InboundMessageId,
-            cancellationToken
-        );
+        if (adapter is null)
+        {
+            var expired = await ExecuteAsync<bool>(
+                connection,
+                "SELECT notifications.expire_inbound_whatsapp_text(@inbound_id)",
+                message.InboundMessageId,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Inbound text expiry {Operation} {Module} {Result} {Reason}",
+                    "whatsapp_inbound_text_expiry",
+                    "notifications",
+                    expired ? "expired" : correlation == "correlated" ? "correlated" : "noop",
+                    expired ? "deadline_elapsed" : correlation == "correlated" ? "unique_pair" : "replay_or_not_due");
+            }
+
+            return;
+        }
+
         await transaction.CommitAsync(cancellationToken);
 
-        var result = expired ? "expired" : correlation == "correlated" ? "correlated" : "noop";
-        var reason = expired
-            ? "deadline_elapsed"
-            : correlation == "correlated"
-                ? "unique_pair"
-                : "replay_or_not_due";
+        if (!string.Equals(correlation, "correlated", StringComparison.Ordinal))
+        {
+            await adapter.ProcessAsync(
+                new InboundAgentRequestReceived(
+                    message.InboundMessageId,
+                    AgentChannelKind.WhatsApp),
+                cancellationToken);
+        }
+
+        var result = correlation == "correlated" ? "correlated" : "forwarded";
+        var reason = correlation == "correlated" ? "unique_pair" : "agent_adapter";
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(

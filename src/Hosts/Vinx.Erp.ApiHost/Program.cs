@@ -156,6 +156,10 @@ builder.Host.UseWolverine(options =>
         .ToPostgresqlQueue("whatsapp-inbound")
         .UseDurableOutbox();
     options
+        .PublishMessage<InboundAgentRequestReceived>()
+        .ToPostgresqlQueue("whatsapp-inbound")
+        .UseDurableOutbox();
+    options
         .PublishMessage<InboundWhatsAppTextCorrelationExpired>()
         .ToPostgresqlQueue("whatsapp-inbound")
         .UseDurableOutbox();
