@@ -160,15 +160,16 @@ public sealed class WorkerHostSecurityContractTests
         Assert.False(reader.GetBoolean(1));
         Assert.False(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
-        // Telegram (4..11) + demandas automation e sua fila scheduled (12..27).
-        for (var index = 4; index <= 27; index++)
+        // 23 expressões: telegrafa (4..11) e demandas automation + scheduled
+        // (12..19); 20..22 são CREATE schema / TEMPORARY / CREATE database.
+        for (var index = 4; index < 20; index++)
         {
             Assert.True(reader.GetBoolean(index), $"worker queue privilege {index} must be granted");
         }
 
-        Assert.False(reader.GetBoolean(28));
-        Assert.True(reader.GetBoolean(29));
-        Assert.False(reader.GetBoolean(30));
+        Assert.False(reader.GetBoolean(20));
+        Assert.True(reader.GetBoolean(21));
+        Assert.False(reader.GetBoolean(22));
     }
 
     [Fact]
