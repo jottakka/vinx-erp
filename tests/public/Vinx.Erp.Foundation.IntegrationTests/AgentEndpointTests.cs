@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -238,15 +239,37 @@ public sealed class AgentEndpointTests
         Assert.Equal(firstResult.CorrelationId, replayResult.CorrelationId);
         Assert.Equal(1, model.CallCount);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var record = await administrator.IdempotencyRecords.SingleAsync();
-        Assert.Equal("agent.run", record.CommandName);
-        Assert.Equal(request.RequestId, record.RequestId);
-        Assert.Equal(scenario.AlfaCompanyId, record.CompanyId);
-        // O replay devolve exatamente o ResultJson seguro persistido (texto
-        // do modelo; sem prompt) — o gate não redige.
-        Assert.Contains(EmailInText, record.ResultJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("resuma o expediente", record.ResultJson, StringComparison.Ordinal);
+        var ledger = await administrator.AgentExecutionLedger.SingleAsync();
+        Assert.Equal("web", ledger.Channel);
+        Assert.Equal(request.RequestId, ledger.RequestId);
+        Assert.Equal(scenario.AlfaCompanyId, ledger.CompanyId);
+        Assert.Equal(AgentExecutionLedgerState.Completed, ledger.State);
+        // O replay devolve exatamente o resultado seguro do ledger (texto do
+        // modelo; sem prompt) — o gate não redige.
+        Assert.Contains(EmailInText, ledger.SafeResultJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("resuma o expediente", ledger.SafeResultJson, StringComparison.Ordinal);
         Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "agent.run").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Concurrent_same_request_claims_once_before_the_model()
+    {
+        var model = ControlledAgentModel.Text(ModelText);
+        await using var factory = await CreateConfiguredFactoryAsync(model);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.AlfaCompanyId, "resuma o expediente concorrente");
+
+        var responses = await Task.WhenAll(
+            factory.CreateClient().PostAsJsonAsync("/agent/runs", request),
+            factory.CreateClient().PostAsJsonAsync("/agent/runs", request));
+
+        Assert.Single(responses, response => response.StatusCode == HttpStatusCode.OK);
+        Assert.Single(responses, response => response.StatusCode == HttpStatusCode.Conflict);
+        Assert.Equal(1, model.CallCount);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var ledger = await administrator.AgentExecutionLedger.SingleAsync();
+        Assert.Equal(AgentExecutionLedgerState.Completed, ledger.State);
+        Assert.Equal(request.RequestId, ledger.RequestId);
     }
 
     [Fact]
@@ -300,7 +323,7 @@ public sealed class AgentEndpointTests
         Assert.Null(result.Text);
         Assert.Equal(1, model.CallCount);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        Assert.Single(await administrator.IdempotencyRecords.ToListAsync());
+        Assert.Single(await administrator.AgentExecutionLedger.ToListAsync());
         var audits = await administrator.AuditEvents
             .Where(audit => audit.Action == "agent.run")
             .OrderBy(audit => audit.OccurredAt)
@@ -308,6 +331,29 @@ public sealed class AgentEndpointTests
         Assert.Equal([AuditOutcome.Success, AuditOutcome.Denied], audits.Select(audit => audit.Outcome).ToList());
         Assert.Equal("idempotency_conflict", audits[1].Reason);
         Assert.Equal(("conflict", "idempotency_conflict"), ReadAuditMetadata(audits[1]));
+    }
+
+    [Theory]
+    [InlineData(AgentExecutionLedgerState.VisionInFlight)]
+    [InlineData(AgentExecutionLedgerState.ModelInFlight)]
+    public async Task Stale_in_flight_replay_becomes_ambiguous_without_a_model_retry(
+        AgentExecutionLedgerState inFlightState)
+    {
+        var model = ControlledAgentModel.Text(ModelText);
+        await using var factory = await CreateConfiguredFactoryAsync(model);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.AlfaCompanyId, "resuma o expediente interrompido");
+        await SeedStaleInFlightLedgerAsync(factory, scenario.AlfaCompanyId, request, inFlightState);
+
+        var response = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("agent_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(0, model.CallCount);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var ledger = await administrator.AgentExecutionLedger.SingleAsync();
+        Assert.Equal(AgentExecutionLedgerState.Ambiguous, ledger.State);
+        Assert.Equal("execution_stale", ledger.ReasonCode);
     }
 
     [Fact]
@@ -325,8 +371,9 @@ public sealed class AgentEndpointTests
         var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
         Assert.Equal("provider_not_configured", error?.Code);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        Assert.Empty(await administrator.IdempotencyRecords.ToListAsync());
-        Assert.Empty(await administrator.AuditEvents.Where(audit => audit.Action == "agent.run").ToListAsync());
+        var ledger = await administrator.AgentExecutionLedger.SingleAsync();
+        Assert.Equal(AgentExecutionLedgerState.FailedClosed, ledger.State);
+        Assert.Equal("provider_not_configured", ledger.ReasonCode);
     }
 
     [Fact]
@@ -346,8 +393,9 @@ public sealed class AgentEndpointTests
         Assert.Equal("agent_timeout", error?.Code);
         // Desfecho 5xx não é durável: o mesmo requestId pode retentar depois.
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        Assert.Empty(await administrator.IdempotencyRecords.ToListAsync());
-        Assert.Empty(await administrator.AuditEvents.Where(audit => audit.Action == "agent.run").ToListAsync());
+        var ledger = await administrator.AgentExecutionLedger.SingleAsync();
+        Assert.Equal(AgentExecutionLedgerState.Ambiguous, ledger.State);
+        Assert.Equal(AgentOutcomeReason.ModelTimeout, ledger.ReasonCode);
     }
 
     [Fact]
@@ -371,8 +419,8 @@ public sealed class AgentEndpointTests
         Assert.DoesNotContain(proposedAction, rawBody, StringComparison.Ordinal);
         Assert.Equal(1, model.CallCount);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var record = await administrator.IdempotencyRecords.SingleAsync();
-        Assert.DoesNotContain(proposedAction, record.ResultJson, StringComparison.Ordinal);
+        var ledger = await administrator.AgentExecutionLedger.SingleAsync();
+        Assert.DoesNotContain(proposedAction, ledger.SafeResultJson, StringComparison.Ordinal);
         var audit = await administrator.AuditEvents.SingleAsync(auditEvent => auditEvent.Action == "agent.run");
         Assert.Equal(AuditOutcome.Success, audit.Outcome);
         Assert.DoesNotContain(proposedAction, audit.MetadataJson, StringComparison.Ordinal);
@@ -406,12 +454,12 @@ public sealed class AgentEndpointTests
         // recebido é exatamente o programado, sem mistura nem perda.
         Assert.Equal(new[] { alfaText, betaText }.Order(), results.Select(result => result.Text).Order());
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
-        var records = await administrator.IdempotencyRecords.ToListAsync();
-        Assert.Equal(2, records.Count);
+        var ledgers = await administrator.AgentExecutionLedger.ToListAsync();
+        Assert.Equal(2, ledgers.Count);
         Assert.Equal(
             new[] { scenario.AlfaCompanyId, scenario.BetaCompanyId!.Value }.Order(),
-            records.Select(record => record.CompanyId).Order());
-        Assert.Equal(new[] { alfaText, betaText }.Order(), records.Select(StoredResponseText).Order());
+            ledgers.Select(ledger => ledger.CompanyId).Order());
+        Assert.Equal(new[] { alfaText, betaText }.Order(), ledgers.Select(StoredOutcomeText).Order());
         var audits = await administrator.AuditEvents.Where(auditEvent => auditEvent.Action == "agent.run").ToListAsync();
         Assert.Equal(2, audits.Count);
         Assert.Equal(
@@ -453,11 +501,11 @@ public sealed class AgentEndpointTests
         Assert.Equal(ungranted.AlfaCompanyId, denial.RequestedCompanyId);
         Assert.Equal(("denied", "capability_denied"), ReadAuditMetadata(denial));
         Assert.DoesNotContain("resuma o meu expediente", denial.MetadataJson, StringComparison.Ordinal);
-        // A negação também persiste idempotência (resposta tipada): o ResultJson
+        // A negação também persiste o resultado seguro no ledger: o JSON
         // carrega somente a resposta segura, nunca o prompt.
-        var records = await administrator.IdempotencyRecords.ToListAsync();
-        var deniedRecord = Assert.Single(records, record => record.CompanyId == ungranted.AlfaCompanyId);
-        Assert.DoesNotContain("resuma o meu expediente", deniedRecord.ResultJson, StringComparison.Ordinal);
+        var deniedLedger = Assert.Single(
+            await administrator.AgentExecutionLedger.Where(ledger => ledger.CompanyId == ungranted.AlfaCompanyId).ToListAsync());
+        Assert.DoesNotContain("resuma o meu expediente", deniedLedger.SafeResultJson, StringComparison.Ordinal);
     }
 
     private static async Task<FoundationApiFactory> CreateConfiguredFactoryAsync(ControlledAgentModel model) =>
@@ -501,11 +549,51 @@ public sealed class AgentEndpointTests
             document.RootElement.TryGetProperty("ReasonCode", out var reasonCode) ? reasonCode.GetString() : null);
     }
 
-    // Texto seguro armazenado no registro de idempotência (ResultJson → Response → Text).
-    private static string? StoredResponseText(IdempotencyRecord record)
+    // Texto seguro armazenado no ledger (AgentOutcome → Text).
+    private static string? StoredOutcomeText(AgentExecutionLedger ledger)
     {
-        using var document = JsonDocument.Parse(record.ResultJson);
-        return document.RootElement.GetProperty("Response").GetProperty("Text").GetString();
+        using var document = JsonDocument.Parse(ledger.SafeResultJson!);
+        return document.RootElement.GetProperty("Text").GetString();
+    }
+
+    private static async Task SeedStaleInFlightLedgerAsync(
+        FoundationApiFactory factory,
+        Guid companyId,
+        AgentRunRequest request,
+        AgentExecutionLedgerState inFlightState)
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var payload = JsonSerializer.Serialize(new
+        {
+            request.Journey,
+            request.Message,
+            request.CompanyId,
+            request.Attachments,
+        });
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
+        var ledger = AgentExecutionLedger.Create(
+            Guid.NewGuid(),
+            companyId,
+            factory.ActorUserId,
+            "web",
+            inboundMessageId: null,
+            request.RequestId,
+            request.Journey,
+            payloadHash);
+        if (inFlightState == AgentExecutionLedgerState.VisionInFlight)
+        {
+            ledger.MarkVisionInFlight(factory.ActorUserId, request.RequestId);
+        }
+        else
+        {
+            Assert.Equal(AgentExecutionLedgerState.ModelInFlight, inFlightState);
+            ledger.MarkModelInFlight(factory.ActorUserId, request.RequestId);
+        }
+
+        administrator.AgentExecutionLedger.Add(ledger);
+        await administrator.SaveChangesAsync();
+        administrator.Entry(ledger).Property(entry => entry.UpdatedAt).CurrentValue = DateTimeOffset.UtcNow.AddMinutes(-11);
+        await administrator.SaveChangesAsync();
     }
 
     private static async Task<AgentScenario> SeedScenarioAsync(

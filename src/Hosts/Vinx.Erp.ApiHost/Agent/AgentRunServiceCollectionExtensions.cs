@@ -29,12 +29,13 @@ internal static class AgentRunServiceCollectionExtensions
     public static IServiceCollection AddAgentRunSurface(
         this IServiceCollection services,
         IConfiguration configuration) =>
-        AddAgentRunSurface(services, configuration, Environment.GetEnvironmentVariable);
+        AddAgentRunSurface(services, configuration, Environment.GetEnvironmentVariable, allowCredentiallessTestModel: false);
 
     internal static IServiceCollection AddAgentRunSurface(
         this IServiceCollection services,
         IConfiguration configuration,
-        Func<string, string?> readEnvironment)
+        Func<string, string?> readEnvironment,
+        bool allowCredentiallessTestModel = false)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -45,7 +46,7 @@ internal static class AgentRunServiceCollectionExtensions
         // mensagem segura da própria options.
         var agentRun =
             configuration.GetSection(ConfigurationSection).Get<AgentRunOptions>() ?? new AgentRunOptions();
-        if (!IsValidConfiguration(agentRun, readEnvironment))
+        if (!IsValidConfiguration(agentRun, readEnvironment, allowCredentiallessTestModel))
         {
             throw new InvalidOperationException("Agent run configuration is invalid.");
         }
@@ -53,7 +54,7 @@ internal static class AgentRunServiceCollectionExtensions
         services
             .AddOptions<AgentRunOptions>()
             .Bind(configuration.GetSection(ConfigurationSection))
-            .Validate(options => IsValidConfiguration(options, readEnvironment), "Agent run configuration is invalid.")
+            .Validate(options => IsValidConfiguration(options, readEnvironment, allowCredentiallessTestModel), "Agent run configuration is invalid.")
             .ValidateOnStart();
 
         services.AddScoped<IAgentContextResolver, AgentContextResolver>();
@@ -64,23 +65,26 @@ internal static class AgentRunServiceCollectionExtensions
         if (!string.IsNullOrWhiteSpace(agentRun.Provider))
         {
             selection = new AgentModelSelection(agentRun.Provider, agentRun.Model!);
-            var providerProfile = ToProviderOptions(agentRun);
-            services.AddHttpClient(
-                ProviderHttpClientName,
-                client =>
-                {
-                    client.BaseAddress = agentRun.Endpoint;
-                    client.Timeout = agentRun.Timeout;
-                })
-                .ConfigurePrimaryHttpMessageHandler(() => OpenAiCompatibleTransport.Create(providerProfile));
-            // A chave entra somente pelo resolvedor do ambiente do processo
-            // na credencial do client aprovado; nenhum header, log ou mensagem a ecoa.
-            services.AddScoped<IAgentModel>(serviceProvider => new ChatClientAgentModel(
-                CreateProviderChatClient(
-                    agentRun,
-                    readEnvironment,
-                    serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(ProviderHttpClientName),
-                    serviceProvider.GetService<ILoggerFactory>())));
+            if (!allowCredentiallessTestModel)
+            {
+                var providerProfile = ToProviderOptions(agentRun);
+                services.AddHttpClient(
+                    ProviderHttpClientName,
+                    client =>
+                    {
+                        client.BaseAddress = agentRun.Endpoint;
+                        client.Timeout = agentRun.Timeout;
+                    })
+                    .ConfigurePrimaryHttpMessageHandler(() => OpenAiCompatibleTransport.Create(providerProfile));
+                // A chave entra somente pelo resolvedor do ambiente do processo
+                // na credencial do client aprovado; nenhum header, log ou mensagem a ecoa.
+                services.AddScoped<IAgentModel>(serviceProvider => new ChatClientAgentModel(
+                    CreateProviderChatClient(
+                        agentRun,
+                        readEnvironment,
+                        serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(ProviderHttpClientName),
+                        serviceProvider.GetService<ILoggerFactory>())));
+            }
         }
 
         if (agentRun.Vision is { } vision)
@@ -118,6 +122,7 @@ internal static class AgentRunServiceCollectionExtensions
             profileCatalog: CreateProfileCatalog(selection, AgentInputLimits.MainTurnMaxCharacters),
             outputGate: serviceProvider.GetRequiredService<AgentOutputGate>(),
             documentContextNormalizer: serviceProvider.GetService<DocumentContextNormalizer>()));
+        services.AddScoped<AgentExecutionService>();
         services.AddScoped<AgentExecutionApplicationService>();
         return services;
     }
@@ -125,7 +130,10 @@ internal static class AgentRunServiceCollectionExtensions
     // Sem provider nenhuma outra configuração é exigida (fail-closed em
     // provider_not_configured); com provider, endpoint/model aprovados e chave
     // no ambiente do processo são obrigatórios. A validação delega à options da fatia do núcleo.
-    private static bool IsValidConfiguration(AgentRunOptions options, Func<string, string?> readEnvironment)
+    private static bool IsValidConfiguration(
+        AgentRunOptions options,
+        Func<string, string?> readEnvironment,
+        bool allowCredentiallessTestModel)
     {
         try
         {
@@ -136,7 +144,8 @@ internal static class AgentRunServiceCollectionExtensions
             return false;
         }
 
-        return (string.IsNullOrWhiteSpace(options.Provider) && options.Vision is null)
+        return allowCredentiallessTestModel
+            || (string.IsNullOrWhiteSpace(options.Provider) && options.Vision is null)
             || OpenAiCompatibleChatClient.HasServerCredential(readEnvironment);
     }
 

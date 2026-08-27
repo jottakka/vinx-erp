@@ -88,14 +88,29 @@ public sealed class AgentExecutionLedgerTests
     }
 
     [Fact]
-    public void Complete_is_allowed_only_from_model_in_flight()
+    public void Deterministic_pre_dispatch_result_can_complete_from_claimed()
     {
         var actorId = Guid.NewGuid();
         var requestId = Guid.NewGuid();
         var ledger = CreateLedger(actorId, requestId);
 
-        Assert.Throws<InvalidOperationException>(() => ledger.Complete("{}", actorId, requestId));
+        ledger.Complete("{\"status\":\"needs_clarification\"}", actorId, requestId);
+
+        Assert.Equal(AgentExecutionLedgerState.Completed, ledger.State);
+        Assert.Equal("{\"status\":\"needs_clarification\"}", ledger.SafeResultJson);
+        Assert.Null(ledger.ReasonCode);
+    }
+
+    [Fact]
+    public void Complete_remains_disallowed_from_vision_without_main_dispatch()
+    {
+        var actorId = Guid.NewGuid();
+        var requestId = Guid.NewGuid();
+        var ledger = CreateLedger(actorId, requestId);
+
         Assert.Throws<InvalidOperationException>(() => ledger.MarkAmbiguous("provider_timeout", actorId, requestId));
+        ledger.MarkVisionInFlight(actorId, requestId);
+        Assert.Throws<InvalidOperationException>(() => ledger.Complete("{}", actorId, requestId));
         ledger.MarkModelInFlight(actorId, requestId);
         ledger.Complete("{}", actorId, requestId);
 

@@ -28,6 +28,13 @@ public sealed class DocumentVisionOcr
         byte[] pageImage,
         string mediaType,
         CancellationToken cancellationToken)
+        => await TranscribePageAsync(pageImage, mediaType, lifecycle: null, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<VisionOcrPageResult> TranscribePageAsync(
+        byte[] pageImage,
+        string mediaType,
+        IAgentExecutionLifecycle? lifecycle,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(pageImage);
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaType);
@@ -35,6 +42,11 @@ public sealed class DocumentVisionOcr
         var message = new ChatMessage(
             ChatRole.User,
             [new DataContent(pageImage, mediaType)]);
+        if (lifecycle is not null)
+        {
+            await lifecycle.MarkVisionInFlightAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var response = await _visionClient
             .GetResponseAsync([message], new ChatOptions { Instructions = Instruction }, cancellationToken)
             .ConfigureAwait(false);

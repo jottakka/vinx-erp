@@ -101,7 +101,14 @@ public sealed class AgentExecutionLedger : ICompanyScoped, IConcurrencyVersioned
     public void Complete(string safeResultJson, Guid actorUserId, Guid requestId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(safeResultJson);
-        Transition(AgentExecutionLedgerState.ModelInFlight, AgentExecutionLedgerState.Completed, actorUserId, requestId);
+        // Resultados determinísticos (validação, autorização e pedido de
+        // esclarecimento) terminam antes de qualquer provider. OCR sozinho
+        // nunca pode concluir: somente a chamada principal libera esse estado.
+        Transition(
+            [AgentExecutionLedgerState.Claimed, AgentExecutionLedgerState.ModelInFlight],
+            AgentExecutionLedgerState.Completed,
+            actorUserId,
+            requestId);
         SafeResultJson = safeResultJson;
     }
 

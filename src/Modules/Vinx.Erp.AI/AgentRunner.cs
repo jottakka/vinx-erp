@@ -49,6 +49,17 @@ public sealed class AgentRunner(
         Guid? requestedCompanyId,
         IReadOnlyList<Guid> attachmentIds,
         CancellationToken cancellationToken)
+        => await RunAsync(actor, profileId, message, requestedCompanyId, attachmentIds, lifecycle: null, cancellationToken)
+            .ConfigureAwait(false);
+
+    internal async Task<AgentOutcome> RunAsync(
+        ActorContext actor,
+        string profileId,
+        string message,
+        Guid? requestedCompanyId,
+        IReadOnlyList<Guid> attachmentIds,
+        IAgentExecutionLifecycle? lifecycle,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(attachmentIds);
         var stopwatch = Stopwatch.StartNew();
@@ -93,6 +104,7 @@ public sealed class AgentRunner(
                         actor,
                         resolution.Context!.CompanyId,
                         attachmentId,
+                        lifecycle,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (documentContext.Status is not DocumentContextStatus.Ready)
@@ -124,6 +136,13 @@ public sealed class AgentRunner(
         ChatResponse response;
         try
         {
+            // A transição durável acontece imediatamente antes da única chamada
+            // principal; qualquer saída incerta depois dela é ambígua.
+            if (lifecycle is not null)
+            {
+                await lifecycle.MarkModelInFlightAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             response = await model.GetResponseAsync(messages, profile.ModelSelection, linkedCts.Token);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

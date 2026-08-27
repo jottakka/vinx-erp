@@ -211,7 +211,10 @@ builder.Services.AddScoped<PaguaiDraftService>();
 builder.Services.AddScoped<AtendimentoCardService>();
 // Superfície do agente: options validadas on-start, gates e provider decididos
 // na composição; sem provider configurado o runner falha fechado.
-builder.Services.AddAgentRunSurface(builder.Configuration);
+builder.Services.AddAgentRunSurface(
+    builder.Configuration,
+    Environment.GetEnvironmentVariable,
+    builder.Configuration.GetValue<bool>("AgentRun:AllowCredentiallessTestModel"));
 builder
     .Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false)
     .AddJsonOptions(options =>

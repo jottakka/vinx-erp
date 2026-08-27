@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -24,6 +25,8 @@ using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using Vinx.Erp.AI;
+using Vinx.Erp.AI.DocumentContext;
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
 using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.Identity;
 using JsonClaimValueTypes = Microsoft.IdentityModel.JsonWebTokens.JsonClaimValueTypes;
@@ -425,6 +428,11 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        if (_testAgentModel is not null)
+        {
+            builder.UseSetting("AgentRun:AllowCredentiallessTestModel", "true");
+        }
+
         if (_disableWolverineForE2e)
         {
             builder.UseContentRoot(ResolveE2eContentRoot());
@@ -560,6 +568,18 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 services.RemoveAll<IAgentModel>();
                 services.AddSingleton(_testAgentModel);
             }
+            if (_testAgentModel is not null && _testAgentRunOptions?.Vision is { } vision)
+            {
+                // O cenário conserva a fonte autorizada real. A visão é inerte
+                // porque este teste termina na autorização, antes do OCR.
+                services.RemoveAll<DocumentContextNormalizer>();
+                services.AddScoped(serviceProvider => new DocumentContextNormalizer(
+                    serviceProvider.GetRequiredService<IAuthorizedDocumentSource>(),
+                    new DocumentVisionOcr(CreateInertVisionClient(vision)),
+                    DocumentContextLimits.FromVisionProfile(
+                        ToInertVisionProfile(vision),
+                        new HashSet<string>(vision.AllowedClassifications, StringComparer.Ordinal))));
+            }
             if (_useJwtBearer)
             {
                 if (_countingIdentityProvider is not null)
@@ -605,6 +625,29 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                     _ => { });
             }
         });
+    }
+
+    private static IChatClient CreateInertVisionClient(AgentRunVisionOptions vision)
+    {
+        var profile = ToInertVisionProfile(vision);
+        profile.ApiKey = "test-only-inert";
+        return new OpenAiCompatibleChatClient(profile, new HttpClient(new InertVisionHandler()));
+    }
+
+    private static OpenAiCompatibleOptions ToInertVisionProfile(AgentRunVisionOptions vision) => new()
+    {
+        Endpoint = vision.Endpoint,
+        Model = vision.Model ?? string.Empty,
+        Timeout = vision.Timeout,
+        ApprovedHosts = vision.ApprovedHosts,
+        AllowImageInputs = true,
+        ModuleTag = "ai/agent-document-vision",
+    };
+
+    private sealed class InertVisionHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(new InvalidOperationException("The test-only vision client must not be invoked."));
     }
 
     public override ValueTask DisposeAsync() => DisposeResourcesAsync(primaryFailure: null);
