@@ -350,7 +350,7 @@ public sealed class TelegramInboundAdmissionTests
     }
 
     [Fact]
-    public async Task Runtime_has_only_the_two_secure_definer_functions_and_no_direct_inbound_table_access()
+    public async Task Runtime_has_only_the_runtime_secure_definer_functions_and_no_direct_inbound_table_access()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
@@ -381,8 +381,7 @@ public sealed class TelegramInboundAdmissionTests
                     'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)',
                     'EXECUTE'),
                 to_regprocedure(
-                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)') IS NULL,
-                to_regprocedure('notifications.complete_inbound_telegram_text(uuid)') IS NULL
+                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)') IS NULL
             FROM pg_class AS table_row
             WHERE table_row.oid = 'notifications.inbound_telegram_messages'::regclass
             """,
@@ -404,7 +403,6 @@ public sealed class TelegramInboundAdmissionTests
             Assert.False(reader.GetBoolean(9));
             Assert.False(reader.GetBoolean(10));
             Assert.True(reader.GetBoolean(11));
-            Assert.True(reader.GetBoolean(12));
             Assert.False(await reader.ReadAsync());
         }
 
