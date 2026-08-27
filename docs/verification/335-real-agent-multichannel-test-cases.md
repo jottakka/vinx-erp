@@ -12,17 +12,29 @@
 
 ## Evidência e pendências
 
-Há evidência focada por tarefa, sem Docker, para os contratos acima. No último
-rerun congelado de migrations/adapters, 24 de 25 testes passaram; a única
-asserção antiforgery desatualizada foi corrigida depois, com compilação limpa,
-mas sem novo rerun. Permanecem pendentes: `verify-public.sh` final, revisão
-completa da branch, CI e smokes reais sintéticos de texto/visão. Não há
-evidência de envio por canal nem de execução de provider real.
+Há evidência focada por tarefa para os contratos acima. O rerun consolidado de
+migrations/adapters chegou a 24/25; a única asserção antiforgery desatualizada
+foi corrigida depois, com compilação limpa. A rodada final de cinco correções
+teve 16/16 testes de integração, 74/74 Foundation Unit, 56/56 AI Unit, 30/30
+Web Pagaí e builds .NET/Web verdes. A revisão Sol completa encontrou cinco
+findings importantes; a re-revisão confirmou todos corrigidos, sem novo finding
+crítico/importante.
+
+O único `verify-public.sh` local saiu `1` no lint Web, antes das suítes amplas:
+dois bloqueios herdados da `main` e uma linha de formato desta branch. O rebase
+absorveu a correção Atendimento; as duas linhas restantes foram corrigidas e o
+Biome focado ficou verde, sem repetir o gate. CI permanece pendente.
+
+O smoke real autorizado fez exatamente uma chamada de texto e uma de visão com
+conteúdo sintético. Ambas falharam de forma segura, sem retry: texto em cerca de
+695 ms e visão em cerca de 655 ms. Prompt, resposta, chave, headers e bytes não
+foram registrados; portanto a evidência não distingue credencial/conta/modelo/
+compatibilidade de API. Não houve envio por WhatsApp ou Telegram.
 
 ## Escopo congelado
 
-- 132 arquivos no total: 83 não teste e 49 de teste.
-- Alterações manuais: +12.901/-4.037 linhas (16.938 de churn).
+- 142 arquivos no total: 90 não teste e 52 de teste.
+- Alterações manuais: +13.402/-4.072 linhas (17.474 de churn).
 - Gerados: 5 arquivos e +8.261 linhas.
 
 A entrega única é a exceção aprovada para a issue #335: o mesmo recorte reúne
