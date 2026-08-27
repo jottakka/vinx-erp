@@ -149,6 +149,72 @@ public sealed class PaguaiDraftEndpointTests
     }
 
     [Fact]
+    public async Task Draft_creation_rejects_an_expired_confirmed_company_invoice_without_draft_receipt_or_success_audit()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var expired = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        await ExpireFileRetentionAsync(factory, expired.Id);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            InvoiceFileId = expired.Id,
+        };
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+        await AssertNoPersistedDraftOrReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var denial = Assert.Single(
+            await administrator
+                .AuditEvents.Where(auditEvent =>
+                    auditEvent.Action == "invoice_file_invalid"
+                    && auditEvent.RequestedCompanyId == scenario.CompanyId
+                )
+                .ToListAsync()
+        );
+        Assert.Equal("invoice_file_invalid", denial.Reason);
+    }
+
+    [Fact]
+    public async Task Replay_returns_the_existing_invoice_after_retention_expires_without_another_audit()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var invoice = await SeedInvoiceFileAsync(factory, scenario, confirmed: true);
+        var request = NewRequest(scenario.CompanyId, Guid.NewGuid()) with
+        {
+            InvoiceFileId = invoice.Id,
+        };
+        using var client = factory.CreateClient();
+
+        using var first = await client.PostAsJsonAsync("/paguai/requests", request);
+        await ExpireFileRetentionAsync(factory, invoice.Id);
+        using var replay = await client.PostAsJsonAsync("/paguai/requests", request);
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        using var firstDocument = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        using var replayDocument = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+        Assert.Equal(
+            ReadGuid(firstDocument.RootElement, "id"),
+            ReadGuid(replayDocument.RootElement, "id")
+        );
+        Assert.Equal(invoice.Id, ReadNullableGuid(replayDocument.RootElement, "invoiceFileId"));
+        await AssertPersistedDraftAndReceiptAsync(factory, scenario.CompanyId, request.RequestId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(
+            1,
+            await administrator.AuditEvents.CountAsync(auditEvent =>
+                auditEvent.Action == "paguai.draft.create"
+                && auditEvent.RequestedCompanyId == scenario.CompanyId
+            )
+        );
+    }
+
+    [Fact]
     public async Task Draft_creation_rejects_an_empty_invoice_file_id_at_the_boundary()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -969,6 +1035,14 @@ public sealed class PaguaiDraftEndpointTests
         var file = await administrator.Files.SingleAsync(candidate => candidate.Id == fileId);
         file.MarkDeleted("test", factory.ActorUserId, Guid.NewGuid());
         await administrator.SaveChangesAsync();
+    }
+
+    private static async Task ExpireFileRetentionAsync(FoundationApiFactory factory, Guid fileId)
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        await administrator.Database.ExecuteSqlAsync(
+            $"UPDATE foundation.files SET retention_until = clock_timestamp() - interval '1 hour' WHERE id = {fileId}"
+        );
     }
 
     private static async Task AssertNoPersistedDraftOrReceiptAsync(

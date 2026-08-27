@@ -45,6 +45,10 @@ public sealed class PaguaiDraftService(
 
         command = command with { Amount = PaguaiAmountRules.Canonicalize(command.Amount) };
         var hash = ComputePayloadHash(command);
+        // One clock reading per operation: a new draft may only reference an
+        // invoice still inside its retention window at this instant, while a
+        // persisted replay stays valid after the window closes.
+        var now = DateTimeOffset.UtcNow;
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(
@@ -86,6 +90,7 @@ public sealed class PaguaiDraftService(
                 );
                 if (
                     invoice is null
+                    || invoice.RetentionUntil <= now
                     || !string.Equals(
                         invoice.ProcessingState,
                         FileRecord.ConfirmedState,
