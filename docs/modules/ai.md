@@ -1,4 +1,4 @@
-# Módulo AI — núcleo OpenAI-compatible e perfil DeepSeek
+# Módulo AI — núcleo OpenAI-compatible
 
 ## Estado
 
@@ -14,6 +14,11 @@ autorizado antes da única chamada principal. Não existe Anthropic,
 OpenCode, memória longa, vector store, streaming nem persistência de
 conversa.
 
+Desde #335, Web, WhatsApp e Telegram traduzem seus contratos para um comando
+comum, fazem claim durável antes de OCR ou provider e carregam somente
+identificadores internos opacos. O núcleo continua sem regra de domínio ou
+runtime específico de OpenCode.
+
 O adapter serve leitura, resumo, extração e rascunho não persistido. Ele
 converte protocolo e devolve resposta normalizada ou proposta de tool; não
 autoriza, não escolhe empresa, não invoca ferramenta e não persiste conversa.
@@ -27,6 +32,11 @@ tira um snapshot imutável na construção e valida o perfil na fronteira:
 mutar as options em runtime não troca endpoint, modelo ou limites de uma
 instância viva. Desde #138 o host registra o `Validator` com
 `ValidateOnStart` na composição da API (`AddAgentRunSurface`).
+
+A credencial é lida exclusivamente de `VINX_AGENT_PROVIDER_API_KEY` no
+ambiente do processo de ApiHost/WorkerHost; appsettings, banco, browser,
+argumentos e fixtures não podem fornecê-la. OpenCode Go é apenas o primeiro
+perfil real de fixture/smoke, não uma dependência do núcleo nem dos testes.
 
 Limites do perfil:
 

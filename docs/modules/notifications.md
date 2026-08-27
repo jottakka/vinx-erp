@@ -205,6 +205,20 @@ recibo. Envelope inválido, retry Npgsql ou cancelamento esgotado após
 detalhe original da exceção; cancelamento da cadeia nunca usa requeue
 indefinido durante o desligamento.
 
+## Agente multicanal (#335)
+
+Após a admissão, WhatsApp e Telegram publicam para o Agente somente envelopes
+de canal e `InboundMessageId`. O handler compartilhado faz claim idempotente,
+relê o inbound autorizado e constrói o comando; ele não recebe telefone, chat
+ID, username, texto, documento, chave ou configuração de provider. Cada canal
+conserva seu recibo técnico e suas barreiras de entrega; confirmação externa
+incerta nunca recebe retry cego.
+
+No Telegram, empresa ambígua exige seleção autenticada limitada às memberships
+ativas do ator. A preferência só vale para mensagem nova; a mensagem que pediu
+seleção não inicia o Agente. Nenhum canal confirma proposta Pagaí: a resposta
+segura só aponta para a revisão Web autenticada.
+
 ## Inbound admissão e identidade (#272 PR1)
 
 O webhook (mesmo endpoint do W3) lê `messages[]` dos tipos `image`, `document`
