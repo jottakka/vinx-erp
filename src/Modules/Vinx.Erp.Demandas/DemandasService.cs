@@ -363,11 +363,6 @@ public sealed class DemandasService(
             await transaction.CommitAsync(cancellationToken);
             LogInformation("succeeded", "create");
         }
-        catch (DemandasTransitionBlockedException)
-        {
-            database.ChangeTracker.Clear();
-            return new(DemandOperationState.IllegalTransition);
-        }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
             return IdempotencyRaceAsync();
@@ -458,6 +453,12 @@ public sealed class DemandasService(
             await FlushNotificationsAsync(actor, command.CompanyId, demandId, pending, cancellationToken);
             LogInformation("succeeded", "advance");
             return new(DemandOperationState.Success, Demand: ToResponse(demand, DateTimeOffset.UtcNow));
+        }
+        catch (DemandasTransitionBlockedException)
+        {
+            database.ChangeTracker.Clear();
+            LogInformation("denied", "approval_prepare_denied");
+            return new(DemandOperationState.IllegalTransition);
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
@@ -635,6 +636,12 @@ public sealed class DemandasService(
             await FlushNotificationsAsync(actor, command.CompanyId, demandId, pending, cancellationToken);
             LogInformation("succeeded", "checklist_complete");
             return new(DemandOperationState.Success, Demand: ToResponse(demand, DateTimeOffset.UtcNow));
+        }
+        catch (DemandasTransitionBlockedException)
+        {
+            database.ChangeTracker.Clear();
+            LogInformation("denied", "approval_prepare_denied");
+            return new(DemandOperationState.IllegalTransition);
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {

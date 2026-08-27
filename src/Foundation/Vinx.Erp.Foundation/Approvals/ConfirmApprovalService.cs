@@ -390,14 +390,17 @@ public sealed class ConfirmApprovalService(
         CancellationToken cancellationToken)
     {
         // Fora de uma transação ativa o contexto RLS (set_config is_local) já
-        // não vigora; abre-se uma transação curta apenas para a leitura.
-        await using var reloadTransaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        // não vigora: transação CURTA apenas quando standalone; com transação
+        // ambiente (costura de demandas) participa sem Begin/Rollback próprios
+        // — mesma classe de bug que a costura corrigiu no Confirm principal.
+        await using IUnitOfWorkScope scope =
+            await AmbientScope.BeginAsync(database, cancellationToken);
         await ApplyContextAsync(actor, companyId, cancellationToken);
         var approval = await database.Approvals.AsNoTracking().IgnoreQueryFilters()
             .SingleOrDefaultAsync(candidate =>
                 candidate.CompanyId == companyId && candidate.Id == approvalId,
                 cancellationToken);
-        await reloadTransaction.RollbackAsync(cancellationToken);
+        await scope.RollbackAsync(cancellationToken);
         return approval;
     }
 

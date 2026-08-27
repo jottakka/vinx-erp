@@ -55,8 +55,10 @@ public sealed class ApprovalsAmbientTransactionTests
             scope.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PrepareApprovalService>>()
         ).PrepareAsync(actor, ToPrepareCommand(companyId, Guid.NewGuid()), default);
 
-        Assert.True(prepared.IsSuccess);
-        Assert.Null(database.Database.CurrentTransaction is null ? null : outer.TransactionId);
+        Assert.True(prepared.IsSuccess, $"prepare denied: {prepared.ErrorCode}");
+        Assert.NotNull(prepared.Value);
+        Assert.NotEqual(Guid.Empty, prepared.Value!.ApprovalId);
+        // Participou da transação ambiente (não abriu a própria).
         Assert.Equal(outer.TransactionId, database.Database.CurrentTransaction!.TransactionId);
 
         await outer.RollbackAsync();
