@@ -27,11 +27,6 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                     'foundation.files.upload', 'foundation.files.confirm',
                     'paguai.draft.approve'));
 
-            -- Leitura de designações para o diretório de aprovadores sob FORCE RLS.
-            CREATE POLICY role_assignments_permissions_owner_select
-                ON foundation.role_assignments FOR SELECT TO vinx_permissions_owner
-                USING (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid);
-
             -- Papel admin padrão passa a carregar a nova capability: o padrão
             -- estabelecido é conceder ações privilegiadas de módulo ao admin
             -- (como foundation.files.confirm), nunca ao member. A função já é
@@ -293,8 +288,6 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                 uuid, uuid, text, text, text, text)
                 FROM vinx_worker;
             DROP FUNCTION paguai.list_draft_approver_user_ids(uuid, uuid);
-            DROP POLICY role_assignments_permissions_owner_select
-                ON foundation.role_assignments;
             DELETE FROM foundation.capabilities
             WHERE (id, name) IN (
                     ('e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a'::uuid, 'paguai.draft.approve'));
@@ -304,6 +297,129 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                 ON foundation.capabilities FOR SELECT TO vinx_permissions_owner
                 USING (name IN ('foundation.roles.assign', 'foundation.employees.create',
                     'foundation.files.upload', 'foundation.files.confirm'));
+
+            -- Corpo do provisionador restaura o estado PRÉ-migração (catálogo de
+            -- 4 capabilities), no mesmo padrão transiente de troca de papel —
+            -- provisionamento é reversível até o último estado de provisioning.
+            GRANT CREATE ON SCHEMA foundation TO vinx_permissions_owner;
+            SET ROLE vinx_permissions_owner;
+            CREATE OR REPLACE FUNCTION foundation.ensure_company_default_roles(p_company_id uuid)
+            RETURNS void
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path TO pg_catalog, foundation, pg_temp
+            AS $function$
+            DECLARE
+                v_seed_actor uuid;
+                v_role_id uuid;
+                v_grant_count integer;
+            BEGIN
+                IF p_company_id IS NULL THEN
+                    RAISE EXCEPTION 'company default roles parameters are invalid'
+                        USING ERRCODE = '22023';
+                END IF;
+
+                PERFORM set_config('app.company_id', p_company_id::text, true);
+
+                SELECT membership.user_id
+                INTO v_seed_actor
+                FROM foundation.memberships AS membership
+                WHERE membership.company_id = p_company_id
+                  AND membership.deleted_at IS NULL
+                ORDER BY membership.created_at, membership.id
+                LIMIT 1;
+                IF v_seed_actor IS NULL THEN
+                    RAISE EXCEPTION 'company has no active membership'
+                        USING ERRCODE = '23514';
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM foundation.roles AS role_record
+                    WHERE role_record.company_id = p_company_id
+                      AND role_record.name = 'admin'
+                      AND role_record.deleted_at IS NULL) THEN
+                    v_role_id := gen_random_uuid();
+                    INSERT INTO foundation.roles (
+                        id, company_id, name, created_by_user_id, updated_by_user_id,
+                        request_id, created_at, updated_at)
+                    VALUES (
+                        v_role_id, p_company_id, 'admin', v_seed_actor, v_seed_actor,
+                        gen_random_uuid(), clock_timestamp(), clock_timestamp());
+                    INSERT INTO foundation.role_capabilities (
+                        id, company_id, role_id, capability_id, scope,
+                        created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+                    SELECT
+                        gen_random_uuid(),
+                        p_company_id,
+                        v_role_id,
+                        capability.id,
+                        'company',
+                        v_seed_actor,
+                        v_seed_actor,
+                        gen_random_uuid(),
+                        clock_timestamp(),
+                        clock_timestamp()
+                    FROM foundation.capabilities AS capability
+                    WHERE capability.name IN (
+                        'foundation.roles.assign',
+                        'foundation.employees.create',
+                        'foundation.files.upload',
+                        'foundation.files.confirm')
+                    ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+                        DO NOTHING;
+                    GET DIAGNOSTICS v_grant_count = ROW_COUNT;
+                    IF v_grant_count <> 4 THEN
+                        RAISE EXCEPTION 'admin default role capability catalog is incomplete'
+                            USING ERRCODE = '23514';
+                    END IF;
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM foundation.roles AS role_record
+                    WHERE role_record.company_id = p_company_id
+                      AND role_record.name = 'member'
+                      AND role_record.deleted_at IS NULL) THEN
+                    v_role_id := gen_random_uuid();
+                    INSERT INTO foundation.roles (
+                        id, company_id, name, created_by_user_id, updated_by_user_id,
+                        request_id, created_at, updated_at)
+                    VALUES (
+                        v_role_id, p_company_id, 'member', v_seed_actor, v_seed_actor,
+                        gen_random_uuid(), clock_timestamp(), clock_timestamp());
+                    INSERT INTO foundation.role_capabilities (
+                        id, company_id, role_id, capability_id, scope,
+                        created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+                    SELECT
+                        gen_random_uuid(),
+                        p_company_id,
+                        v_role_id,
+                        capability.id,
+                        'company',
+                        v_seed_actor,
+                        v_seed_actor,
+                        gen_random_uuid(),
+                        clock_timestamp(),
+                        clock_timestamp()
+                    FROM foundation.capabilities AS capability
+                    WHERE capability.name IN ('foundation.files.upload')
+                    ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+                        DO NOTHING;
+                    GET DIAGNOSTICS v_grant_count = ROW_COUNT;
+                    IF v_grant_count <> 1 THEN
+                        RAISE EXCEPTION 'member default role capability catalog is incomplete'
+                            USING ERRCODE = '23514';
+                    END IF;
+                END IF;
+            END;
+            $function$;
+            RESET ROLE;
+            REVOKE CREATE ON SCHEMA foundation FROM vinx_permissions_owner;
+            REVOKE ALL ON FUNCTION foundation.ensure_company_default_roles(uuid)
+                FROM PUBLIC, vinx_migrator;
+            GRANT EXECUTE ON FUNCTION foundation.ensure_company_default_roles(uuid)
+                TO vinx_runtime;
             """
         );
 }
