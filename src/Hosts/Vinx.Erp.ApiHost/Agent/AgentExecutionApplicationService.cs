@@ -49,11 +49,13 @@ public sealed class AgentExecutionApplicationService(AgentExecutionService execu
                     actor.CorrelationId),
                 StatusCodes.Status409Conflict),
             AgentExecutionDisposition.InProgress => AgentRunResult.Failure(
-                "agent_in_progress", StatusCodes.Status409Conflict),
+                "execution_in_progress", StatusCodes.Status409Conflict),
             AgentExecutionDisposition.Ambiguous when result.Outcome?.Status == AgentOutcomeStatus.TimedOut =>
                 MapOutcome(result.Outcome),
+            AgentExecutionDisposition.Ambiguous when result.ReasonCode == AgentOutcomeReason.ModelTimeout =>
+                AgentRunResult.Failure("agent_timeout", StatusCodes.Status504GatewayTimeout),
             AgentExecutionDisposition.Ambiguous => AgentRunResult.Failure(
-                "agent_unavailable", StatusCodes.Status503ServiceUnavailable),
+                "execution_ambiguous", StatusCodes.Status503ServiceUnavailable),
             AgentExecutionDisposition.FailedClosed => AgentRunResult.Failure(
                 string.Equals(result.ReasonCode, AgentOutcomeReason.ProviderNotConfigured, StringComparison.Ordinal)
                     ? AgentOutcomeReason.ProviderNotConfigured

@@ -348,12 +348,50 @@ public sealed class AgentEndpointTests
         var response = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        Assert.Equal("agent_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal("execution_ambiguous", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
         Assert.Equal(0, model.CallCount);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var ledger = await administrator.AgentExecutionLedger.SingleAsync();
         Assert.Equal(AgentExecutionLedgerState.Ambiguous, ledger.State);
         Assert.Equal("execution_stale", ledger.ReasonCode);
+        var audit = await administrator.AuditEvents.SingleAsync(audit => audit.Action == "agent.run");
+        Assert.Equal(("ambiguous", "execution_stale"), ReadAuditMetadata(audit));
+    }
+
+    [Fact]
+    public async Task Stale_claimed_replay_fails_closed_without_a_model_retry()
+    {
+        var model = ControlledAgentModel.Text(ModelText);
+        await using var factory = await CreateConfiguredFactoryAsync(model);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.AlfaCompanyId, "resuma o pedido interrompido antes do provider");
+        await SeedStaleInFlightLedgerAsync(factory, scenario.AlfaCompanyId, request, AgentExecutionLedgerState.Claimed);
+
+        var response = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("agent_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(0, model.CallCount);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var ledger = await administrator.AgentExecutionLedger.SingleAsync();
+        Assert.Equal(AgentExecutionLedgerState.FailedClosed, ledger.State);
+        Assert.Equal("execution_stale", ledger.ReasonCode);
+    }
+
+    [Fact]
+    public async Task Fresh_in_flight_replay_uses_execution_in_progress_code()
+    {
+        var model = ControlledAgentModel.Text(ModelText);
+        await using var factory = await CreateConfiguredFactoryAsync(model);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewRequest(scenario.AlfaCompanyId, "resuma o pedido ainda em execução");
+        await SeedStaleInFlightLedgerAsync(factory, scenario.AlfaCompanyId, request, AgentExecutionLedgerState.ModelInFlight, stale: false);
+
+        var response = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("execution_in_progress", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(0, model.CallCount);
     }
 
     [Fact]
@@ -387,10 +425,14 @@ public sealed class AgentEndpointTests
         var request = NewRequest(scenario.AlfaCompanyId, "resuma um expediente muito longo");
 
         var response = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
+        var replay = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
 
         Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
         Assert.Equal("agent_timeout", error?.Code);
+        Assert.Equal(HttpStatusCode.GatewayTimeout, replay.StatusCode);
+        Assert.Equal("agent_timeout", (await replay.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(1, model.CallCount);
         // Desfecho 5xx não é durável: o mesmo requestId pode retentar depois.
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var ledger = await administrator.AgentExecutionLedger.SingleAsync();
@@ -560,7 +602,8 @@ public sealed class AgentEndpointTests
         FoundationApiFactory factory,
         Guid companyId,
         AgentRunRequest request,
-        AgentExecutionLedgerState inFlightState)
+        AgentExecutionLedgerState inFlightState,
+        bool stale = true)
     {
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var payload = JsonSerializer.Serialize(new
@@ -584,16 +627,18 @@ public sealed class AgentEndpointTests
         {
             ledger.MarkVisionInFlight(factory.ActorUserId, request.RequestId);
         }
-        else
+        else if (inFlightState == AgentExecutionLedgerState.ModelInFlight)
         {
-            Assert.Equal(AgentExecutionLedgerState.ModelInFlight, inFlightState);
             ledger.MarkModelInFlight(factory.ActorUserId, request.RequestId);
         }
 
         administrator.AgentExecutionLedger.Add(ledger);
         await administrator.SaveChangesAsync();
-        administrator.Entry(ledger).Property(entry => entry.UpdatedAt).CurrentValue = DateTimeOffset.UtcNow.AddMinutes(-11);
-        await administrator.SaveChangesAsync();
+        if (stale)
+        {
+            administrator.Entry(ledger).Property(entry => entry.UpdatedAt).CurrentValue = DateTimeOffset.UtcNow.AddMinutes(-11);
+            await administrator.SaveChangesAsync();
+        }
     }
 
     private static async Task<AgentScenario> SeedScenarioAsync(

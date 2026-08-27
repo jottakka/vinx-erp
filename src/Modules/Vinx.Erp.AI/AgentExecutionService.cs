@@ -76,6 +76,19 @@ public sealed class AgentExecutionService(
             await PersistTerminalAsync(claim.Ledger, command, outcome: null, CancellationToken.None).ConfigureAwait(false);
             return AgentExecutionResult.FailedClosed(outcome.ReasonCode);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (lifecycle.ProviderDispatched)
+            {
+                await MarkAmbiguousAsync(claim.Ledger!, command, CancelledReason, CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                await FailClosedAsync(claim.Ledger!, command, CancelledReason, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            throw;
+        }
         catch (OperationCanceledException)
         {
             return lifecycle.ProviderDispatched
@@ -159,7 +172,10 @@ public sealed class AgentExecutionService(
             AgentExecutionLedgerState.Completed => DeserializeCompleted(ledger),
             AgentExecutionLedgerState.Ambiguous => AgentExecutionResult.Ambiguous(ledger.ReasonCode!),
             AgentExecutionLedgerState.FailedClosed => AgentExecutionResult.FailedClosed(ledger.ReasonCode!),
-            AgentExecutionLedgerState.Claimed or AgentExecutionLedgerState.VisionInFlight or AgentExecutionLedgerState.ModelInFlight
+            AgentExecutionLedgerState.Claimed
+                when DateTimeOffset.UtcNow - ledger.UpdatedAt >= InFlightStaleAfter =>
+                await FailClosedAsync(ledger, command, StaleInFlightReason, cancellationToken).ConfigureAwait(false),
+            AgentExecutionLedgerState.VisionInFlight or AgentExecutionLedgerState.ModelInFlight
                 when DateTimeOffset.UtcNow - ledger.UpdatedAt >= InFlightStaleAfter =>
                 await MarkAmbiguousAsync(ledger, command, StaleInFlightReason, cancellationToken).ConfigureAwait(false),
             _ => AgentExecutionResult.InProgress(),
@@ -206,7 +222,7 @@ public sealed class AgentExecutionService(
         await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await ApplyContextAsync(command, ledger.CompanyId, cancellationToken).ConfigureAwait(false);
         var (status, reasonCode, auditOutcome) = outcome is null
-            ? ("failed_closed", ledger.ReasonCode, AuditOutcome.Failure)
+            ? (ledger.State == AgentExecutionLedgerState.Ambiguous ? "ambiguous" : "failed_closed", ledger.ReasonCode, AuditOutcome.Failure)
             : ToAudit(outcome);
         await auditAppender.AppendAsync(new AuditEventData(
             command.Actor.UserId,
@@ -326,8 +342,8 @@ public sealed class AgentExecutionService(
             }
 
             ledger.MarkVisionInFlight(command.Actor.UserId, command.RequestId);
-            ProviderDispatched = true;
             await PersistTransitionAsync(cancellationToken).ConfigureAwait(false);
+            ProviderDispatched = true;
         }
 
         public async Task MarkModelInFlightAsync(CancellationToken cancellationToken)
