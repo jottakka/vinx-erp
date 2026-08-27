@@ -10,11 +10,10 @@ export function AgentPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const description = access.available
-    ? "Cada mensagem é uma consulta independente ao agente da empresa ativa; turnos anteriores não fazem parte do contexto."
+    ? "Envie perguntas sobre a empresa selecionada."
     : companyName
-      ? "Mensagens e anexos permanecem desativados até que seu perfil tenha acesso ao assistente nesta empresa."
-      : "Mensagens e anexos permanecem desativados até que uma empresa seja selecionada.";
-
+      ? "Escolha outra empresa para continuar."
+      : "Escolha uma empresa antes de enviar uma pergunta.";
   function backToContext() {
     openDock();
 
@@ -30,7 +29,7 @@ export function AgentPage() {
     <Stack spacing={3}>
       <PageHeader
         description={description}
-        eyebrow={`${companyName ?? "Sem empresa"} · Página dedicada`}
+        eyebrow="Assistente"
         title="Agente"
       />
       {access.available ? (

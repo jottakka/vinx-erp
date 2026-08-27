@@ -27,21 +27,31 @@ function createGateway(
 ): EmployeeDirectoryGateway {
   return {
     create: vi.fn().mockResolvedValue({ ok: true, state: "created" }),
-    list: vi.fn().mockResolvedValue({
+    list: vi.fn().mockImplementation(async (requestedCompanyId: string) => ({
       items: [
-        {
-          displayName: "Ana",
-          employeeId: "33333333-3333-4333-8333-333333333333",
-          membershipId: "44444444-4444-4444-8444-444444444444",
-        },
+        requestedCompanyId === secondCompanyId
+          ? {
+              displayName: "Bia",
+              employeeId: "77777777-7777-4777-8777-777777777777",
+              membershipId: "88888888-8888-4888-8888-888888888888",
+            }
+          : {
+              displayName: "Ana",
+              employeeId: "33333333-3333-4333-8333-333333333333",
+              membershipId: "44444444-4444-4444-8444-444444444444",
+            },
       ],
       ok: true,
-    }),
+    })),
     ...overrides,
   };
 }
 
-function snapshot(capability = true, userId = "user-1") {
+function snapshot(
+  capability = true,
+  userId = "user-1",
+  includeSecondCompany = false,
+) {
   return {
     companies: capability
       ? [
@@ -61,7 +71,7 @@ function snapshot(capability = true, userId = "user-1") {
             companyName: "Beta",
             membershipId: "66666666-6666-4666-8666-666666666666",
           },
-        ]
+        ].filter((_company, index) => includeSecondCompany || index === 0)
       : [],
     flags: {},
     platform: { isPlatformOperator: false },
@@ -73,7 +83,7 @@ function snapshotForCompanies(
   companyIds: readonly string[],
   userId = "user-1",
 ) {
-  const current = snapshot(true, userId);
+  const current = snapshot(true, userId, true);
   return {
     ...current,
     companies: current.companies.filter((company) =>
@@ -130,18 +140,62 @@ function renderPage({
 }
 
 async function selectCompany(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByLabelText("Empresa"));
-  await user.click(await screen.findByRole("option", { name: "Alfa" }));
+  await user.click(await screen.findByRole("combobox", { name: "Empresas" }));
+  await user.click(await screen.findByRole("option", { name: /Alfa/ }));
+  await user.keyboard("{Escape}");
 }
 
 async function selectSecondCompany(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByLabelText("Empresa"));
-  await user.click(await screen.findByRole("option", { name: "Beta" }));
+  await user.click(await screen.findByRole("combobox", { name: "Empresas" }));
+  await user.click(
+    await screen.findByRole("option", {
+      name: /Todas as empresas autorizadas/,
+    }),
+  );
+  await user.keyboard("{Escape}");
+  await user.click(await screen.findByRole("combobox", { name: "Empresas" }));
+  await user.click(await screen.findByRole("option", { name: /Beta/ }));
+  await user.keyboard("{Escape}");
 }
 
 async function fillValidForm(user: ReturnType<typeof userEvent.setup>) {
-  await user.type(screen.getByLabelText("Nome"), "Nova Pessoa");
-  await user.type(screen.getByLabelText("E-mail"), "nova@example.test");
+  await user.click(
+    await screen.findByRole("button", { name: "Cadastrar funcionário" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  await user.click(within(dialog).getByRole("combobox", { name: "Empresa" }));
+  await user.click(await screen.findByRole("option", { name: /Alfa/ }));
+  await user.type(within(dialog).getByLabelText("Nome"), "Nova Pessoa");
+  await user.type(within(dialog).getByLabelText("E-mail"), "nova@example.test");
+}
+
+async function waitForAuthenticatedDirectory(hidden = false) {
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("progressbar", { name: "Carregando pessoas" }),
+    ).toBeNull(),
+  );
+  return screen.findByRole("button", {
+    hidden,
+    name: "Cadastrar funcionário",
+  });
+}
+
+function muiSelectValue(combobox: HTMLElement): string {
+  const input = combobox.parentElement?.querySelector<HTMLInputElement>(
+    'input[aria-hidden="true"]',
+  );
+  if (!input) throw new Error("MUI select hidden input was not found");
+  return input.value;
+}
+
+async function changeCreationCompany(
+  user: ReturnType<typeof userEvent.setup>,
+  name: RegExp,
+) {
+  const dialog = screen.getByRole("dialog");
+  await user.click(within(dialog).getByRole("combobox", { name: "Empresa" }));
+  await user.click(await screen.findByRole("option", { name }));
 }
 
 describe("PeoplePage", () => {
@@ -163,8 +217,77 @@ describe("PeoplePage", () => {
     expect(gateway.create).not.toHaveBeenCalled();
   });
 
-  it("waits for explicit selection and only renders display names as text", async () => {
+  it("uses plain directory wording when no employees are found", async () => {
+    const gateway = createGateway({
+      list: vi.fn().mockResolvedValue({ items: [], ok: true }),
+    });
+    renderPage({ gateway });
+
+    expect(
+      await screen.findByText("Nenhum funcionário encontrado."),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("Nenhum funcionário reservado."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("matches accented names with an accent-insensitive search", async () => {
     const user = userEvent.setup();
+    const gateway = createGateway({
+      list: vi.fn().mockResolvedValue({
+        items: [
+          {
+            displayName: "André Santos",
+            employeeId: "33333333-3333-4333-8333-333333333333",
+            membershipId: "44444444-4444-4444-8444-444444444444",
+          },
+        ],
+        ok: true,
+      }),
+    });
+    renderPage({ gateway });
+
+    expect(await screen.findByText("André Santos")).toBeVisible();
+
+    await user.type(screen.getByLabelText("Buscar por nome"), "andre");
+    expect(screen.getByText("André Santos")).toBeVisible();
+
+    await user.clear(screen.getByLabelText("Buscar por nome"));
+    await user.type(screen.getByLabelText("Buscar por nome"), "ÁNDR");
+    expect(screen.getByText("André Santos")).toBeVisible();
+
+    await user.clear(screen.getByLabelText("Buscar por nome"));
+    await user.type(screen.getByLabelText("Buscar por nome"), "bruno");
+    expect(
+      screen.getByText("Nenhum funcionário corresponde à busca."),
+    ).toBeVisible();
+  });
+
+  it("shows a Portuguese name limit instead of the default Zod message", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Cadastrar funcionário" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await changeCreationCompany(user, /Alfa/);
+    const name = within(dialog).getByLabelText("Nome");
+    fireEvent.change(name, { target: { value: "x".repeat(201) } });
+    const form = name.closest("form");
+    if (!form) throw new Error("Expected reservation form");
+    fireEvent.submit(form);
+
+    expect(
+      await within(dialog).findByText(
+        "O nome deve ter no máximo 200 caracteres.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(dialog).queryByText(/String must contain/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("defaults to all eligible companies and only renders human directory data", async () => {
     const gateway = createGateway({
       list: vi.fn().mockResolvedValue({
         items: [
@@ -177,33 +300,58 @@ describe("PeoplePage", () => {
         ok: true,
       }),
     });
-    renderPage({ gateway });
+    renderPage({
+      gateway,
+      sessionGateway: createSessionGateway(
+        vi.fn().mockResolvedValue(snapshot(true, "user-1", true)),
+      ),
+    });
 
-    await screen.findByLabelText("Empresa");
-    expect(gateway.list).not.toHaveBeenCalled();
-
-    await selectCompany(user);
-    await waitFor(() =>
-      expect(gateway.list).toHaveBeenCalledWith(companyId, expect.anything()),
-    );
     expect(
-      await screen.findByText("<img src=x onerror=alert(1)>"),
-    ).toBeVisible();
+      await screen.findAllByText("<img src=x onerror=alert(1)>"),
+    ).toHaveLength(2);
+    await waitFor(() => expect(gateway.list).toHaveBeenCalledTimes(2));
+    expect(gateway.list).toHaveBeenCalledWith(companyId, expect.anything());
+    expect(gateway.list).toHaveBeenCalledWith(
+      secondCompanyId,
+      expect.anything(),
+    );
     expect(document.querySelector("img")).toBeNull();
     expect(
       screen.queryByText("33333333-3333-4333-8333-333333333333"),
     ).toBeNull();
+    expect(
+      screen.queryByText("44444444-4444-4444-8444-444444444444"),
+    ).toBeNull();
+    expect(screen.getAllByText("Alfa", { exact: true })).not.toHaveLength(0);
+    expect(screen.getAllByText("Beta", { exact: true })).not.toHaveLength(0);
   });
 
   it("validates locally before reserving", async () => {
     const user = userEvent.setup();
     const gateway = createGateway();
-    renderPage({ gateway });
+    renderPage({
+      gateway,
+      sessionGateway: createSessionGateway(
+        vi.fn().mockResolvedValue(snapshot(true, "user-1", true)),
+      ),
+    });
 
     await selectCompany(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
+    await changeCreationCompany(user, /Alfa/);
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cadastrar funcionário",
+      }),
+    );
+    expect(
+      within(screen.getByRole("dialog")).getByText(
+        "Este cadastro não envia convite nem concede acesso ao sistema.",
+      ),
+    ).toBeVisible();
 
     expect(await screen.findByText("Informe um nome válido.")).toBeVisible();
     expect(gateway.create).not.toHaveBeenCalled();
@@ -226,7 +374,7 @@ describe("PeoplePage", () => {
     await screen.findByText("Ana");
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
 
     await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(1));
@@ -238,7 +386,7 @@ describe("PeoplePage", () => {
     });
     await waitFor(() => expect(getBootstrap).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(gateway.list).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("Funcionário reservado.")).toBeVisible();
+    expect(await screen.findByText("Funcionário cadastrado.")).toBeVisible();
   });
 
   it("reconciles a delayed eligible refresh before publishing success and refetch", async () => {
@@ -255,13 +403,14 @@ describe("PeoplePage", () => {
     await screen.findByText("Ana");
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
-    expect(screen.queryByText("Funcionário reservado.")).toBeNull();
+    expect(screen.queryByText("Funcionário cadastrado.")).toBeNull();
 
-    refresh.resolve(snapshot());
+    await waitFor(() => expect(getBootstrap).toHaveBeenCalledTimes(2));
+    await act(async () => refresh.resolve(snapshot()));
 
-    expect(await screen.findByText("Funcionário reservado.")).toBeVisible();
+    expect(await screen.findByText("Funcionário cadastrado.")).toBeVisible();
     await waitFor(() => expect(gateway.list).toHaveBeenCalledTimes(2));
   });
 
@@ -279,7 +428,7 @@ describe("PeoplePage", () => {
     await screen.findByText("Ana");
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
     refresh.resolve(snapshot(false));
 
@@ -289,7 +438,7 @@ describe("PeoplePage", () => {
       ),
     ).toBeVisible();
     expect(gateway.list).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Funcionário reservado.")).toBeNull();
+    expect(screen.queryByText("Funcionário cadastrado.")).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Tentar novamente" }),
     ).toBeNull();
@@ -309,18 +458,23 @@ describe("PeoplePage", () => {
     await screen.findByText("Ana");
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
-    refresh.resolve(snapshot(true, "user-2"));
+    await waitFor(() => expect(getBootstrap).toHaveBeenCalledTimes(2));
+    await act(async () => refresh.resolve(snapshot(true, "user-2")));
 
-    await screen.findByLabelText("Empresa");
-    await waitFor(() => expect(gateway.list).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText("Funcionário reservado.")).toBeNull();
-    expect(screen.getByLabelText("Nome")).toHaveValue("");
-    expect(screen.getByLabelText("E-mail")).toHaveValue("");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const createButton = await waitForAuthenticatedDirectory(true);
+    await screen.findByRole("combobox", { hidden: true, name: "Empresas" });
+    await waitFor(() => expect(gateway.list).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Funcionário cadastrado.")).toBeNull();
+    await user.click(createButton);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("Nome")).toHaveValue("");
+    expect(within(dialog).getByLabelText("E-mail")).toHaveValue("");
     expect(
-      screen.getByRole("combobox", { name: "Empresa" }),
-    ).not.toHaveTextContent("Alfa");
+      muiSelectValue(within(dialog).getByRole("combobox", { name: "Empresa" })),
+    ).toBe("");
   });
 
   it("clears the selected company and form when its capability is removed", async () => {
@@ -334,8 +488,19 @@ describe("PeoplePage", () => {
 
     await selectCompany(user);
     await fillValidForm(user);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("Nome")).toHaveValue("Nova Pessoa");
+    expect(within(dialog).getByLabelText("E-mail")).toHaveValue(
+      "nova@example.test",
+    );
+    expect(
+      within(dialog).getByRole("combobox", { name: "Empresa" }),
+    ).toHaveTextContent("Alfa");
+    expect(
+      within(dialog).getByRole("button", { name: "Cadastrar funcionário" }),
+    ).toBeEnabled();
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
     refresh.resolve(snapshotForCompanies([secondCompanyId]));
 
@@ -346,7 +511,7 @@ describe("PeoplePage", () => {
       screen.getByRole("combobox", { name: "Empresa" }),
     ).not.toHaveTextContent("Alfa");
     await user.click(screen.getByRole("combobox", { name: "Empresa" }));
-    expect(await screen.findByRole("option", { name: "Beta" })).toBeVisible();
+    expect(await screen.findByRole("option", { name: /Beta/ })).toBeVisible();
   });
 
   it("clears typed unselected fields before rendering a different user view", async () => {
@@ -358,17 +523,19 @@ describe("PeoplePage", () => {
       .mockReturnValueOnce(refresh.promise);
     renderPage({ sessionGateway: createSessionGateway(getBootstrap) });
 
-    await screen.findByLabelText("Nome");
     await fillValidForm(user);
-    window.dispatchEvent(new Event("online"));
-    refresh.resolve(snapshot(true, "user-2"));
+    act(() => window.dispatchEvent(new Event("online")));
+    await waitFor(() => expect(getBootstrap).toHaveBeenCalledTimes(2));
+    await act(async () => refresh.resolve(snapshot(true, "user-2")));
 
-    await screen.findByLabelText("Nome");
-    expect(screen.getByLabelText("Nome")).toHaveValue("");
-    expect(screen.getByLabelText("E-mail")).toHaveValue("");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(await waitForAuthenticatedDirectory(true));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("Nome")).toHaveValue("");
+    expect(within(dialog).getByLabelText("E-mail")).toHaveValue("");
     expect(
-      screen.getByRole("combobox", { name: "Empresa" }),
-    ).not.toHaveTextContent("Alfa");
+      muiSelectValue(within(dialog).getByRole("combobox", { name: "Empresa" })),
+    ).toBe("");
   });
 
   it("uses a bound default request ID factory", async () => {
@@ -379,7 +546,7 @@ describe("PeoplePage", () => {
     await selectCompany(user);
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
 
     await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(1));
@@ -412,7 +579,7 @@ describe("PeoplePage", () => {
     await selectCompany(user);
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
     expect(
       await screen.findByRole("button", { name: "Tentar novamente" }),
@@ -435,17 +602,23 @@ describe("PeoplePage", () => {
         ok: false,
       }),
     });
-    renderPage({ createRequestId, gateway });
+    renderPage({
+      createRequestId,
+      gateway,
+      sessionGateway: createSessionGateway(
+        vi.fn().mockResolvedValue(snapshot(true, "user-1", true)),
+      ),
+    });
 
     await selectCompany(user);
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
     await screen.findByRole("button", { name: "Tentar novamente" });
 
     expect(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     ).toBeDisabled();
     const form = screen.getByLabelText("Nome").closest("form");
     if (!form) throw new Error("Expected reservation form");
@@ -453,7 +626,7 @@ describe("PeoplePage", () => {
     expect(gateway.create).toHaveBeenCalledTimes(1);
     expect(createRequestId).toHaveBeenCalledTimes(1);
 
-    await selectSecondCompany(user);
+    await changeCreationCompany(user, /Beta/);
     expect(screen.getByLabelText("Nome")).toHaveValue("");
     expect(screen.getByLabelText("E-mail")).toHaveValue("");
     expect(
@@ -487,7 +660,7 @@ describe("PeoplePage", () => {
       await selectCompany(user);
       await fillValidForm(user);
       await user.click(
-        screen.getByRole("button", { name: "Reservar funcionário" }),
+        screen.getByRole("button", { name: "Cadastrar funcionário" }),
       );
       await user.click(
         await screen.findByRole("button", { name: "Tentar novamente" }),
@@ -511,17 +684,22 @@ describe("PeoplePage", () => {
           }),
       ),
     });
-    renderPage({ gateway });
+    renderPage({
+      gateway,
+      sessionGateway: createSessionGateway(
+        vi.fn().mockResolvedValue(snapshot(true, "user-1", true)),
+      ),
+    });
 
     await selectCompany(user);
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
 
     expect(gateway.create).toHaveBeenCalledTimes(1);
     expect(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     ).toBeDisabled();
     expect(resolveCreate).toBeDefined();
     resolveCreate?.({ ok: true, state: "created" });
@@ -557,7 +735,7 @@ describe("PeoplePage", () => {
     await selectCompany(user);
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
     await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(getBootstrap).toHaveBeenCalledTimes(2));
@@ -569,7 +747,7 @@ describe("PeoplePage", () => {
 
     expect(gateway.create).toHaveBeenCalledTimes(1);
     await waitFor(() =>
-      expect(screen.getByText("Funcionário reservado.")).toBeVisible(),
+      expect(screen.getByText("Funcionário cadastrado.")).toBeVisible(),
     );
     expect(gateway.create).toHaveBeenCalledTimes(1);
   });
@@ -587,14 +765,19 @@ describe("PeoplePage", () => {
           }),
       ),
     });
-    renderPage({ gateway });
+    renderPage({
+      gateway,
+      sessionGateway: createSessionGateway(
+        vi.fn().mockResolvedValue(snapshot(true, "user-1", true)),
+      ),
+    });
 
     await selectCompany(user);
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
-    await selectSecondCompany(user);
+    await changeCreationCompany(user, /Beta/);
     await user.clear(screen.getByLabelText("Nome"));
     await user.type(screen.getByLabelText("Nome"), "Pessoa nova");
     resolveCreate?.({ error: { kind: "network" }, ok: false });
@@ -624,21 +807,26 @@ describe("PeoplePage", () => {
           }),
       ),
     });
-    renderPage({ gateway });
+    renderPage({
+      gateway,
+      sessionGateway: createSessionGateway(
+        vi.fn().mockResolvedValue(snapshot(true, "user-1", true)),
+      ),
+    });
 
     await selectCompany(user);
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
-    await selectSecondCompany(user);
+    await changeCreationCompany(user, /Beta/);
     await user.clear(screen.getByLabelText("Nome"));
     await user.type(screen.getByLabelText("Nome"), "Pessoa atual");
     resolveCreate?.({ ok: true, state: "created" });
 
     await waitFor(() => expect(gateway.list).toHaveBeenCalledTimes(2));
     expect(screen.getByLabelText("Nome")).toHaveValue("Pessoa atual");
-    expect(screen.queryByText("Funcionário reservado.")).toBeNull();
+    expect(screen.queryByText("Funcionário cadastrado.")).toBeNull();
   });
 
   it("does not render a delayed directory response from a previous company", async () => {
@@ -666,7 +854,12 @@ describe("PeoplePage", () => {
         });
       }),
     });
-    renderPage({ gateway });
+    renderPage({
+      gateway,
+      sessionGateway: createSessionGateway(
+        vi.fn().mockResolvedValue(snapshot(true, "user-1", true)),
+      ),
+    });
 
     await selectCompany(user);
     await waitFor(() =>
@@ -691,7 +884,7 @@ describe("PeoplePage", () => {
 
     expect(screen.queryByText("Ana")).toBeNull();
     expect(screen.getByText("Bia")).toBeVisible();
-    expect(gateway.list).toHaveBeenCalledTimes(2);
+    expect(gateway.list).toHaveBeenCalledTimes(3);
     expect(gateway.list).toHaveBeenLastCalledWith(
       secondCompanyId,
       expect.anything(),
@@ -711,7 +904,7 @@ describe("PeoplePage", () => {
     await screen.findByText("Ana");
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
 
     await waitFor(() => expect(getBootstrap).toHaveBeenCalledTimes(2));
@@ -732,25 +925,25 @@ describe("PeoplePage", () => {
     await selectCompany(user);
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
 
     expect(
       await screen.findByText(
-        "A reserva foi concluída, mas a sessão precisa ser atualizada.",
+        "O cadastro foi concluído, mas a sessão precisa ser atualizada.",
       ),
     ).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Atualizar sessão" }),
     ).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: "Reservar funcionário" }),
+      screen.queryByRole("button", { name: "Cadastrar funcionário" }),
     ).toBeNull();
     await user.click(screen.getByRole("button", { name: "Atualizar sessão" }));
     manualRefresh.resolve(snapshot());
     await waitFor(() => expect(getBootstrap).toHaveBeenCalledTimes(3));
     expect(
-      await screen.findByRole("button", { name: "Reservar funcionário" }),
+      await screen.findByRole("button", { name: "Cadastrar funcionário" }),
     ).toBeVisible();
     await waitFor(() => expect(gateway.list).toHaveBeenCalledTimes(2));
   });
@@ -768,25 +961,27 @@ describe("PeoplePage", () => {
     await selectCompany(user);
     await fillValidForm(user);
     await user.click(
-      screen.getByRole("button", { name: "Reservar funcionário" }),
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
     );
     await screen.findByText(
-      "A reserva foi concluída, mas a sessão precisa ser atualizada.",
+      "O cadastro foi concluído, mas a sessão precisa ser atualizada.",
     );
     await user.click(screen.getByRole("button", { name: "Atualizar sessão" }));
-    manualRefresh.resolve(snapshot(true, "user-2"));
+    await act(async () => manualRefresh.resolve(snapshot(true, "user-2")));
 
-    await screen.findByLabelText("Empresa");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(
       screen.queryByText(
-        "A reserva foi concluída, mas a sessão precisa ser atualizada.",
+        "O cadastro foi concluído, mas a sessão precisa ser atualizada.",
       ),
     ).toBeNull();
-    expect(screen.getByLabelText("Nome")).toHaveValue("");
-    expect(screen.getByLabelText("E-mail")).toHaveValue("");
+    await user.click(await waitForAuthenticatedDirectory());
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByLabelText("Nome")).toHaveValue("");
+    expect(within(dialog).getByLabelText("E-mail")).toHaveValue("");
     expect(
-      screen.getByRole("combobox", { name: "Empresa" }),
-    ).not.toHaveTextContent("Alfa");
+      muiSelectValue(within(dialog).getByRole("combobox", { name: "Empresa" })),
+    ).toBe("");
   });
 
   it.each(["employee_conflict"] as const)(
@@ -801,11 +996,11 @@ describe("PeoplePage", () => {
       await selectCompany(user);
       await fillValidForm(user);
       await user.click(
-        screen.getByRole("button", { name: "Reservar funcionário" }),
+        screen.getByRole("button", { name: "Cadastrar funcionário" }),
       );
 
       expect(
-        await screen.findByText("Não foi possível concluir esta reserva."),
+        await screen.findByText("Não foi possível concluir o cadastro."),
       ).toBeVisible();
       expect(screen.queryByText("nova@example.test")).toBeNull();
     },
@@ -832,7 +1027,7 @@ describe("PeoplePage", () => {
       await screen.findByText("Ana");
       await fillValidForm(user);
       await user.click(
-        screen.getByRole("button", { name: "Reservar funcionário" }),
+        screen.getByRole("button", { name: "Cadastrar funcionário" }),
       );
 
       expect(await screen.findByLabelText("Atualizando pessoas")).toBeVisible();
@@ -843,9 +1038,9 @@ describe("PeoplePage", () => {
       await screen.findByLabelText("Empresa");
       expect(screen.getByLabelText("Nome")).toHaveValue("");
       expect(screen.getByLabelText("E-mail")).toHaveValue("");
-      expect(gateway.list).toHaveBeenCalledTimes(1);
+      expect(gateway.list).toHaveBeenCalledTimes(2);
       expect(
-        screen.queryByText("Não foi possível concluir esta reserva."),
+        screen.queryByText("Não foi possível concluir o cadastro."),
       ).toBeNull();
     },
   );
@@ -855,8 +1050,23 @@ describe("PeoplePage", () => {
     async (kind) => {
       const user = userEvent.setup();
       const refresh = deferred<ReturnType<typeof snapshot>>();
+      let listAttempts = 0;
       const gateway = createGateway({
-        list: vi.fn().mockResolvedValue({ error: { kind }, ok: false }),
+        list: vi.fn().mockImplementation(async () => {
+          listAttempts += 1;
+          return listAttempts === 1
+            ? { error: { kind }, ok: false }
+            : {
+                items: [
+                  {
+                    displayName: "Ana",
+                    employeeId: "33333333-3333-4333-8333-333333333333",
+                    membershipId: "44444444-4444-4444-8444-444444444444",
+                  },
+                ],
+                ok: true,
+              };
+        }),
       });
       const getBootstrap = vi
         .fn()
@@ -867,17 +1077,18 @@ describe("PeoplePage", () => {
         sessionGateway: createSessionGateway(getBootstrap),
       });
 
-      await selectCompany(user);
-
       expect(await screen.findByLabelText("Atualizando pessoas")).toBeVisible();
       expect(screen.queryByLabelText("Nome")).toBeNull();
       expect(gateway.list).toHaveBeenCalledTimes(1);
-      refresh.resolve(snapshot(true, "user-2"));
+      await act(async () => refresh.resolve(snapshot(true, "user-2")));
 
-      await screen.findByLabelText("Empresa");
-      expect(screen.getByLabelText("Nome")).toHaveValue("");
-      expect(screen.getByLabelText("E-mail")).toHaveValue("");
-      expect(gateway.list).toHaveBeenCalledTimes(1);
+      await user.click(
+        await screen.findByRole("button", { name: "Cadastrar funcionário" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByLabelText("Nome")).toHaveValue("");
+      expect(within(dialog).getByLabelText("E-mail")).toHaveValue("");
+      expect(gateway.list).toHaveBeenCalledTimes(2);
       expect(gateway.create).not.toHaveBeenCalled();
     },
   );
@@ -888,20 +1099,65 @@ describe("PeoplePage", () => {
     renderPage({ gateway });
 
     await selectCompany(user);
-    const employee = await screen.findByRole("button", { name: "Ana" });
+    const employee = await screen.findByRole("button", { name: /Ana/ });
     await user.click(employee);
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeVisible();
     expect(within(dialog).getByText("Ana")).toBeVisible();
     expect(
-      within(dialog).getByText("33333333-3333-4333-8333-333333333333"),
-    ).toBeVisible();
+      within(dialog).queryByText("33333333-3333-4333-8333-333333333333"),
+    ).toBeNull();
     expect(
-      within(dialog).getByText("44444444-4444-4444-8444-444444444444"),
-    ).toBeVisible();
-    expect(
-      within(dialog).getByText(/O e-mail não é retornado pelo diretório/),
-    ).toBeVisible();
+      within(dialog).queryByText("44444444-4444-4444-8444-444444444444"),
+    ).toBeNull();
+    expect(within(dialog).getByText("Alfa", { exact: true })).toBeVisible();
+  });
+
+  it("drops a delayed create after closing the dialog", async () => {
+    const user = userEvent.setup();
+    let resolveCreate:
+      | ((result: EmployeeDirectoryCreateResult) => void)
+      | undefined;
+    const gateway = createGateway({
+      create: vi.fn(
+        () =>
+          new Promise<EmployeeDirectoryCreateResult>((resolve) => {
+            resolveCreate = resolve;
+          }),
+      ),
+    });
+    renderPage({ gateway });
+    await screen.findByText("Ana");
+    await fillValidForm(user);
+    await user.click(
+      screen.getByRole("button", { name: "Cadastrar funcionário" }),
+    );
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Fechar",
+      }),
+    );
+    resolveCreate?.({ ok: true, state: "created" });
+    await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Cadastrar funcionário" }),
+      ).toBeEnabled(),
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Cadastrar funcionário" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Nome"), "Cadastro atual");
+    await user.type(
+      within(dialog).getByLabelText("E-mail"),
+      "atual@example.test",
+    );
+    resolveCreate?.({ ok: true, state: "created" });
+    await waitFor(() => expect(gateway.create).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.queryByText("Funcionário cadastrado.")).toBeNull();
   });
 });

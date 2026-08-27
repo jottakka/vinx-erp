@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { amountToCents, maximumAmountCents } from "./paguai-amount";
+import { isValidDateOnly } from "./paguai-format";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const draftsPath = "/paguai/requests";
@@ -11,6 +12,8 @@ const amountSchema = z
     return cents !== null && cents > 0n && cents <= maximumAmountCents;
   });
 
+const dateSchema = z.string().refine(isValidDateOnly);
+
 const draftSchema = z
   .object({
     id: z.uuid(),
@@ -20,8 +23,9 @@ const draftSchema = z
     description: z.string().trim().min(1).max(4000),
     amount: amountSchema,
     currency: z.literal("BRL"),
-    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    dueDate: dateSchema,
     beneficiaryDisplayName: z.string().trim().min(1).max(200),
+    invoiceFileId: z.uuid().nullable(),
     proofRequirement: z.enum(["optional", "required"]),
     state: z.literal("rascunho"),
     version: z.literal(1),
@@ -44,6 +48,7 @@ export type CreatePaguaiDraftInput = Pick<
   | "currency"
   | "dueDate"
   | "beneficiaryDisplayName"
+  | "invoiceFileId"
   | "proofRequirement"
 >;
 export type PaguaiDraftError =

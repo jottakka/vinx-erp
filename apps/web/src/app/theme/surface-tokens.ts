@@ -4,8 +4,8 @@ export const displayFontFamily =
   '"Sora", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
 export const vinxSurface = {
-  // Lavagem ambiente quente para o fundo do shell; segue o esquema ativo
-  // porque mistura variáveis semanticas em vez de valores fixos.
+  // Lavagem ambiente azul para o fundo do shell; segue o esquema ativo
+  // porque mistura variáveis semânticas em vez de valores fixos.
   ambientWash:
     "radial-gradient(1100px 520px at 88% -12%, color-mix(in srgb, var(--vinx-palette-primary-main) 9%, transparent), transparent 62%), radial-gradient(920px 460px at -8% 112%, color-mix(in srgb, var(--vinx-palette-secondary-main) 8%, transparent), transparent 58%)",
 } as const;
@@ -36,6 +36,20 @@ export const vinxFieldBorder = {
     "color-mix(in srgb, var(--vinx-palette-text-primary) 64%, transparent)",
 } as const;
 
+// Preenchimento de campo: o foco precisa destacar (alpha >= rest), nunca
+// clarear em relação ao repouso — por isso focus > rest em ambos os esquemas.
+export const vinxFieldFill = {
+  rest: "color-mix(in srgb, var(--vinx-palette-text-primary) 3%, transparent)",
+  hover: "color-mix(in srgb, var(--vinx-palette-text-primary) 5%, transparent)",
+  focus: "color-mix(in srgb, var(--vinx-palette-text-primary) 4%, transparent)",
+  darkRest:
+    "color-mix(in srgb, var(--vinx-palette-text-primary) 4%, transparent)",
+  darkHover:
+    "color-mix(in srgb, var(--vinx-palette-text-primary) 7%, transparent)",
+  darkFocus:
+    "color-mix(in srgb, var(--vinx-palette-text-primary) 5%, transparent)",
+} as const;
+
 type AccentSurface = {
   main: string;
   tint: string;
@@ -52,11 +66,12 @@ export function companySurface(slot: CompanyAppearanceSlot): AccentSurface {
 }
 
 export const vinxShadow = {
-  card: "0 1px 2px rgba(30, 21, 14, 0.05), 0 4px 14px rgba(30, 21, 14, 0.05)",
-  lift: "0 2px 4px rgba(30, 21, 14, 0.07), 0 14px 34px rgba(30, 21, 14, 0.13)",
+  card: "0 1px 2px color-mix(in srgb, var(--vinx-palette-navigation-dark) 5%, transparent), 0 4px 14px color-mix(in srgb, var(--vinx-palette-navigation-dark) 5%, transparent)",
+  lift: "0 2px 4px color-mix(in srgb, var(--vinx-palette-navigation-dark) 7%, transparent), 0 14px 34px color-mix(in srgb, var(--vinx-palette-navigation-dark) 13%, transparent)",
   overlay:
-    "0 10px 24px rgba(22, 15, 10, 0.16), 0 24px 64px rgba(22, 15, 10, 0.22)",
-  markFilter: "drop-shadow(0 2px 6px rgba(30, 21, 14, 0.18))",
+    "0 10px 24px color-mix(in srgb, var(--vinx-palette-navigation-dark) 16%, transparent), 0 24px 64px color-mix(in srgb, var(--vinx-palette-navigation-dark) 22%, transparent)",
+  markFilter:
+    "drop-shadow(0 2px 6px color-mix(in srgb, var(--vinx-palette-navigation-dark) 18%, transparent))",
 } as const;
 
 // Vidro fosco reservado a superfícies paradas (AppBar); nunca sobre o

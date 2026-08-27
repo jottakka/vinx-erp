@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text.Json;
+using Npgsql;
+using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
 
@@ -216,79 +218,183 @@ public sealed class RealE2eFixtureHostTests
     }
 
     [Fact]
-    public async Task Concurrent_hosts_keep_database_and_api_mutations_isolated()
+    public async Task Shared_host_seeds_once_and_keeps_profile_RLS_isolated()
     {
-        var firstStart = E2eFixtureHost.StartAsync("maria", CancellationToken.None);
-        var secondStart = E2eFixtureHost.StartAsync("maria", CancellationToken.None);
-        E2eFixtureHost[] hosts;
+        SharedE2eFixtureHost? sharedHost = null;
+        var agentModel = new DeterministicE2eAgentModel();
+        var agentRunOptions = new AgentRunOptions
+        {
+            Provider = AgentRunOptions.OpenAiCompatibleProvider,
+            Endpoint = new Uri("https://agent-provider.example/v1"),
+            ApiKey = "test-agent-key",
+            Model = "test-agent-model",
+        };
+        var mariaApiPort = 0;
+        var claraApiPort = 0;
+        var databasePort = 0;
+        string? databaseHost = null;
+        string? credentialFilePath = null;
         try
         {
-            hosts = await Task.WhenAll(firstStart, secondStart);
-        }
-        catch (Exception primaryFailure)
-        {
-            await FixtureCleanup.CompleteAsync(
-                primaryFailure,
-                () => DisposeSuccessfulStartAsync(firstStart),
-                () => DisposeSuccessfulStartAsync(secondStart));
-            throw;
-        }
+            sharedHost = await SharedE2eFixtureHost.StartAsync(
+                CancellationToken.None,
+                agentModel,
+                agentRunOptions);
+            mariaApiPort = sharedHost.MariaOrigin.Port;
+            claraApiPort = sharedHost.ClaraOrigin.Port;
+            databaseHost = sharedHost.DatabaseHost;
+            databasePort = sharedHost.DatabasePort;
+            credentialFilePath = sharedHost.DatabasePasswordFilePath;
 
-        var first = hosts[0];
-        var second = hosts[1];
-        var firstApiPort = first.Origin.Port;
-        var secondApiPort = second.Origin.Port;
-        var firstDatabaseEndpoint = (first.DatabaseHost, first.DatabasePort);
-        var secondDatabaseEndpoint = (second.DatabaseHost, second.DatabasePort);
+            Assert.NotEqual(sharedHost.MariaOrigin, sharedHost.ClaraOrigin);
+            Assert.Equal("127.0.0.1", sharedHost.MariaOrigin.Host);
+            Assert.Equal("127.0.0.1", sharedHost.ClaraOrigin.Host);
+            Assert.StartsWith("vinx_fixture_", sharedHost.DatabaseName, StringComparison.Ordinal);
+            Assert.Equal("postgres", sharedHost.DatabaseUser);
+            Assert.True(File.Exists(credentialFilePath));
 
-        try
-        {
-            Assert.NotEqual(first.Origin, second.Origin);
-            Assert.NotEqual(first.DatabaseName, second.DatabaseName);
-            Assert.NotEqual(firstDatabaseEndpoint, secondDatabaseEndpoint);
+            using var mariaClient = CreateClient(sharedHost.MariaOrigin);
+            using var claraClient = CreateClient(sharedHost.ClaraOrigin);
+            using var mariaBootstrap = await GetJsonAsync(mariaClient, "/foundation/bootstrap");
+            using var claraBootstrap = await GetJsonAsync(claraClient, "/foundation/bootstrap");
+            Assert.Equal("Maria Silva", mariaBootstrap.RootElement.GetProperty("user").GetProperty("displayName").GetString());
+            Assert.Equal("Clara Oliveira", claraBootstrap.RootElement.GetProperty("user").GetProperty("displayName").GetString());
+            Assert.Equal(
+                ["Alfa", "Beta"],
+                mariaBootstrap.RootElement.GetProperty("companies").EnumerateArray()
+                    .Select(company => company.GetProperty("companyName").GetString()!)
+                    .ToArray());
+            Assert.Equal(
+                ["Gama"],
+                claraBootstrap.RootElement.GetProperty("companies").EnumerateArray()
+                    .Select(company => company.GetProperty("companyName").GetString()!)
+                    .ToArray());
+            var alfaCompanyId = sharedHost.Receipt.AlfaCompanyId;
+            var betaCompanyId = sharedHost.Receipt.BetaCompanyId;
+            var gamaCompanyId = sharedHost.Receipt.GamaCompanyId;
 
-            using var firstClient = CreateClient(first.Origin);
-            using var secondClient = CreateClient(second.Origin);
+            using (var mariaAlfaAgentResponse = await mariaClient.PostAsJsonAsync(
+                "/agent/runs",
+                new AgentRunRequest(
+                    Guid.NewGuid(),
+                    "read_only_summarize_v1",
+                    "resuma a empresa Alfa",
+                    alfaCompanyId)))
+            {
+                Assert.Equal(HttpStatusCode.OK, mariaAlfaAgentResponse.StatusCode);
+                var result = await ReadAgentRunResponseAsync(mariaAlfaAgentResponse);
+                Assert.Equal("result", result.Status);
+                Assert.Equal("ok", result.ReasonCode);
+                Assert.Equal(DeterministicE2eAgentModel.ResponseText, result.Text);
+                Assert.Null(result.Sources);
+                Assert.NotEqual(Guid.Empty, result.CorrelationId);
+                Assert.Equal(
+                    result.CorrelationId.ToString(),
+                    Assert.Single(mariaAlfaAgentResponse.Headers.GetValues("X-Correlation-ID")));
+            }
+
+            Assert.Equal(1, agentModel.CallCount);
+            Assert.Equal(1, agentModel.LastMessageCount);
+            Assert.Equal(AgentRunOptions.OpenAiCompatibleProvider, agentModel.LastSelection?.ProviderId);
+            Assert.Equal("test-agent-model", agentModel.LastSelection?.ModelId);
+
+            using (var mariaBetaAgentResponse = await mariaClient.PostAsJsonAsync(
+                "/agent/runs",
+                new AgentRunRequest(
+                    Guid.NewGuid(),
+                    "read_only_summarize_v1",
+                    "resuma a empresa Beta",
+                    betaCompanyId)))
+            {
+                Assert.Equal(HttpStatusCode.OK, mariaBetaAgentResponse.StatusCode);
+                var result = await ReadAgentRunResponseAsync(mariaBetaAgentResponse);
+                Assert.Equal("denied", result.Status);
+                Assert.Equal("capability_denied", result.ReasonCode);
+                Assert.Null(result.Text);
+                Assert.Null(result.Sources);
+            }
+
+            Assert.Equal(1, agentModel.CallCount);
+
+            using (var claraGamaAgentResponse = await claraClient.PostAsJsonAsync(
+                "/agent/runs",
+                new AgentRunRequest(
+                    Guid.NewGuid(),
+                    "read_only_summarize_v1",
+                    "resuma a empresa Gama",
+                    gamaCompanyId)))
+            {
+                Assert.Equal(HttpStatusCode.OK, claraGamaAgentResponse.StatusCode);
+                var result = await ReadAgentRunResponseAsync(claraGamaAgentResponse);
+                Assert.Equal("denied", result.Status);
+                Assert.Equal("capability_denied", result.ReasonCode);
+                Assert.Null(result.Text);
+                Assert.Null(result.Sources);
+            }
+
+            Assert.Equal(1, agentModel.CallCount);
+
             Assert.Equal(
                 ["Beatriz Costa", "Maria Silva"],
-                await ReadEmployeeNamesAsync(firstClient, first.Receipt.AlfaCompanyId));
-            Assert.Equal(
-                ["Beatriz Costa", "Maria Silva"],
-                await ReadEmployeeNamesAsync(secondClient, second.Receipt.AlfaCompanyId));
+                await ReadEmployeeNamesAsync(mariaClient, alfaCompanyId));
 
-            var antiforgeryToken = await GetAntiforgeryTokenAsync(firstClient);
+            var antiforgeryToken = await GetAntiforgeryTokenAsync(mariaClient);
             using var createRequest = new HttpRequestMessage(
                 HttpMethod.Post,
-                $"/foundation/companies/{first.Receipt.AlfaCompanyId}/employees")
+                $"/foundation/companies/{alfaCompanyId}/employees")
             {
                 Content = JsonContent.Create(new
                 {
                     requestId = Guid.NewGuid(),
-                    companyId = first.Receipt.AlfaCompanyId,
-                    displayName = "Pessoa isolada A",
-                    email = "pessoa.isolada.a@example.test",
+                    companyId = alfaCompanyId,
+                    displayName = "Pessoa compartilhada A",
+                    email = "pessoa.compartilhada.a@example.test",
                 }),
             };
             createRequest.Headers.Add("X-CSRF-TOKEN", antiforgeryToken);
-            using var created = await firstClient.SendAsync(createRequest);
+            using var created = await mariaClient.SendAsync(createRequest);
             Assert.Equal(HttpStatusCode.Created, created.StatusCode);
 
             Assert.Equal(
-                ["Beatriz Costa", "Maria Silva", "Pessoa isolada A"],
-                await ReadEmployeeNamesAsync(firstClient, first.Receipt.AlfaCompanyId));
-            Assert.Equal(
-                ["Beatriz Costa", "Maria Silva"],
-                await ReadEmployeeNamesAsync(secondClient, second.Receipt.AlfaCompanyId));
+                ["Beatriz Costa", "Maria Silva", "Pessoa compartilhada A"],
+                await ReadEmployeeNamesAsync(mariaClient, alfaCompanyId));
+            await AssertCapabilityDeniedAsync(
+                claraClient,
+                $"/foundation/companies/{alfaCompanyId}/employees");
+            await AssertCapabilityDeniedAsync(
+                mariaClient,
+                $"/foundation/companies/{gamaCompanyId}/employees");
+
+            await using (var administrator = await sharedHost.OpenAdministratorConnectionAsync())
+            await using (var persisted = new NpgsqlCommand(
+                "SELECT count(*) FROM foundation.employees WHERE company_id = @company_id AND display_name = @display_name",
+                administrator))
+            {
+                persisted.Parameters.AddWithValue("company_id", alfaCompanyId);
+                persisted.Parameters.AddWithValue("display_name", "Pessoa compartilhada A");
+                Assert.Equal(1L, Convert.ToInt64(await persisted.ExecuteScalarAsync()));
+            }
+
+            using (var endpoint = new TcpClient())
+            using (var endpointCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            {
+                await endpoint.ConnectAsync(databaseHost, databasePort, endpointCancellation.Token);
+            }
         }
         finally
         {
-            await Task.WhenAll(first.DisposeAsync().AsTask(), second.DisposeAsync().AsTask());
+            if (sharedHost is not null)
+            {
+                await sharedHost.DisposeAsync();
+            }
         }
 
-        await AssertPortClosedAsync("127.0.0.1", firstApiPort);
-        await AssertPortClosedAsync("127.0.0.1", secondApiPort);
-        await AssertPortClosedAsync(firstDatabaseEndpoint.DatabaseHost, firstDatabaseEndpoint.DatabasePort);
-        await AssertPortClosedAsync(secondDatabaseEndpoint.DatabaseHost, secondDatabaseEndpoint.DatabasePort);
+        Assert.NotNull(databaseHost);
+        Assert.NotNull(credentialFilePath);
+        Assert.False(File.Exists(credentialFilePath));
+        await AssertPortClosedAsync("127.0.0.1", mariaApiPort);
+        await AssertPortClosedAsync("127.0.0.1", claraApiPort);
+        await AssertPortClosedAsync(databaseHost, databasePort);
     }
 
     private static HttpClient CreateClient(Uri origin) => new(new HttpClientHandler
@@ -329,27 +435,15 @@ public sealed class RealE2eFixtureHostTests
             ?? throw new InvalidOperationException("The antiforgery request token was empty.");
     }
 
+    private static async Task<AgentRunResponse> ReadAgentRunResponseAsync(HttpResponseMessage response) =>
+        await response.Content.ReadFromJsonAsync<AgentRunResponse>()
+            ?? throw new InvalidOperationException("The agent run response body was not readable.");
+
     private static async Task AssertCapabilityDeniedAsync(HttpClient client, string requestUri)
     {
         using var response = await client.GetAsync(requestUri);
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal(CapabilityDeniedBody, await response.Content.ReadAsStringAsync());
-    }
-
-    private static async ValueTask DisposeSuccessfulStartAsync(Task<E2eFixtureHost> startTask)
-    {
-        E2eFixtureHost host;
-        try
-        {
-            host = await startTask;
-        }
-        catch
-        {
-            // StartAsync owns cleanup when it fails.
-            return;
-        }
-
-        await host.DisposeAsync();
     }
 
     private static async Task AssertPortClosedAsync(string host, int port)
@@ -363,9 +457,14 @@ public sealed class RealE2eFixtureHostTests
                 using var attempt = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
                 await client.ConnectAsync(host, port, attempt.Token);
             }
-            catch (Exception exception) when (exception is SocketException or OperationCanceledException)
+            catch (SocketException)
             {
+                // Only a refused connection proves the port is closed.
                 return;
+            }
+            catch (OperationCanceledException)
+            {
+                // A slow or stalled connect is inconclusive; keep polling until the deadline.
             }
 
             await Task.Delay(100);
@@ -373,4 +472,19 @@ public sealed class RealE2eFixtureHostTests
 
         Assert.Fail($"Port {host}:{port} remained open after fixture disposal.");
     }
+
+    private sealed record AgentRunRequest(
+        Guid RequestId,
+        string Journey,
+        string Message,
+        Guid CompanyId);
+
+    private sealed record AgentRunResponse(
+        string Status,
+        string? ReasonCode,
+        string? Text,
+        IReadOnlyList<AgentRunSourceRef>? Sources,
+        Guid CorrelationId);
+
+    private sealed record AgentRunSourceRef(string Reference);
 }

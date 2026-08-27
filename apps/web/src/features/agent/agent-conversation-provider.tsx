@@ -23,12 +23,6 @@ import {
 } from "./agent-client";
 import type { AgentMessage, AgentStatus } from "./agent-contract";
 
-/**
- * Conecta o workspace do agente ao POST /agent/runs real. Cada envio é uma
- * consulta independente (o runner não mantém turnos anteriores) contra a
- * primeira empresa do bootstrap; a conversa é abortada e limpa quando a
- * empresa muda. Nenhum resultado tardio sobrevive a reset/unmount/troca.
- */
 export function agentReplyText(result: AgentRunSendResult): string {
   if (!result.ok) {
     return failureText(result.failure.kind);
@@ -100,18 +94,21 @@ function replySources(result: AgentRunSendResult) {
 
 type AgentConversationContextValue = {
   access: AgentAccess;
+  authorizedCompanies: readonly AuthorizedCompanyMembership[];
   attachments: readonly AgentConversationAttachment[];
   attachmentSelectionAvailable: boolean;
   attachmentSelectionLimitReached: boolean;
   closeDock: () => void;
   companyName: string | null;
+  selectCompany: (companyId: string) => void;
+  selectedCompanyId: string;
   dockOpen: boolean;
   messages: readonly AgentMessage[];
   openDock: () => void;
   removeAttachment: (localId: string) => void;
   resetConversation: () => void;
   selectAttachments: (files: readonly File[]) => void;
-  sendMessage: (text: string) => void;
+  sendMessage: (text: string) => boolean;
   status: AgentStatus;
 };
 
@@ -144,18 +141,21 @@ export type AgentConversationAttachment = {
  */
 const inertValue: AgentConversationContextValue = {
   access: { available: false, message: companyRequiredMessage },
+  authorizedCompanies: [],
   attachments: [],
   attachmentSelectionAvailable: false,
   attachmentSelectionLimitReached: false,
   closeDock: () => {},
   companyName: null,
+  selectCompany: () => {},
+  selectedCompanyId: "",
   dockOpen: false,
   messages: [],
   openDock: () => {},
   removeAttachment: () => {},
   resetConversation: () => {},
   selectAttachments: () => {},
-  sendMessage: () => {},
+  sendMessage: () => false,
   status: "idle",
 };
 
@@ -178,29 +178,69 @@ export function isAgentWorkspaceEnabled() {
   return import.meta.env.DEV;
 }
 
+/**
+ * Conecta o workspace do agente ao POST /agent/runs para a empresa escolhida.
+ * A conversa é cancelada e limpa quando a empresa, o usuário ou o vínculo muda.
+ * Resultados tardios não são exibidos após reset, desmontagem ou troca.
+ */
 export function AgentConversationProvider({
   children,
 }: {
   children: ReactNode;
 }) {
   const { bootstrap } = useSession();
-  const company = bootstrap?.companies[0] ?? null;
+  const authorizedCompanies = bootstrap?.companies ?? [];
+  const [selection, setSelection] = useState<{
+    companyId: string;
+    membershipId: string;
+    userId: string;
+  } | null>(null);
+  const selectedCompany =
+    selection && bootstrap?.user.id === selection.userId
+      ? (authorizedCompanies.find(
+          (company) =>
+            company.companyId === selection.companyId &&
+            company.membershipId === selection.membershipId,
+        ) ?? null)
+      : null;
+  const selectCompany = useCallback(
+    (companyId: string) => {
+      const company = authorizedCompanies.find(
+        (candidate) => candidate.companyId === companyId,
+      );
+      setSelection(
+        company && bootstrap
+          ? {
+              companyId: company.companyId,
+              membershipId: company.membershipId,
+              userId: bootstrap.user.id,
+            }
+          : null,
+      );
+    },
+    [authorizedCompanies, bootstrap],
+  );
+  useLayoutEffect(() => {
+    if (selection && !selectedCompany) setSelection(null);
+  }, [selectedCompany, selection]);
   const [dockOpen, setDockOpen] = useState(false);
   const openDock = useCallback(() => setDockOpen(true), []);
   const closeDock = useCallback(() => setDockOpen(false), []);
   const scopeKey = createAgentConversationScopeKey({
-    companyId: company?.companyId ?? null,
-    membershipId: company?.membershipId ?? null,
+    companyId: selectedCompany?.companyId ?? null,
+    membershipId: selectedCompany?.membershipId ?? null,
     userId: bootstrap?.user.id ?? null,
   });
 
   return (
     <ScopedAgentConversationProvider
       closeDock={closeDock}
-      company={company}
+      company={selectedCompany}
       dockOpen={dockOpen}
       key={scopeKey}
       openDock={openDock}
+      authorizedCompanies={authorizedCompanies}
+      onCompanyChange={selectCompany}
     >
       {children}
     </ScopedAgentConversationProvider>
@@ -213,12 +253,16 @@ function ScopedAgentConversationProvider({
   company,
   dockOpen,
   openDock,
+  authorizedCompanies,
+  onCompanyChange,
 }: {
   children: ReactNode;
   closeDock: () => void;
   company: AuthorizedCompanyMembership | null;
   dockOpen: boolean;
   openDock: () => void;
+  authorizedCompanies: readonly AuthorizedCompanyMembership[];
+  onCompanyChange: (companyId: string) => void;
 }) {
   const companyId = company?.companyId ?? null;
   const access = resolveAgentAccess(company);
@@ -388,9 +432,9 @@ function ScopedAgentConversationProvider({
   );
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string): boolean => {
       if (!access.available) {
-        return;
+        return false;
       }
       const normalized = text.trim();
       const selectedAttachments = attachmentSnapshot.current;
@@ -401,12 +445,14 @@ function ScopedAgentConversationProvider({
       );
 
       // Trava síncrona: um envio por vez, exatamente um requestId novo.
+      // Devolve false para o compositor manter o rascunho digitado.
       if (
+        !companyId ||
         !normalized ||
         inFlight.current ||
         attachmentIds.length !== selectedAttachments.length
       ) {
-        return;
+        return false;
       }
 
       const controller = new AbortController();
@@ -429,7 +475,7 @@ function ScopedAgentConversationProvider({
       client.current
         .send({
           message: normalized,
-          ...(companyId ? { companyId } : {}),
+          companyId,
           ...(attachmentIds.length ? { attachments: attachmentIds } : {}),
           signal: controller.signal,
         })
@@ -470,6 +516,7 @@ function ScopedAgentConversationProvider({
             setStatus("idle");
           }
         });
+      return true;
     },
     [access.available, companyId, replaceAttachments],
   );
@@ -477,11 +524,14 @@ function ScopedAgentConversationProvider({
   const value = useMemo(
     () => ({
       access,
+      authorizedCompanies,
       attachments,
       attachmentSelectionAvailable,
       attachmentSelectionLimitReached,
       closeDock,
       companyName: company?.companyName ?? null,
+      selectCompany: onCompanyChange,
+      selectedCompanyId: companyId ?? "",
       dockOpen,
       messages,
       openDock,
@@ -493,7 +543,9 @@ function ScopedAgentConversationProvider({
     }),
     [
       closeDock,
+      authorizedCompanies,
       company,
+      onCompanyChange,
       dockOpen,
       access,
       messages,
@@ -506,6 +558,7 @@ function ScopedAgentConversationProvider({
       selectAttachments,
       sendMessage,
       status,
+      companyId,
     ],
   );
 

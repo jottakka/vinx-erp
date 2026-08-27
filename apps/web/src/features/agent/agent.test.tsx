@@ -15,6 +15,7 @@ import {
   AgentConversationProvider,
   agentReplyText,
   createAgentConversationScopeKey,
+  useAgentConversation,
 } from "./agent-conversation-provider";
 import { AgentDock } from "./agent-dock";
 import { AgentTrigger } from "./agent-trigger";
@@ -69,9 +70,12 @@ function ScopeCommitProbe({
   onCommit: (snapshot: ScopeCommitSnapshot) => void;
 }) {
   const { bootstrap } = useSession();
+  const { selectedCompanyId } = useAgentConversation();
 
   useLayoutEffect(() => {
-    const company = bootstrap?.companies[0];
+    const company = bootstrap?.companies.find(
+      (candidate) => candidate.companyId === selectedCompanyId,
+    );
     const dock = screen.queryAllByRole("complementary", {
       name: "Painel do agente",
     })[0];
@@ -86,7 +90,7 @@ function ScopeCommitProbe({
         dock?.textContent?.includes("consulta da associação anterior") === true,
       userId: bootstrap?.user.id ?? null,
     });
-  }, [bootstrap, onCommit]);
+  }, [bootstrap, onCommit, selectedCompanyId]);
 
   return null;
 }
@@ -137,18 +141,39 @@ async function renderAgentWorkspace(
   return { router, unmount };
 }
 
+async function openDockAndSelectCompany(
+  user: ReturnType<typeof userEvent.setup>,
+  companyName: RegExp = /Alfa/,
+) {
+  await user.click(
+    screen.getByRole("button", { name: /^Abrir painel do agente/ }),
+  );
+  let dock = within(
+    screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+  );
+  await user.click(dock.getByRole("combobox", { name: "Empresa do envio" }));
+  await user.click(await screen.findByRole("option", { name: companyName }));
+  dock = within(
+    screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+  );
+  return dock;
+}
+
 async function openDockAndType(
   user: ReturnType<typeof userEvent.setup>,
   message: string,
 ) {
-  await user.click(
-    screen.getByRole("button", { name: "Abrir painel do agente" }),
-  );
-  const dock = within(
-    screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
-  );
+  const dock = await openDockAndSelectCompany(user);
   await user.type(dock.getByLabelText("Mensagem para o agente"), message);
   return dock;
+}
+
+function muiSelectValue(combobox: HTMLElement): string {
+  const input = combobox.parentElement?.querySelector<HTMLInputElement>(
+    'input[aria-hidden="true"]',
+  );
+  if (!input) throw new Error("MUI select hidden input was not found");
+  return input.value;
 }
 
 function antiforgeryTokenResponse() {
@@ -186,6 +211,7 @@ function attachmentFile(name: string, bytes = new Uint8Array([1])): File {
 function attachmentFetch(
   fileIds: readonly string[],
   blockedAntiforgery?: { at: number; response: Promise<Response> },
+  fileIdsByName?: Readonly<Record<string, string>>,
 ) {
   let antiforgeryCalls = 0;
   let intended = 0;
@@ -198,7 +224,8 @@ function attachmentFetch(
       return antiforgeryTokenResponse();
     }
     if (path === intentionPath) {
-      const id = fileIds[intended++];
+      const body = JSON.parse(init?.body as string) as { fileName: string };
+      const id = fileIdsByName?.[body.fileName] ?? fileIds[intended++];
       return new Response(
         JSON.stringify({
           fileId: id,
@@ -336,7 +363,10 @@ describe("agent workspace", () => {
     await renderAgentWorkspace();
 
     const dock = await openDockAndType(user, "Preciso antecipar um pagamento");
-    expect(dock.getByText("Alfa · Consultas independentes")).toBeVisible();
+    expect(dock.getAllByText("Alfa", { exact: true }).length).toBeGreaterThan(
+      0,
+    );
+    expect(dock.getByText("Empresa selecionada")).toBeVisible();
     await user.click(dock.getByRole("button", { name: "Enviar" }));
 
     expect(await dock.findByText("Resposta liberada pelo gate")).toBeVisible();
@@ -414,7 +444,7 @@ describe("agent workspace", () => {
     await user.click(dock.getByRole("button", { name: "Enviar" }));
     expect(dock.getByText("Analisando…")).toBeVisible();
 
-    await user.type(dock.getByLabelText("Mensagem para o agente"), "segunda");
+    expect(dock.getByLabelText("Mensagem para o agente")).toBeDisabled();
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     expect(runCalls(fetchSpy)).toHaveLength(1);
 
@@ -428,6 +458,7 @@ describe("agent workspace", () => {
       }),
     );
     expect(await dock.findByText("primeira resposta")).toBeVisible();
+    await user.type(dock.getByLabelText("Mensagem para o agente"), "segunda");
 
     fetchSpy
       .mockResolvedValueOnce(antiforgeryTokenResponse())
@@ -482,14 +513,14 @@ describe("agent workspace", () => {
     );
     await waitFor(() =>
       expect(dock.getByRole("note")).toHaveTextContent(
-        /consulta independente/i,
+        /Faça uma pergunta sobre a empresa selecionada/i,
       ),
     );
     expect(dock.queryByText("resposta tardia")).toBeNull();
     expect(dock.queryByText("consulta cancelada")).toBeNull();
   });
 
-  it("shares the conversation between the dock and the dedicated page", async () => {
+  it("shares the conversation between the dock and the full-page view", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -513,7 +544,7 @@ describe("agent workspace", () => {
     expect(await dock.findByText("resposta compartilhada")).toBeVisible();
 
     const expandButtons = screen.getAllByRole("button", {
-      name: "Abrir página dedicada do agente",
+      name: "Abrir agente em tela inteira",
     });
     await user.click(expandButtons[expandButtons.length - 1]);
     await waitFor(() => expect(router.state.location.pathname).toBe("/agente"));
@@ -536,25 +567,29 @@ describe("agent workspace", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("describes the dedicated page as real company-scoped provider processing", async () => {
+  it("describes the full-page view as real company-scoped provider processing", async () => {
+    const user = userEvent.setup();
     await renderAgentWorkspace("/agente");
 
     expect(
       await screen.findByRole("heading", { name: "Agente" }),
     ).toBeVisible();
+    await user.click(
+      screen.getByRole("combobox", { name: "Empresa do envio" }),
+    );
+    await user.click(await screen.findByRole("option", { name: /Alfa/ }));
     expect(screen.queryByText("Dados de demonstração")).toBeNull();
     expect(
-      screen.getByText(
-        "Os envios são reais, vinculados à empresa indicada e, quando disponível, processados pelo provedor de IA configurado.",
-      ),
+      screen.getByText(/Os envios são reais, vinculados à empresa indicada/i),
     ).toBeVisible();
   });
 
-  it("keeps the blocked composer status canonical on the dedicated page", async () => {
+  it("keeps the blocked composer status canonical on the full-page view", async () => {
     await renderAgentWorkspace("/agente", createCompanylessGateway());
 
+    expect(await screen.findByText("Assistente")).toBeVisible();
     expect(
-      await screen.findByText("Sem empresa · Página dedicada"),
+      screen.getByText("Escolha uma empresa antes de enviar uma pergunta."),
     ).toBeVisible();
     expect(
       screen.getAllByText("Selecione uma empresa para usar o assistente."),
@@ -563,11 +598,10 @@ describe("agent workspace", () => {
       "Selecione uma empresa para usar o assistente.",
     );
     expect(
-      screen.getByText(
-        "Mensagens e anexos permanecem desativados até que uma empresa seja selecionada.",
+      screen.queryByText(
+        /Página dedicada|Consultas independentes|turnos|contexto/i,
       ),
-    ).toBeVisible();
-    expect(screen.queryByText(/empresa ativa/i)).toBeNull();
+    ).toBeNull();
     expect(screen.queryByText(/vinculados à empresa indicada/i)).toBeNull();
   });
 
@@ -593,6 +627,10 @@ describe("agent workspace", () => {
     expect(picker).toBeDisabled();
     expect(dock.getByRole("button", { name: "Enviar" })).toBeDisabled();
     const composer = dock.getByLabelText("Mensagem para o agente");
+    expect(composer.closest("form")).toHaveAttribute(
+      "aria-describedby",
+      "agent-access-message",
+    );
     const blockedMessage = "tentativa sem empresa";
 
     await user.type(composer, blockedMessage);
@@ -643,11 +681,19 @@ describe("agent workspace", () => {
         name: "Abrir painel do agente — indisponível para este perfil",
       }),
     );
-    const dock = within(
+    let dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+    await user.click(dock.getByRole("combobox", { name: "Empresa do envio" }));
+    await user.click(await screen.findByRole("option", { name: /Alfa/ }));
+    dock = within(
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
 
-    expect(dock.getByText("Alfa · Assistente indisponível")).toBeVisible();
+    expect(dock.getAllByText("Alfa", { exact: true }).length).toBeGreaterThan(
+      0,
+    );
+    expect(dock.getByText("Assistente indisponível")).toBeVisible();
     expect(dock.getByRole("status")).toHaveTextContent(
       "O assistente não está disponível para o seu perfil nesta empresa.",
     );
@@ -706,12 +752,7 @@ describe("agent workspace", () => {
   it("keeps the authorized attachment button focusable and opens its chooser", async () => {
     const user = userEvent.setup();
     await renderAgentWorkspace();
-    await user.click(
-      screen.getByRole("button", { name: "Abrir painel do agente" }),
-    );
-    const dock = within(
-      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
-    );
+    const dock = await openDockAndSelectCompany(user);
     const picker = dock.getByLabelText("Anexar documentos ao agente");
     const openChooser = vi.spyOn(picker, "click");
     const attachmentButton = dock.getByRole("button", {
@@ -834,12 +875,16 @@ describe("agent workspace", () => {
       ).toBeEnabled(),
     );
 
-    const refreshedDock = within(
+    let refreshedDock = within(
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
-    expect(
-      await refreshedDock.findByText("Alfa renovada · Consultas independentes"),
-    ).toBeVisible();
+    await waitFor(() =>
+      expect(
+        muiSelectValue(
+          refreshedDock.getByRole("combobox", { name: "Empresa do envio" }),
+        ),
+      ).toBe(""),
+    );
     expect(
       scopeCommits.filter((scope) => scope.userId === null).at(-1),
     ).toEqual({
@@ -850,9 +895,9 @@ describe("agent workspace", () => {
       userId: null,
     });
     expect(scopeCommits.find((scope) => scope.userId === "joana")).toEqual({
-      companyId: alfaCompanyId,
+      companyId: null,
       draft: "",
-      membershipId: "88888888-8888-4888-8888-888888888888",
+      membershipId: null,
       oldMessageVisible: false,
       userId: "joana",
     });
@@ -865,6 +910,30 @@ describe("agent workspace", () => {
     expect(refreshedDock.getByLabelText("Mensagem para o agente")).toHaveValue(
       "",
     );
+    await user.click(
+      refreshedDock.getByRole("combobox", { name: "Empresa do envio" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: /Alfa renovada/ }),
+    );
+    refreshedDock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+    expect(
+      (await refreshedDock.findAllByText("Alfa renovada", { exact: true }))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(
+      scopeCommits.find(
+        (scope) =>
+          scope.membershipId === "88888888-8888-4888-8888-888888888888",
+      ),
+    ).toMatchObject({
+      companyId: alfaCompanyId,
+      draft: "",
+      oldMessageVisible: false,
+      userId: "joana",
+    });
   });
 
   it("aborts before the first new-scope layout commit and switches the caption when the active company changes", async () => {
@@ -887,6 +956,7 @@ describe("agent workspace", () => {
       ...snapshot,
       companies: [...snapshot.companies].reverse(),
     };
+    snapshot = betaFirst;
 
     const user = userEvent.setup();
     let resolveRun: (value: Response) => void = () => {};
@@ -911,7 +981,9 @@ describe("agent workspace", () => {
     });
 
     const dock = await openDockAndType(user, "consulta da Alfa");
-    expect(dock.getByText("Alfa · Consultas independentes")).toBeVisible();
+    expect(dock.getAllByText("Alfa", { exact: true }).length).toBeGreaterThan(
+      0,
+    );
     await user.click(dock.getByRole("button", { name: "Enviar" }));
     await waitFor(() => expect(runCalls(fetchSpy)).toHaveLength(1));
     const [firstPath, firstInit] = runCalls(fetchSpy)[0];
@@ -921,26 +993,22 @@ describe("agent workspace", () => {
     });
     oldRunSignal = firstInit.signal as AbortSignal;
 
-    // O drawer modal aplica aria-hidden ao fundo: o gatilho de refresh é
-    // consultado com hidden enquanto o painel permanece aberto.
-    snapshot = betaFirst;
     observeNewScope = true;
-    await user.click(
-      screen.getByRole("button", { name: "Atualizar sessão", hidden: true }),
-    );
+    await user.click(dock.getByRole("combobox", { name: "Empresa do envio" }));
+    await user.click(await screen.findByRole("option", { name: /Beta/ }));
 
     expect(oldRunAbortedAtFirstNewScopeLayoutCommit).toBe(true);
 
-    expect(
-      await screen.findByText("Beta · Consultas independentes"),
-    ).toBeVisible();
     const refreshedDock = within(
       screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
     );
+    expect(
+      (await refreshedDock.findAllByText("Beta", { exact: true }))[0],
+    ).toBeVisible();
     expect(oldRunSignal.aborted).toBe(true);
     await waitFor(() =>
       expect(refreshedDock.getByRole("note")).toHaveTextContent(
-        /consulta independente/i,
+        /Faça uma pergunta sobre a empresa selecionada/i,
       ),
     );
     expect(refreshedDock.queryByText("consulta da Alfa")).toBeNull();
@@ -964,15 +1032,17 @@ describe("agent workspace", () => {
       "55555555-5555-4555-8555-555555555555",
       "66666666-6666-4666-8666-666666666666",
     ];
-    vi.stubGlobal("fetch", attachmentFetch(fileIds));
+    vi.stubGlobal(
+      "fetch",
+      attachmentFetch(fileIds, undefined, {
+        "primeiro.pdf": fileIds[0],
+        "segundo.pdf": fileIds[1],
+        "terceiro.pdf": fileIds[2],
+      }),
+    );
     const user = userEvent.setup();
     const { router } = await renderAgentWorkspace();
-    await user.click(
-      screen.getByRole("button", { name: "Abrir painel do agente" }),
-    );
-    const dock = within(
-      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
-    );
+    const dock = await openDockAndSelectCompany(user);
 
     await user.upload(dock.getByLabelText("Anexar documentos ao agente"), [
       attachmentFile("primeiro.pdf"),
@@ -993,7 +1063,7 @@ describe("agent workspace", () => {
     ]);
 
     await user.click(
-      dock.getByRole("button", { name: "Abrir página dedicada do agente" }),
+      dock.getByRole("button", { name: "Abrir agente em tela inteira" }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/agente"));
     expect(
@@ -1010,12 +1080,7 @@ describe("agent workspace", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     await renderAgentWorkspace();
-    await user.click(
-      screen.getByRole("button", { name: "Abrir painel do agente" }),
-    );
-    const dock = within(
-      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
-    );
+    const dock = await openDockAndSelectCompany(user);
 
     await user.upload(dock.getByLabelText("Anexar documentos ao agente"), [
       attachmentFile("um.pdf"),
@@ -1073,13 +1138,53 @@ describe("agent workspace", () => {
     resolveToken(antiforgeryTokenResponse());
   });
 
+  it("keeps the typed text when Enter is pressed while an attachment is still uploading", async () => {
+    let resolveToken: (response: Response) => void = () => {};
+    const token = new Promise<Response>((resolve) => (resolveToken = resolve));
+    const fetchSpy = attachmentFetch([], { at: 1, response: token });
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    await renderAgentWorkspace();
+    const dock = await openDockAndSelectCompany(user);
+
+    await user.upload(
+      dock.getByLabelText("Anexar documentos ao agente"),
+      attachmentFile("lento.pdf"),
+    );
+    await waitFor(() => expect(dock.getByText("Enviando")).toBeVisible());
+
+    const composer = dock.getByLabelText("Mensagem para o agente");
+    await user.type(composer, "resuma o anexo quando terminar");
+    await user.keyboard("{Enter}");
+
+    expect(composer).toHaveValue("resuma o anexo quando terminar");
+    // O texto não vira mensagem: só pode existir no próprio compositor.
+    expect(
+      dock.queryByText("resuma o anexo quando terminar", { selector: "p" }),
+    ).toBeNull();
+    expect(runCalls(fetchSpy)).toHaveLength(0);
+
+    resolveToken(antiforgeryTokenResponse());
+    // Consome o assentamento do upload dentro do próprio teste (pronto ou
+    // falho): o fetch stubado não pode vazar para o spy do teste seguinte.
+    await waitFor(() =>
+      expect(dock.queryByText("Enviando")).not.toBeInTheDocument(),
+    );
+  });
+
   it("sends three ready IDs in order after rejecting a fourth and clears the warning", async () => {
     const fileIds = [
       "44444444-4444-4444-8444-444444444444",
       "55555555-5555-4555-8555-555555555555",
       "66666666-6666-4666-8666-666666666666",
     ];
-    const fetchSpy = attachmentFetch(fileIds);
+    // IDs por nome de arquivo (ordem de assentamento dos uploads não é
+    // garantida sob carga); a ordem do corpo não é contrato do produto.
+    const fetchSpy = attachmentFetch(fileIds, undefined, {
+      "primeiro.pdf": fileIds[0],
+      "segundo.pdf": fileIds[1],
+      "terceiro.pdf": fileIds[2],
+    });
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     await renderAgentWorkspace();
@@ -1100,7 +1205,7 @@ describe("agent workspace", () => {
 
     expect(await dock.findByText("Resposta autorizada")).toBeVisible();
     const body = JSON.parse(runCalls(fetchSpy)[0][1].body as string);
-    expect(body.attachments).toEqual(fileIds);
+    expect([...body.attachments].sort()).toEqual([...fileIds].sort());
     expect(
       dock.queryByRole("list", { name: "Anexos selecionados" }),
     ).toBeNull();
@@ -1149,12 +1254,7 @@ describe("agent workspace", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     const { unmount } = await renderAgentWorkspace();
-    await user.click(
-      screen.getByRole("button", { name: "Abrir painel do agente" }),
-    );
-    const dock = within(
-      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
-    );
+    const dock = await openDockAndSelectCompany(user);
 
     await user.upload(
       dock.getByLabelText("Anexar documentos ao agente"),
@@ -1196,9 +1296,18 @@ describe("agent workspace", () => {
       "../auth/mock-session-fixtures"
     );
     snapshot = createBootstrapSnapshot(mockSessionProfiles.maria);
+    // O escopo da conversa só reseta quando a identidade/empresa realmente
+    // muda: renovar o membershipId da Alfa é uma mudança real de escopo.
     const nextScope = {
       ...snapshot,
-      companies: [...snapshot.companies].reverse(),
+      companies: snapshot.companies.map((company) =>
+        company.companyId === alfaCompanyId
+          ? {
+              ...company,
+              membershipId: "88888888-8888-4888-8888-888888888888",
+            }
+          : company,
+      ),
     };
     let resolveToken: (response: Response) => void = () => {};
     const token = new Promise<Response>((resolve) => (resolveToken = resolve));
@@ -1206,12 +1315,7 @@ describe("agent workspace", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     await renderAgentWorkspace("/", gateway);
-    await user.click(
-      screen.getByRole("button", { name: "Abrir painel do agente" }),
-    );
-    const dock = within(
-      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
-    );
+    let dock = await openDockAndSelectCompany(user);
 
     await user.upload(
       dock.getByLabelText("Anexar documentos ao agente"),
@@ -1225,10 +1329,21 @@ describe("agent workspace", () => {
     );
 
     expect(signal.aborted).toBe(true);
-    expect(
-      await screen.findByText("Beta · Consultas independentes"),
-    ).toBeVisible();
     expect(screen.queryByText("escopo-antigo.pdf")).toBeNull();
+    dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+    expect(
+      muiSelectValue(dock.getByRole("combobox", { name: "Empresa do envio" })),
+    ).toBe("");
+    await user.click(dock.getByRole("combobox", { name: "Empresa do envio" }));
+    await user.click(await screen.findByRole("option", { name: /Beta/ }));
+    dock = within(
+      screen.getAllByRole("complementary", { name: "Painel do agente" })[0],
+    );
+    expect(
+      (await dock.findAllByText("Beta", { exact: true }))[0],
+    ).toBeVisible();
     resolveToken(antiforgeryTokenResponse());
   });
 

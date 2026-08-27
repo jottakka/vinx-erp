@@ -74,4 +74,19 @@ describe("app header notifications badge", () => {
       ).toBeVisible(),
     );
   });
+
+  it("keeps compact-header controls named for assistive technology", async () => {
+    renderHeader(0);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("link", { name: "Notificações: nenhuma não lida" }),
+      ).toBeVisible(),
+    );
+    expect(screen.getByLabelText("Sessão ativa: Maria")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Abrir preferências visuais" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sair" })).toBeVisible();
+  });
 });

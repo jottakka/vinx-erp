@@ -1,14 +1,39 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type AtendimentoCard, atendimentoClient } from "./atendimento-client";
+import {
+  type AtendimentoCard,
+  type AtendimentoCreateOptions,
+  atendimentoClient,
+} from "./atendimento-client";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
+const requestId = "99999999-9999-4999-8999-999999999999";
+
+function createWithRequestId(
+  companyId: string,
+  stableRequestId: string,
+  title: string,
+  description: string,
+  options?: AtendimentoCreateOptions,
+) {
+  return (
+    atendimentoClient.create as unknown as (
+      companyId: string,
+      requestId: string,
+      title: string,
+      description: string,
+      options?: AtendimentoCreateOptions,
+    ) => ReturnType<typeof atendimentoClient.create>
+  )(companyId, stableRequestId, title, description, options);
+}
 
 const createdCard: AtendimentoCard = {
+  attachmentFileId: null,
   assigneeMembershipId: null,
   column: "novo",
   companyId: "11111111-1111-4111-8111-111111111111",
   description: "Pedido de ajuda",
   id: "22222222-2222-4222-8222-222222222222",
+  participantMembershipIds: [],
   title: "Ajuda com cobrança",
   version: 1,
 };
@@ -49,10 +74,15 @@ describe("atendimento client", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     await expect(
-      atendimentoClient.create(
+      createWithRequestId(
         createdCard.companyId,
+        requestId,
         createdCard.title,
         createdCard.description,
+        {
+          attachmentFileId: "33333333-3333-4333-8333-333333333333",
+          participantMembershipIds: ["44444444-4444-4444-8444-444444444444"],
+        },
       ),
     ).resolves.toEqual({ card: createdCard, ok: true });
 
@@ -86,6 +116,9 @@ describe("atendimento client", () => {
       {
         companyId: createdCard.companyId,
         description: createdCard.description,
+        attachmentFileId: "33333333-3333-4333-8333-333333333333",
+        participantMembershipIds: ["44444444-4444-4444-8444-444444444444"],
+        requestId,
         title: createdCard.title,
       },
     );
@@ -98,8 +131,9 @@ describe("atendimento client", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     await expect(
-      atendimentoClient.create(
+      createWithRequestId(
         createdCard.companyId,
+        requestId,
         createdCard.title,
         createdCard.description,
       ),
@@ -107,5 +141,112 @@ describe("atendimento client", () => {
 
     expect(fetchSpy.mock.calls).toHaveLength(1);
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(antiforgeryPath);
+  });
+
+  it("loads named assignment options only for the explicit company", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            displayName: "Maria Silva",
+            membershipId: "33333333-3333-4333-8333-333333333333",
+          },
+        ]),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      atendimentoClient.assignmentOptions(createdCard.companyId),
+    ).resolves.toEqual([
+      {
+        displayName: "Maria Silva",
+        membershipId: "33333333-3333-4333-8333-333333333333",
+      },
+    ]);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/atendimento/assignment-options?companyId=11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("returns null for malformed assignment options", async () => {
+    await Promise.all(
+      [
+        [{ displayName: "Maria Silva", membershipId: "not-a-uuid" }],
+        [
+          {
+            displayName: "Maria Silva",
+            membershipId: "00000000-0000-0000-0000-000000000000",
+          },
+        ],
+        [
+          {
+            displayName: "",
+            membershipId: "33333333-3333-4333-8333-333333333333",
+          },
+        ],
+        [
+          {
+            displayName: "Maria Silva",
+            extra: "campo desconhecido",
+            membershipId: "33333333-3333-4333-8333-333333333333",
+          },
+        ],
+        [
+          {
+            displayName: "Maria Silva",
+            membershipId: "33333333-3333-4333-8333-333333333333",
+          },
+          { displayName: "Inválido", membershipId: "também-não" },
+        ],
+      ].map(async (payload) => {
+        const fetchSpy = vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify(payload), { status: 200 }),
+          );
+        vi.stubGlobal("fetch", fetchSpy);
+
+        await expect(
+          atendimentoClient.assignmentOptions(createdCard.companyId),
+        ).resolves.toBeNull();
+      }),
+    );
+  });
+
+  it("cancels with the current version, request ID, and trimmed reason", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ requestToken: "csrf-token" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...createdCard, column: "cancelado" }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await atendimentoClient.cancel(
+      createdCard.companyId,
+      createdCard,
+      "  Duplicado  ",
+    );
+
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
+      `/atendimento/cards/${createdCard.id}/cancel`,
+    );
+    expect(JSON.parse(String(fetchSpy.mock.calls[1]?.[1]?.body))).toMatchObject(
+      {
+        companyId: createdCard.companyId,
+        expectedVersion: createdCard.version,
+        reason: "Duplicado",
+      },
+    );
   });
 });

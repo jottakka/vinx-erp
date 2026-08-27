@@ -100,23 +100,31 @@ Detalhe de outro solicitante, outra empresa ou sem permissão é sempre
 `404 {"code":"resource_not_found"}`.
 
 `POST /paguai/requests` usa a mesma segurança; para cookie BFF, CSRF exige
-`X-CSRF-TOKEN`. O corpo JSON estrito contém exatamente `companyId`, `requestId`,
-`title`, `description`, `amount`, `currency`, `dueDate`,
-`beneficiaryDisplayName` e `proofRequirement`. `amount` é texto decimal exato
-positivo com no máximo duas casas, entre `0.01` e `9999999999999999.99`, sem
-arredondamento (por exemplo, `"1250.25"`); `currency` é exatamente `BRL`; `dueDate` usa `YYYY-MM-DD`;
+`X-CSRF-TOKEN`. O corpo JSON estrito contém `companyId`, `requestId`, `title`,
+`description`, `amount`, `currency`, `dueDate`, `beneficiaryDisplayName` e
+`proofRequirement`, além de `invoiceFileId` opcional e anulável. Quando
+informado, `invoiceFileId` é UUID de uma fatura ou documento privado, vivo e
+confirmado da mesma empresa, classificado exatamente como
+`paguai_request_invoice`; ele integra o hash de idempotência. `amount` é texto
+decimal exato positivo com no máximo duas casas, entre `0.01` e
+`9999999999999999.99`, sem arredondamento (por exemplo, `"1250.25"`);
+`currency` é exatamente `BRL`; `dueDate` usa `YYYY-MM-DD`;
 `beneficiaryDisplayName` é aparado, não vazio e limitado a 200 caracteres; e
 `proofRequirement` é `optional` ou `required`. Os textos de título e descrição
-continuam limitados a 200 e 4000 caracteres. Aceita somente
+continuam limitados a 200 e 4000 caracteres. UUID inválido ou arquivo
+inexistente, removido, não confirmado, de outra empresa ou de classificação
+incorreta devolve `400 {"code":"invalid_request"}` sem mutação. Aceita somente
 `Content-Type: application/json` e no máximo
 24 KiB de bytes recebidos; mídia incorreta devolve `415` e corpo excedente
 devolve `400 {"code":"invalid_request"}`, ambos antes de qualquer mutação. Retorna `201` e `Location` na primeira criação, `200` no
 replay idêntico, `400`, `401`, `403`, `409 {"code":"idempotency_conflict"}`,
 `429` ou `503 {"code":"paguai_unavailable"}`. A resposta de sucesso contém
 `id`, `companyId`, `requestId`, `title`, `description`, `amount`, `currency`,
-`dueDate`, `beneficiaryDisplayName`, `proofRequirement`, `state`, `version` e
-`createdAt`; `state` é `rascunho` e `version` é `1`. O beneficiário é somente
-texto informativo e nunca entra em logs, auditoria ou métricas.
+`dueDate`, `beneficiaryDisplayName`, `invoiceFileId`, `proofRequirement`,
+`state`, `version` e `createdAt`; `invoiceFileId` permanece UUID ou `null`, sem
+URL, chave de storage, nome, MIME, tamanho, bytes ou outro metadado do arquivo.
+`state` é `rascunho` e `version` é `1`. O beneficiário é somente texto
+informativo e nunca entra em logs, auditoria ou métricas.
 
 O contrato não expõe payload em logs ou auditoria. Todas as respostas privadas
 recebem `Cache-Control: private, no-store` e o header de correlação do host.
@@ -155,18 +163,37 @@ da empresa selecionada, ou `400 invalid_request`, `401`, `403
 membership_required|capability_denied`, `429` e `503 atendimento_unavailable`.
 
 `POST /atendimento/cards` exige `service_desk.ticket.create`; o corpo possui
-`companyId`, `requestId`, `title` e `description`. Retorna `201`, ou `200` no
-replay equivalente; `400 invalid_request`, `401`, `403`, `409
+`companyId`, `requestId`, `title`, `description`, `attachmentFileId` opcional e
+`participantMembershipIds` opcional com no máximo 25 entradas não vazias. O anexo
+precisa ser confirmado, da mesma empresa e da classificação
+`service_desk_attachment`; participantes precisam ser
+memberships ativas da empresa. Aceita somente `Content-Type: application/json`;
+mídia incorreta devolve `415`. Retorna `201` com `Location` da fila, ou `200` no
+replay equivalente;
+`400 invalid_request`, `401`, `403`, `404 resource_not_found`, `409
 idempotency_conflict`, `429` e `503` são publicados. `POST
 /atendimento/cards/{id}/assign` exige `.assign` e recebe também
 `expectedVersion` e `assigneeMembershipId`. `POST /atendimento/cards/{id}/move`
 exige `.move` e recebe `expectedVersion` e `column` (`novo`, `em_andamento` ou
-`concluido`). As duas retornam `200`, e podem retornar `404 resource_not_found`,
-`409 idempotency_conflict|integrity_conflict`, `400`, `401`, `403`, `429` ou
-`503`. `integrity_conflict` devolve apenas o estado atual já autorizado do
-cartão, nunca dados de outra empresa. As três mutações publicam o header
+`concluido`). `POST /atendimento/cards/{id}/cancel` exige a capability dedicada
+`.cancel`, recebe `expectedVersion` e `reason` aparado de 1 a 500 caracteres, e
+cria o estado terminal `cancelado`. As três retornam `200`, e podem retornar
+`404 resource_not_found`, `409
+idempotency_conflict|integrity_conflict|terminal_state`, `400`, `415`, `401`,
+`403`, `429` ou `503`. A resposta do cartão inclui `attachmentFileId` anulável e
+`participantMembershipIds` sempre como array; `integrity_conflict` e
+`terminal_state` devolvem apenas
+o estado atual já autorizado do cartão, nunca dados de outra empresa;
+`terminal_state` sinaliza o cancelamento de um cartão já cancelado com um novo
+`requestId`, enquanto o replay do mesmo `requestId` devolve o resultado original.
+As quatro mutações publicam o header
 `X-CSRF-TOKEN`: ele é obrigatório quando a operação usa cookie de sessão BFF e
 é obtido em `GET /foundation/identity/browser-session/antiforgery`; clientes
 bearer não precisam de antiforgery. Todas as respostas mantêm
 `X-Correlation-ID`, usam `Cache-Control: private, no-store` e as mutações usam
 auditoria transacional.
+
+`GET /atendimento/assignment-options?companyId={uuid}` exige
+`service_desk.ticket.assign` e retorna somente memberships ativas da empresa
+autorizada como `{ membershipId, displayName }`, ordenadas por nome e UUID. Não
+publica e-mail, role nem acesso direto a `foundation.users`.

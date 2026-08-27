@@ -1,4 +1,11 @@
-export type AtendimentoColumn = "novo" | "em_andamento" | "concluido";
+import { z } from "zod";
+import { isCanonicalUuid } from "../../shared/http/bff-response";
+
+export type AtendimentoColumn =
+  | "novo"
+  | "em_andamento"
+  | "concluido"
+  | "cancelado";
 
 export type AtendimentoCard = {
   id: string;
@@ -8,6 +15,18 @@ export type AtendimentoCard = {
   column: AtendimentoColumn;
   version: number;
   assigneeMembershipId: string | null;
+  attachmentFileId: string | null;
+  participantMembershipIds: readonly string[];
+};
+
+export type AtendimentoAssignmentOption = {
+  membershipId: string;
+  displayName: string;
+};
+
+export type AtendimentoCreateOptions = {
+  attachmentFileId?: string | null;
+  participantMembershipIds?: readonly string[];
 };
 
 type CommandResult =
@@ -17,6 +36,16 @@ type CommandResult =
 const basePath = "/atendimento/cards";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const antiforgeryHeaderName = "X-CSRF-TOKEN";
+
+const atendimentoIdSchema = z.string().refine(isCanonicalUuid);
+const assignmentOptionsSchema = z.array(
+  z
+    .object({
+      membershipId: atendimentoIdSchema,
+      displayName: z.string().min(1),
+    })
+    .strict(),
+);
 
 function request(path: string, init: RequestInit = {}) {
   return fetch(path, {
@@ -87,11 +116,38 @@ export const atendimentoClient = {
       return null;
     }
   },
-  create(companyId: string, title: string, description: string) {
+  async assignmentOptions(
+    companyId: string,
+    signal?: AbortSignal,
+  ): Promise<AtendimentoAssignmentOption[] | null> {
+    try {
+      const response = await request(
+        `/atendimento/assignment-options?companyId=${encodeURIComponent(companyId)}`,
+        { signal },
+      );
+      if (!response.ok) return null;
+      const parsed = assignmentOptionsSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  },
+  create(
+    companyId: string,
+    requestId: string,
+    title: string,
+    description: string,
+    {
+      attachmentFileId = null,
+      participantMembershipIds = [],
+    }: AtendimentoCreateOptions = {},
+  ) {
     return command(basePath, {
+      attachmentFileId,
       companyId,
       description,
-      requestId: crypto.randomUUID(),
+      participantMembershipIds: [...participantMembershipIds],
+      requestId,
       title,
     });
   },
@@ -112,6 +168,14 @@ export const atendimentoClient = {
       column,
       companyId,
       expectedVersion: card.version,
+      requestId: crypto.randomUUID(),
+    });
+  },
+  cancel(companyId: string, card: AtendimentoCard, reason: string) {
+    return command(`${basePath}/${card.id}/cancel`, {
+      companyId,
+      expectedVersion: card.version,
+      reason: reason.trim(),
       requestId: crypto.randomUUID(),
     });
   },

@@ -55,6 +55,13 @@ public sealed class PaguaiRequestConfiguration : IEntityTypeConfiguration<Paguai
             .HasColumnType("text")
             .HasMaxLength(10)
             .IsRequired();
+        builder.Property(request => request.InvoiceFileId).HasColumnName("invoice_file_id");
+        builder.HasIndex(request => new { request.CompanyId, request.InvoiceFileId });
+        builder.HasOne<FileRecord>()
+            .WithMany()
+            .HasForeignKey(request => new { request.CompanyId, request.InvoiceFileId })
+            .HasPrincipalKey(file => new { file.CompanyId, file.Id })
+            .OnDelete(DeleteBehavior.Restrict);
         builder.Property(request => request.State).HasColumnName("state");
         builder.Property(request => request.Version).HasColumnName("version");
         builder
