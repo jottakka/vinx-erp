@@ -63,13 +63,9 @@ public partial class BindPaguaiInboundCandidateToCompanyContext : Migration
             """
         );
 
-    // Down fail-closed condicional: enquanto existem candidatos inbound, restaurar
-    // o corpo anterior reintroduziria a leitura cross-company (ator multiempresa
-    // lendo candidato de outra empresa que não a do GUC app.company_id) sobre dados
-    // vivos, então o downgrade recusa e a migration permanece aplicada. Sem
-    // candidatos, o downgrade restaura fielmente o corpo anterior — o mesmo padrão
-    // de barreira condicional das migrations irmãs — para que downgrades profundos
-    // de diagnóstico continuem alcançando os pontos anteriores do histórico. A
+    // Down fail-closed condicional: enquanto existem candidatos inbound, o downgrade
+    // recusa e a migration permanece aplicada. Sem candidatos, o reader preserva o
+    // binding de app.company_id até AddPaguaiDraftSourceDocument.Down removê-lo. A
     // checagem roda como vinx_notifications_owner (único papel com SELECT sob a
     // RLS forçada da tabela de candidatos) dentro da mesma coreografia de grants
     // do Up; o RESET ROLE inicial imuniza o batch contra papéis residuais de uma
@@ -122,6 +118,11 @@ public partial class BindPaguaiInboundCandidateToCompanyContext : Migration
                 IF v_candidate.company_id NOT IN (
                     SELECT membership.company_id
                     FROM foundation.current_actor_memberships() AS membership) THEN
+                    RETURN;
+                END IF;
+
+                IF v_candidate.company_id IS DISTINCT FROM
+                    NULLIF(current_setting('app.company_id', true), '')::uuid THEN
                     RETURN;
                 END IF;
 
