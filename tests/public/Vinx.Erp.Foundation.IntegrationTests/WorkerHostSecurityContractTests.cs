@@ -147,7 +147,7 @@ public sealed class WorkerHostSecurityContractTests
                     'vinx_worker',
                     'vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled',
                     'DELETE'
-                )
+                ),
                 has_schema_privilege('vinx_worker', 'vinx_wolverine_queues', 'CREATE'),
                 has_database_privilege('vinx_worker', current_database(), 'TEMPORARY'),
                 has_database_privilege('vinx_worker', current_database(), 'CREATE')
@@ -160,14 +160,15 @@ public sealed class WorkerHostSecurityContractTests
         Assert.False(reader.GetBoolean(1));
         Assert.False(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
-        for (var index = 4; index <= 11; index++)
+        // Telegram (4..11) + demandas automation e sua fila scheduled (12..27).
+        for (var index = 4; index <= 27; index++)
         {
-            Assert.True(reader.GetBoolean(index));
+            Assert.True(reader.GetBoolean(index), $"worker queue privilege {index} must be granted");
         }
 
-        Assert.False(reader.GetBoolean(12));
-        Assert.True(reader.GetBoolean(13));
-        Assert.False(reader.GetBoolean(14));
+        Assert.False(reader.GetBoolean(28));
+        Assert.True(reader.GetBoolean(29));
+        Assert.False(reader.GetBoolean(30));
     }
 
     [Fact]
