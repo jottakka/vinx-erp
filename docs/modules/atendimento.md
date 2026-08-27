@@ -41,4 +41,6 @@ A migration `20260816030000_AddAtendimentoKanbanMvp` cria o schema `service_desk
 
 Idempotência é autorizada antes da leitura do registro; assign, move e cancel incluem o `cardId` no escopo. Create sem anexo nem participantes conserva o hash legado; entradas novas usam IDs deduplicados e ordenados. Replay equivalente devolve o resultado original e divergência devolve `409 idempotency_conflict`. Conflito de versão ou ação distinta em cartão cancelado devolve `409 integrity_conflict` com estado atual seguro, sem sobrescrever cartão ou histórico; cancelar um cartão já cancelado com um novo `requestId` devolve `409 terminal_state` nomeando a condição terminal, enquanto o replay do mesmo `requestId` devolve o resultado original. Falha de histórico, receipt ou auditoria desfaz a mutação na mesma transação. O downgrade recusa estado novo ainda referenciado.
 
-Ficam fora do MVP: templates genéricos, configuração de quadro, SLA, canais WhatsApp/e-mail, IA, chatbot, roteamento, automação, MCP e integrações Paguai.
+Ficam fora do MVP: templates genéricos, configuração de quadro, motor de calendário/SLA,
+integrações de canais inbound (WhatsApp/e-mail), IA, chatbot, roteamento, automação,
+MCP e integrações Paguai.

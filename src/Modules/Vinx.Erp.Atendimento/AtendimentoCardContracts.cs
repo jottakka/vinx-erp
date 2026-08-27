@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Vinx.Erp.Atendimento;
 
 public static class AtendimentoPriority
@@ -65,8 +67,10 @@ public sealed record AtendimentoCardResponse(
     Guid? AssigneeMembershipId
 )
 {
+    [AllowedValues(AtendimentoPriority.Critical, AtendimentoPriority.High, AtendimentoPriority.Medium, AtendimentoPriority.Low)]
     public string Priority { get; init; } = AtendimentoPriority.Medium;
 
+    [AllowedValues(AtendimentoChannel.WhatsApp, AtendimentoChannel.Email, AtendimentoChannel.Web, AtendimentoChannel.Manual)]
     public string Channel { get; init; } = AtendimentoChannel.Manual;
 
     public DateTimeOffset? SlaDueAt { get; init; }

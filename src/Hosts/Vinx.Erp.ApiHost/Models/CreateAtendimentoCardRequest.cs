@@ -26,9 +26,11 @@ public sealed class CreateAtendimentoCardRequest : IValidatableObject
     [MaxLength(4000)]
     public string Description { get; init; } = string.Empty;
 
-    public string? Priority { get; init; }
+    [AllowedValues(AtendimentoPriority.Critical, AtendimentoPriority.High, AtendimentoPriority.Medium, AtendimentoPriority.Low)]
+    public string? Priority { get; init; } = AtendimentoPriority.Medium;
 
-    public string? Channel { get; init; }
+    [AllowedValues(AtendimentoChannel.WhatsApp, AtendimentoChannel.Email, AtendimentoChannel.Web, AtendimentoChannel.Manual)]
+    public string? Channel { get; init; } = AtendimentoChannel.Manual;
 
     public DateTimeOffset? SlaDueAt { get; init; }
 

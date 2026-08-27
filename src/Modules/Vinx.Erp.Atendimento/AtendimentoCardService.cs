@@ -1054,6 +1054,7 @@ public sealed class AtendimentoCardService(
         {
             Priority = command.Priority ?? AtendimentoPriority.Medium,
             Channel = command.Channel ?? AtendimentoChannel.Manual,
+            SlaDueAt = command.SlaDueAt?.ToUniversalTime(),
             ParticipantMembershipIds =
             [
                 .. (command.ParticipantMembershipIds ?? [])

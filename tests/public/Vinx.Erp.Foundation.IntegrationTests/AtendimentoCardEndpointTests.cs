@@ -63,6 +63,48 @@ public sealed class AtendimentoCardEndpointTests
     }
 
     [Fact]
+    public async Task Create_normalizes_equivalent_sla_instants_before_hash_and_persistence()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var requestId = Guid.NewGuid();
+        var expectedUtc = new DateTimeOffset(2030, 1, 2, 15, 0, 0, TimeSpan.Zero);
+        var request = new CreateCardRequest(
+            scenario.CompanyId,
+            requestId,
+            "Prazo com fuso",
+            "Instantes equivalentes devem ser idempotentes."
+        )
+        {
+            SlaDueAt = expectedUtc.ToOffset(TimeSpan.FromHours(-3)),
+        };
+
+        using var createdResponse = await client.PostAsJsonAsync("/atendimento/cards", request);
+        Assert.Equal(HttpStatusCode.Created, createdResponse.StatusCode);
+        var created = (await createdResponse.Content.ReadFromJsonAsync<CardResponse>())!;
+        Assert.Equal(expectedUtc, created.SlaDueAt);
+        Assert.Equal(TimeSpan.Zero, created.SlaDueAt!.Value.Offset);
+
+        using var replayResponse = await client.PostAsJsonAsync(
+            "/atendimento/cards",
+            request with { SlaDueAt = expectedUtc }
+        );
+        Assert.Equal(HttpStatusCode.OK, replayResponse.StatusCode);
+        var replayed = (await replayResponse.Content.ReadFromJsonAsync<CardResponse>())!;
+        Assert.Equal(created.Id, replayed.Id);
+        Assert.Equal(expectedUtc, replayed.SlaDueAt);
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(
+            1L,
+            await administrator.Database.SqlQuery<long>(
+                $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_cards WHERE company_id = {scenario.CompanyId}"
+            ).SingleAsync()
+        );
+    }
+
+    [Fact]
     public async Task Legacy_create_defaults_and_receipt_replay_remain_compatible()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -1764,11 +1806,28 @@ public sealed class AtendimentoCardEndpointTests
         var createProperties = schemas
             .GetProperty("CreateAtendimentoCardRequest")
             .GetProperty("properties");
+        AssertEnum(createProperties.GetProperty("priority"), "critica", "alta", "media", "baixa");
+        AssertEnum(createProperties.GetProperty("channel"), "whatsapp", "email", "web", "manual");
+        Assert.True(HasSchemaType(createProperties.GetProperty("priority"), "string"));
+        Assert.True(HasSchemaType(createProperties.GetProperty("channel"), "string"));
+        Assert.True(HasSchemaType(createProperties.GetProperty("slaDueAt"), "string"));
+        Assert.True(IsNullableSchema(createProperties.GetProperty("slaDueAt")));
         Assert.True(IsNullableSchema(createProperties.GetProperty("attachmentFileId")));
         Assert.True(HasSchemaType(createProperties.GetProperty("participantMembershipIds"), "array"));
         var cardProperties = schemas
             .GetProperty("AtendimentoCardResponse")
             .GetProperty("properties");
+        AssertEnum(cardProperties.GetProperty("priority"), "critica", "alta", "media", "baixa");
+        AssertEnum(cardProperties.GetProperty("channel"), "whatsapp", "email", "web", "manual");
+        Assert.True(HasSchemaType(cardProperties.GetProperty("priority"), "string"));
+        Assert.True(HasSchemaType(cardProperties.GetProperty("channel"), "string"));
+        Assert.True(HasSchemaType(cardProperties.GetProperty("slaDueAt"), "string"));
+        Assert.True(IsNullableSchema(cardProperties.GetProperty("slaDueAt")));
+        Assert.True(HasSchemaType(cardProperties.GetProperty("isOverdue"), "boolean"));
+        Assert.True(HasSchemaType(cardProperties.GetProperty("createdAt"), "string"));
+        Assert.True(HasSchemaType(cardProperties.GetProperty("updatedAt"), "string"));
+        Assert.True(IsNullableSchema(cardProperties.GetProperty("createdAt")));
+        Assert.True(IsNullableSchema(cardProperties.GetProperty("updatedAt")));
         Assert.True(IsNullableSchema(cardProperties.GetProperty("attachmentFileId")));
         Assert.True(HasSchemaType(cardProperties.GetProperty("participantMembershipIds"), "array"));
         var cancelPost = paths.GetProperty("/atendimento/cards/{id}/cancel").GetProperty("post");
@@ -1873,6 +1932,14 @@ public sealed class AtendimentoCardEndpointTests
             ? type.GetString() == expectedType
             : type.ValueKind == JsonValueKind.Array
                 && type.EnumerateArray().Any(value => value.GetString() == expectedType));
+
+    private static void AssertEnum(JsonElement schema, params string[] expectedValues)
+    {
+        Assert.Equal(
+            expectedValues,
+            schema.GetProperty("enum").EnumerateArray().Select(value => value.GetString()).ToArray()
+        );
+    }
 
     private static void AssertExtendedCardFields(
         CardResponse? card,
