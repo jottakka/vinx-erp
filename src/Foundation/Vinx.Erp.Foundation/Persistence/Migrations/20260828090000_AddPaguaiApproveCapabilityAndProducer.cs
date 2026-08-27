@@ -17,9 +17,28 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
             VALUES ('e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a', 'paguai.draft.approve', clock_timestamp())
             ON CONFLICT (name) DO NOTHING;
 
+            -- O catálogo visível ao dono do provisionamento passa a incluir a nova
+            -- capability; sem isso, ensure_company_default_roles rodando como
+            -- vinx_permissions_owner NÃO a vê num banco vazio (item 4 da revisão).
+            DROP POLICY capabilities_permissions_owner_select ON foundation.capabilities;
+            CREATE POLICY capabilities_permissions_owner_select
+                ON foundation.capabilities FOR SELECT TO vinx_permissions_owner
+                USING (name IN ('foundation.roles.assign', 'foundation.employees.create',
+                    'foundation.files.upload', 'foundation.files.confirm',
+                    'paguai.draft.approve'));
+
+            -- Leitura de designações para o diretório de aprovadores sob FORCE RLS.
+            CREATE POLICY role_assignments_permissions_owner_select
+                ON foundation.role_assignments FOR SELECT TO vinx_permissions_owner
+                USING (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid);
+
             -- Papel admin padrão passa a carregar a nova capability: o padrão
             -- estabelecido é conceder ações privilegiadas de módulo ao admin
-            -- (como foundation.files.confirm), nunca ao member.
+            -- (como foundation.files.confirm), nunca ao member. A função já é
+            -- de vinx_permissions_owner; a reescrita acontece DENTRO do papel
+            -- (transient CREATE + SET ROLE), no padrão das migrações irmãs.
+            GRANT CREATE ON SCHEMA foundation TO vinx_permissions_owner;
+            SET ROLE vinx_permissions_owner;
             CREATE OR REPLACE FUNCTION foundation.ensure_company_default_roles(p_company_id uuid)
             RETURNS void
             LANGUAGE plpgsql
@@ -132,14 +151,15 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                 END IF;
             END;
             $function$;
-            ALTER FUNCTION foundation.ensure_company_default_roles(uuid)
-                OWNER TO vinx_permissions_owner;
+            RESET ROLE;
+            REVOKE CREATE ON SCHEMA foundation FROM vinx_permissions_owner;
             REVOKE ALL ON FUNCTION foundation.ensure_company_default_roles(uuid)
                 FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION foundation.ensure_company_default_roles(uuid)
                 TO vinx_runtime;
 
-            -- Backfill: empresas com admin existente recebem o novo grant.
+            -- Backfill: empresas com admin existente recebem o novo grant
+            -- (executado como migrator, bypass de RLS, como na migração original).
             DO $block$
             DECLARE
                 company_record record;
@@ -188,7 +208,13 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
             END;
             $block$;
 
-            -- Diretório de destinatários na fila: resolução só na entrega.
+            -- Diretório de destinatários na fila: resolução só na entrega. O
+            -- DEFINER é vinx_permissions_owner (dá vazão às policies _owner_select
+            -- existentes + role_assignments acima) e o contexto de empresa é fixado
+            -- INTERNAMENTE pela própria função — sem isso o FORCE RLS devolve zero
+            -- linhas quando o chamador veio de outra empresa ou sem contexto.
+            GRANT CREATE ON SCHEMA paguai TO vinx_permissions_owner;
+            SET ROLE vinx_permissions_owner;
             CREATE FUNCTION paguai.list_draft_approver_user_ids(
                 p_company_id uuid,
                 p_exclude_user_id uuid)
@@ -197,9 +223,11 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
             SET search_path TO pg_catalog, foundation, pg_temp
             AS $function$
             BEGIN
-                IF p_company_id IS NULL THEN
+                IF p_company_id IS NULL OR p_exclude_user_id IS NULL THEN
                     RAISE EXCEPTION 'paguai approver parameters are invalid' USING ERRCODE = '22023';
                 END IF;
+
+                PERFORM set_config('app.company_id', p_company_id::text, true);
 
                 RETURN QUERY
                 SELECT DISTINCT membership.user_id
@@ -222,9 +250,11 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                    AND capability.name = 'paguai.draft.approve'
                 WHERE membership.company_id = p_company_id
                   AND membership.deleted_at IS NULL
-                  AND (p_exclude_user_id IS NULL OR membership.user_id <> p_exclude_user_id);
+                  AND membership.user_id <> p_exclude_user_id;
             END;
             $function$;
+            RESET ROLE;
+            REVOKE CREATE ON SCHEMA paguai FROM vinx_permissions_owner;
             REVOKE ALL ON FUNCTION paguai.list_draft_approver_user_ids(uuid, uuid)
                 FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION paguai.list_draft_approver_user_ids(uuid, uuid)
@@ -258,13 +288,22 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
             END;
             $block$;
 
+            -- Revoke escopado aos objetos deste produtor.
             REVOKE EXECUTE ON FUNCTION notifications.enqueue_notification_intent(
                 uuid, uuid, text, text, text, text)
                 FROM vinx_worker;
             DROP FUNCTION paguai.list_draft_approver_user_ids(uuid, uuid);
+            DROP POLICY role_assignments_permissions_owner_select
+                ON foundation.role_assignments;
             DELETE FROM foundation.capabilities
             WHERE (id, name) IN (
                     ('e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a'::uuid, 'paguai.draft.approve'));
+
+            -- Catálogo do provisionador volta ao corte anterior.
+            CREATE POLICY capabilities_permissions_owner_select
+                ON foundation.capabilities FOR SELECT TO vinx_permissions_owner
+                USING (name IN ('foundation.roles.assign', 'foundation.employees.create',
+                    'foundation.files.upload', 'foundation.files.confirm'));
             """
         );
 }

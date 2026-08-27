@@ -26,6 +26,7 @@ public sealed class CompanyDefaultRolesMigrationTests
         "foundation.files.confirm",
         "foundation.files.upload",
         "foundation.roles.assign",
+        "paguai.draft.approve",
     ];
     private static readonly string[] MemberGrantNames = ["foundation.files.upload"];
 
@@ -152,7 +153,12 @@ public sealed class CompanyDefaultRolesMigrationTests
 
         var roles = await ReadLiveRoleGrantsAsync(fixture, companyId);
         Assert.Equal(MemberGrantNames, roles["member"]);
-        Assert.Equal(["foundation.files.upload"], roles["admin"]);
+        // O papel reservado pré-existente permanece intocado na CRIAÇÃO de
+        // papéis padrão; o backfill CATÁLOGO da capability nova ainda o
+        // alcança (política explícita deste corte).
+        Assert.Equal(
+            ["foundation.files.upload", "paguai.draft.approve"],
+            roles["admin"]);
         Assert.Equal(customRoleId, await ReadLiveRoleIdAsync(fixture, companyId, "admin"));
     }
 

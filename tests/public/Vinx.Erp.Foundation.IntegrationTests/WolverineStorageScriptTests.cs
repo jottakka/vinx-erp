@@ -99,7 +99,13 @@ public sealed class WolverineStorageScriptTests
                     'vinx_worker',
                     'vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled',
                     'DELETE'
-                )
+                ),
+                to_regclass('vinx_wolverine_queues.wolverine_queue_paguai_events') IS NOT NULL,
+                to_regclass('vinx_wolverine_queues.wolverine_queue_paguai_events_scheduled') IS NOT NULL,
+                has_table_privilege('vinx_worker','vinx_wolverine_queues.wolverine_queue_paguai_events','SELECT'),
+                has_table_privilege('vinx_worker','vinx_wolverine_queues.wolverine_queue_paguai_events','INSERT'),
+                has_table_privilege('vinx_worker','vinx_wolverine_queues.wolverine_queue_paguai_events','UPDATE'),
+                has_table_privilege('vinx_worker','vinx_wolverine_queues.wolverine_queue_paguai_events','DELETE')
             """,
             administrator
         );
@@ -108,7 +114,7 @@ public sealed class WolverineStorageScriptTests
         Assert.True(reader.GetBoolean(0));
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
-        for (var index = 3; index <= 10; index++)
+        for (var index = 3; index <= 17; index++)
         {
             Assert.True(reader.GetBoolean(index));
         }

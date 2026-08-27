@@ -74,21 +74,42 @@ public sealed class PaguaiDraftNotificationTests
         var scenario = await SeedScenarioAsync(factory);
         using var client = factory.CreateClient();
 
-        await using (var administrator = await factory.Fixture.OpenAdministratorConnectionAsync())
-        await using (var revoke = new NpgsqlCommand(
-            "REVOKE INSERT ON vinx_wolverine.wolverine_outgoing_envelopes FROM vinx_runtime;",
-            administrator))
+        // Item 9 da revisão: o grant é restaurado em finally para não vazar
+        // revogação para outros testes do pool.
+        try
         {
-            await revoke.ExecuteNonQueryAsync();
+            await using (var administrator = await factory.Fixture.OpenAdministratorConnectionAsync())
+            await using (var revoke = new NpgsqlCommand(
+                "REVOKE INSERT ON vinx_wolverine.wolverine_outgoing_envelopes FROM vinx_runtime;",
+                administrator))
+            {
+                await revoke.ExecuteNonQueryAsync();
+            }
+
+            using var failed = await client.PostAsJsonAsync("/paguai/requests", Body(scenario.CompanyId));
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.StatusCode);
+            await using var guard = await factory.Fixture.OpenAdministratorConnectionAsync();
+            Assert.Equal(
+                0,
+                (long)(await new NpgsqlCommand(
+                    "SELECT count(*) FROM paguai.requests WHERE company_id = "
+                        + $"'{scenario.CompanyId}'::uuid",
+                    guard
+                ).ExecuteScalarAsync())!
+            );
+        }
+        finally
+        {
+            await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+            await using var restore = new NpgsqlCommand(
+                "GRANT INSERT ON vinx_wolverine.wolverine_outgoing_envelopes TO vinx_runtime;",
+                administrator
+            );
+            await restore.ExecuteNonQueryAsync();
         }
 
-        var body = Body(scenario.CompanyId);
-        using var failed = await client.PostAsJsonAsync("/paguai/requests", body);
-        using var retry = await client.PostAsJsonAsync("/paguai/requests", body);
-
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.StatusCode);
-        // Sem outbox não há rascunho nem recibo; com o canal restaurado o MESMO
-        // payload cria e publica exatamente um envelope novo (atomicidade).
+        using var retry = await client.PostAsJsonAsync("/paguai/requests", Body(scenario.CompanyId));
+        // Com o canal restaurado, o MESMO payload cria e publica envelope novo.
         Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
         Assert.True(await CountDurablePaguaiMessagesAsync(factory) >= 1);
     }
