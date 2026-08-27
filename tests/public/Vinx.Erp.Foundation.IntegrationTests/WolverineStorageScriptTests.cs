@@ -114,7 +114,7 @@ public sealed class WolverineStorageScriptTests
                 ),
                 has_function_privilege(
                     'vinx_worker',
-                    'notifications.enqueue_notification_intent(uuid,uuid,text,text,text,text)',
+                    'notifications.enqueue_paguai_draft_created_notification(uuid,uuid,uuid,uuid)',
                     'EXECUTE'
                 )
             """,

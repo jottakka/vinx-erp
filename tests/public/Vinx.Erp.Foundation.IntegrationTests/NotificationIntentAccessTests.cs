@@ -94,7 +94,8 @@ public sealed class NotificationIntentAccessTests
                 has_function_privilege('vinx_runtime', 'notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text)', 'EXECUTE'),
                 has_function_privilege('vinx_runtime', 'notifications.set_channel_preference(uuid, uuid, text, boolean)', 'EXECUTE'),
                 has_schema_privilege('vinx_worker', 'notifications', 'USAGE'),
-                has_function_privilege('vinx_worker', 'notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text)', 'EXECUTE')
+                has_function_privilege('vinx_worker', 'notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text)', 'EXECUTE'),
+                has_function_privilege('vinx_worker', 'notifications.enqueue_paguai_draft_created_notification(uuid, uuid, uuid, uuid)', 'EXECUTE')
             """,
             administrator
         );
@@ -107,8 +108,9 @@ public sealed class NotificationIntentAccessTests
         // Desde o worker de entregas (#48) o vinx_worker tem USAGE no schema
         // para executar as funções de claim/finalize; continua sem DML direto.
         Assert.True(reader.GetBoolean(4));
-        // #355 permite somente esta função estreita para o produtor Pagaí no worker.
-        Assert.True(reader.GetBoolean(5));
+        // #355 mantém a função genérica proibida e libera só a fronteira Pagaí.
+        Assert.False(reader.GetBoolean(5));
+        Assert.True(reader.GetBoolean(6));
     }
 
     [Fact]

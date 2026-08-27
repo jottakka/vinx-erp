@@ -259,11 +259,15 @@ Nenhum envelope guarda telefone, e-mail, corpo de mensagem, payload de negócio
 ou segredo; os contatos persistem somente os endereços necessários ao provider
 e o deep-link é um selector relativo opcional. A fatia #355 acrescenta o primeiro
 produtor Pagaí: `PaguaiDraftCreated` leva somente `CompanyId`, `DraftId` e
-`RequesterUserId` no outbox transacional. O WorkerHost consome `paguai-events`,
-resolve os aprovadores atuais pelo diretório restrito da #346, exclui o
-solicitante e cria intents in-app com a chave idempotente
-`paguai.<draftId:N>.draft-created`. Template ausente ou reprovado é falha
-best-effort registrada em `Warning`; não desfaz o rascunho confirmado.
+`RequesterUserId` no outbox transacional. O WorkerHost consome `paguai-events`
+e chama somente `notifications.enqueue_paguai_draft_created_notification`;
+a função `SECURITY DEFINER` valida o rascunho, empresa e solicitante, resolve
+os aprovadores atuais, exclui o solicitante e fixa internamente canal `in_app`,
+template, chave idempotente `paguai.<draftId:N>.draft-created` e deep-link do
+rascunho. Apenas `vinx_worker` a executa; não recebe a função genérica de
+intents nem acesso direto às tabelas Pagaí ou de notificações. Template ausente
+ou reprovado é falha best-effort registrada em `Warning`; não desfaz o rascunho
+confirmado.
 
 A fatia #48 estende a máquina de estados do worker
 (`pending_provider → provider_in_flight →
