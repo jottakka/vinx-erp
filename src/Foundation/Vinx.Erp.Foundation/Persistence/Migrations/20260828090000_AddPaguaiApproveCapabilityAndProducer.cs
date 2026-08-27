@@ -348,7 +348,9 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
             WHERE (id, name) IN (
                     ('e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a'::uuid, 'paguai.draft.approve'));
 
-            -- Catálogo do provisionador volta ao corte anterior.
+            -- Catálogo do provisionador volta ao corte anterior: a política de
+            -- 5 nomes deixada pelo Up precisa sair antes da recriação (senão 42710).
+            DROP POLICY capabilities_permissions_owner_select ON foundation.capabilities;
             CREATE POLICY capabilities_permissions_owner_select
                 ON foundation.capabilities FOR SELECT TO vinx_permissions_owner
                 USING (name IN ('foundation.roles.assign', 'foundation.employees.create',

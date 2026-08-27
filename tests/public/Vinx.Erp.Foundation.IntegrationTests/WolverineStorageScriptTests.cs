@@ -114,7 +114,8 @@ public sealed class WolverineStorageScriptTests
         Assert.True(reader.GetBoolean(0));
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
-        for (var index = 3; index <= 17; index++)
+        // 17 expressões no SELECT (ordinais 0..16): todos os grants esperados true.
+        for (var index = 3; index <= 16; index++)
         {
             Assert.True(reader.GetBoolean(index));
         }

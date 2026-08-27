@@ -104,9 +104,11 @@ public sealed class PaguaiApproverAccessTests
             Assert.True(reader.GetBoolean(1));
         }
 
-        // Comportamento sob sessão runtime com CONTEXTO DE OUTRA empresa: sem o
-        // set_config interno o FORCE RLS filtraria tudo e retornaria vazio.
-        await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        // Comportamento sob sessão do WORKER com CONTEXTO DE OUTRA empresa: sem o
+        // set_config interno o FORCE RLS filtraria tudo e retornaria vazio. O EXECUTE
+        // é concedido apenas a vinx_worker (PUBLIC revogado), por isso a sonda usa
+        // a conexão do worker — não a runtime.
+        await using var runtime = new NpgsqlConnection(fixture.WorkerConnectionString);
         await runtime.OpenAsync();
         await using var transaction = await runtime.BeginTransactionAsync();
         await using (var context = new NpgsqlCommand(
