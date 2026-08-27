@@ -5,7 +5,7 @@ namespace Vinx.Erp.Foundation.Domain;
 /// define o fluxo de etapas. Empresa-escopo, versão otimista e sem seeds —
 /// catálogo construído pela própria empresa com capability dedicada.
 /// </summary>
-public sealed class DemandRoutine
+public sealed class DemandRoutine : IConcurrencyVersioned
 {
     public Guid Id { get; set; }
 

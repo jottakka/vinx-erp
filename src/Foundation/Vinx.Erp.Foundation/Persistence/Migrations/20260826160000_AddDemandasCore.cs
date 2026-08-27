@@ -275,6 +275,12 @@ public sealed class AddDemandasCore : Migration
                 TO vinx_demandas_owner
                 USING (true);
 
+            -- Funções SECURITY DEFINER pertencem a vinx_demandas_owner: CREATE é
+            -- concedido apenas na janela de criação e revogado em seguida
+            -- (espelho de 20260825110000; ALTER OWNER direto falha 42501
+            -- porque o papel dono não tem CREATE no schema).
+            GRANT CREATE ON SCHEMA demandas TO vinx_demandas_owner;
+            SET ROLE vinx_demandas_owner;
             CREATE FUNCTION demandas.enumerate_automation_companies()
             RETURNS TABLE (company_id uuid)
             LANGUAGE sql
@@ -288,8 +294,6 @@ public sealed class AddDemandasCore : Migration
                   AND candidate.closed_at IS NULL
                 ORDER BY candidate.company_id;
             $function$;
-            ALTER FUNCTION demandas.enumerate_automation_companies()
-                OWNER TO vinx_demandas_owner;
             REVOKE ALL ON FUNCTION demandas.enumerate_automation_companies()
                 FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION demandas.enumerate_automation_companies()
@@ -310,12 +314,12 @@ public sealed class AddDemandasCore : Migration
                 WHERE demand.id = p_demand_id
                   AND demand.deleted_at IS NULL;
             $function$;
-            ALTER FUNCTION demandas.demand_responsible_user(uuid)
-                OWNER TO vinx_demandas_owner;
             REVOKE ALL ON FUNCTION demandas.demand_responsible_user(uuid)
                 FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION demandas.demand_responsible_user(uuid)
                 TO vinx_worker;
+            RESET ROLE;
+            REVOKE CREATE ON SCHEMA demandas FROM vinx_demandas_owner;
 
             GRANT USAGE ON SCHEMA demandas TO vinx_worker;
             GRANT SELECT ON demandas.demand_routine_stages,

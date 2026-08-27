@@ -1,13 +1,24 @@
+extern alias workerhost;
+
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Demandas;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Foundation.Persistence.Interceptors;
+using Wolverine;
 using Xunit;
+using WorkerAutomation = workerhost::Vinx.Erp.WorkerHost;
+using WorkerProgram = workerhost::Program;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
 
@@ -134,6 +145,137 @@ public sealed class DemandasCoreEndpointTests
         var card = board!.Items.Single(candidate => candidate.Id == demand.Id);
         Assert.True(card.IsOverdue);
     }
+
+    /// <summary>
+    /// Prova mínima end-to-end do tick de automação (runbook P3 item 4) DENTRO
+    /// das fixtures existentes: WorkerHost real (DI fornece scan/handler/bus),
+    /// fila durável demandas-automation materializada, varredura com identidade
+    /// do worker avançando DUE primeiro e marcando overdue depois, e o handler
+    /// auto-perpetuando o próximo tick na fila agendada.
+    /// </summary>
+    [Fact]
+    public async Task Automation_tick_flows_through_durable_demandas_queue_due_first_and_self_perpetuates()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var scenario = await SeedScenarioAsync(factory, administrator);
+        using var client = factory.CreateClient();
+
+        var routineId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        administrator.DemandRoutines.Add(new DemandRoutine
+        {
+            Id = routineId,
+            CompanyId = scenario.CompanyId,
+            Name = "Ciclo com gatilho de tempo",
+            Tipo = "Ciclo",
+            Departamento = "Operações",
+            RoutingOrder = 1,
+            DefaultChecklistItems = [],
+            IsActive = true,
+            CreatedByUserId = factory.ActorUserId,
+            UpdatedByUserId = factory.ActorUserId,
+            RequestId = Guid.NewGuid(),
+            CreatedAt = now,
+            UpdatedAt = now,
+            RowVersion = 1,
+        });
+        await administrator.SaveChangesAsync();
+        administrator.DemandRoutineStages.AddRange(
+            new DemandRoutineStage { Id = Guid.NewGuid(), CompanyId = scenario.CompanyId, RoutineId = routineId, OrderIndex = 0, Stage = DemandStages.Initiation, TriggerKind = DemandStageTriggerKind.TimeElapsed, TriggerHours = 1m },
+            new DemandRoutineStage { Id = Guid.NewGuid(), CompanyId = scenario.CompanyId, RoutineId = routineId, OrderIndex = 1, Stage = DemandStages.Execution, TriggerKind = DemandStageTriggerKind.ExplicitCompletion }
+        );
+        await administrator.SaveChangesAsync();
+
+        // DUE: gatilho de tempo vencido (início da etapa 2h no passado).
+        var dueDemand = await CreateInRoutineAsync(client, new RoutineScenario(scenario.CompanyId, scenario.MembershipId, routineId));
+        await administrator.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE demandas.demands SET stage_started_at = now() - interval '2 hours' WHERE id = {dueDemand.Id}");
+        // OVERDUE: sem rotina, prazo manual já vencido.
+        var overdueDemand = await CreateDemandAsync(client, scenario, DateTimeOffset.UtcNow.AddHours(-1));
+
+        await using var workerHost = new WorkerAutomationHostFactory(factory.Fixture.WorkerConnectionString);
+        using var workerClient = workerHost.CreateClient();
+
+        // Tick imediato pela fila durável (o envelope semeado pelo scheduler só
+        // vence em +5min): o runtime do worker consome e executa o handler REAL.
+        using (var busScope = workerHost.Services.CreateScope())
+        {
+            var bus = busScope.ServiceProvider.GetRequiredService<IMessageBus>();
+            await bus.PublishAsync(new WorkerAutomation.DemandasAutomationTick(DateTimeOffset.UtcNow));
+        }
+
+        var advanced = false;
+        for (var attempt = 0; attempt < 40 && !advanced; attempt++)
+        {
+            await Task.Delay(500);
+            advanced = await administrator.Database
+                .SqlQuery<bool>($"""SELECT (stage = 'execution') AS "Value" FROM demandas.demands WHERE id = {dueDemand.Id}""")
+                .SingleAsync();
+        }
+        Assert.True(advanced);
+
+        var overdueMarked = await administrator.Database
+            .SqlQuery<bool>($"""SELECT (overdue_since IS NOT NULL) AS "Value" FROM demandas.demands WHERE id = {overdueDemand.Id}""")
+            .SingleAsync();
+        Assert.True(overdueMarked);
+
+        // Fila durável drenada: o envelope do tick foi consumido pelo listener
+        // (o handler auto-perpetua agendando o próximo tick ao final de cada
+        // execução; encadeamentos concorrentes tornam a contagem da fila
+        // agendada intrinsecamente corrida, então ela não é pinada aqui).
+        await Task.Delay(1000);
+        var queuedTicks = await administrator.Database
+            .SqlQuery<int>($"""SELECT count(*) AS "Value" FROM vinx_wolverine_queues.wolverine_queue_demandas_automation""")
+            .SingleAsync();
+        Assert.True(queuedTicks == 0);
+
+        // DUE primeiro/overdue depois: provado com UMA varredura direta e
+        // determinística do serviço real (identidade do worker), sem a
+        // concorrência dos ticks enfileirados pelo Wolverine.
+        var secondDue = await CreateInRoutineAsync(client, new RoutineScenario(scenario.CompanyId, scenario.MembershipId, routineId));
+        await administrator.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE demandas.demands SET stage_started_at = now() - interval '2 hours' WHERE id = {secondDue.Id}");
+        var secondOverdue = await CreateDemandAsync(client, scenario, DateTimeOffset.UtcNow.AddHours(-1));
+
+        var workerOptions = new DbContextOptionsBuilder<FoundationDbContext>()
+            .UseNpgsql(factory.Fixture.WorkerConnectionString)
+            .UseSnakeCaseNamingConvention()
+            .AddInterceptors(new RowVersionInterceptor())
+            .Options;
+        await using var workerDatabase = new FoundationDbContext(workerOptions);
+        var scan = new DemandasAutomationScanService(
+            workerDatabase,
+            new DemandasNotificationComposer(
+                new NotificationIntentService(workerDatabase, null!, NullLogger<NotificationIntentService>.Instance),
+                NullLogger<DemandasNotificationComposer>.Instance),
+            NullLogger<DemandasAutomationScanService>.Instance);
+        await scan.ScanAsync(CancellationToken.None);
+
+        var scanEvents = await administrator.Database
+            .SqlQuery<string>(
+                $"""SELECT kind || '@' || extract(epoch from occurred_at)::bigint || '#' || left(demand_id::text, 8) AS "Value" FROM demandas.demand_events WHERE demand_id IN ({secondDue.Id}, {secondOverdue.Id}) AND kind IN ('stage_advanced', 'overdue') ORDER BY occurred_at"""
+            )
+            .ToListAsync();
+        Assert.Equal(
+            [$"stage_advanced#{secondDue.Id.ToString()[..8]}", $"overdue#{secondOverdue.Id.ToString()[..8]}"],
+            scanEvents.Select(row => row.Split('@')[0] + row[row.IndexOf('#')..]).ToList()
+        );
+    }
+
+    private sealed class WorkerAutomationHostFactory(string? connectionString)
+        : WebApplicationFactory<WorkerProgram>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseSetting("FOUNDATION_WORKER_CONNECTION", connectionString ?? string.Empty);
+            builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.test/auth/v1");
+            builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
+            builder.UseSetting("SUPABASE_AUTH_SERVICE_ROLE_KEY", "test-service-role-key");
+            builder.UseSetting("SUPABASE_INVITE_REDIRECT_URL", "https://app.example.test/convite");
+        }
+    }
+
 
     [Fact]
     public async Task Reader_without_membership_in_company_is_forbidden()
@@ -270,7 +412,11 @@ private static async Task<DemandSeed> CreateInRoutineAsync(HttpClient client, Ro
             UpdatedAt = now,
             RowVersion = 1,
         };
+        // O modelo não declara a relação stage→routine (FK só no DDL das
+        // migrações SQL): salvar ambos no mesmo batch deixa o EF sem ordenar
+        // o pai antes do filho e quebra fk_demand_routine_stages_routine.
         administrator.DemandRoutines.Add(routine);
+        await administrator.SaveChangesAsync();
         administrator.DemandRoutineStages.AddRange(
             new DemandRoutineStage { Id = Guid.NewGuid(), CompanyId = baseScenario.CompanyId, RoutineId = routine.Id, OrderIndex = 0, Stage = DemandStages.Initiation, TriggerKind = DemandStageTriggerKind.ChecklistCompleted },
             new DemandRoutineStage { Id = Guid.NewGuid(), CompanyId = baseScenario.CompanyId, RoutineId = routine.Id, OrderIndex = 1, Stage = DemandStages.Execution, TriggerKind = DemandStageTriggerKind.ExplicitCompletion }

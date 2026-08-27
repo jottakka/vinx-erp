@@ -324,6 +324,11 @@ public sealed class DemandasService(
                 RowVersion = 1,
             };
             database.Demands.Add(demand);
+            // O modelo não declara as relações filho→demanda (FKs só no DDL das
+            // migrações SQL): sem o pai persistido primeiro, o batch do EF insere
+            // eventos/participantes antes da demanda (23503). Mesma transação
+            // ambiente — a atomicidade do create permanece intacta.
+            await database.SaveChangesAsync(cancellationToken);
 
             var position = 0;
             foreach (var text in routineEntity?.DefaultChecklistItems ?? [])

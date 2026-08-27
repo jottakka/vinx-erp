@@ -6,7 +6,7 @@ namespace Vinx.Erp.Foundation.Domain;
 /// <see cref="StageCycleCount"/> cresce a cada re-iniciação para dar chave de
 /// deduplicação nova aos avisos por ciclo.
 /// </summary>
-public sealed class Demand
+public sealed class Demand : IConcurrencyVersioned
 {
     public Guid Id { get; set; }
 

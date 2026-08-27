@@ -224,7 +224,10 @@ public sealed class DemandEventConfiguration : IEntityTypeConfiguration<DemandEv
             .HasColumnName("occurrence_token")
             .HasMaxLength(64);
         builder.Property(@event => @event.ActorUserId).HasColumnName("actor_user_id");
-        builder.Property(@event => @event.MetadataJson).HasColumnName("metadata_json");
+        builder
+            .Property(@event => @event.MetadataJson)
+            .HasColumnName("metadata_json")
+            .HasColumnType("jsonb");
         builder.Property(@event => @event.OccurredAt).HasColumnName("occurred_at");
     }
 }

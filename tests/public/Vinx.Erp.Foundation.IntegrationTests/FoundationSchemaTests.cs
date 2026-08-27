@@ -209,8 +209,17 @@ public sealed class FoundationSchemaTests
         try
         {
             var provisioningCatalog = await ReadCapabilityNamesAsync(provisioning);
+            // Catálogo do provisionador = união das policies de lista estática:
+            // as 4 foundation.* originais + as 6 demandas.* da lane P3
+            // (capabilities_demandas_owner_read em 20260826160000).
             Assert.Equal(
                 [
+                    "demandas.demand.advance",
+                    "demandas.demand.assign",
+                    "demandas.demand.create",
+                    "demandas.demand.participants.manage",
+                    "demandas.demand.read",
+                    "demandas.routine.manage",
                     "foundation.files.confirm",
                     "foundation.files.upload",
                     "foundation.memberships.revoke",

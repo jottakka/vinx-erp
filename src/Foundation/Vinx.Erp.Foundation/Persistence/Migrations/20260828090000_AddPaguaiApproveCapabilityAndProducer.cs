@@ -295,6 +295,11 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
             RESET ROLE;
             REVOKE CREATE, USAGE ON SCHEMA paguai FROM vinx_permissions_owner;
 
+            -- O worker consome a fila e chama a função qualificada: EXECUTE sem
+            -- USAGE no schema é 42501 na sonda (precedente: runtime em
+            -- 20260816020000; migrator é dono do schema e concede fora do SET ROLE).
+            GRANT USAGE ON SCHEMA paguai TO vinx_worker;
+
 """
         );
         migrationBuilder.Sql(
@@ -338,11 +343,14 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                 FROM vinx_worker;
             RESET ROLE;
 
-            GRANT CREATE ON SCHEMA paguai TO vinx_permissions_owner;
+            -- DROP de objeto qualificado exige USAGE além de CREATE — mesmo par
+            -- de concessões da janela do Up (sem USAGE: 42501 no SET ROLE).
+            GRANT USAGE, CREATE ON SCHEMA paguai TO vinx_permissions_owner;
             SET ROLE vinx_permissions_owner;
             DROP FUNCTION paguai.list_draft_approver_user_ids(uuid, uuid);
             RESET ROLE;
-            REVOKE CREATE ON SCHEMA paguai FROM vinx_permissions_owner;
+            REVOKE CREATE, USAGE ON SCHEMA paguai FROM vinx_permissions_owner;
+            REVOKE USAGE ON SCHEMA paguai FROM vinx_worker;
 
             DELETE FROM foundation.capabilities
             WHERE (id, name) IN (

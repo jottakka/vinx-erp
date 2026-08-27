@@ -364,6 +364,12 @@ builder.Host.UseWolverine(options =>
     options.ListenToPostgresqlQueue("whatsapp-inbound-documents").UseDurableInbox();
     options.ListenToPostgresqlQueue("telegram-inbound").UseDurableInbox();
     options.ListenToPostgresqlQueue("demandas-automation").UseDurableInbox();
+    // O tick é produzido E consumido por este host: sem roteamento explícito o
+    // envelope cairia no endpoint local padrão e a fila durável dedicada (com
+    // grants próprios) ficaria órfã.
+    options
+        .PublishMessage<DemandasAutomationTick>()
+        .ToPostgresqlQueue("demandas-automation");
 });
 
 

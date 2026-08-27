@@ -868,111 +868,145 @@ CREATE FUNCTION foundation.ensure_company_default_roles(p_company_id uuid) RETUR
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'pg_catalog', 'foundation', 'pg_temp'
     AS $$
-DECLARE
-    v_seed_actor uuid;
-    v_role_id uuid;
-    v_grant_count integer;
-BEGIN
-    IF p_company_id IS NULL THEN
-        RAISE EXCEPTION 'company default roles parameters are invalid'
-            USING ERRCODE = '22023';
-    END IF;
+            DECLARE
+                v_seed_actor uuid;
+                v_role_id uuid;
+                v_grant_count integer;
+            BEGIN
+                IF p_company_id IS NULL THEN
+                    RAISE EXCEPTION 'company default roles parameters are invalid'
+                        USING ERRCODE = '22023';
+                END IF;
 
-    PERFORM set_config('app.company_id', p_company_id::text, true);
+                PERFORM set_config('app.company_id', p_company_id::text, true);
 
-    SELECT membership.user_id
-    INTO v_seed_actor
-    FROM foundation.memberships AS membership
-    WHERE membership.company_id = p_company_id
-      AND membership.deleted_at IS NULL
-    ORDER BY membership.created_at, membership.id
-    LIMIT 1;
-    IF v_seed_actor IS NULL THEN
-        RAISE EXCEPTION 'company has no active membership'
-            USING ERRCODE = '23514';
-    END IF;
+                SELECT membership.user_id
+                INTO v_seed_actor
+                FROM foundation.memberships AS membership
+                WHERE membership.company_id = p_company_id
+                  AND membership.deleted_at IS NULL
+                ORDER BY membership.created_at, membership.id
+                LIMIT 1;
+                IF v_seed_actor IS NULL THEN
+                    RAISE EXCEPTION 'company has no active membership'
+                        USING ERRCODE = '23514';
+                END IF;
 
-    IF NOT EXISTS (
-        SELECT 1
-        FROM foundation.roles AS role_record
-        WHERE role_record.company_id = p_company_id
-          AND role_record.name = 'admin'
-          AND role_record.deleted_at IS NULL) THEN
-        v_role_id := gen_random_uuid();
-        INSERT INTO foundation.roles (
-            id, company_id, name, created_by_user_id, updated_by_user_id,
-            request_id, created_at, updated_at)
-        VALUES (
-            v_role_id, p_company_id, 'admin', v_seed_actor, v_seed_actor,
-            gen_random_uuid(), clock_timestamp(), clock_timestamp());
-        INSERT INTO foundation.role_capabilities (
-            id, company_id, role_id, capability_id, scope,
-            created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
-        SELECT
-            gen_random_uuid(),
-            p_company_id,
-            v_role_id,
-            capability.id,
-            'company',
-            v_seed_actor,
-            v_seed_actor,
-            gen_random_uuid(),
-            clock_timestamp(),
-            clock_timestamp()
-        FROM foundation.capabilities AS capability
-        WHERE capability.name IN (
-            'foundation.roles.assign',
-            'foundation.employees.create',
-            'foundation.files.upload',
-            'foundation.files.confirm')
-        ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
-            DO NOTHING;
-        GET DIAGNOSTICS v_grant_count = ROW_COUNT;
-        IF v_grant_count <> 4 THEN
-            RAISE EXCEPTION 'admin default role capability catalog is incomplete'
-                USING ERRCODE = '23514';
-        END IF;
-    END IF;
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM foundation.roles AS role_record
+                    WHERE role_record.company_id = p_company_id
+                      AND role_record.name = 'admin'
+                      AND role_record.deleted_at IS NULL) THEN
+                    v_role_id := gen_random_uuid();
+                    INSERT INTO foundation.roles (
+                        id, company_id, name, created_by_user_id, updated_by_user_id,
+                        request_id, created_at, updated_at)
+                    VALUES (
+                        v_role_id, p_company_id, 'admin', v_seed_actor, v_seed_actor,
+                        gen_random_uuid(), clock_timestamp(), clock_timestamp());
+                    INSERT INTO foundation.role_capabilities (
+                        id, company_id, role_id, capability_id, scope,
+                        created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+                    SELECT
+                        gen_random_uuid(),
+                        p_company_id,
+                        v_role_id,
+                        capability.id,
+                        'company',
+                        v_seed_actor,
+                        v_seed_actor,
+                        gen_random_uuid(),
+                        clock_timestamp(),
+                        clock_timestamp()
+                    FROM foundation.capabilities AS capability
+                    WHERE capability.name IN (
+                        'foundation.roles.assign',
+                        'foundation.employees.create',
+                        'foundation.files.upload',
+                        'foundation.files.confirm',
+                        'paguai.draft.approve')
+                    ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+                        DO NOTHING;
+                    GET DIAGNOSTICS v_grant_count = ROW_COUNT;
+                    IF v_grant_count <> 5 THEN
+                        RAISE EXCEPTION 'admin default role capability catalog is incomplete'
+                            USING ERRCODE = '23514';
+                    END IF;
+                END IF;
 
-    IF NOT EXISTS (
-        SELECT 1
-        FROM foundation.roles AS role_record
-        WHERE role_record.company_id = p_company_id
-          AND role_record.name = 'member'
-          AND role_record.deleted_at IS NULL) THEN
-        v_role_id := gen_random_uuid();
-        INSERT INTO foundation.roles (
-            id, company_id, name, created_by_user_id, updated_by_user_id,
-            request_id, created_at, updated_at)
-        VALUES (
-            v_role_id, p_company_id, 'member', v_seed_actor, v_seed_actor,
-            gen_random_uuid(), clock_timestamp(), clock_timestamp());
-        INSERT INTO foundation.role_capabilities (
-            id, company_id, role_id, capability_id, scope,
-            created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
-        SELECT
-            gen_random_uuid(),
-            p_company_id,
-            v_role_id,
-            capability.id,
-            'company',
-            v_seed_actor,
-            v_seed_actor,
-            gen_random_uuid(),
-            clock_timestamp(),
-            clock_timestamp()
-        FROM foundation.capabilities AS capability
-        WHERE capability.name IN ('foundation.files.upload')
-        ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
-            DO NOTHING;
-        GET DIAGNOSTICS v_grant_count = ROW_COUNT;
-        IF v_grant_count <> 1 THEN
-            RAISE EXCEPTION 'member default role capability catalog is incomplete'
-                USING ERRCODE = '23514';
-        END IF;
-    END IF;
-END;
-$$;
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM foundation.roles AS role_record
+                    WHERE role_record.company_id = p_company_id
+                      AND role_record.name = 'member'
+                      AND role_record.deleted_at IS NULL) THEN
+                    v_role_id := gen_random_uuid();
+                    INSERT INTO foundation.roles (
+                        id, company_id, name, created_by_user_id, updated_by_user_id,
+                        request_id, created_at, updated_at)
+                    VALUES (
+                        v_role_id, p_company_id, 'member', v_seed_actor, v_seed_actor,
+                        gen_random_uuid(), clock_timestamp(), clock_timestamp());
+                    INSERT INTO foundation.role_capabilities (
+                        id, company_id, role_id, capability_id, scope,
+                        created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+                    SELECT
+                        gen_random_uuid(),
+                        p_company_id,
+                        v_role_id,
+                        capability.id,
+                        'company',
+                        v_seed_actor,
+                        v_seed_actor,
+                        gen_random_uuid(),
+                        clock_timestamp(),
+                        clock_timestamp()
+                    FROM foundation.capabilities AS capability
+                    WHERE capability.name IN ('foundation.files.upload')
+                    ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+                        DO NOTHING;
+                    GET DIAGNOSTICS v_grant_count = ROW_COUNT;
+                    IF v_grant_count <> 1 THEN
+                        RAISE EXCEPTION 'member default role capability catalog is incomplete'
+                            USING ERRCODE = '23514';
+                    END IF;
+                ELSE
+                    -- Admin pré-existente: completa APENAS o grant ausente da
+                    -- nova capability, idempotente e sem tocar nos demais.
+                    INSERT INTO foundation.role_capabilities (
+                        id, company_id, role_id, capability_id, scope,
+                        created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+                    SELECT
+                        gen_random_uuid(),
+                        p_company_id,
+                        admin_role.id,
+                        capability.id,
+                        'company',
+                        admin_role.created_by_user_id,
+                        admin_role.created_by_user_id,
+                        gen_random_uuid(),
+                        clock_timestamp(),
+                        clock_timestamp()
+                    FROM foundation.roles AS admin_role
+                    CROSS JOIN foundation.capabilities AS capability
+                    WHERE admin_role.company_id = p_company_id
+                      AND admin_role.name = 'admin'
+                      AND admin_role.deleted_at IS NULL
+                      AND capability.name = 'paguai.draft.approve'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM foundation.role_capabilities AS existing
+                          WHERE existing.company_id = admin_role.company_id
+                            AND existing.role_id = admin_role.id
+                            AND existing.capability_id = capability.id
+                            AND existing.scope = 'company'
+                            AND existing.deleted_at IS NULL)
+                    ON CONFLICT (company_id, role_id, capability_id, scope) WHERE deleted_at IS NULL
+                        DO NOTHING;
+                END IF;
+            END;
+            $$;
 
 
 -- Name: ensure_platform_owner_employee_create(uuid, uuid, uuid); Type: FUNCTION; Schema: foundation; Owner: -
@@ -2742,6 +2776,11 @@ CREATE POLICY approvals_company_isolation ON foundation.approvals USING (((compa
 
 ALTER TABLE foundation.capabilities ENABLE ROW LEVEL SECURITY;
 
+-- Name: capabilities capabilities_demandas_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_demandas_owner_read ON foundation.capabilities FOR SELECT TO vinx_provisioning_owner USING (((name)::text = ANY ((ARRAY['demandas.demand.read'::character varying, 'demandas.demand.create'::character varying, 'demandas.demand.advance'::character varying, 'demandas.demand.assign'::character varying, 'demandas.demand.participants.manage'::character varying, 'demandas.routine.manage'::character varying])::text[])));
+
+
 -- Name: capabilities capabilities_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY capabilities_employee_directory_owner_select ON foundation.capabilities FOR SELECT TO vinx_employee_directory_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying])::text[])));
@@ -2761,7 +2800,7 @@ CREATE POLICY capabilities_permissions_owner_granted_select ON foundation.capabi
 
 -- Name: capabilities capabilities_permissions_owner_select; Type: POLICY; Schema: foundation; Owner: -
 
-CREATE POLICY capabilities_permissions_owner_select ON foundation.capabilities FOR SELECT TO vinx_permissions_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying, 'foundation.files.upload'::character varying, 'foundation.files.confirm'::character varying])::text[])));
+CREATE POLICY capabilities_permissions_owner_select ON foundation.capabilities FOR SELECT TO vinx_permissions_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying, 'foundation.files.upload'::character varying, 'foundation.files.confirm'::character varying, 'paguai.draft.approve'::character varying])::text[])));
 
 
 -- Name: capabilities capabilities_provisioning_owner; Type: POLICY; Schema: foundation; Owner: -
@@ -2917,6 +2956,11 @@ CREATE POLICY memberships_authorized_company_read ON foundation.memberships FOR 
 -- Name: memberships memberships_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY memberships_company_isolation ON foundation.memberships USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: memberships memberships_demandas_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_demandas_owner_read ON foundation.memberships FOR SELECT TO vinx_demandas_owner USING (true);
 
 
 -- Name: memberships memberships_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
@@ -3076,6 +3120,11 @@ CREATE POLICY role_capabilities_authorized_company_read ON foundation.role_capab
 -- Name: role_capabilities role_capabilities_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_capabilities_company_isolation ON foundation.role_capabilities USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: role_capabilities role_capabilities_demandas_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_demandas_owner_read ON foundation.role_capabilities FOR SELECT TO vinx_provisioning_owner USING ((capability_id = ANY (ARRAY['6ff8b25a-1c37-58cc-894b-97221467c3d4'::uuid, 'd3c10860-a26c-5eac-b684-8e2faac9ad99'::uuid, '74403a29-bdae-55a9-b43b-774eca3f03b2'::uuid, '00b09e31-8693-5b62-b59a-cad5994f3378'::uuid, 'd207f7a5-7fdb-5a7d-a87c-2b4210f36712'::uuid, 'ec28a347-1ade-5586-bf33-e6f1cbd59620'::uuid])));
 
 
 -- Name: role_capabilities role_capabilities_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -

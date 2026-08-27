@@ -283,9 +283,6 @@ public partial class AddNotificationEmailChannel : Migration
                 FROM PUBLIC, vinx_worker, vinx_migrator;
             DROP FUNCTION notifications.get_notification_email_delivery_target(uuid, uuid);
 
-            DROP FUNCTION notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text);
-            DROP FUNCTION notifications.set_channel_preference(uuid, uuid, text, boolean);
-
             ALTER TABLE notifications.notification_templates
                 DROP CONSTRAINT notification_templates_email_subject_check,
                 DROP CONSTRAINT notification_templates_email_body_check,
@@ -304,5 +301,170 @@ public partial class AddNotificationEmailChannel : Migration
                     CHECK (channel IN ('whatsapp'));
             RESET ROLE;
             REVOKE SELECT (id, email) ON TABLE foundation.users FROM vinx_notifications_owner;
+
+            -- Restaura as funções da era pré-e-mail (padrão do Down do canal
+            -- Telegram): DROP sem recriação deixa o Down de 20260818120000 com
+            -- 42883, pois ele REVOKE/DROP a função que ele próprio criou. O
+            -- CREATE OR REPLACE exige janela transiente de CREATE no schema.
+            GRANT CREATE ON SCHEMA notifications TO vinx_notifications_owner;
+            SET ROLE vinx_notifications_owner;
+            REVOKE ALL ON FUNCTION notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text)
+                FROM PUBLIC, vinx_runtime, vinx_migrator;
+            CREATE OR REPLACE FUNCTION notifications.enqueue_notification_intent(
+                p_company_id uuid,
+                p_recipient_user_id uuid,
+                p_event_key text,
+                p_channel text,
+                p_template_key text,
+                p_deep_link_selector text)
+            RETURNS TABLE (status text, delivery_id uuid)
+            LANGUAGE plpgsql SECURITY DEFINER
+            SET search_path TO pg_catalog, notifications, pg_temp
+            AS $function$
+            DECLARE
+                v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+                v_correlation_id uuid := COALESCE(NULLIF(current_setting('app.correlation_id', true), '')::uuid, gen_random_uuid());
+                v_delivery_id uuid;
+                v_opted_in boolean;
+            BEGIN
+                IF v_actor_user_id IS NULL THEN
+                    RAISE EXCEPTION 'notification actor is required' USING ERRCODE = '42501';
+                END IF;
+                IF p_company_id IS NULL
+                    OR p_recipient_user_id IS NULL
+                    OR p_channel IS NULL OR p_channel NOT IN ('in_app', 'whatsapp')
+                    OR p_event_key IS NULL OR btrim(p_event_key) = '' OR char_length(btrim(p_event_key)) > 200
+                        OR p_event_key <> btrim(p_event_key)
+                    OR p_template_key IS NULL OR btrim(p_template_key) = '' OR char_length(btrim(p_template_key)) > 100
+                        OR p_template_key <> btrim(p_template_key)
+                    OR (p_deep_link_selector IS NOT NULL
+                        AND (p_deep_link_selector NOT LIKE '/%' OR char_length(p_deep_link_selector) > 200))
+                THEN
+                    RAISE EXCEPTION 'notification intent parameters are invalid' USING ERRCODE = '22023';
+                END IF;
+
+                -- Contexto transacional de empresa para as policies RLS de leitura,
+                -- no mesmo padrão das funções de provisionamento e diretório.
+                PERFORM set_config('app.company_id', p_company_id::text, true);
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM foundation.memberships AS membership
+                    WHERE membership.company_id = p_company_id
+                        AND membership.user_id = p_recipient_user_id
+                        AND membership.deleted_at IS NULL)
+                THEN
+                    RAISE EXCEPTION 'recipient is not a member of the company' USING ERRCODE = '42501';
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM notifications.notification_templates AS template
+                    WHERE template.company_id = p_company_id
+                        AND template.channel = p_channel
+                        AND template.template_key = p_template_key
+                        AND template.is_approved)
+                THEN
+                    RAISE EXCEPTION 'notification template is not approved' USING ERRCODE = '22023';
+                END IF;
+
+                IF p_channel = 'whatsapp' THEN
+                    SELECT preference.opted_in INTO v_opted_in
+                    FROM notifications.notification_preferences AS preference
+                    WHERE preference.company_id = p_company_id
+                        AND preference.user_id = p_recipient_user_id
+                        AND preference.channel = 'whatsapp';
+                    IF COALESCE(v_opted_in, false) IS DISTINCT FROM true THEN
+                        RETURN QUERY SELECT 'suppressed_channel_opt_out'::text, NULL::uuid;
+                        RETURN;
+                    END IF;
+                END IF;
+
+                INSERT INTO notifications.notification_intents (
+                    id, company_id, recipient_user_id, event_key, channel, template_key,
+                    deep_link_selector, status, correlation_id, created_by_user_id)
+                VALUES (
+                    gen_random_uuid(), p_company_id, p_recipient_user_id, p_event_key, p_channel, p_template_key,
+                    p_deep_link_selector, 'pending_delivery', v_correlation_id, v_actor_user_id)
+                ON CONFLICT (event_key, recipient_user_id, channel, template_key) DO NOTHING
+                RETURNING id INTO v_delivery_id;
+
+                IF v_delivery_id IS NULL THEN
+                    SELECT existing_intent.id INTO v_delivery_id
+                    FROM notifications.notification_intents AS existing_intent
+                    WHERE existing_intent.event_key = p_event_key
+                        AND existing_intent.recipient_user_id = p_recipient_user_id
+                        AND existing_intent.channel = p_channel
+                        AND existing_intent.template_key = p_template_key;
+                    RETURN QUERY SELECT 'replay'::text, v_delivery_id;
+                    RETURN;
+                END IF;
+
+                PERFORM audit.append_event(
+                    v_actor_user_id, 'company', p_company_id, 'web', 'notification.intent.enqueue',
+                    'notification_intent', v_delivery_id, 'success', v_correlation_id, NULL,
+                    jsonb_build_object('channel', p_channel, 'event_key', p_event_key));
+                RETURN QUERY SELECT 'created'::text, v_delivery_id;
+            END;
+            $function$;
+            REVOKE ALL ON FUNCTION notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text)
+                FROM PUBLIC, vinx_migrator;
+            GRANT EXECUTE ON FUNCTION notifications.enqueue_notification_intent(uuid, uuid, text, text, text, text)
+                TO vinx_runtime;
+
+            CREATE OR REPLACE FUNCTION notifications.set_channel_preference(
+                p_company_id uuid,
+                p_user_id uuid,
+                p_channel text,
+                p_opted_in boolean)
+            RETURNS void
+            LANGUAGE plpgsql SECURITY DEFINER
+            SET search_path TO pg_catalog, notifications, pg_temp
+            AS $function$
+            DECLARE
+                v_actor_user_id uuid := NULLIF(current_setting('app.user_id', true), '')::uuid;
+                v_correlation_id uuid := COALESCE(NULLIF(current_setting('app.correlation_id', true), '')::uuid, gen_random_uuid());
+                v_changed integer;
+            BEGIN
+                IF v_actor_user_id IS NULL THEN
+                    RAISE EXCEPTION 'notification actor is required' USING ERRCODE = '42501';
+                END IF;
+                IF p_channel IS DISTINCT FROM 'whatsapp' OR p_opted_in IS NULL THEN
+                    RAISE EXCEPTION 'notification preference parameters are invalid' USING ERRCODE = '22023';
+                END IF;
+                IF v_actor_user_id <> p_user_id THEN
+                    RAISE EXCEPTION 'notification preference changes are self-service' USING ERRCODE = '42501';
+                END IF;
+                PERFORM set_config('app.company_id', p_company_id::text, true);
+                IF NOT EXISTS (
+                    SELECT 1 FROM foundation.memberships AS membership
+                    WHERE membership.company_id = p_company_id
+                        AND membership.user_id = p_user_id
+                        AND membership.deleted_at IS NULL)
+                THEN
+                    RAISE EXCEPTION 'recipient is not a member of the company' USING ERRCODE = '42501';
+                END IF;
+
+                INSERT INTO notifications.notification_preferences AS preference (
+                    company_id, user_id, channel, opted_in, updated_by_user_id)
+                VALUES (p_company_id, p_user_id, p_channel, p_opted_in, v_actor_user_id)
+                ON CONFLICT (company_id, user_id, channel) DO UPDATE
+                    SET opted_in = EXCLUDED.opted_in,
+                        updated_at = clock_timestamp(),
+                        updated_by_user_id = EXCLUDED.updated_by_user_id
+                    WHERE preference.opted_in IS DISTINCT FROM EXCLUDED.opted_in;
+                GET DIAGNOSTICS v_changed = ROW_COUNT;
+                IF v_changed > 0 THEN
+                    PERFORM audit.append_event(
+                        v_actor_user_id, 'company', p_company_id, 'web', 'notification.preference.change',
+                        'notification_preference', p_user_id, 'success', v_correlation_id, NULL,
+                        jsonb_build_object('channel', p_channel, 'opted_in', p_opted_in));
+                END IF;
+            END;
+            $function$;
+            REVOKE ALL ON FUNCTION notifications.set_channel_preference(uuid, uuid, text, boolean)
+                FROM PUBLIC, vinx_migrator;
+            GRANT EXECUTE ON FUNCTION notifications.set_channel_preference(uuid, uuid, text, boolean)
+                TO vinx_runtime;
+            RESET ROLE;
+            REVOKE CREATE ON SCHEMA notifications FROM vinx_notifications_owner;
             """);
 }

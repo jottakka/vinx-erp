@@ -513,7 +513,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.Property<string>("MetadataJson")
                         .IsRequired()
-                        .HasColumnType("text")
+                        .HasColumnType("jsonb")
                         .HasColumnName("metadata_json");
 
                     b.Property<DateTimeOffset>("OccurredAt")
