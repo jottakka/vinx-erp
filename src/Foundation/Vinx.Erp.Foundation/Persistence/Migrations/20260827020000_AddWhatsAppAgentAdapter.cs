@@ -17,15 +17,20 @@ public partial class AddWhatsAppAgentAdapter : Migration
                 foundation.role_capabilities, foundation.capabilities, foundation.files,
                 foundation.agent_execution_ledger, foundation.users TO vinx_worker;
             GRANT INSERT, UPDATE ON TABLE foundation.files TO vinx_worker;
+            GRANT REFERENCES (id) ON TABLE foundation.files TO vinx_notifications_owner;
             GRANT INSERT ON TABLE foundation.agent_execution_ledger TO vinx_worker;
             GRANT UPDATE (state, safe_result_json, reason_code, updated_at, row_version)
                 ON TABLE foundation.agent_execution_ledger TO vinx_worker;
             GRANT USAGE ON SCHEMA paguai, audit TO vinx_worker;
             GRANT SELECT, INSERT, UPDATE ON TABLE paguai.draft_proposals TO vinx_worker;
+            SET ROLE vinx_authorization_owner;
             GRANT EXECUTE ON FUNCTION foundation.current_actor_memberships() TO vinx_worker;
+            RESET ROLE;
+            SET ROLE vinx_audit_owner;
             GRANT EXECUTE ON FUNCTION audit.append_event(
                 uuid, text, uuid, text, text, text, uuid, text, uuid, text, jsonb)
                 TO vinx_worker;
+            RESET ROLE;
 
             DROP POLICY capabilities_notifications_owner_read ON foundation.capabilities;
             CREATE POLICY capabilities_notifications_owner_read ON foundation.capabilities
@@ -408,15 +413,20 @@ public partial class AddWhatsAppAgentAdapter : Migration
                         'correlation_timeout', 'correlation_ambiguous'));
             RESET ROLE;
             REVOKE CREATE ON SCHEMA notifications FROM vinx_notifications_owner;
+            REVOKE REFERENCES (id) ON TABLE foundation.files FROM vinx_notifications_owner;
 
             DROP POLICY capabilities_notifications_owner_read ON foundation.capabilities;
             CREATE POLICY capabilities_notifications_owner_read ON foundation.capabilities
                 FOR SELECT TO vinx_notifications_owner
                 USING (name = 'foundation.files.upload');
+            SET ROLE vinx_audit_owner;
             REVOKE EXECUTE ON FUNCTION audit.append_event(
                 uuid, text, uuid, text, text, text, uuid, text, uuid, text, jsonb)
                 FROM vinx_worker;
+            RESET ROLE;
+            SET ROLE vinx_authorization_owner;
             REVOKE EXECUTE ON FUNCTION foundation.current_actor_memberships() FROM vinx_worker;
+            RESET ROLE;
             REVOKE SELECT, INSERT, UPDATE ON TABLE paguai.draft_proposals FROM vinx_worker;
             REVOKE USAGE ON SCHEMA paguai, audit FROM vinx_worker;
             REVOKE INSERT, UPDATE ON TABLE foundation.files FROM vinx_worker;
