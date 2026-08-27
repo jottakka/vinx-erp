@@ -12,7 +12,7 @@ using Vinx.Erp.Foundation.Persistence;
 namespace Vinx.Erp.Foundation.Persistence.Migrations
 {
     [DbContext(typeof(FoundationDbContext))]
-    [Migration("20260826231302_RecordDemandasCoreModel")]
+    [Migration("20260826233229_RecordDemandasCoreModel")]
     partial class RecordDemandasCoreModel
     {
         /// <inheritdoc />
@@ -347,6 +347,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Property<DateTimeOffset?>("OverdueSince")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("overdue_since");
+
+                    b.Property<Guid?>("PendingApprovalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pending_approval_id");
+
+                    b.Property<Guid?>("PendingProposalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pending_proposal_id");
 
                     b.Property<string>("Priority")
                         .IsRequired()

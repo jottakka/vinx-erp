@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Vinx.Erp.Foundation.Approvals;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Xunit;
 
@@ -181,4 +182,43 @@ public sealed class ApprovalContractsTests
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement.Clone();
+}
+
+// Costura de parametrização das aprovações: pinos de privilégio.
+public sealed class ApprovalCapabilityPolicyPinTests
+{
+    [Fact]
+    public void Legacy_policy_pins_ai_capability_and_command_names()
+    {
+        var policy = ApprovalCapabilityPolicy.Legacy;
+        Assert.Equal("ai.approvals.prepare", policy.PrepareCommandName);
+        Assert.Equal("ai.approvals.expire", policy.ExpireCommandName);
+        Assert.Equal("ai.approvals.confirm", policy.ConfirmCommandName);
+        Assert.Equal("ai.approvals.veto", policy.VetoCommandName);
+        Assert.Equal(KnownCapabilities.AiWritesConfirm, policy.CapabilityName);
+    }
+
+    [Fact]
+    public void Module_policy_names_commands_with_prefix_and_keeps_scope_pin()
+    {
+        var policy = ApprovalCapabilityPolicy.ForModule(
+            "demandas",
+            "demandas.demand.advance",
+            AuditSource.Web
+        );
+        Assert.Equal("demandas.approvals.prepare", policy.PrepareCommandName);
+        Assert.Equal("demandas.approvals.confirm", policy.ConfirmCommandName);
+        Assert.Equal("demandas.approvals.veto", policy.VetoCommandName);
+        Assert.Equal("demandas.approvals.expire", policy.ExpireCommandName);
+        Assert.Equal("demandas.demand.advance", policy.CapabilityName);
+        Assert.Equal(AuditSource.Web, policy.AuditSource);
+    }
+
+    [Fact]
+    public void From_capability_only_swaps_the_capability()
+    {
+        var policy = ApprovalCapabilityPolicy.FromCapability("outro.cap");
+        Assert.Equal("ai.approvals.confirm", policy.ConfirmCommandName);
+        Assert.Equal("outro.cap", policy.CapabilityName);
+    }
 }

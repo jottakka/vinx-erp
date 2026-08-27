@@ -23,14 +23,21 @@ public sealed class ConfirmApprovalService(
     AuditAppender auditAppender,
     AuthorizationTelemetry telemetry,
     CapabilityEvaluator capabilityEvaluator,
-    ILogger<ConfirmApprovalService> logger)
+    ILogger<ConfirmApprovalService> logger,
+    ApprovalCapabilityPolicy? approvalPolicy = null)
 {
-    private const string ConfirmCommandName = "ai.approvals.confirm";
-    private const string VetoCommandName = "ai.approvals.veto";
     private const string Operation = "approval_confirmation";
     private const string Module = "foundation";
-    private static readonly CapabilityRequirement RequiredCapability =
-        new(KnownCapabilities.AiWritesConfirm, CapabilityScope.Company);
+
+    // Costura aditiva: Legacy preserva o contrato do módulo AI byte a byte.
+    private readonly ApprovalCapabilityPolicy policy = approvalPolicy ?? ApprovalCapabilityPolicy.Legacy;
+
+    private CapabilityRequirement RequiredCapability =>
+        new(policy.CapabilityName, CapabilityScope.Company);
+
+    private string ConfirmCommandName => policy.ConfirmCommandName;
+
+    private string VetoCommandName => policy.VetoCommandName;
 
     public async Task<AuthorizationResult<ConfirmApprovalResult>> ConfirmAsync(
         ActorContext actor,
@@ -42,7 +49,8 @@ public sealed class ConfirmApprovalService(
 
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
             var actorMembership = await database.Memberships.SingleOrDefaultAsync(membership =>
                 membership.CompanyId == command.CompanyId && membership.UserId == actor.UserId,
@@ -66,7 +74,7 @@ public sealed class ConfirmApprovalService(
                     cancellationToken);
                 if (approval is null)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     return ProposalUnavailable("proposal_not_found");
                 }
 
@@ -76,7 +84,7 @@ public sealed class ConfirmApprovalService(
                 }
                 else if (approval.IsConsumed)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     if (MatchesReplay(approval, command, payloadHash))
                     {
 #pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
@@ -132,7 +140,7 @@ public sealed class ConfirmApprovalService(
                             actor.UserId,
                             AuditScope.Company,
                             command.CompanyId,
-                            AuditSource.Ai,
+                            policy.AuditSource,
                             ConfirmCommandName,
                             "approval",
                             approval.Id,
@@ -141,7 +149,7 @@ public sealed class ConfirmApprovalService(
                             null,
                             "{}"), cancellationToken);
                         await database.SaveChangesAsync(cancellationToken);
-                        await transaction.CommitAsync(cancellationToken);
+                        await scope.CommitAsync(cancellationToken);
 #pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                         logger.LogInformation(
                             "Confirmação de aprovação {Operation} {Module} {Result} {Reason}",
@@ -160,7 +168,7 @@ public sealed class ConfirmApprovalService(
                         .SingleOrDefaultAsync(candidate =>
                             candidate.CompanyId == command.CompanyId && candidate.Id == command.ApprovalId,
                             cancellationToken);
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     if (current is null)
                     {
                         return ProposalUnavailable("proposal_expired_or_vetoed");
@@ -186,7 +194,7 @@ public sealed class ConfirmApprovalService(
                 }
             }
 
-            await transaction.RollbackAsync(cancellationToken);
+            await scope.RollbackAsync(cancellationToken);
         }
         catch (DbUpdateException exception)
         {
@@ -232,7 +240,8 @@ public sealed class ConfirmApprovalService(
 
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
             var actorMembership = await database.Memberships.SingleOrDefaultAsync(membership =>
                 membership.CompanyId == command.CompanyId && membership.UserId == actor.UserId,
@@ -278,7 +287,7 @@ public sealed class ConfirmApprovalService(
                         actor.UserId,
                         AuditScope.Company,
                         command.CompanyId,
-                        AuditSource.Ai,
+                        policy.AuditSource,
                         VetoCommandName,
                         "approval",
                         command.ApprovalId,
@@ -286,7 +295,7 @@ public sealed class ConfirmApprovalService(
                         new CorrelationContext(actor.CorrelationId).CorrelationId,
                         null,
                         "{}"), cancellationToken);
-                    await transaction.CommitAsync(cancellationToken);
+                    await scope.CommitAsync(cancellationToken);
 #pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                     logger.LogInformation(
                         "Veto de aprovação {Operation} {Module} {Result} {Reason}",
@@ -308,7 +317,7 @@ public sealed class ConfirmApprovalService(
                         cancellationToken);
                 if (current is null)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     return AuthorizationResult<VetoApprovalResult>.Failure(
                         AuthorizationErrorCode.ProposalUnavailable);
                 }
@@ -323,14 +332,14 @@ public sealed class ConfirmApprovalService(
                 }
                 else if (current.IsVetoed)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     return AuthorizationResult<VetoApprovalResult>.Success(
                         new VetoApprovalResult(
                             command.ApprovalId, command.ProposalId, VetoApprovalOutcome.AlreadyVetoed));
                 }
                 else if (current.IsExpired)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     return AuthorizationResult<VetoApprovalResult>.Failure(
                         AuthorizationErrorCode.ProposalUnavailable);
                 }
@@ -343,7 +352,7 @@ public sealed class ConfirmApprovalService(
                     var databaseNow = await database.Database
                         .SqlQuery<DateTimeOffset>($"SELECT now() AS \"Value\"")
                         .SingleAsync(cancellationToken);
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     if (current.ExpiresAt <= databaseNow)
                     {
                         return AuthorizationResult<VetoApprovalResult>.Failure(
@@ -355,7 +364,7 @@ public sealed class ConfirmApprovalService(
                 }
             }
 
-            await transaction.RollbackAsync(cancellationToken);
+            await scope.RollbackAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -381,14 +390,17 @@ public sealed class ConfirmApprovalService(
         CancellationToken cancellationToken)
     {
         // Fora de uma transação ativa o contexto RLS (set_config is_local) já
-        // não vigora; abre-se uma transação curta apenas para a leitura.
-        await using var reloadTransaction = await database.Database.BeginTransactionAsync(cancellationToken);
+        // não vigora: transação CURTA apenas quando standalone; com transação
+        // ambiente (costura de demandas) participa sem Begin/Rollback próprios
+        // — mesma classe de bug que a costura corrigiu no Confirm principal.
+        await using IUnitOfWorkScope scope =
+            await AmbientScope.BeginAsync(database, cancellationToken);
         await ApplyContextAsync(actor, companyId, cancellationToken);
         var approval = await database.Approvals.AsNoTracking().IgnoreQueryFilters()
             .SingleOrDefaultAsync(candidate =>
                 candidate.CompanyId == companyId && candidate.Id == approvalId,
                 cancellationToken);
-        await reloadTransaction.RollbackAsync(cancellationToken);
+        await scope.RollbackAsync(cancellationToken);
         return approval;
     }
 
@@ -456,13 +468,14 @@ public sealed class ConfirmApprovalService(
     {
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, companyId, cancellationToken);
             await auditAppender.AppendAsync(new AuditEventData(
                 actor.UserId,
                 AuditScope.Company,
                 companyId,
-                AuditSource.Ai,
+                policy.AuditSource,
                 denial.ToStableCode(),
                 "approval",
                 null,
@@ -470,7 +483,7 @@ public sealed class ConfirmApprovalService(
                 new CorrelationContext(actor.CorrelationId).CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            await scope.CommitAsync(cancellationToken);
             if (denial == AuthorizationErrorCode.ProposalConflict && IsExpectedSingleUseConflict(reason))
             {
 #pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
@@ -511,13 +524,14 @@ public sealed class ConfirmApprovalService(
     {
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, companyId, cancellationToken);
             await auditAppender.AppendAsync(new AuditEventData(
                 actor.UserId,
                 AuditScope.Company,
                 companyId,
-                AuditSource.Ai,
+                policy.AuditSource,
                 denial.ToStableCode(),
                 "approval",
                 null,
@@ -525,7 +539,7 @@ public sealed class ConfirmApprovalService(
                 new CorrelationContext(actor.CorrelationId).CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            await scope.CommitAsync(cancellationToken);
             return AuthorizationResult<VetoApprovalResult>.Failure(denial);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

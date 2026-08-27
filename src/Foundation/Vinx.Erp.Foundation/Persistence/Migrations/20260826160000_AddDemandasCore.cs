@@ -101,6 +101,8 @@ public sealed class AddDemandasCore : Migration
                 overdue_since timestamp with time zone NULL,
                 stage_cycle_count integer NOT NULL DEFAULT 1 CHECK (stage_cycle_count >= 1),
                 closed_at timestamp with time zone NULL,
+                pending_approval_id uuid NULL,
+                pending_proposal_id uuid NULL,
                 created_by_user_id uuid NOT NULL REFERENCES foundation.users(id) ON DELETE RESTRICT,
                 updated_by_user_id uuid NOT NULL REFERENCES foundation.users(id) ON DELETE RESTRICT,
                 request_id uuid NOT NULL,

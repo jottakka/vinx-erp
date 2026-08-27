@@ -48,6 +48,12 @@ public sealed class DemandConfiguration : IEntityTypeConfiguration<Demand>
             .HasColumnName("stage_cycle_count")
             .HasDefaultValue(1);
         builder.Property(demand => demand.ClosedAt).HasColumnName("closed_at");
+        builder
+            .Property(demand => demand.PendingApprovalId)
+            .HasColumnName("pending_approval_id");
+        builder
+            .Property(demand => demand.PendingProposalId)
+            .HasColumnName("pending_proposal_id");
         builder.Property(demand => demand.CreatedByUserId).HasColumnName("created_by_user_id");
         builder.Property(demand => demand.UpdatedByUserId).HasColumnName("updated_by_user_id");
         builder.Property(demand => demand.RequestId).HasColumnName("request_id");

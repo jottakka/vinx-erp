@@ -57,6 +57,11 @@ public sealed class Demand
 
     public DateTimeOffset? ClosedAt { get; set; }
 
+    /// <summary>Aprovação pendente vinculada quando a etapa exige decisão.</summary>
+    public Guid? PendingApprovalId { get; set; }
+
+    public Guid? PendingProposalId { get; set; }
+
     public Guid CreatedByUserId { get; set; }
 
     public Guid UpdatedByUserId { get; set; }

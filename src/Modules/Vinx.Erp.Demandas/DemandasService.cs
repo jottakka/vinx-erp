@@ -47,6 +47,7 @@ public sealed class DemandasService(
     AuditAppender auditAppender,
     CapabilityEvaluator capabilityEvaluator,
     DemandasNotificationComposer notifications,
+    DemandasApprovalsService approvals,
     ILogger<DemandasService> logger
 )
 {
@@ -442,6 +443,7 @@ public sealed class DemandasService(
             }
 
             var pending = await ApplyStageAdvanceAsync(actor, demand, stageRules, "adv", cancellationToken);
+            await PrepareApprovalOnEntryAsync(actor, demand, command.RequestId, pending, cancellationToken);
             TouchDemand(demand, actor, command.RequestId);
 
             database.IdempotencyRecords.Add(NewIdempotencyRecord(actor, command.CompanyId, "demandas.demand.advance", command.RequestId, Hash(new PayloadRef(demandId, command)), JsonSerializer.Serialize(ToResponse(demand, DateTimeOffset.UtcNow))));
@@ -451,6 +453,20 @@ public sealed class DemandasService(
             await FlushNotificationsAsync(actor, command.CompanyId, demandId, pending, cancellationToken);
             LogInformation("succeeded", "advance");
             return new(DemandOperationState.Success, Demand: ToResponse(demand, DateTimeOffset.UtcNow));
+        }
+        catch (DemandasTransitionBlockedException)
+        {
+            // Auditoria da negação em transação PRÓPRIA após o rollback do
+            // fluxo (regra da casa: tentativa negada é evidência durável).
+            database.ChangeTracker.Clear();
+            LogInformation("denied", "approval_prepare_denied");
+            return await DeniedAsync(
+                actor,
+                command.CompanyId,
+                "demandas.demand.advance",
+                DemandOperationState.IllegalTransition,
+                cancellationToken
+            );
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
@@ -466,6 +482,43 @@ public sealed class DemandasService(
             LogUnavailable(exception, "database_or_audit_failed");
             return new(DemandOperationState.Unavailable);
         }
+    }
+
+    /// <summary>
+    /// Entrada em awaiting_approval exige proposta durável do Foundation e troca
+    /// o aviso para awaiting_approval; falha de preparo desfaz o avanço.
+    /// </summary>
+    private async Task PrepareApprovalOnEntryAsync(
+        ActorContext actor,
+        Demand demand,
+        Guid requestId,
+        PendingNotes[] pendingNotes,
+        CancellationToken cancellationToken
+    )
+    {
+        if (demand.Stage != DemandStages.AwaitingApproval)
+        {
+            return;
+        }
+
+        if (!await approvals.PrepareOnStageEntryAsync(actor, demand, requestId, cancellationToken))
+        {
+            throw new DemandasTransitionBlockedException();
+        }
+        for (var index = 0; index < pendingNotes.Length; index++)
+        {
+            pendingNotes[index] = new PendingNotes(
+                pendingNotes[index].Cycle,
+                DemandNotificationKinds.AwaitingApproval,
+                pendingNotes[index].Recipients
+            );
+        }
+    }
+
+    private sealed class DemandasTransitionBlockedException : InvalidOperationException
+    {
+        public DemandasTransitionBlockedException()
+            : base("approval_prepare_denied") { }
     }
 
     /// <summary>
@@ -579,6 +632,7 @@ public sealed class DemandasService(
             )
             {
                 var autoPending = await ApplyStageAdvanceAsync(actor, demand, stageRules, "auto-checklist", cancellationToken);
+                await PrepareApprovalOnEntryAsync(actor, demand, command.RequestId, autoPending, cancellationToken);
                 pending = [.. pending, .. autoPending];
             }
 
@@ -590,6 +644,20 @@ public sealed class DemandasService(
             await FlushNotificationsAsync(actor, command.CompanyId, demandId, pending, cancellationToken);
             LogInformation("succeeded", "checklist_complete");
             return new(DemandOperationState.Success, Demand: ToResponse(demand, DateTimeOffset.UtcNow));
+        }
+        catch (DemandasTransitionBlockedException)
+        {
+            // Mesma garantia do avanço: negação auditada fora da transação
+            // ambiente que acabou de sofrer rollback.
+            database.ChangeTracker.Clear();
+            LogInformation("denied", "approval_prepare_denied");
+            return await DeniedAsync(
+                actor,
+                command.CompanyId,
+                "demandas.demand.checklist.complete",
+                DemandOperationState.IllegalTransition,
+                cancellationToken
+            );
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
