@@ -186,8 +186,5 @@ internal static class AgentRunServiceCollectionExtensions
     private static Func<string, AgentTaskProfile?> CreateProfileCatalog(
         AgentModelSelection? selection,
         int maxInputCharacters) =>
-        profileId =>
-            AgentTaskProfileCatalog.TryGet(profileId, out _)
-                ? AgentTaskProfileCatalog.CreateApprovedProfile(selection, maxInputCharacters)
-                : null;
+        profileId => AgentTaskProfileCatalog.CreateApprovedProfile(profileId, selection, maxInputCharacters);
 }

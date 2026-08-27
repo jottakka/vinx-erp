@@ -75,6 +75,47 @@ public sealed class AgentRunCompositionTests
     }
 
     [Fact]
+    public async Task Paguai_profile_uses_its_catalog_contract_with_the_server_selected_model()
+    {
+        var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "https://api.example.com/v1/"),
+            ("AgentRun:Model", "approved-model"),
+            ("AgentRun:ApprovedHosts:0", "api.example.com"));
+        var services = CreateBaseServices();
+        services.AddAgentRunSurface(configuration, ReadDedicatedCredential);
+
+        var companyId = Guid.NewGuid();
+        var actor = new ActorContext(Guid.NewGuid(), Guid.NewGuid());
+        var resolver = new CapturingContextResolver(new AgentExecutionContext(
+            actor.UserId,
+            actor.CorrelationId,
+            companyId,
+            "Empresa Aprovada",
+            Guid.NewGuid(),
+            AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+            new HashSet<string>()));
+        services.AddScoped<IAgentContextResolver>(_ => resolver);
+
+        using var provider = services.BuildServiceProvider();
+        var outcome = await provider.GetRequiredService<AgentRunner>().RunAsync(
+            actor,
+            AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+            "extraia a fatura",
+            companyId,
+            [Guid.NewGuid()],
+            CancellationToken.None);
+
+        Assert.Equal(AgentOutcomeStatus.NeedsClarification, outcome.Status);
+        Assert.Equal(AgentOutcomeReason.DocumentContextUnavailable, outcome.ReasonCode);
+        var profile = Assert.IsType<AgentTaskProfile>(resolver.Profile);
+        Assert.Equal(AgentTaskProfileCatalog.PaguaiFromDocumentProfileId, profile.ProfileId);
+        Assert.Equal(AgentTaskProfileCatalog.PaguaiFromDocumentProfileId, profile.Journey);
+        Assert.True(profile.AllowDocumentAttachments);
+        Assert.Equal(new AgentModelSelection(AgentRunOptions.OpenAiCompatibleProvider, "approved-model"), profile.ModelSelection);
+    }
+
+    [Fact]
     public void Text_runtime_profile_rejects_a_parent_allowlist_entry()
     {
         var configuration = CreateConfiguration(
@@ -227,5 +268,20 @@ public sealed class AgentRunCompositionTests
             AgentTaskProfile profile,
             Guid? requestedCompanyId,
             CancellationToken cancellationToken) => Task.FromResult(resolution);
+    }
+
+    private sealed class CapturingContextResolver(AgentExecutionContext context) : IAgentContextResolver
+    {
+        public AgentTaskProfile? Profile { get; private set; }
+
+        public Task<AgentContextResolution> ResolveAsync(
+            ActorContext actor,
+            AgentTaskProfile profile,
+            Guid? requestedCompanyId,
+            CancellationToken cancellationToken)
+        {
+            Profile = profile;
+            return Task.FromResult(new AgentContextResolution(AgentContextResolutionStatus.Resolved, "resolved", context));
+        }
     }
 }
