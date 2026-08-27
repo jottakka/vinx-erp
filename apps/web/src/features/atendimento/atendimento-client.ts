@@ -77,7 +77,6 @@ const basePath = "/atendimento/cards";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const antiforgeryHeaderName = "X-CSRF-TOKEN";
 
-const atendimentoIdSchema = z.string().refine(isCanonicalUuid);
 const assignmentOptionsSchema = z.array(
   z
     .object({

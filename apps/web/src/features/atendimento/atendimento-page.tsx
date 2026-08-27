@@ -367,11 +367,10 @@ export function AtendimentoPage({
   }
 
   async function move(card: AtendimentoCard, column: AtendimentoColumn) {
-    const key = recoveryKey(card.companyId, card.id);
     if (
       card.column === column ||
       card.column === "cancelado" ||
-      recoveringCardKeys.includes(key)
+      isRecoveringCard(card)
     )
       return;
     const lease = beginCardMutation(card);
@@ -386,13 +385,14 @@ export function AtendimentoPage({
           card.id,
         );
       applyCardSnapshot(result.card, lease);
+      closeCardMenus(card.companyId, card.id);
     } finally {
       finishCardMutation(lease);
     }
   }
 
   async function assign(card: AtendimentoCard) {
-    if (!assigneeMembershipId.trim()) return;
+    if (isRecoveringCard(card) || !assigneeMembershipId.trim()) return;
     const lease = beginCardMutation(card);
     if (!lease) return;
     setAssigning(true);
@@ -407,6 +407,7 @@ export function AtendimentoPage({
         return;
       }
       applyCardSnapshot(result.card, lease);
+      closeCardMenus(card.companyId, card.id);
       setAssigningCard(null);
       setAssigneeMembershipId("");
     } finally {
@@ -416,6 +417,7 @@ export function AtendimentoPage({
   }
 
   async function openAssignment(card: AtendimentoCard) {
+    if (isRecoveringCard(card)) return;
     assignmentAbort.current?.abort();
     const controller = new AbortController();
     assignmentAbort.current = controller;
@@ -435,7 +437,7 @@ export function AtendimentoPage({
 
   async function cancel(card: AtendimentoCard) {
     const reason = cancellationReason.trim();
-    if (!reason || reason.length > 500) return;
+    if (isRecoveringCard(card) || !reason || reason.length > 500) return;
     const lease = beginCardMutation(card);
     if (!lease) return;
     setCancelling(true);
@@ -450,6 +452,7 @@ export function AtendimentoPage({
         return;
       }
       applyCardSnapshot(result.card, lease);
+      closeCardMenus(card.companyId, card.id);
       setCancellingCard(null);
       setCancellationReason("");
     } finally {
@@ -499,6 +502,27 @@ export function AtendimentoPage({
     return `${companyId}:${cardId}`;
   }
 
+  function isRecoveringCard(card: AtendimentoCard) {
+    return (
+      recoveryTokens.current.has(recoveryKey(card.companyId, card.id)) ||
+      recoveringCardKeys.includes(recoveryKey(card.companyId, card.id))
+    );
+  }
+
+  function closeCardMenus(companyId: string, cardId: string) {
+    const key = recoveryKey(companyId, cardId);
+    setStatusMenu((menu) =>
+      menu && recoveryKey(menu.card.companyId, menu.card.id) === key
+        ? null
+        : menu,
+    );
+    setActionsMenu((menu) =>
+      menu && recoveryKey(menu.card.companyId, menu.card.id) === key
+        ? null
+        : menu,
+    );
+  }
+
   function invalidateCard(companyId: string, cardId: string) {
     setCards((cards) =>
       cards.filter(
@@ -514,6 +538,7 @@ export function AtendimentoPage({
     setCancellingCard((card) =>
       card?.id === cardId && card.companyId === companyId ? null : card,
     );
+    closeCardMenus(companyId, cardId);
   }
 
   async function recover(
@@ -529,6 +554,7 @@ export function AtendimentoPage({
     setRecoveringCardKeys((keys) =>
       keys.includes(key) ? keys : [...keys, key],
     );
+    closeCardMenus(companyId, cardId);
     try {
       const validCurrent =
         current?.id === cardId && current.companyId === companyId;
@@ -725,10 +751,12 @@ export function AtendimentoPage({
                   .filter((card) => card.column === column.id)
                   .map((card) => {
                     const mutationPending = isCardMutationPending(card);
+                    const cardRecovering = isRecoveringCard(card);
                     const cardMovable =
                       canEditCard(card) &&
                       card.column !== "cancelado" &&
-                      !mutationPending;
+                      !mutationPending &&
+                      !cardRecovering;
                     return (
                       <Card
                         key={card.id}
@@ -836,13 +864,14 @@ export function AtendimentoPage({
                           </Button>
                           {canEditCard(card) && card.column !== "cancelado" ? (
                             <Button
-                              disabled={mutationPending}
-                              onClick={(event) =>
+                              disabled={mutationPending || cardRecovering}
+                              onClick={(event) => {
+                                if (isRecoveringCard(card)) return;
                                 setStatusMenu({
                                   anchorEl: event.currentTarget,
                                   card,
-                                })
-                              }
+                                });
+                              }}
                               size="small"
                             >
                               Alterar status
@@ -852,13 +881,14 @@ export function AtendimentoPage({
                           card.column !== "cancelado" ? (
                             <IconButton
                               aria-label="Mais ações"
-                              disabled={mutationPending}
-                              onClick={(event) =>
+                              disabled={mutationPending || cardRecovering}
+                              onClick={(event) => {
+                                if (isRecoveringCard(card)) return;
                                 setActionsMenu({
                                   anchorEl: event.currentTarget,
                                   card,
-                                })
-                              }
+                                });
+                              }}
                               size="small"
                             >
                               <MoreVertOutlinedIcon />
@@ -911,6 +941,10 @@ export function AtendimentoPage({
                 <MenuItem
                   key={destination.id}
                   onClick={() => {
+                    if (isRecoveringCard(statusMenu.card)) {
+                      setStatusMenu(null);
+                      return;
+                    }
                     void move(statusMenu.card, destination.id);
                     setStatusMenu(null);
                   }}
@@ -928,6 +962,10 @@ export function AtendimentoPage({
         {actionsMenu && canAssignCard(actionsMenu.card) ? (
           <MenuItem
             onClick={() => {
+              if (isRecoveringCard(actionsMenu.card)) {
+                setActionsMenu(null);
+                return;
+              }
               void openAssignment(actionsMenu.card);
               setActionsMenu(null);
             }}
@@ -938,6 +976,10 @@ export function AtendimentoPage({
         {actionsMenu && canCancelCard(actionsMenu.card) ? (
           <MenuItem
             onClick={() => {
+              if (isRecoveringCard(actionsMenu.card)) {
+                setActionsMenu(null);
+                return;
+              }
               setCancellingCard(actionsMenu.card);
               setActionsMenu(null);
             }}
@@ -1002,7 +1044,10 @@ export function AtendimentoPage({
               assigning ||
               !assigningCard ||
               !assigneeMembershipId ||
-              (assigningCard ? isCardMutationPending(assigningCard) : false)
+              (assigningCard
+                ? isCardMutationPending(assigningCard) ||
+                  isRecoveringCard(assigningCard)
+                : false)
             }
             onClick={() => assigningCard && void assign(assigningCard)}
             variant="contained"
@@ -1050,6 +1095,7 @@ export function AtendimentoPage({
             color="error"
             disabled={
               !cancellingCard ||
+              isRecoveringCard(cancellingCard) ||
               !cancellationReason.trim() ||
               cancellationReason.trim().length > 500 ||
               cancelling ||

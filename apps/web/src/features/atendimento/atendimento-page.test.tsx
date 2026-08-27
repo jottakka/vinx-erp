@@ -1239,6 +1239,73 @@ describe("AtendimentoPage", () => {
     });
   });
 
+  it("blocks stale menu actions during delayed recovery and closes them on failure", async () => {
+    const user = userEvent.setup();
+    const delayedRecovery = deferred<AtendimentoCard[] | null>();
+    const moveResult =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return delayedRecovery.promise;
+    });
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockReturnValue(moveResult.promise);
+    const assignmentOptions = vi
+      .spyOn(atendimentoClient, "assignmentOptions")
+      .mockResolvedValue([]);
+
+    renderPage();
+    // Referências capturadas antes do menu: com o menu aberto o board fica
+    // aria-hidden para queries de papel acessível.
+    const card = (
+      await screen.findByText(alfaCard.title)
+    ).closest(".MuiCard-root") as HTMLElement;
+    const targetColumn = screen.getByRole("heading", {
+      name: "Em andamento",
+    }).parentElement as HTMLElement;
+
+    // Menu capturado antes da mutação: com o lock por cartão compartilhado,
+    // "Mais ações" fica desabilitado enquanto um move está pendente.
+    await user.click(screen.getByRole("button", { name: "Mais ações" }));
+    const actionsMenu = await screen.findByRole("menu");
+    const assignItem = within(actionsMenu).getByRole("menuitem", {
+      name: "Atribuir responsável",
+    });
+    const cancelItem = within(actionsMenu).getByRole("menuitem", {
+      name: "Cancelar atendimento",
+    });
+
+    fireEvent.dragStart(card);
+    fireEvent.drop(targetColumn);
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+
+    moveResult.resolve({ code: "integrity_conflict", ok: false });
+    await waitFor(() => expect(alfaReads).toBe(2));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(assignItem);
+      fireEvent.click(cancelItem);
+    });
+    expect(assignmentOptions).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    delayedRecovery.resolve(null);
+    await waitFor(() => {
+      expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(
+        "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
+      ),
+    ).toBeVisible();
+  });
+
   it("keeps a newer queue snapshot when an older conflict reload finishes late", async () => {
     const user = userEvent.setup();
     const staleRecovery = {
