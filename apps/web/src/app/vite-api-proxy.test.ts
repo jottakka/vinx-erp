@@ -48,6 +48,10 @@ describe("development API proxy", () => {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
+      "^/paguai/draft-proposals(?:/|\\?|$)": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
     });
   });
 
@@ -210,6 +214,10 @@ describe("web Vite configuration", () => {
         changeOrigin: false,
       },
       "^/paguai/requests(?:/|\\?|$)": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "^/paguai/draft-proposals(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },

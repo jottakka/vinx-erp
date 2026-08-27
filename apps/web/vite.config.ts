@@ -26,6 +26,10 @@ type VinxApiProxy = {
     changeOrigin: false;
     target: string;
   };
+  "^/paguai/draft-proposals(?:/|\\?|$)": {
+    changeOrigin: false;
+    target: string;
+  };
 };
 
 /**
@@ -75,6 +79,10 @@ export function resolveDevelopmentApiProxy(
         target: target.origin,
       },
       "^/paguai/requests(?:/|\\?|$)": {
+        changeOrigin: false,
+        target: target.origin,
+      },
+      "^/paguai/draft-proposals(?:/|\\?|$)": {
         changeOrigin: false,
         target: target.origin,
       },
