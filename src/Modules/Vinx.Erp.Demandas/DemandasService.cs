@@ -107,7 +107,8 @@ public sealed class DemandasService(
                 query = query.Where(demand => demand.ResponsibleMembershipId == responsible);
             }
 
-            const int pageSize = BoardPageSize <= 0 ? 100 : BoardPageSize;
+            // Contrato honesto: limit é ajustável (1..200, padrão 100) — documentado.
+            var pageSize = limit is < 1 or > MaximumBoardRows ? BoardPageSize : limit;
             if (!string.IsNullOrWhiteSpace(after))
             {
                 if (!BoardCursor.TryDecode(after, out var decoded))
@@ -124,7 +125,7 @@ public sealed class DemandasService(
             var demands = await query
                 .OrderBy(demand => demand.CreatedAt)
                 .ThenBy(demand => demand.Id)
-                .Take(Math.Min(pageSize, MaximumBoardRows))
+                .Take(pageSize)
                 .ToListAsync(cancellationToken);
             var cards = demands.Select(demand => ToBoardCard(demand, now)).ToArray();
             var hasMore = total > cards.Length;

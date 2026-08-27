@@ -253,6 +253,18 @@ public sealed class AddDemandasCore : Migration
                               'd207f7a5-7fdb-5a7d-a87c-2b4210f36712'::uuid,
                               'ec28a347-1ade-5586-bf33-e6f1cbd59620'::uuid)));
 
+            -- Espelho exato de 20260812040429: o papel dono lê as linhas que as
+            -- funções SECURITY DEFINER enxergam — sem isto é permission-denied
+            -- sob FORCE RLS com papel NOBYPASSRLS.
+            GRANT USAGE ON SCHEMA demandas TO vinx_demandas_owner;
+            GRANT SELECT ON TABLE demandas.demands TO vinx_demandas_owner;
+
+            CREATE POLICY demands_demandas_owner_read
+                ON demandas.demands
+                FOR SELECT
+                TO vinx_demandas_owner
+                USING (true);
+
             CREATE FUNCTION demandas.enumerate_automation_companies()
             RETURNS TABLE (company_id uuid)
             LANGUAGE sql
@@ -321,17 +333,21 @@ public sealed class AddDemandasCore : Migration
             DROP FUNCTION demandas.demand_responsible_user(uuid);
             DROP POLICY capabilities_demandas_owner_read ON foundation.capabilities;
             DROP POLICY role_capabilities_demandas_owner_read ON foundation.role_capabilities;
-                        REVOKE ALL ON demandas.demand_events, demandas.demand_checklist_items,
+            DROP POLICY demands_demandas_owner_read ON demandas.demands;
+            REVOKE SELECT ON TABLE demandas.demands FROM vinx_demandas_owner;
+            REVOKE USAGE ON SCHEMA demandas FROM vinx_demandas_owner;
+            REVOKE ALL ON demandas.demand_events, demandas.demand_checklist_items,
                 demandas.demand_participants, demandas.demands, demandas.demand_routine_stages,
                 demandas.demand_routines FROM vinx_runtime;
+            REVOKE USAGE, SELECT ON SEQUENCE demandas.demands_demand_number_seq FROM vinx_runtime;
+            REVOKE ALL ON SCHEMA demandas FROM vinx_worker;
             DROP TABLE demandas.demand_events;
             DROP TABLE demandas.demand_checklist_items;
             DROP TABLE demandas.demand_participants;
             DROP TABLE demandas.demands;
             DROP TABLE demandas.demand_routine_stages;
             DROP TABLE demandas.demand_routines;
-            REVOKE USAGE, SELECT ON SEQUENCE demandas.demands_demand_number_seq FROM vinx_runtime;
-            REVOKE ALL ON SCHEMA demandas FROM vinx_worker;
+
             REVOKE USAGE ON SCHEMA demandas FROM vinx_runtime;
             DROP SCHEMA demandas;
             DO $block$

@@ -258,6 +258,43 @@ public sealed class FoundationSchemaTests
         return [.. names];
     }
 
+
+    [Fact]
+    public async Task Demandas_owner_role_is_provisioned_with_schema_table_and_function_visibility()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new Npgsql.NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vinx_demandas_owner' AND NOT rolcanlogin),
+                has_schema_privilege('vinx_demandas_owner', 'demandas', 'USAGE'),
+                has_table_privilege('vinx_demandas_owner', 'demandas.demands', 'SELECT'),
+                has_function_privilege(
+                    'vinx_worker',
+                    'demandas.enumerate_automation_companies()',
+                    'EXECUTE'),
+                EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'demandas'
+                      AND tablename = 'demands'
+                      AND policyname = 'demands_demandas_owner_read'
+                      AND roles::text LIKE '%vinx_demandas_owner%')
+            """,
+            connection
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0), "role vinx_demandas_owner must exist NOLOGIN");
+        Assert.True(reader.GetBoolean(1), "owner needs USAGE on schema demandas");
+        Assert.True(reader.GetBoolean(2), "owner needs SELECT on demandas.demands");
+        Assert.True(reader.GetBoolean(3), "worker must execute the enumeration function");
+        Assert.True(reader.GetBoolean(4), "permissive owner-read policy must be pinned");
+    }
+
     [Fact]
     public async Task Runtime_direct_and_effective_table_privileges_match_the_complete_baseline_matrix()
     {
