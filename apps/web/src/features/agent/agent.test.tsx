@@ -400,6 +400,7 @@ describe("agent workspace", () => {
   });
 
   it("renders a fixed confirmation notice without any proposal card for opaque confirmation state", async () => {
+    const proposalId = "11111111-1111-4111-8111-111111111111";
     vi.stubGlobal(
       "fetch",
       vi
@@ -412,6 +413,7 @@ describe("agent workspace", () => {
             text: null,
             sources: null,
             correlationId,
+            paguaiProposalId: proposalId,
           }),
         ),
     );
@@ -425,6 +427,9 @@ describe("agent workspace", () => {
     expect(
       screen.queryByRole("button", { name: "Aprovar execução" }),
     ).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Revisar proposta Paguai" }),
+    ).toHaveAttribute("href", `/paguai?proposal=${proposalId}`);
   });
 
   it("blocks a second submission while one is in flight and issues a fresh requestId per accepted send", async () => {

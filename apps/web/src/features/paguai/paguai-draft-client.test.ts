@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { HttpResponse, http } from "msw";
+import { describe, expect, it, vi } from "vitest";
+import { server } from "../../test/msw/server";
 import { createPaguaiDraftClient } from "./paguai-draft-client";
 
 const companyId = "11111111-1111-4111-8111-111111111111";
@@ -20,7 +22,86 @@ const draft = {
   createdAt: "2026-08-16T12:00:00.000+00:00",
 };
 
+const proposalId = "44444444-4444-4444-8444-444444444444";
+const proposal = {
+  id: proposalId,
+  companyId,
+  title: "Papel",
+  description: "Papel para impressora",
+  amount: "1250.00",
+  currency: "BRL" as const,
+  dueDate: "2026-09-01",
+  beneficiaryDisplayName: "Fornecedor Demo",
+  proofRequirement: "required" as const,
+  invoiceFileId: "55555555-5555-4555-8555-555555555555",
+  confidence: 0.98,
+  sourceReferences: [{ field: "amount", source: "page:1" }],
+  state: "pending" as const,
+  createdAt: "2026-08-26T12:00:00.000+00:00",
+  expiresAt: "2026-08-26T12:15:00.000+00:00",
+};
+const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
+const testOrigin = "http://localhost";
+
+function handlerUrl(path: string) {
+  return new URL(path, testOrigin).toString();
+}
+
+function createFetchSpy() {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const forwardedInput =
+      typeof input === "string" ? new URL(input, testOrigin) : input;
+    return globalThis.fetch(forwardedInput, init);
+  });
+}
+
 describe("Paguai draft client", () => {
+  it("reads the exact persisted proposal and confirms it with antiforgery without client-editable financial input", async () => {
+    const requests: Request[] = [];
+    server.use(
+      http.get(
+        handlerUrl(`/paguai/draft-proposals/${proposalId}`),
+        ({ request }) => {
+          expect(new URL(request.url).searchParams.get("companyId")).toBe(
+            companyId,
+          );
+          return HttpResponse.json(proposal);
+        },
+      ),
+      http.get(handlerUrl(antiforgeryPath), () =>
+        HttpResponse.json({ requestToken: "csrf" }),
+      ),
+      http.post(
+        handlerUrl(`/paguai/draft-proposals/${proposalId}/confirm`),
+        async ({ request }) => {
+          requests.push(request);
+          return HttpResponse.json(draft, { status: 201 });
+        },
+      ),
+    );
+    const fetchSpy = createFetchSpy();
+    const client = createPaguaiDraftClient(fetchSpy);
+
+    await expect(client.getProposal(companyId, proposalId)).resolves.toEqual({
+      ok: true,
+      value: proposal,
+    });
+    await expect(
+      client.confirmProposal(companyId, proposalId, requestId),
+    ).resolves.toEqual({
+      ok: true,
+      value: draft,
+    });
+
+    expect(fetchSpy.mock.calls.map(([path]) => String(path))).toEqual([
+      `/paguai/draft-proposals/${proposalId}?companyId=${companyId}`,
+      antiforgeryPath,
+      `/paguai/draft-proposals/${proposalId}/confirm`,
+    ]);
+    expect(await requests[0]?.json()).toEqual({ companyId, requestId });
+    expect(requests[0]?.headers.get("X-CSRF-TOKEN")).toBe("csrf");
+  });
+
   it("uses same-origin antiforgery before creating a strict draft response", async () => {
     const calls: [string, RequestInit][] = [];
     const fetchImplementation: typeof fetch = async (input, init) => {

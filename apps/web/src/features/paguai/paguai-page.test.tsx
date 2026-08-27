@@ -7,8 +7,10 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { BrowserRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
+import { FeedbackProvider } from "../../shared/ui/feedback-provider";
 import type {
   BootstrapSnapshot,
   MockSessionGateway,
@@ -77,13 +79,17 @@ function renderPage(
 ) {
   render(
     <VinxThemeProvider>
-      <SessionProvider gateway={sessionGateway}>
-        <PaguaiPage
-          draftClient={
-            draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
-          }
-        />
-      </SessionProvider>
+      <FeedbackProvider>
+        <BrowserRouter>
+          <SessionProvider gateway={sessionGateway}>
+            <PaguaiPage
+              draftClient={
+                draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
+              }
+            />
+          </SessionProvider>
+        </BrowserRouter>
+      </FeedbackProvider>
     </VinxThemeProvider>,
   );
 }
@@ -108,14 +114,18 @@ function renderPageWithSessionRefresh(
 ) {
   render(
     <VinxThemeProvider>
-      <SessionProvider gateway={sessionGateway}>
-        <RefreshBootstrapButton />
-        <PaguaiPage
-          draftClient={
-            draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
-          }
-        />
-      </SessionProvider>
+      <FeedbackProvider>
+        <BrowserRouter>
+          <SessionProvider gateway={sessionGateway}>
+            <RefreshBootstrapButton />
+            <PaguaiPage
+              draftClient={
+                draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
+              }
+            />
+          </SessionProvider>
+        </BrowserRouter>
+      </FeedbackProvider>
     </VinxThemeProvider>,
   );
 }

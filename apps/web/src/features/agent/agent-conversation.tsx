@@ -18,6 +18,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { Link as RouterLink } from "react-router-dom";
 import { CompanySelect } from "../../shared/ui/company-select";
 import type { AgentMessage } from "./agent-contract";
 import { useAgentConversation } from "./agent-conversation-provider";
@@ -56,6 +57,11 @@ function MessageBubble({ message }: { message: AgentMessage }) {
             />
           ))}
         </Stack>
+      ) : null}
+      {message.proposalPath ? (
+        <Button component={RouterLink} size="small" to={message.proposalPath}>
+          Revisar proposta Paguai
+        </Button>
       ) : null}
     </Stack>
   );
