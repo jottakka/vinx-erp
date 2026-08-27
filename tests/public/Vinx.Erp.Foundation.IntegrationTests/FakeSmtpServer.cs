@@ -85,7 +85,7 @@ public sealed class FakeSmtpServer : IAsyncDisposable
                 var upper = line.ToUpperInvariant();
                 if (upper.StartsWith("EHLO") || upper.StartsWith("HELO"))
                 {
-                    await WriteAsync(stream, "250-fake-smtp\r\n250 AUTH LOGIN\r\n");
+                    await WriteAsync(stream, "250-fake-smtp\r\n250 AUTH LOGIN PLAIN\r\n");
                 }
                 else if (upper.StartsWith("AUTH LOGIN"))
                 {
