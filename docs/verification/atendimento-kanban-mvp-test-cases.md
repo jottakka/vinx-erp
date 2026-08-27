@@ -10,6 +10,10 @@
 | Atribuição | Opções retornam somente `membershipId` e `displayName` das memberships ativas da empresa, após capability `.assign`. | `AtendimentoCardEndpointTests`, `AtendimentoCardSchemaTests` |
 | Idempotência | O mesmo `requestId` pode mover cartões distintos; cada rota inclui `cardId` no escopo e no hash. | `AtendimentoCardEndpointTests` |
 | Cancelamento | Cancelamento dedicado exige motivo, cria histórico para `cancelado`, audita `service_desk.ticket.cancel`, repete receipt e bloqueia cancel/move/assign distintos. | `AtendimentoCardEndpointTests`, `RequestModelValidationBoundaryTests` |
+| Cancelamento/UI | Mover, atribuir e cancelar são capabilities independentes na UI: o cancelamento exige `service_desk.ticket.cancel` (escopo Company) e não deriva de `.move`. | `atendimento-page.test.tsx` (Vitest) |
+| Concorrência/UI | Lock por `companyId:cardId` compartilhado por move/assign/cancel: mutação do mesmo cartão não inicia enquanto outra está pendente; cartão de outra empresa permanece utilizável. | `atendimento-page.test.tsx` (Vitest) |
+| Concorrência/UI | Resposta atrasada de move nunca rebaixa a versão publicada: snapshot cancelado versão 3 permanece quando a resposta versão 2 chega depois. | `atendimento-page.test.tsx` (Vitest) |
+| Web/contrato | Opções de atribuição falham fechadas: schema estrito array/objeto com UUID canônico e `displayName` não vazio; payload malformado retorna `null`. | `atendimento-client.test.ts` (Vitest) |
 | Integridade | Dois movimentos concorrentes têm um único vencedor; o `409` retorna o estado pós-corrida e há um único histórico. | `AtendimentoCardEndpointTests` |
 | Isolamento | Fila selecionada não retorna cartão de outra empresa e empresa inacessível não vaza detalhe. | `AtendimentoCardEndpointTests` |
 | Autorização/auditoria | Capability ausente retorna `403`; ação auditada preserva `service_desk.ticket.*` e motivo separado. | `AtendimentoCardEndpointTests` |

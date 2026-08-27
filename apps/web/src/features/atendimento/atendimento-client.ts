@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { isCanonicalUuid } from "../../shared/http/bff-response";
+
 export type AtendimentoColumn =
   | "novo"
   | "em_andamento"
@@ -33,6 +36,16 @@ type CommandResult =
 const basePath = "/atendimento/cards";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const antiforgeryHeaderName = "X-CSRF-TOKEN";
+
+const atendimentoIdSchema = z.string().refine(isCanonicalUuid);
+const assignmentOptionsSchema = z.array(
+  z
+    .object({
+      membershipId: atendimentoIdSchema,
+      displayName: z.string().min(1),
+    })
+    .strict(),
+);
 
 function request(path: string, init: RequestInit = {}) {
   return fetch(path, {
@@ -112,9 +125,9 @@ export const atendimentoClient = {
         `/atendimento/assignment-options?companyId=${encodeURIComponent(companyId)}`,
         { signal },
       );
-      return response.ok
-        ? ((await response.json()) as AtendimentoAssignmentOption[])
-        : null;
+      if (!response.ok) return null;
+      const parsed = assignmentOptionsSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }

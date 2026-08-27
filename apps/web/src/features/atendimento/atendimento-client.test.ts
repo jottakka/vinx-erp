@@ -172,6 +172,51 @@ describe("atendimento client", () => {
     );
   });
 
+  it("returns null for malformed assignment options", async () => {
+    await Promise.all(
+      [
+        [{ displayName: "Maria Silva", membershipId: "not-a-uuid" }],
+        [
+          {
+            displayName: "Maria Silva",
+            membershipId: "00000000-0000-0000-0000-000000000000",
+          },
+        ],
+        [
+          {
+            displayName: "",
+            membershipId: "33333333-3333-4333-8333-333333333333",
+          },
+        ],
+        [
+          {
+            displayName: "Maria Silva",
+            extra: "campo desconhecido",
+            membershipId: "33333333-3333-4333-8333-333333333333",
+          },
+        ],
+        [
+          {
+            displayName: "Maria Silva",
+            membershipId: "33333333-3333-4333-8333-333333333333",
+          },
+          { displayName: "Inválido", membershipId: "também-não" },
+        ],
+      ].map(async (payload) => {
+        const fetchSpy = vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify(payload), { status: 200 }),
+          );
+        vi.stubGlobal("fetch", fetchSpy);
+
+        await expect(
+          atendimentoClient.assignmentOptions(createdCard.companyId),
+        ).resolves.toBeNull();
+      }),
+    );
+  });
+
   it("cancels with the current version, request ID, and trimmed reason", async () => {
     const fetchSpy = vi
       .fn()

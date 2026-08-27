@@ -60,10 +60,16 @@ const readCapability = "service_desk.ticket.read_queue";
 const createCapability = "service_desk.ticket.create";
 const moveCapability = "service_desk.ticket.move";
 const assignCapability = "service_desk.ticket.assign";
+const cancelCapability = "service_desk.ticket.cancel";
 
 type CardMenuState = {
   anchorEl: HTMLElement;
   card: AtendimentoCard;
+};
+
+type CardMutationLease = {
+  key: string;
+  generation: number;
 };
 
 function messageFor(code: string) {
@@ -126,14 +132,13 @@ export function AtendimentoPage({
   const [cancelling, setCancelling] = useState(false);
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<AtendimentoColumn | null>(null);
-  const [movingCardIdList, setMovingCardIdList] = useState<readonly string[]>(
-    [],
-  );
+  const [pendingMutationKeys, setPendingMutationKeys] = useState<
+    readonly string[]
+  >([]);
   const assignmentEpoch = useRef(0);
   const assignmentAbort = useRef<AbortController | null>(null);
-  const assigningRef = useRef(false);
-  const cancellingRef = useRef(false);
-  const movingCardIds = useRef(new Set<string>());
+  const mutationGenerations = useRef(new Map<string, number>());
+  const pendingMutations = useRef(new Map<string, number>());
 
   const createCompanies = useMemo(
     () =>
@@ -259,29 +264,76 @@ export function AtendimentoPage({
     return { ok: true };
   }
 
+  function cardMutationKey(card: AtendimentoCard) {
+    return `${card.companyId}:${card.id}`;
+  }
+
+  // Lock por cartão compartilhado por move/assign/cancel: nenhuma mutação do
+  // mesmo companyId:cardId inicia enquanto outra estiver pendente, e uma
+  // resposta só é publicada pela geração vigente.
+  function beginCardMutation(card: AtendimentoCard): CardMutationLease | null {
+    const key = cardMutationKey(card);
+    if (pendingMutations.current.has(key)) return null;
+    const generation = (mutationGenerations.current.get(key) ?? 0) + 1;
+    mutationGenerations.current.set(key, generation);
+    pendingMutations.current.set(key, generation);
+    setPendingMutationKeys([...pendingMutations.current.keys()]);
+    return { generation, key };
+  }
+
+  function finishCardMutation(lease: CardMutationLease) {
+    if (pendingMutations.current.get(lease.key) !== lease.generation) return;
+    pendingMutations.current.delete(lease.key);
+    setPendingMutationKeys([...pendingMutations.current.keys()]);
+  }
+
+  function isCardMutationPending(card: AtendimentoCard) {
+    return pendingMutationKeys.includes(cardMutationKey(card));
+  }
+
+  // Publicador único de cartões: nunca reduz a versão de uma entidade da
+  // mesma empresa/cartão, em nenhuma cópia aberta.
+  function applyCardSnapshot(
+    incoming: AtendimentoCard,
+    lease?: CardMutationLease,
+  ) {
+    if (lease && pendingMutations.current.get(lease.key) !== lease.generation)
+      return;
+    const replaces = (card: AtendimentoCard) =>
+      card.companyId === incoming.companyId && card.id === incoming.id
+        ? incoming.version >= card.version
+          ? incoming
+          : card
+        : card;
+    setCards((current) => current.map(replaces));
+    setStatusMenu((menu) =>
+      menu ? { ...menu, card: replaces(menu.card) } : menu,
+    );
+    setActionsMenu((menu) =>
+      menu ? { ...menu, card: replaces(menu.card) } : menu,
+    );
+    setViewingCard((card) => (card ? replaces(card) : card));
+    setAssigningCard((card) => (card ? replaces(card) : card));
+    setCancellingCard((card) => (card ? replaces(card) : card));
+  }
+
   async function move(card: AtendimentoCard, column: AtendimentoColumn) {
     if (card.column === column || card.column === "cancelado") return;
-    // Trava por cartão: ignora um segundo move (menu ou arraste) até o
-    // primeiro assentar, no mesmo padrão de assign/cancel.
-    if (movingCardIds.current.has(card.id)) return;
-    movingCardIds.current.add(card.id);
-    setMovingCardIdList([...movingCardIds.current]);
+    const lease = beginCardMutation(card);
+    if (!lease) return;
     try {
       const result = await atendimentoClient.move(card.companyId, card, column);
       if (!result.ok) return recover(result.code, result.current);
-      setCards((current) =>
-        current.map((item) => (item.id === card.id ? result.card : item)),
-      );
+      applyCardSnapshot(result.card, lease);
     } finally {
-      movingCardIds.current.delete(card.id);
-      setMovingCardIdList([...movingCardIds.current]);
+      finishCardMutation(lease);
     }
   }
 
   async function assign(card: AtendimentoCard) {
-    if (assigning || assigningRef.current || !assigneeMembershipId.trim())
-      return;
-    assigningRef.current = true;
+    if (!assigneeMembershipId.trim()) return;
+    const lease = beginCardMutation(card);
+    if (!lease) return;
     setAssigning(true);
     try {
       const result = await atendimentoClient.assign(
@@ -293,13 +345,11 @@ export function AtendimentoPage({
         recover(result.code, result.current);
         return;
       }
-      setCards((current) =>
-        current.map((item) => (item.id === card.id ? result.card : item)),
-      );
+      applyCardSnapshot(result.card, lease);
       setAssigningCard(null);
       setAssigneeMembershipId("");
     } finally {
-      assigningRef.current = false;
+      finishCardMutation(lease);
       setAssigning(false);
     }
   }
@@ -324,9 +374,9 @@ export function AtendimentoPage({
 
   async function cancel(card: AtendimentoCard) {
     const reason = cancellationReason.trim();
-    if (!reason || reason.length > 500 || cancelling || cancellingRef.current)
-      return;
-    cancellingRef.current = true;
+    if (!reason || reason.length > 500) return;
+    const lease = beginCardMutation(card);
+    if (!lease) return;
     setCancelling(true);
     try {
       const result = await atendimentoClient.cancel(
@@ -338,26 +388,17 @@ export function AtendimentoPage({
         recover(result.code, result.current);
         return;
       }
-      setCards((current) =>
-        current.map((item) => (item.id === card.id ? result.card : item)),
-      );
+      applyCardSnapshot(result.card, lease);
       setCancellingCard(null);
       setCancellationReason("");
     } finally {
-      cancellingRef.current = false;
+      finishCardMutation(lease);
       setCancelling(false);
     }
   }
 
   function recover(code: string, current?: AtendimentoCard) {
-    if (current)
-      setCards((cards) =>
-        cards.map((card) => (card.id === current.id ? current : card)),
-      );
-    if (current) {
-      setAssigningCard((card) => (card?.id === current.id ? current : card));
-      setCancellingCard((card) => (card?.id === current.id ? current : card));
-    }
+    if (current) applyCardSnapshot(current);
     setError(messageFor(code));
   }
 
@@ -384,6 +425,18 @@ export function AtendimentoPage({
         ?.capabilities.some(
           (capability) =>
             capability.name === assignCapability &&
+            capability.scopes.includes("Company"),
+        ) ?? false
+    );
+  }
+
+  function canCancelCard(card: AtendimentoCard) {
+    return (
+      companies
+        .find((company) => company.companyId === card.companyId)
+        ?.capabilities.some(
+          (capability) =>
+            capability.name === cancelCapability &&
             capability.scopes.includes("Company"),
         ) ?? false
     );
@@ -516,11 +569,11 @@ export function AtendimentoPage({
                 {visibleCards
                   .filter((card) => card.column === column.id)
                   .map((card) => {
-                    const moveLocked = movingCardIdList.includes(card.id);
+                    const mutationPending = isCardMutationPending(card);
                     const cardMovable =
                       canEditCard(card) &&
                       card.column !== "cancelado" &&
-                      !moveLocked;
+                      !mutationPending;
                     return (
                       <Card
                         key={card.id}
@@ -609,7 +662,7 @@ export function AtendimentoPage({
                           </Button>
                           {canEditCard(card) && card.column !== "cancelado" ? (
                             <Button
-                              disabled={moveLocked}
+                              disabled={mutationPending}
                               onClick={(event) =>
                                 setStatusMenu({
                                   anchorEl: event.currentTarget,
@@ -621,10 +674,11 @@ export function AtendimentoPage({
                               Alterar status
                             </Button>
                           ) : null}
-                          {(canAssignCard(card) || canEditCard(card)) &&
+                          {(canAssignCard(card) || canCancelCard(card)) &&
                           card.column !== "cancelado" ? (
                             <IconButton
                               aria-label="Mais ações"
+                              disabled={mutationPending}
                               onClick={(event) =>
                                 setActionsMenu({
                                   anchorEl: event.currentTarget,
@@ -707,7 +761,7 @@ export function AtendimentoPage({
             Atribuir responsável
           </MenuItem>
         ) : null}
-        {actionsMenu && canEditCard(actionsMenu.card) ? (
+        {actionsMenu && canCancelCard(actionsMenu.card) ? (
           <MenuItem
             onClick={() => {
               setCancellingCard(actionsMenu.card);
@@ -770,7 +824,12 @@ export function AtendimentoPage({
             Cancelar
           </Button>
           <Button
-            disabled={assigning || !assigningCard || !assigneeMembershipId}
+            disabled={
+              assigning ||
+              !assigningCard ||
+              !assigneeMembershipId ||
+              (assigningCard ? isCardMutationPending(assigningCard) : false)
+            }
             onClick={() => assigningCard && void assign(assigningCard)}
             variant="contained"
           >
@@ -819,7 +878,8 @@ export function AtendimentoPage({
               !cancellingCard ||
               !cancellationReason.trim() ||
               cancellationReason.trim().length > 500 ||
-              cancelling
+              cancelling ||
+              (cancellingCard ? isCardMutationPending(cancellingCard) : false)
             }
             onClick={() => cancellingCard && void cancel(cancellingCard)}
             variant="contained"

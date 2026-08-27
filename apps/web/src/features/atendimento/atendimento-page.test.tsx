@@ -61,11 +61,16 @@ const assignCapability = {
   name: "service_desk.ticket.assign",
   scopes: ["Company"],
 } as const;
+const cancelCapability = {
+  name: "service_desk.ticket.cancel",
+  scopes: ["Company"],
+} as const;
 const allAtendimentoCapabilities = [
   readCapability,
   createCapability,
   moveCapability,
   assignCapability,
+  cancelCapability,
 ];
 
 function snapshot(
@@ -468,6 +473,39 @@ describe("AtendimentoPage", () => {
     expect(within(dialog).queryByText("Alfa")).toBeNull();
   });
 
+  it("exposes cancellation with a Company-scoped cancel capability without granting move", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+
+    renderPage(snapshot([readCapability, cancelCapability]));
+
+    expect(await screen.findByText(alfaCard.title)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Alterar status" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Mais ações" }));
+    expect(
+      screen.getByRole("menuitem", { name: "Cancelar atendimento" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("menuitem", { name: "Atribuir responsável" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not derive cancellation permission from the move capability", async () => {
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+
+    renderPage(snapshot([readCapability, moveCapability]));
+
+    expect(await screen.findByText(alfaCard.title)).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Alterar status" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Mais ações" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("moves a card to another column by calling the move client", async () => {
     const user = userEvent.setup();
     const moved = { ...alfaCard, column: "em_andamento" as const };
@@ -539,6 +577,169 @@ describe("AtendimentoPage", () => {
       ).toBeEnabled(),
     );
     expect(move).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one mutation lock across move and cancel for the same card", async () => {
+    const user = userEvent.setup();
+    const result =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockReturnValue(result.promise);
+    const cancel = vi.spyOn(atendimentoClient, "cancel");
+
+    renderPage();
+
+    // Referências capturadas antes do diálogo: com o modal aberto o board
+    // fica aria-hidden para queries de papel acessível.
+    const card = (await screen.findByText(alfaCard.title)).closest(
+      ".MuiCard-root",
+    ) as HTMLElement;
+    const targetColumn = screen.getByRole("heading", {
+      name: "Em andamento",
+    }).parentElement as HTMLElement;
+
+    await user.click(screen.getByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Cancelar atendimento" }),
+    );
+    await user.type(
+      screen.getByLabelText("Motivo do cancelamento"),
+      "Duplicado",
+    );
+
+    // O move entra em voo por um evento de arraste capturado antes do
+    // diálogo: o lock por cartão precisa segurar o cancelamento pendente.
+    fireEvent.dragStart(card);
+    fireEvent.drop(targetColumn);
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+
+    const confirm = screen.getByRole("button", {
+      name: "Confirmar cancelamento",
+    });
+    expect(confirm).toBeDisabled();
+    act(() => {
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(cancel).not.toHaveBeenCalled();
+
+    result.resolve({
+      card: { ...alfaCard, column: "em_andamento" },
+      ok: true,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Confirmar cancelamento" }),
+      ).toBeEnabled(),
+    );
+  });
+
+  it("does not lock a different company-card while another mutation is pending", async () => {
+    const user = userEvent.setup();
+    const result =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard, betaCard]);
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockImplementation((_companyId, card) =>
+        card.id === alfaCard.id
+          ? result.promise
+          : Promise.resolve({
+              card: { ...betaCard, column: "em_andamento" },
+              ok: true,
+            } as Awaited<ReturnType<typeof atendimentoClient.move>>),
+      );
+
+    renderPage();
+
+    const alfaCardElement = (await screen.findByText(alfaCard.title)).closest(
+      ".MuiCard-root",
+    ) as HTMLElement;
+    await user.click(
+      within(alfaCardElement).getByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+    expect(
+      within(alfaCardElement).getByRole("button", { name: "Alterar status" }),
+    ).toBeDisabled();
+
+    const betaCardElement = (await screen.findByText(betaCard.title)).closest(
+      ".MuiCard-root",
+    ) as HTMLElement;
+    await user.click(
+      within(betaCardElement).getByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(2));
+    expect(move.mock.calls[1]?.[1]).toMatchObject({ id: betaCard.id });
+
+    result.resolve({
+      card: { ...alfaCard, column: "em_andamento" },
+      ok: true,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+  });
+
+  it("keeps a cancelled version 3 snapshot when a delayed version 2 move response arrives", async () => {
+    const user = userEvent.setup();
+    const result =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    const cancelledCard = {
+      ...alfaCard,
+      column: "cancelado" as const,
+      version: 3,
+    };
+    const alfaQueue: AtendimentoCard[][] = [[alfaCard]];
+    vi.spyOn(atendimentoClient, "list").mockImplementation(async (companyId) =>
+      companyId === alfaCompanyId ? (alfaQueue.shift() ?? []) : [betaCard],
+    );
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockReturnValue(result.promise);
+
+    renderPage();
+    expect(await screen.findByText(alfaCard.title)).toBeVisible();
+    const alfaCardElement = (await screen.findByText(alfaCard.title)).closest(
+      ".MuiCard-root",
+    ) as HTMLElement;
+
+    await user.click(
+      within(alfaCardElement).getByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+
+    // Reload normal da fila publica o cartão cancelado em versão 3 enquanto
+    // a resposta atrasada do move (versão 2) ainda não chegou.
+    alfaQueue.push([cancelledCard]);
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Alfa" }));
+    await user.keyboard("{Escape}");
+    const cancelledColumn = screen.getByRole("heading", {
+      name: "Cancelados",
+    }).parentElement as HTMLElement;
+    await waitFor(() =>
+      expect(within(cancelledColumn).getByText(alfaCard.title)).toBeVisible(),
+    );
+
+    result.resolve({
+      card: { ...alfaCard, column: "em_andamento", version: 2 },
+      ok: true,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+
+    const inProgressColumn = screen.getByRole("heading", {
+      name: "Em andamento",
+    }).parentElement as HTMLElement;
+    await waitFor(() =>
+      expect(within(cancelledColumn).getByText(alfaCard.title)).toBeVisible(),
+    );
+    expect(
+      within(inProgressColumn).queryByText(alfaCard.title),
+    ).not.toBeInTheDocument();
   });
 
   it("anchors each card menu to its trigger and preserves Escape close", async () => {
