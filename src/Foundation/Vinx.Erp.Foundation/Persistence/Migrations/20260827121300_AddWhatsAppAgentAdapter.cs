@@ -12,11 +12,31 @@ public partial class AddWhatsAppAgentAdapter : Migration
     protected override void Up(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
-            GRANT SELECT ON TABLE foundation.companies, foundation.groups,
-                foundation.memberships, foundation.roles, foundation.role_assignments,
-                foundation.role_capabilities, foundation.capabilities, foundation.files,
-                foundation.agent_execution_ledger, foundation.users TO vinx_worker;
-            GRANT INSERT, UPDATE ON TABLE foundation.files TO vinx_worker;
+            GRANT SELECT (id, company_id, user_id, deleted_at)
+                ON TABLE foundation.memberships TO vinx_worker;
+            GRANT SELECT (id, company_id, deleted_at)
+                ON TABLE foundation.roles TO vinx_worker;
+            GRANT SELECT (id, company_id, role_id, membership_id, deleted_at)
+                ON TABLE foundation.role_assignments TO vinx_worker;
+            GRANT SELECT (company_id, role_id, capability_id, scope, deleted_at)
+                ON TABLE foundation.role_capabilities TO vinx_worker;
+            GRANT SELECT (id, name)
+                ON TABLE foundation.capabilities TO vinx_worker;
+            GRANT SELECT (
+                id, company_id, uploader_membership_id, original_file_name,
+                extension, size_bytes, mime_type, checksum, classification,
+                origin, retention_until, provider_key, processing_state,
+                failure_reason, scan_engine, scan_engine_version,
+                scan_signature_version, scanned_at_utc, created_by_user_id,
+                updated_by_user_id, request_id, created_at, updated_at,
+                deleted_at, deleted_by_user_id, deleted_reason, row_version)
+                ON TABLE foundation.files TO vinx_worker;
+            GRANT SELECT (
+                id, company_id, actor_user_id, channel, inbound_message_id,
+                request_id, journey, payload_hash, state, safe_result_json,
+                reason_code, created_at, updated_at, row_version)
+                ON TABLE foundation.agent_execution_ledger TO vinx_worker;
+            GRANT INSERT ON TABLE foundation.files TO vinx_worker;
             GRANT REFERENCES (id) ON TABLE foundation.files TO vinx_notifications_owner;
             GRANT SELECT (
                 id, company_id, uploader_membership_id, processing_state,
@@ -36,6 +56,14 @@ public partial class AddWhatsAppAgentAdapter : Migration
             SET ROLE vinx_authorization_owner;
             GRANT EXECUTE ON FUNCTION foundation.current_actor_memberships() TO vinx_worker;
             RESET ROLE;
+            GRANT EXECUTE ON FUNCTION foundation.current_authorized_company_ids() TO vinx_worker;
+            CREATE POLICY capabilities_worker_agent_read ON foundation.capabilities
+                FOR SELECT TO vinx_worker
+                USING (name IN (
+                    'foundation.files.upload',
+                    'foundation.files.read-ocr',
+                    'ai.read',
+                    'paguai.draft.create'));
             SET ROLE vinx_audit_owner;
             GRANT EXECUTE ON FUNCTION audit.append_event(
                 uuid, text, uuid, text, text, text, uuid, text, uuid, text, jsonb)
@@ -504,15 +532,37 @@ public partial class AddWhatsAppAgentAdapter : Migration
             SET ROLE vinx_authorization_owner;
             REVOKE EXECUTE ON FUNCTION foundation.current_actor_memberships() FROM vinx_worker;
             RESET ROLE;
+            REVOKE EXECUTE ON FUNCTION foundation.current_authorized_company_ids() FROM vinx_worker;
+            DROP POLICY capabilities_worker_agent_read ON foundation.capabilities;
             REVOKE SELECT, INSERT ON TABLE paguai.draft_proposals FROM vinx_worker;
             REVOKE UPDATE (state, result_draft_id, resolution_request_id, resolved_at, row_version)
                 ON TABLE paguai.draft_proposals FROM vinx_worker;
             REVOKE USAGE ON SCHEMA audit FROM vinx_worker;
-            REVOKE INSERT, UPDATE ON TABLE foundation.files FROM vinx_worker;
-            REVOKE SELECT ON TABLE foundation.companies, foundation.groups,
-                foundation.memberships, foundation.roles, foundation.role_assignments,
-                foundation.role_capabilities, foundation.capabilities, foundation.files,
-                foundation.agent_execution_ledger, foundation.users FROM vinx_worker;
+            REVOKE INSERT ON TABLE foundation.files FROM vinx_worker;
+            REVOKE SELECT (id, company_id, user_id, deleted_at)
+                ON TABLE foundation.memberships FROM vinx_worker;
+            REVOKE SELECT (id, company_id, deleted_at)
+                ON TABLE foundation.roles FROM vinx_worker;
+            REVOKE SELECT (id, company_id, role_id, membership_id, deleted_at)
+                ON TABLE foundation.role_assignments FROM vinx_worker;
+            REVOKE SELECT (company_id, role_id, capability_id, scope, deleted_at)
+                ON TABLE foundation.role_capabilities FROM vinx_worker;
+            REVOKE SELECT (id, name)
+                ON TABLE foundation.capabilities FROM vinx_worker;
+            REVOKE SELECT (
+                id, company_id, uploader_membership_id, original_file_name,
+                extension, size_bytes, mime_type, checksum, classification,
+                origin, retention_until, provider_key, processing_state,
+                failure_reason, scan_engine, scan_engine_version,
+                scan_signature_version, scanned_at_utc, created_by_user_id,
+                updated_by_user_id, request_id, created_at, updated_at,
+                deleted_at, deleted_by_user_id, deleted_reason, row_version)
+                ON TABLE foundation.files FROM vinx_worker;
+            REVOKE SELECT (
+                id, company_id, actor_user_id, channel, inbound_message_id,
+                request_id, journey, payload_hash, state, safe_result_json,
+                reason_code, created_at, updated_at, row_version)
+                ON TABLE foundation.agent_execution_ledger FROM vinx_worker;
             REVOKE INSERT ON TABLE foundation.agent_execution_ledger FROM vinx_worker;
             REVOKE UPDATE (state, safe_result_json, reason_code, updated_at, row_version)
                 ON TABLE foundation.agent_execution_ledger FROM vinx_worker;

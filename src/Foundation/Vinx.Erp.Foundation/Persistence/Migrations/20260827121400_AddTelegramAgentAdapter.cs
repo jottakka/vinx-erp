@@ -142,7 +142,8 @@ public partial class AddTelegramAgentAdapter : Migration
                             btrim(text_body, E' \t\n\013\f\r') <> ''
                             AND char_length(text_body) BETWEEN 1 AND 4096))
                         AND media_id IS NOT NULL
-                        AND media_id ~ '^[A-Za-z0-9_-]{1,512}$'
+                        AND char_length(media_id) BETWEEN 1 AND 512
+                        AND media_id ~ '^[A-Za-z0-9_-]+$'
                         AND media_size BETWEEN 1 AND 26214400
                         AND media_mime_type IN ('application/pdf', 'image/jpeg', 'image/png')
                         AND (message_type <> 'photo' OR media_mime_type = 'image/jpeg'))),
@@ -339,7 +340,9 @@ public partial class AddTelegramAgentAdapter : Migration
                         (p_text_body IS NOT NULL AND (
                             btrim(p_text_body, E' \t\n\013\f\r') = ''
                             OR char_length(p_text_body) NOT BETWEEN 1 AND 4096))
-                        OR p_media_id IS NULL OR p_media_id !~ '^[A-Za-z0-9_-]{1,512}$'
+                        OR p_media_id IS NULL
+                        OR char_length(p_media_id) NOT BETWEEN 1 AND 512
+                        OR p_media_id !~ '^[A-Za-z0-9_-]+$'
                         OR p_media_size NOT BETWEEN 1 AND 26214400
                         OR p_media_mime_type NOT IN ('application/pdf', 'image/jpeg', 'image/png')
                         OR (p_message_type = 'photo' AND p_media_mime_type <> 'image/jpeg'))) THEN

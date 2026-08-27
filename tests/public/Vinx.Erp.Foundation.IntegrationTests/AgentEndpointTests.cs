@@ -810,7 +810,7 @@ public sealed class AgentEndpointTests
                 extension, size_bytes, mime_type, checksum, classification,
                 origin, retention_until, provider_key, processing_state,
                 scan_engine, scan_engine_version, scan_signature_version,
-                scanned_at, created_by_user_id, updated_by_user_id, request_id,
+                scanned_at_utc, created_by_user_id, updated_by_user_id, request_id,
                 created_at, updated_at)
             SELECT @file_id, @company_id, membership.id,
                 'nota-fiscal-sintetica.png', '.png', @size_bytes,

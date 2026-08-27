@@ -284,13 +284,15 @@ public sealed class RealE2eFixtureHostTests
             var betaCompanyId = sharedHost.Receipt.BetaCompanyId;
             var gamaCompanyId = sharedHost.Receipt.GamaCompanyId;
 
-            using (var mariaAlfaAgentResponse = await mariaClient.PostAsJsonAsync(
+            using (var mariaAlfaAgentResponse = await PostJsonWithAntiforgeryAsync(
+                mariaClient,
                 "/agent/runs",
                 new AgentRunRequest(
                     Guid.NewGuid(),
                     "read_only_summarize_v1",
                     "resuma a empresa Alfa",
-                    alfaCompanyId)))
+                    alfaCompanyId,
+                    [])))
             {
                 Assert.Equal(HttpStatusCode.OK, mariaAlfaAgentResponse.StatusCode);
                 var result = await ReadAgentRunResponseAsync(mariaAlfaAgentResponse);
@@ -315,7 +317,8 @@ public sealed class RealE2eFixtureHostTests
             var mainCallsBeforePaguai = agentModel.CallCount;
             var visionCallsBeforePaguai = sharedHost.MariaAgentVisionCallCount;
             Guid proposalId;
-            using (var mariaPaguaiAgentResponse = await mariaClient.PostAsJsonAsync(
+            using (var mariaPaguaiAgentResponse = await PostJsonWithAntiforgeryAsync(
+                mariaClient,
                 "/agent/runs",
                 new AgentRunRequest(
                     proposalRunRequestId,
@@ -344,7 +347,8 @@ public sealed class RealE2eFixtureHostTests
                 Assert.Equal("pending", proposal.RootElement.GetProperty("state").GetString());
             }
 
-            using (var replay = await mariaClient.PostAsJsonAsync(
+            using (var replay = await PostJsonWithAntiforgeryAsync(
+                mariaClient,
                 "/agent/runs",
                 new AgentRunRequest(
                     proposalRunRequestId,
@@ -353,22 +357,16 @@ public sealed class RealE2eFixtureHostTests
                     alfaCompanyId,
                     [sharedHost.Receipt.MariaAlfaAgenticAttachmentId])))
             {
-                Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
-                Assert.Equal(proposalId, (await ReadAgentRunResponseAsync(replay)).PaguaiProposalId);
+                await AssertSuccessfulPaguaiReplayAsync(replay, proposalId);
             }
 
             Assert.Equal(2, agentModel.CallCount);
             Assert.Equal(1, sharedHost.MariaAgentVisionCallCount);
-            var proposalAntiforgery = await GetAntiforgeryTokenAsync(mariaClient);
-            using (var confirmation = new HttpRequestMessage(
-                HttpMethod.Post,
-                $"/paguai/draft-proposals/{proposalId}/confirm")
+            using (var confirmed = await PostJsonWithAntiforgeryAsync(
+                mariaClient,
+                $"/paguai/draft-proposals/{proposalId}/confirm",
+                new { companyId = alfaCompanyId, requestId = Guid.NewGuid() }))
             {
-                Content = JsonContent.Create(new { companyId = alfaCompanyId, requestId = Guid.NewGuid() }),
-            })
-            {
-                confirmation.Headers.Add("X-CSRF-TOKEN", proposalAntiforgery);
-                using var confirmed = await mariaClient.SendAsync(confirmation);
                 Assert.Equal(HttpStatusCode.Created, confirmed.StatusCode);
                 using var draft = JsonDocument.Parse(await confirmed.Content.ReadAsStringAsync());
                 Assert.Equal(proposalId, draft.RootElement.GetProperty("sourceProposalId").GetGuid());
@@ -382,13 +380,15 @@ public sealed class RealE2eFixtureHostTests
                 Assert.Equal(1L, Convert.ToInt64(await count.ExecuteScalarAsync()));
             }
 
-            using (var mariaBetaAgentResponse = await mariaClient.PostAsJsonAsync(
+            using (var mariaBetaAgentResponse = await PostJsonWithAntiforgeryAsync(
+                mariaClient,
                 "/agent/runs",
                 new AgentRunRequest(
                     Guid.NewGuid(),
                     "read_only_summarize_v1",
                     "resuma a empresa Beta",
-                    betaCompanyId)))
+                    betaCompanyId,
+                    [])))
             {
                 Assert.Equal(HttpStatusCode.OK, mariaBetaAgentResponse.StatusCode);
                 var result = await ReadAgentRunResponseAsync(mariaBetaAgentResponse);
@@ -400,13 +400,15 @@ public sealed class RealE2eFixtureHostTests
 
             Assert.Equal(2, agentModel.CallCount);
 
-            using (var claraGamaAgentResponse = await claraClient.PostAsJsonAsync(
+            using (var claraGamaAgentResponse = await PostJsonWithAntiforgeryAsync(
+                claraClient,
                 "/agent/runs",
                 new AgentRunRequest(
                     Guid.NewGuid(),
                     "read_only_summarize_v1",
                     "resuma a empresa Gama",
-                    gamaCompanyId)))
+                    gamaCompanyId,
+                    [])))
             {
                 Assert.Equal(HttpStatusCode.OK, claraGamaAgentResponse.StatusCode);
                 var result = await ReadAgentRunResponseAsync(claraGamaAgentResponse);
@@ -422,21 +424,16 @@ public sealed class RealE2eFixtureHostTests
                 ["Beatriz Costa", "Maria Silva"],
                 await ReadEmployeeNamesAsync(mariaClient, alfaCompanyId));
 
-            var antiforgeryToken = await GetAntiforgeryTokenAsync(mariaClient);
-            using var createRequest = new HttpRequestMessage(
-                HttpMethod.Post,
-                $"/foundation/companies/{alfaCompanyId}/employees")
-            {
-                Content = JsonContent.Create(new
+            using var created = await PostJsonWithAntiforgeryAsync(
+                mariaClient,
+                $"/foundation/companies/{alfaCompanyId}/employees",
+                new
                 {
                     requestId = Guid.NewGuid(),
                     companyId = alfaCompanyId,
                     displayName = "Pessoa compartilhada A",
                     email = "pessoa.compartilhada.a@example.test",
-                }),
-            };
-            createRequest.Headers.Add("X-CSRF-TOKEN", antiforgeryToken);
-            using var created = await mariaClient.SendAsync(createRequest);
+                });
             Assert.Equal(HttpStatusCode.Created, created.StatusCode);
 
             Assert.Equal(
@@ -517,6 +514,38 @@ public sealed class RealE2eFixtureHostTests
             "/foundation/identity/browser-session/antiforgery");
         return document.RootElement.GetProperty("requestToken").GetString()
             ?? throw new InvalidOperationException("The antiforgery request token was empty.");
+    }
+
+    private static async Task<HttpResponseMessage> PostJsonWithAntiforgeryAsync<T>(
+        HttpClient client,
+        string requestUri,
+        T payload)
+    {
+        var antiforgeryToken = await GetAntiforgeryTokenAsync(client);
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+        {
+            Content = JsonContent.Create(payload),
+        };
+        request.Headers.Add("X-CSRF-TOKEN", antiforgeryToken);
+        return await client.SendAsync(request);
+    }
+
+    private static async Task AssertSuccessfulPaguaiReplayAsync(
+        HttpResponseMessage response,
+        Guid expectedProposalId)
+    {
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = body.RootElement;
+        var safeCategory = root.TryGetProperty("status", out var status)
+            ? status.GetString()
+            : root.TryGetProperty("code", out var code)
+                ? code.GetString()
+                : "missing";
+        Assert.True(
+            response.StatusCode == HttpStatusCode.OK,
+            $"Expected successful Paguai replay, but received HTTP {(int)response.StatusCode} with category '{safeCategory}'.");
+        Assert.Equal("requires_confirmation", status.GetString());
+        Assert.Equal(expectedProposalId, root.GetProperty("paguaiProposalId").GetGuid());
     }
 
     private static async Task<AgentRunResponse> ReadAgentRunResponseAsync(HttpResponseMessage response) =>

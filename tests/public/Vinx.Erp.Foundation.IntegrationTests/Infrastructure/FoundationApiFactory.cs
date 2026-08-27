@@ -28,6 +28,7 @@ using Vinx.Erp.AI;
 using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Providers.OpenAiCompatible;
 using Vinx.Erp.ApiHost.Agent;
+using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.Foundation.Identity;
 using JsonClaimValueTypes = Microsoft.IdentityModel.JsonWebTokens.JsonClaimValueTypes;
 using Vinx.Erp.Foundation.Persistence;
@@ -839,7 +840,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             [
                 new AmrEntry("password", issuedAt - 10),
                 new AmrEntry("email", issuedAt - 20)
-            ]);
+            ],
+            AuthenticationType: BrowserBffAuthenticationExtensions.CookieScheme);
     }
 
     private static async Task<Exception> DisposeAfterFailureAsync(
@@ -1045,7 +1047,8 @@ public sealed record TestPrincipalClaims(
     long IssuedAt,
     long ExpiresAt,
     IReadOnlyList<AmrEntry> Amr,
-    string? Aal = null);
+    string? Aal = null,
+    string AuthenticationType = FoundationApiFactory.TestAuthenticationScheme);
 
 public sealed record AmrEntry(string Method, long Timestamp);
 
@@ -1092,7 +1095,7 @@ public sealed class TestAuthenticationHandler(
                 timestamp = entry.Timestamp
             }), JsonClaimValueTypes.Json)));
 
-        var identity = new ClaimsIdentity(identityClaims, Scheme.Name);
+        var identity = new ClaimsIdentity(identityClaims, claims.AuthenticationType);
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
         return Task.FromResult(AuthenticateResult.Success(ticket));

@@ -193,6 +193,114 @@ public sealed class InboundWhatsAppAgentAdapterTests
     }
 
     [Fact]
+    public async Task Worker_agent_has_only_required_foundation_columns_and_functions()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+
+        await AssertWorkerColumnsAsync(
+            administrator,
+            "foundation.memberships",
+            ["id", "company_id", "user_id", "deleted_at"]);
+        await AssertWorkerColumnsAsync(
+            administrator,
+            "foundation.roles",
+            ["id", "company_id", "deleted_at"]);
+        await AssertWorkerColumnsAsync(
+            administrator,
+            "foundation.role_assignments",
+            ["id", "company_id", "role_id", "membership_id", "deleted_at"]);
+        await AssertWorkerColumnsAsync(
+            administrator,
+            "foundation.role_capabilities",
+            ["company_id", "role_id", "capability_id", "scope", "deleted_at"]);
+        await AssertWorkerColumnsAsync(
+            administrator,
+            "foundation.capabilities",
+            ["id", "name"]);
+        await AssertWorkerColumnsAsync(
+            administrator,
+            "foundation.files",
+            [
+                "id", "company_id", "uploader_membership_id", "original_file_name",
+                "extension", "size_bytes", "mime_type", "checksum", "classification",
+                "origin", "retention_until", "provider_key", "processing_state",
+                "failure_reason", "scan_engine", "scan_engine_version",
+                "scan_signature_version", "scanned_at_utc", "created_by_user_id",
+                "updated_by_user_id", "request_id", "created_at", "updated_at",
+                "deleted_at", "deleted_by_user_id", "deleted_reason", "row_version",
+            ]);
+        await AssertWorkerColumnsAsync(
+            administrator,
+            "foundation.agent_execution_ledger",
+            [
+                "id", "company_id", "actor_user_id", "channel", "inbound_message_id",
+                "request_id", "journey", "payload_hash", "state", "safe_result_json",
+                "reason_code", "created_at", "updated_at", "row_version",
+            ]);
+
+        await using var boundary = new NpgsqlCommand(
+            """
+            SELECT
+                has_function_privilege(
+                    'vinx_worker', 'foundation.current_actor_memberships()', 'EXECUTE'),
+                has_function_privilege(
+                    'vinx_worker', 'foundation.current_authorized_company_ids()', 'EXECUTE'),
+                has_table_privilege('vinx_worker', 'foundation.files', 'INSERT'),
+                NOT has_table_privilege('vinx_worker', 'foundation.files', 'UPDATE'),
+                NOT has_table_privilege('vinx_worker', 'foundation.companies', 'SELECT'),
+                NOT has_table_privilege('vinx_worker', 'foundation.groups', 'SELECT'),
+                NOT has_table_privilege('vinx_worker', 'foundation.users', 'SELECT'),
+                NOT has_table_privilege('vinx_worker', 'foundation.memberships', 'SELECT'),
+                NOT has_table_privilege('vinx_worker', 'foundation.roles', 'SELECT'),
+                NOT has_table_privilege('vinx_worker', 'foundation.role_assignments', 'SELECT'),
+                NOT has_table_privilege('vinx_worker', 'foundation.role_capabilities', 'SELECT'),
+                NOT has_table_privilege('vinx_worker', 'foundation.capabilities', 'SELECT'),
+                NOT has_table_privilege('vinx_worker', 'foundation.files', 'SELECT'),
+                NOT has_table_privilege(
+                    'vinx_worker', 'foundation.agent_execution_ledger', 'SELECT'),
+                NOT has_column_privilege(
+                    'vinx_worker', 'foundation.files', 'company_id', 'UPDATE'),
+                NOT has_column_privilege(
+                    'vinx_worker', 'foundation.files', 'uploader_membership_id', 'UPDATE'),
+                NOT has_column_privilege(
+                    'vinx_worker', 'foundation.files', 'provider_key', 'UPDATE'),
+                NOT has_column_privilege(
+                    'vinx_worker', 'foundation.files', 'classification', 'UPDATE')
+            """,
+            administrator);
+        await using var reader = await boundary.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        for (var index = 0; index < reader.FieldCount; index++)
+        {
+            Assert.True(reader.GetBoolean(index));
+        }
+
+        await using var worker = new NpgsqlConnection(fixture.WorkerConnectionString);
+        await worker.OpenAsync();
+        await using var capabilities = new NpgsqlCommand(
+            "SELECT name FROM foundation.capabilities ORDER BY name",
+            worker);
+        await using var capabilityReader = await capabilities.ExecuteReaderAsync();
+        var capabilityNames = new List<string>();
+        while (await capabilityReader.ReadAsync())
+        {
+            capabilityNames.Add(capabilityReader.GetString(0));
+        }
+
+        Assert.Equal(
+            [
+                "ai.read",
+                "foundation.files.read-ocr",
+                "foundation.files.upload",
+                "paguai.draft.create",
+            ],
+            capabilityNames);
+    }
+
+    [Fact]
     public async Task Completed_ledger_redelivery_resumes_one_reply_without_model_call()
     {
         var model = new NeverCalledAgentModel();
@@ -352,6 +460,22 @@ public sealed class InboundWhatsAppAgentAdapterTests
         return membershipId;
     }
 
+    private static async Task AssertWorkerColumnsAsync(
+        NpgsqlConnection connection,
+        string relation,
+        IReadOnlyList<string> columns)
+    {
+        foreach (var column in columns)
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT has_column_privilege('vinx_worker', @relation, @column, 'SELECT')",
+                connection);
+            command.Parameters.AddWithValue("relation", relation);
+            command.Parameters.AddWithValue("column", column);
+            Assert.True((bool)(await command.ExecuteScalarAsync())!, $"Missing {relation}.{column} SELECT");
+        }
+    }
+
     private static async Task AdmitDocumentAsync(
         FoundationApiFactory factory,
         Guid inboundId,
@@ -418,7 +542,7 @@ public sealed class InboundWhatsAppAgentAdapterTests
                 extension, size_bytes, mime_type, checksum, classification,
                 origin, retention_until, provider_key, processing_state,
                 scan_engine, scan_engine_version, scan_signature_version,
-                scanned_at, created_by_user_id, updated_by_user_id, request_id,
+                scanned_at_utc, created_by_user_id, updated_by_user_id, request_id,
                 created_at, updated_at)
             VALUES (
                 @id, @company_id, @membership_id, 'agent.pdf', '.pdf', 1,

@@ -145,14 +145,20 @@ public sealed class PaguaiProposalEndpointTests
     [Fact]
     public async Task Confirmation_promotes_the_file_consumes_the_proposal_and_replays_the_same_request()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var factory = await CreateBrowserSessionFactoryAsync();
         var scenario = await SeedScenarioAsync(factory);
         var proposal = await CreateProposalAsync(factory, scenario);
         var request = new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() };
-        using var client = factory.CreateClient();
+        using var client = await CreateSignedInBrowserClientAsync(factory);
 
-        using var first = await client.PostAsJsonAsync($"/paguai/draft-proposals/{proposal.Id}/confirm", request);
-        using var replay = await client.PostAsJsonAsync($"/paguai/draft-proposals/{proposal.Id}/confirm", request);
+        using var first = await PostBrowserJsonAsync(
+            client,
+            $"/paguai/draft-proposals/{proposal.Id}/confirm",
+            request);
+        using var replay = await PostBrowserJsonAsync(
+            client,
+            $"/paguai/draft-proposals/{proposal.Id}/confirm",
+            request);
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
@@ -267,16 +273,22 @@ public sealed class PaguaiProposalEndpointTests
     [Fact]
     public async Task Same_request_with_another_proposal_returns_payload_conflict()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var factory = await CreateBrowserSessionFactoryAsync();
         var scenario = await SeedScenarioAsync(factory);
         var firstProposal = await CreateProposalAsync(factory, scenario);
         var secondFile = await SeedAgenticFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "second");
         var secondProposal = await CreateProposalAsync(factory, scenario with { FileId = secondFile.Id }, Guid.NewGuid());
         var request = new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() };
-        using var client = factory.CreateClient();
+        using var client = await CreateSignedInBrowserClientAsync(factory);
 
-        using var first = await client.PostAsJsonAsync($"/paguai/draft-proposals/{firstProposal.Id}/confirm", request);
-        using var conflict = await client.PostAsJsonAsync($"/paguai/draft-proposals/{secondProposal.Id}/confirm", request);
+        using var first = await PostBrowserJsonAsync(
+            client,
+            $"/paguai/draft-proposals/{firstProposal.Id}/confirm",
+            request);
+        using var conflict = await PostBrowserJsonAsync(
+            client,
+            $"/paguai/draft-proposals/{secondProposal.Id}/confirm",
+            request);
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
@@ -286,14 +298,18 @@ public sealed class PaguaiProposalEndpointTests
     [Fact]
     public async Task Rejected_and_database_clock_expired_proposals_are_terminal_and_unavailable()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var factory = await CreateBrowserSessionFactoryAsync();
         var scenario = await SeedScenarioAsync(factory);
         var rejected = await CreateProposalAsync(factory, scenario);
-        using var client = factory.CreateClient();
+        using var client = await CreateSignedInBrowserClientAsync(factory);
         var rejection = new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() };
 
-        using var reject = await client.PostAsJsonAsync($"/paguai/draft-proposals/{rejected.Id}/reject", rejection);
-        using var rejectedConfirm = await client.PostAsJsonAsync(
+        using var reject = await PostBrowserJsonAsync(
+            client,
+            $"/paguai/draft-proposals/{rejected.Id}/reject",
+            rejection);
+        using var rejectedConfirm = await PostBrowserJsonAsync(
+            client,
             $"/paguai/draft-proposals/{rejected.Id}/confirm",
             new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() });
         Assert.Equal(HttpStatusCode.NoContent, reject.StatusCode);
@@ -303,7 +319,8 @@ public sealed class PaguaiProposalEndpointTests
         var secondFile = await SeedAgenticFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "expired");
         var expired = await CreateProposalAsync(factory, scenario with { FileId = secondFile.Id }, Guid.NewGuid());
         await SetExpiredByDatabaseClockAsync(factory, expired.Id);
-        using var expiredConfirm = await client.PostAsJsonAsync(
+        using var expiredConfirm = await PostBrowserJsonAsync(
+            client,
             $"/paguai/draft-proposals/{expired.Id}/confirm",
             new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() });
         Assert.Equal(HttpStatusCode.Conflict, expiredConfirm.StatusCode);
@@ -318,12 +335,14 @@ public sealed class PaguaiProposalEndpointTests
     [InlineData("file")]
     public async Task Revoked_confirmation_dependency_invalidates_without_creating_a_draft(string dependency)
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var factory = await CreateBrowserSessionFactoryAsync();
         var scenario = await SeedScenarioAsync(factory);
         var proposal = await CreateProposalAsync(factory, scenario);
         await RevokeDependencyAsync(factory, scenario, dependency);
 
-        using var response = await factory.CreateClient().PostAsJsonAsync(
+        using var client = await CreateSignedInBrowserClientAsync(factory);
+        using var response = await PostBrowserJsonAsync(
+            client,
             $"/paguai/draft-proposals/{proposal.Id}/confirm",
             new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() });
 
@@ -338,12 +357,14 @@ public sealed class PaguaiProposalEndpointTests
     [Fact]
     public async Task Audit_failure_rolls_back_classification_draft_proposal_and_audit()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var factory = await CreateBrowserSessionFactoryAsync();
         var scenario = await SeedScenarioAsync(factory);
         var proposal = await CreateProposalAsync(factory, scenario);
+        using var client = await CreateSignedInBrowserClientAsync(factory);
         await RevokeAuditAppendAsync(factory);
 
-        using var response = await factory.CreateClient().PostAsJsonAsync(
+        using var response = await PostBrowserJsonAsync(
+            client,
             $"/paguai/draft-proposals/{proposal.Id}/confirm",
             new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() });
 
@@ -360,16 +381,20 @@ public sealed class PaguaiProposalEndpointTests
     [Fact]
     public async Task Concurrent_confirmations_create_one_draft_and_consume_once()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var factory = await CreateBrowserSessionFactoryAsync();
         var scenario = await SeedScenarioAsync(factory);
         var proposal = await CreateProposalAsync(factory, scenario);
-        using var firstClient = factory.CreateClient();
-        using var secondClient = factory.CreateClient();
+        using var firstClient = await CreateSignedInBrowserClientAsync(factory);
+        using var secondClient = await CreateSignedInBrowserClientAsync(factory);
 
         var responses = await Task.WhenAll(
-            firstClient.PostAsJsonAsync($"/paguai/draft-proposals/{proposal.Id}/confirm",
+            PostBrowserJsonAsync(
+                firstClient,
+                $"/paguai/draft-proposals/{proposal.Id}/confirm",
                 new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() }),
-            secondClient.PostAsJsonAsync($"/paguai/draft-proposals/{proposal.Id}/confirm",
+            PostBrowserJsonAsync(
+                secondClient,
+                $"/paguai/draft-proposals/{proposal.Id}/confirm",
                 new { companyId = scenario.CompanyId, requestId = Guid.NewGuid() }));
 
         Assert.Single(responses, response => response.StatusCode == HttpStatusCode.Created);
@@ -687,6 +712,40 @@ public sealed class PaguaiProposalEndpointTests
             "GRANT EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) TO vinx_runtime;",
             connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<FoundationApiFactory> CreateBrowserSessionFactoryAsync()
+    {
+        var provider = new BrowserSessionProviderHandler();
+        var factory = await FoundationApiFactory
+            .CreateWithJwtBearerAndBrowserSessionProviderAsync(provider);
+        provider.ResponseFactory = _ => BrowserSessionProviderResponse(
+            factory.CreateJwtToken(JwtTokenVariation.Valid));
+        return factory;
+    }
+
+    private static async Task<HttpClient> CreateSignedInBrowserClientAsync(
+        FoundationApiFactory factory)
+    {
+        var client = factory.CreateClient(
+            new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using var signIn = await SignInAsync(client);
+        Assert.Equal(HttpStatusCode.NoContent, signIn.StatusCode);
+        return client;
+    }
+
+    private static async Task<HttpResponseMessage> PostBrowserJsonAsync<T>(
+        HttpClient client,
+        string requestUri,
+        T payload)
+    {
+        var antiforgeryToken = await GetAntiforgeryTokenAsync(client);
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+        {
+            Content = JsonContent.Create(payload),
+        };
+        request.Headers.Add(AntiforgeryHeader, antiforgeryToken);
+        return await client.SendAsync(request);
     }
 
     private static async Task<HttpResponseMessage> SignInAsync(HttpClient client)
