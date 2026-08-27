@@ -2766,6 +2766,11 @@ ALTER TABLE foundation.capabilities ENABLE ROW LEVEL SECURITY;
 CREATE POLICY capabilities_employee_directory_owner_select ON foundation.capabilities FOR SELECT TO vinx_employee_directory_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying])::text[])));
 
 
+-- Name: capabilities capabilities_notifications_owner_paguai_approve_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_notifications_owner_paguai_approve_read ON foundation.capabilities FOR SELECT TO vinx_notifications_owner USING (((name)::text = 'paguai.draft.approve'::text));
+
+
 -- Name: capabilities capabilities_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY capabilities_notifications_owner_read ON foundation.capabilities FOR SELECT TO vinx_notifications_owner USING (((name)::text = 'foundation.files.upload'::text));
