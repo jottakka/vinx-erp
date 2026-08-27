@@ -2,6 +2,7 @@ using System.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications;
 using Wolverine;
@@ -14,7 +15,9 @@ namespace Vinx.Erp.WorkerHost;
 [InboundTelegramFailurePolicy]
 public sealed class InboundTelegramTextReceivedHandler(
     FoundationDbContext database,
-    ILogger<InboundTelegramTextReceivedHandler> logger
+    ILogger<InboundTelegramTextReceivedHandler> logger,
+    InboundAgentChannelAdapter? adapter = null,
+    IMessageBus? bus = null
 )
 {
     private const string Operation = "telegram_inbound_receipt";
@@ -59,6 +62,46 @@ public sealed class InboundTelegramTextReceivedHandler(
             { Status: "not_admitted", Transitioned: false } => ("noop", "not_admitted"),
             _ => throw new InvalidOperationException("Inbound Telegram receipt returned an unknown state."),
         };
+
+        Guid? deliveryId = null;
+        if (receipt.Status == "completed")
+        {
+            deliveryId = await EnqueueSelectionDeliveryAsync(
+                message.InboundMessageId,
+                cancellationToken).ConfigureAwait(false);
+            if (deliveryId is null && adapter is not null)
+            {
+                try
+                {
+                    await adapter.ProcessAsync(
+                        new InboundAgentRequestReceived(
+                            message.InboundMessageId,
+                            AgentChannelKind.Telegram),
+                        cancellationToken).ConfigureAwait(false);
+                    deliveryId = await ReadAgentDeliveryIdAsync(
+                        message.InboundMessageId,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (NotificationProviderTransientException)
+                {
+                    throw new InboundTelegramReceiptExecutionException(isTransient: true);
+                }
+            }
+        }
+        else if (receipt.Status == "not_admitted")
+        {
+            deliveryId = await EnqueueSelectionDeliveryAsync(
+                message.InboundMessageId,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (deliveryId is { } opaqueDeliveryId && bus is not null)
+        {
+            await bus.PublishAsync(
+                new NotificationDeliveryRequested(opaqueDeliveryId),
+                new DeliveryOptions { CorrelationId = Guid.NewGuid().ToString("D") })
+                .ConfigureAwait(false);
+        }
 
 #pragma warning disable CA1873 // Os argumentos são valores constantes e baratos; o guard não agrega ganho.
         logger.LogInformation(
@@ -171,6 +214,72 @@ public sealed class InboundTelegramTextReceivedHandler(
             if (openedConnection)
             {
                 await database.Database.CloseConnectionAsync();
+            }
+        }
+    }
+
+    private async Task<Guid?> ReadAgentDeliveryIdAsync(
+        Guid inboundMessageId,
+        CancellationToken cancellationToken)
+    {
+        var connection = database.Database.GetDbConnection();
+        var openedConnection = connection.State != ConnectionState.Open;
+        if (openedConnection)
+        {
+            await database.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
+            command.CommandText =
+                "SELECT notifications.get_inbound_telegram_agent_delivery(@inbound_id)";
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "inbound_id";
+            parameter.Value = inboundMessageId;
+            command.Parameters.Add(parameter);
+            var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            return result is Guid deliveryId ? deliveryId : null;
+        }
+        finally
+        {
+            if (openedConnection)
+            {
+                await database.Database.CloseConnectionAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task<Guid?> EnqueueSelectionDeliveryAsync(
+        Guid inboundMessageId,
+        CancellationToken cancellationToken)
+    {
+        var connection = database.Database.GetDbConnection();
+        var openedConnection = connection.State != ConnectionState.Open;
+        if (openedConnection)
+        {
+            await database.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
+            command.CommandText =
+                "SELECT delivery_id FROM notifications.enqueue_inbound_telegram_selection_reply(@inbound_id)";
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "inbound_id";
+            parameter.Value = inboundMessageId;
+            command.Parameters.Add(parameter);
+            var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            return result is Guid opaqueDeliveryId ? opaqueDeliveryId : null;
+        }
+        finally
+        {
+            if (openedConnection)
+            {
+                await database.Database.CloseConnectionAsync().ConfigureAwait(false);
             }
         }
     }

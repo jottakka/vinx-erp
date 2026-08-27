@@ -84,8 +84,10 @@ builder
     .Bind(builder.Configuration)
     .Validate(
         options =>
-            string.IsNullOrEmpty(options.WebhookSecretToken)
-            || TelegramOptions.IsValidWebhookSecret(options.WebhookSecretToken),
+            (string.IsNullOrEmpty(options.WebhookSecretToken)
+                || TelegramOptions.IsValidWebhookSecret(options.WebhookSecretToken))
+            && (string.IsNullOrWhiteSpace(options.WebAppBaseUrl)
+                || options.ReviewLinksAreConfigured),
         "Telegram webhook secret token is invalid."
     )
     .ValidateOnStart();
@@ -398,6 +400,7 @@ if (app.Environment.IsDevelopment())
 }
 app.MapBrowserBffSessionEndpoints();
 app.MapAgentRunSurface();
+app.MapAgentChannelCompanySelectionEndpoints();
 app.MapMetaWhatsAppWebhookEndpoints();
 app.MapTelegramWebhookEndpoints(
     (services, inbound, cancellationToken) =>

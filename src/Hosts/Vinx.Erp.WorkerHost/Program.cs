@@ -335,14 +335,18 @@ builder
             // só envia outbound, portanto valida exclusivamente token e base;
             // o ApiHost assume o segredo de webhook quando o receber.
             (
-                string.IsNullOrWhiteSpace(options.BotToken)
-                && string.Equals(
-                    options.ApiBaseUrl,
-                    "https://api.telegram.org",
-                    StringComparison.Ordinal
+                (
+                    string.IsNullOrWhiteSpace(options.BotToken)
+                    && string.Equals(
+                        options.ApiBaseUrl,
+                        "https://api.telegram.org",
+                        StringComparison.Ordinal
+                    )
                 )
+                || options.OutboundIsConfigured
             )
-            || options.OutboundIsConfigured,
+            && (string.IsNullOrWhiteSpace(options.WebAppBaseUrl)
+                || options.ReviewLinksAreConfigured),
         "Telegram options are invalid."
     )
     .ValidateOnStart();

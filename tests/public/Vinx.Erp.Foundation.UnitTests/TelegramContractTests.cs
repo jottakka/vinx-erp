@@ -389,6 +389,67 @@ public sealed class TelegramContractTests
     }
 
     [Fact]
+    public void Agent_reply_mapper_adds_only_the_server_generated_https_route()
+    {
+        var proposalId = Guid.Parse("11111111-1111-4111-8111-111111111111");
+
+        var message = TelegramMapper.MapAgentReply(
+            "123456789",
+            "Documento pronto para revisão",
+            $"/paguai?proposal={proposalId:D}",
+            "https://vinx.example/");
+
+        Assert.Equal(
+            $"Documento pronto para revisão: https://vinx.example/paguai?proposal={proposalId:D}",
+            message.Text);
+        Assert.Throws<ArgumentException>(() => TelegramMapper.MapAgentReply(
+            "123456789",
+            "Documento pronto para revisão",
+            "/redirect?target=https://untrusted.invalid",
+            "https://vinx.example"));
+    }
+
+    [Fact]
+    public async Task Media_client_rejects_a_provider_file_path_outside_the_exact_allowlist()
+    {
+        var handler = new SequenceHandler(
+            JsonResponse("""{"ok":true,"result":{"file_path":"documents/../escape.pdf"}}"""));
+        var client = new TelegramMediaClient(
+            new HttpClient(handler),
+            ConfiguredOptions());
+
+        await Assert.ThrowsAsync<InboundTelegramMediaException>(() => client.DownloadAsync(
+            "opaque_file_id",
+            "application/pdf",
+            1024,
+            CancellationToken.None));
+
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task Media_client_enforces_the_download_limit_before_materialization()
+    {
+        var handler = new SequenceHandler(
+            JsonResponse("""{"ok":true,"result":{"file_path":"documents/file.pdf"}}"""),
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(new byte[5]),
+            });
+        handler.Responses[1].Content.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf");
+        var client = new TelegramMediaClient(new HttpClient(handler), ConfiguredOptions());
+
+        await Assert.ThrowsAsync<InboundTelegramMediaException>(() => client.DownloadAsync(
+            "opaque_file_id",
+            "application/pdf",
+            4,
+            CancellationToken.None));
+
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
     public async Task Provider_rejects_disabled_outbound_without_resolving_a_target_or_creating_an_HTTP_client()
     {
         var httpClientFactory = new FailingHttpClientFactory();
@@ -413,11 +474,34 @@ public sealed class TelegramContractTests
         new("123456789", "Approved Telegram text");
 
     private static TelegramClient BuildClient(HttpMessageHandler handler) =>
-        new(new HttpClient(handler), new TelegramOptions
+        new(new HttpClient(handler), ConfiguredOptions());
+
+    private static TelegramOptions ConfiguredOptions() => new()
+    {
+        BotToken = UnitTestToken,
+        ApiBaseUrl = "https://api.telegram.test",
+        WebAppBaseUrl = "https://vinx.example",
+    };
+
+    private static HttpResponseMessage JsonResponse(string body) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(body, Encoding.UTF8, "application/json"),
+    };
+
+    private sealed class SequenceHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    {
+        private int _index;
+        public IReadOnlyList<HttpResponseMessage> Responses { get; } = responses;
+        public int CallCount => Volatile.Read(ref _index);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
         {
-            BotToken = UnitTestToken,
-            ApiBaseUrl = "https://api.telegram.test",
-        });
+            var index = Interlocked.Increment(ref _index) - 1;
+            return Task.FromResult(Responses[index]);
+        }
+    }
 
     private sealed class CountingContent(string payload) : HttpContent
     {

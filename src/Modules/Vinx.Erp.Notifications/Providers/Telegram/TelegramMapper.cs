@@ -30,6 +30,54 @@ public static class TelegramMapper
         return new TelegramMessage(chatId, text);
     }
 
+    /// <summary>
+    /// Acrescenta somente uma rota interna allow-listed a texto seguro já
+    /// persistido pelo outbox do Agente. A origem nunca vem do modelo.
+    /// </summary>
+    public static TelegramMessage MapAgentReply(
+        string chatId,
+        string text,
+        string? deepLinkSelector,
+        string webAppBaseUrl)
+    {
+        if (deepLinkSelector is null)
+        {
+            return Map(chatId, text);
+        }
+
+        if (!TryParseAgentSelector(deepLinkSelector)
+            || !Uri.TryCreate(webAppBaseUrl, UriKind.Absolute, out var baseUri)
+            || baseUri.Scheme != Uri.UriSchemeHttps
+            || !string.IsNullOrEmpty(baseUri.UserInfo)
+            || baseUri.AbsolutePath != "/"
+            || !string.IsNullOrEmpty(baseUri.Query)
+            || !string.IsNullOrEmpty(baseUri.Fragment))
+        {
+            throw new ArgumentException("Telegram Agent review link is invalid.", nameof(deepLinkSelector));
+        }
+
+        var normalizedBase = baseUri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal)
+            ? baseUri
+            : new Uri(baseUri.AbsoluteUri + "/", UriKind.Absolute);
+        var absoluteLink = new Uri(normalizedBase, deepLinkSelector.TrimStart('/'));
+        return Map(chatId, $"{text}: {absoluteLink.AbsoluteUri}");
+    }
+
+    private static bool TryParseAgentSelector(string selector)
+    {
+        const string SelectionPrefix = "/agente?channelSelection=";
+        const string PaguaiPrefix = "/paguai?proposal=";
+        var identifier = selector.StartsWith(SelectionPrefix, StringComparison.Ordinal)
+            ? selector[SelectionPrefix.Length..]
+            : selector.StartsWith(PaguaiPrefix, StringComparison.Ordinal)
+                ? selector[PaguaiPrefix.Length..]
+                : null;
+        return identifier is not null
+            && Guid.TryParseExact(identifier, "D", out var parsed)
+            && parsed != Guid.Empty
+            && string.Equals(parsed.ToString("D"), identifier, StringComparison.Ordinal);
+    }
+
     private static bool IsCanonicalPrivateChatId(string? chatId) =>
         chatId is { Length: >= 1 and <= 16 }
         && chatId[0] is >= '1' and <= '9'

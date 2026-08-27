@@ -32,7 +32,7 @@ public sealed class TelegramClient(HttpClient http, TelegramOptions options)
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
-            $"{options.ApiBaseUrl.TrimEnd('/')}/bot{options.BotToken}/sendMessage"
+            BuildBotMethodUrl(options, "sendMessage")
         )
         {
             Content = new StringContent(
@@ -186,6 +186,15 @@ public sealed class TelegramClient(HttpClient http, TelegramOptions options)
 
     private static NotificationProviderResult Ambiguous() =>
         new(NotificationProviderResultKind.Ambiguous);
+
+    internal static string BuildBotMethodUrl(TelegramOptions options, string method)
+    {
+        if (method is not ("sendMessage" or "getFile"))
+        {
+            throw new ArgumentOutOfRangeException(nameof(method));
+        }
+        return $"{options.ApiBaseUrl.TrimEnd('/')}/bot{options.BotToken}/{method}";
+    }
 }
 
 /// <summary>Corpo mínimo permitido pelo Telegram sendMessage.</summary>

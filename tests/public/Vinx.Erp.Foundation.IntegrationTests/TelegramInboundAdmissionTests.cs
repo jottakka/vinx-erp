@@ -165,7 +165,7 @@ public sealed class TelegramInboundAdmissionTests
 
         var rows = await TelegramNotificationSeed.ReadInboundMessagesAsync(factory);
         var row = Assert.Single(rows);
-        Assert.Equal(4096, row.TextBody.Length);
+        Assert.Equal(4096, Assert.IsType<string>(row.TextBody).Length);
         Assert.Equal("unbound", row.ResolutionState);
     }
 

@@ -21,6 +21,7 @@ import { AgentDock } from "./agent-dock";
 import { AgentTrigger } from "./agent-trigger";
 
 const agentRunsPath = "/agent/runs";
+const channelSelectionPath = "/agent/channel-company-selection";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const confirmationPath = "/foundation/files/confirmations";
 const intentionPath = "/foundation/files/upload-intentions";
@@ -345,6 +346,53 @@ describe("agent access copy", () => {
 });
 
 describe("agent workspace", () => {
+  it("shows authenticated Telegram company selection without starting an agent run", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(antiforgeryTokenResponse())
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: "selected" }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+
+    await renderAgentWorkspace(
+      "/agente?channelSelection=11111111-1111-4111-8111-111111111111",
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Escolha a empresa para o Telegram",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("combobox", { name: "Empresa do Telegram" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("combobox", { name: "Empresa do Telegram" }),
+    );
+    await user.click(await screen.findByRole("option", { name: /Alfa/ }));
+    await user.click(screen.getByRole("button", { name: "Salvar empresa" }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    const selectionCall = fetchSpy.mock.calls[1];
+    expect(selectionCall[0]).toBe(channelSelectionPath);
+    expect(JSON.parse(selectionCall[1].body as string)).toEqual({
+      companyId: alfaCompanyId,
+      inboundMessageId: "11111111-1111-4111-8111-111111111111",
+      requestId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      ),
+    });
+    expect(
+      await screen.findByText(/A próxima mensagem usará essa empresa/i),
+    ).toBeVisible();
+    expect(runCalls(fetchSpy)).toHaveLength(0);
+  });
+
   it("sends the message to POST /agent/runs and renders the typed result with sources", async () => {
     const fetchSpy = vi
       .fn()
