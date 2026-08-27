@@ -895,6 +895,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("date")
                         .HasColumnName("due_date");
 
+                    b.Property<Guid?>("ProofFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("proof_file_id");
+
                     b.Property<string>("ProofRequirement")
                         .IsRequired()
                         .HasMaxLength(10)

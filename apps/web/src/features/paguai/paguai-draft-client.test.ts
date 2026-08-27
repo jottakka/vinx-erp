@@ -3,6 +3,7 @@ import { createPaguaiDraftClient } from "./paguai-draft-client";
 
 const companyId = "11111111-1111-4111-8111-111111111111";
 const requestId = "22222222-2222-4222-8222-222222222222";
+const proofFileId = "44444444-4444-4444-8444-444444444444";
 const draft = {
   id: "33333333-3333-4333-8333-333333333333",
   companyId,
@@ -99,4 +100,71 @@ describe("Paguai draft client", () => {
       ).resolves.toEqual({ ok: false, error: status });
     },
   );
+
+  it("sends the uploaded proof file id and parses persisted proof metadata back", async () => {
+    const calls: [string, RequestInit][] = [];
+    const proofDraft = {
+      ...draft,
+      proofFileId,
+      proofFileName: "comprovante.pdf",
+      proofFileMimeType: "application/pdf",
+      proofFileSizeBytes: 10,
+    };
+    const fetchImplementation: typeof fetch = async (input, init) => {
+      calls.push([String(input), init ?? {}]);
+      return calls.length === 1
+        ? Response.json({ requestToken: "csrf" })
+        : Response.json(proofDraft, { status: 201 });
+    };
+
+    const result = await createPaguaiDraftClient(fetchImplementation).create({
+      companyId,
+      requestId,
+      title: draft.title,
+      description: draft.description,
+      amount: draft.amount,
+      currency: draft.currency,
+      dueDate: draft.dueDate,
+      beneficiaryDisplayName: draft.beneficiaryDisplayName,
+      proofRequirement: draft.proofRequirement,
+      proofFileId,
+    });
+
+    expect(result).toEqual({ ok: true, value: proofDraft });
+    expect(JSON.parse(String(calls[1][1].body)).proofFileId).toBe(proofFileId);
+  });
+
+  it("keeps responses without proof fields compatible for legacy drafts", async () => {
+    const fetchImplementation: typeof fetch = async () =>
+      Response.json(draft, { status: 200 });
+
+    await expect(
+      createPaguaiDraftClient(fetchImplementation).detail(companyId, draft.id),
+    ).resolves.toEqual({ ok: true, value: draft });
+  });
+
+  it("surfaces the typed error code from a rejected proof binding", async () => {
+    const fetchImplementation: typeof fetch = async (input) =>
+      String(input) === "/foundation/identity/browser-session/antiforgery"
+        ? Response.json({ requestToken: "csrf" })
+        : Response.json({ code: "proof_file_bound" }, { status: 409 });
+
+    await expect(
+      createPaguaiDraftClient(fetchImplementation).create({
+        companyId,
+        requestId,
+        title: draft.title,
+        description: draft.description,
+        amount: draft.amount,
+        currency: draft.currency,
+        dueDate: draft.dueDate,
+        beneficiaryDisplayName: draft.beneficiaryDisplayName,
+        proofRequirement: draft.proofRequirement,
+        proofFileId,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { status: 409, code: "proof_file_bound" },
+    });
+  });
 });
