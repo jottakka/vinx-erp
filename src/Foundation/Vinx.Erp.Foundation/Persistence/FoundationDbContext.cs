@@ -25,6 +25,7 @@ public sealed class FoundationDbContext(DbContextOptions<FoundationDbContext> op
     public DbSet<FoundationApproval> Approvals => Set<FoundationApproval>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<PaguaiRequest> PaguaiRequests => Set<PaguaiRequest>();
+    public DbSet<PaguaiDraftProposal> PaguaiDraftProposals => Set<PaguaiDraftProposal>();
     public DbSet<AtendimentoCard> AtendimentoCards => Set<AtendimentoCard>();
     public DbSet<AtendimentoCardParticipant> AtendimentoCardParticipants => Set<AtendimentoCardParticipant>();
 

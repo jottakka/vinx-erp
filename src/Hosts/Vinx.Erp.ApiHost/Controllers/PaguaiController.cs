@@ -17,8 +17,104 @@ namespace Vinx.Erp.ApiHost.Controllers;
 [EnableRateLimiting(ApiConstants.ProtectedRateLimitPolicy)]
 [Route("paguai")]
 [Produces("application/json")]
-public sealed class PaguaiController(PaguaiDraftService service) : ControllerBase
+public sealed class PaguaiController(
+    PaguaiDraftService service,
+    PaguaiProposalService proposalService,
+    PaguaiProposalConfirmationService proposalConfirmationService) : ControllerBase
 {
+    [HttpGet("draft-proposals/{id:guid}")]
+    [ProducesResponseType(typeof(PaguaiProposal), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> GetProposal(
+        Guid id,
+        [FromQuery] Guid? companyId,
+        CancellationToken cancellationToken)
+    {
+        var actor = HttpContext.GetRequiredActorContext();
+        var result = await proposalService.GetAsync(
+            actor, companyId ?? Guid.Empty, id, cancellationToken);
+        return result.State switch
+        {
+            PaguaiProposalOperationState.Found => Ok(result.Proposal),
+            PaguaiProposalOperationState.NotFound => ApiControllerError.Error(
+                "resource_not_found", StatusCodes.Status404NotFound),
+            PaguaiProposalOperationState.ProposalUnavailable => ApiControllerError.Error(
+                "proposal_unavailable", StatusCodes.Status409Conflict),
+            _ => ApiControllerError.Error("paguai_unavailable", StatusCodes.Status503ServiceUnavailable),
+        };
+    }
+
+    [HttpPost("draft-proposals/{id:guid}/confirm")]
+    [PaguaiAntiforgeryRequiredMetadata]
+    [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
+    [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> ConfirmProposal(
+        Guid id,
+        [FromBody] ConfirmPaguaiProposalRequest model,
+        CancellationToken cancellationToken)
+    {
+        var actor = HttpContext.GetRequiredActorContext();
+        var result = await proposalConfirmationService.ConfirmAsync(
+            actor, model.ToCommand(id), cancellationToken);
+        return result.State switch
+        {
+            PaguaiProposalOperationState.Created => CreatedAtAction(
+                nameof(Detail),
+                new { id = result.Draft!.Id, companyId = result.Draft.CompanyId },
+                result.Draft),
+            PaguaiProposalOperationState.Replay => Ok(result.Draft),
+            PaguaiProposalOperationState.Invalid => ApiControllerError.InvalidRequest(
+                StatusCodes.Status400BadRequest),
+            PaguaiProposalOperationState.IdempotencyConflict => ApiControllerError.Error(
+                "idempotency_conflict", StatusCodes.Status409Conflict),
+            PaguaiProposalOperationState.ProposalUnavailable => ApiControllerError.Error(
+                "proposal_unavailable", StatusCodes.Status409Conflict),
+            _ => ApiControllerError.Error("paguai_unavailable", StatusCodes.Status503ServiceUnavailable),
+        };
+    }
+
+    [HttpPost("draft-proposals/{id:guid}/reject")]
+    [PaguaiAntiforgeryRequiredMetadata]
+    [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> RejectProposal(
+        Guid id,
+        [FromBody] RejectPaguaiProposalRequest model,
+        CancellationToken cancellationToken)
+    {
+        var actor = HttpContext.GetRequiredActorContext();
+        var result = await proposalConfirmationService.RejectAsync(
+            actor, model.ToCommand(id), cancellationToken);
+        return result.State switch
+        {
+            PaguaiProposalOperationState.Created or PaguaiProposalOperationState.Replay => NoContent(),
+            PaguaiProposalOperationState.Invalid => ApiControllerError.InvalidRequest(
+                StatusCodes.Status400BadRequest),
+            PaguaiProposalOperationState.IdempotencyConflict => ApiControllerError.Error(
+                "idempotency_conflict", StatusCodes.Status409Conflict),
+            PaguaiProposalOperationState.ProposalUnavailable => ApiControllerError.Error(
+                "proposal_unavailable", StatusCodes.Status409Conflict),
+            _ => ApiControllerError.Error("paguai_unavailable", StatusCodes.Status503ServiceUnavailable),
+        };
+    }
+
     [HttpGet("requests")]
     [ProducesResponseType(typeof(IReadOnlyList<PaguaiDraft>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

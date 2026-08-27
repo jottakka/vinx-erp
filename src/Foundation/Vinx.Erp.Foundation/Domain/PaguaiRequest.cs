@@ -33,6 +33,9 @@ public sealed class PaguaiRequest
     /// <summary>Documento inbound que originou o rascunho; único por documento.</summary>
     public Guid? SourceInboundMessageId { get; set; }
 
+    /// <summary>Proposta agentic confirmada que originou o rascunho; única por proposta.</summary>
+    public Guid? SourceProposalId { get; set; }
+
     public string State { get; set; } = "rascunho";
 
     public int Version { get; set; } = 1;

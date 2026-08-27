@@ -208,6 +208,8 @@ builder.Services.AddSingleton<IMalwareScanner>(serviceProvider =>
 );
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddScoped<PaguaiDraftService>();
+builder.Services.AddScoped<PaguaiProposalService>();
+builder.Services.AddScoped<PaguaiProposalConfirmationService>();
 builder.Services.AddScoped<AtendimentoCardService>();
 // Superfície do agente: options validadas on-start, gates e provider decididos
 // na composição; sem provider configurado o runner falha fechado.
