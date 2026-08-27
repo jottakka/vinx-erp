@@ -39,7 +39,7 @@ public sealed class AgentExecutionApplicationService(AgentExecutionService execu
 
         return result.Disposition switch
         {
-            AgentExecutionDisposition.Completed => MapOutcome(result.Outcome!),
+            AgentExecutionDisposition.Completed => MapOutcome(result.Outcome!, result.PaguaiProposalId),
             AgentExecutionDisposition.Conflict => AgentRunResult.Success(
                 new AgentRunHttpResponse(
                     AgentRunStatus.Conflict,
@@ -66,9 +66,18 @@ public sealed class AgentExecutionApplicationService(AgentExecutionService execu
     }
 
     /// <summary>Mapeamento puro do desfecho do runner para a resposta HTTP.</summary>
-    public static AgentRunResult MapOutcome(AgentOutcome outcome) =>
+    public static AgentRunResult MapOutcome(AgentOutcome outcome, Guid? paguaiProposalId = null) =>
         outcome.Status switch
         {
+            AgentOutcomeStatus.Completed when paguaiProposalId is not null => AgentRunResult.Success(
+                new AgentRunHttpResponse(
+                    AgentRunStatus.RequiresConfirmation,
+                    outcome.ReasonCode,
+                    Text: null,
+                    Sources: null,
+                    outcome.CorrelationId,
+                    paguaiProposalId),
+                StatusCodes.Status200OK),
             AgentOutcomeStatus.Completed => Typed(AgentRunStatus.Result, outcome, StatusCodes.Status200OK),
             AgentOutcomeStatus.NeedsClarification => Typed(AgentRunStatus.NeedsClarification, outcome, StatusCodes.Status200OK),
             AgentOutcomeStatus.Denied => Typed(AgentRunStatus.Denied, outcome, StatusCodes.Status200OK),

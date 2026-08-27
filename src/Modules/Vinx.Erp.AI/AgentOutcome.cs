@@ -41,7 +41,8 @@ public static class AgentOutcomeReason
 }
 
 /// <summary>
-/// Resultado seguro da execução: texto da resposta, proposta Pagaí tipada ou
+/// Resultado seguro da execução: texto da resposta, proposta Pagaí tipada com
+/// a versão exata da política aplicada ou
 /// proposta de ação a confirmar; nunca prompt, contexto, JSON/OCR bruto, JWT,
 /// PII ou segredo. Tool call não executa no runner.
 /// </summary>
@@ -52,4 +53,5 @@ public sealed record AgentOutcome(
     string? ProposedActionName,
     Guid CorrelationId,
     TimeSpan Elapsed,
-    PaguaiDocumentProposal? PaguaiProposal = null);
+    PaguaiDocumentProposal? PaguaiProposal = null,
+    string? PolicyVersion = null);

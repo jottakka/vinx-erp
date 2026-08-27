@@ -10,14 +10,15 @@ public enum AgentExecutionDisposition
     FailedClosed,
 }
 
-/// <summary>Resultado sem conteúdo de request, provider ou documento.</summary>
+/// <summary>Resultado sem conteúdo bruto; pode carregar somente o ID da proposta Pagaí materializada.</summary>
 public sealed record AgentExecutionResult(
     AgentExecutionDisposition Disposition,
     AgentOutcome? Outcome = null,
-    string? ReasonCode = null)
+    string? ReasonCode = null,
+    Guid? PaguaiProposalId = null)
 {
-    public static AgentExecutionResult Completed(AgentOutcome outcome) =>
-        new(AgentExecutionDisposition.Completed, outcome);
+    public static AgentExecutionResult Completed(AgentOutcome outcome, Guid? paguaiProposalId = null) =>
+        new(AgentExecutionDisposition.Completed, outcome, PaguaiProposalId: paguaiProposalId);
 
     public static AgentExecutionResult InProgress() =>
         new(AgentExecutionDisposition.InProgress, null, "execution_in_progress");

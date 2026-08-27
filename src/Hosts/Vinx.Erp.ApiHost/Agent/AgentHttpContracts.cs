@@ -22,7 +22,7 @@ public static class AgentRunStatus
     /// <summary>Conflito de execução (por exemplo, idempotência divergente).</summary>
     public const string Conflict = "conflict";
 
-    /// <summary>Estado opaco aguardando confirmação explícita; nenhuma execução ocorreu.</summary>
+    /// <summary>Confirmação explícita pendente: tool opaca ou proposta Pagaí tipada já persistida.</summary>
     public const string RequiresConfirmation = "requires_confirmation";
 }
 
@@ -48,13 +48,14 @@ public sealed record AgentRunHttpRequest(
             : Array.AsReadOnly(attachments.ToArray());
 }
 
-/// <summary>Resposta tipada de uma execução; texto somente o do modelo liberado pelo gate, sem prompt ou resposta bruta.</summary>
+/// <summary>Resposta tipada; expõe no máximo texto liberado e o ID opaco de uma proposta Pagaí persistida.</summary>
 public sealed record AgentRunHttpResponse(
     string Status,
     string? ReasonCode,
     string? Text,
     IReadOnlyList<AgentRunSourceRef>? Sources,
-    Guid CorrelationId
+    Guid CorrelationId,
+    Guid? PaguaiProposalId = null
 );
 
 /// <summary>Parser estrito do corpo de POST /agent/runs: campos fechados, tipos exatos, sem exceções e sem eco do payload.</summary>

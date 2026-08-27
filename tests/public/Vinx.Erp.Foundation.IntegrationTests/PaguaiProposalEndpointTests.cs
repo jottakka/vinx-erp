@@ -6,6 +6,8 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using Vinx.Erp.AI;
+using Vinx.Erp.AI.Guardrails;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
@@ -17,6 +19,102 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 
 public sealed class PaguaiProposalEndpointTests
 {
+    [Fact]
+    public async Task Completed_ledger_replay_materializes_and_returns_the_same_proposal_id()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var command = await SeedCompletedPaguaiLedgerAsync(factory, scenario);
+
+        var first = await ExecuteAgentAsync(factory, command);
+        var replay = await ExecuteAgentAsync(factory, command);
+
+        Assert.Equal(AgentExecutionDisposition.Completed, first.Disposition);
+        Assert.NotNull(first.PaguaiProposalId);
+        Assert.Equal(first.PaguaiProposalId, replay.PaguaiProposalId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(1, await administrator.PaguaiDraftProposals.CountAsync(proposal =>
+            proposal.CompanyId == scenario.CompanyId
+            && proposal.ActorUserId == factory.ActorUserId
+            && proposal.RequestId == command.RequestId));
+        Assert.Equal(
+            AgentPolicyVersion.Current,
+            (await administrator.PaguaiDraftProposals.SingleAsync(proposal =>
+                proposal.RequestId == command.RequestId)).PolicyVersion);
+    }
+
+    [Fact]
+    public async Task Proposal_materialization_failure_retries_from_completed_ledger_only()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var command = await SeedCompletedPaguaiLedgerAsync(factory, scenario);
+        await RevokeAuditAppendAsync(factory);
+
+        var unavailable = await ExecuteAgentAsync(factory, command);
+
+        Assert.Equal(AgentExecutionDisposition.FailedClosed, unavailable.Disposition);
+        Assert.Null(unavailable.PaguaiProposalId);
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            Assert.Equal(AgentExecutionLedgerState.Completed,
+                (await administrator.AgentExecutionLedger.SingleAsync()).State);
+            Assert.Empty(await administrator.PaguaiDraftProposals.ToListAsync());
+        }
+
+        await GrantAuditAppendAsync(factory);
+        var recovered = await ExecuteAgentAsync(factory, command);
+
+        Assert.Equal(AgentExecutionDisposition.Completed, recovered.Disposition);
+        Assert.NotNull(recovered.PaguaiProposalId);
+    }
+
+    [Fact]
+    public async Task Concurrent_completed_ledger_replays_converge_on_one_proposal_id()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var command = await SeedCompletedPaguaiLedgerAsync(factory, scenario);
+
+        var results = await Task.WhenAll(
+            ExecuteAgentAsync(factory, command),
+            ExecuteAgentAsync(factory, command));
+
+        Assert.All(results, result => Assert.Equal(AgentExecutionDisposition.Completed, result.Disposition));
+        Assert.NotNull(results[0].PaguaiProposalId);
+        Assert.Equal(results[0].PaguaiProposalId, results[1].PaguaiProposalId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(1, await administrator.PaguaiDraftProposals.CountAsync(proposal =>
+            proposal.RequestId == command.RequestId));
+    }
+
+    [Theory]
+    [InlineData("consumed")]
+    [InlineData("rejected")]
+    [InlineData("invalidated")]
+    [InlineData("expired")]
+    public async Task Terminal_proposal_ledger_replay_never_creates_a_new_pending_proposal(string terminalState)
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var command = await SeedCompletedPaguaiLedgerAsync(factory, scenario);
+        var first = await ExecuteAgentAsync(factory, command);
+        var proposalId = Assert.IsType<Guid>(first.PaguaiProposalId);
+        await SetProposalTerminalAsync(factory, proposalId, terminalState);
+
+        var replay = await ExecuteAgentAsync(factory, command);
+
+        Assert.Equal(AgentExecutionDisposition.Completed, replay.Disposition);
+        Assert.Equal(proposalId, replay.PaguaiProposalId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(1, await administrator.PaguaiDraftProposals.CountAsync(proposal =>
+            proposal.RequestId == command.RequestId));
+        Assert.False(await administrator.PaguaiDraftProposals.AnyAsync(proposal =>
+            proposal.RequestId == command.RequestId
+            && proposal.Id != proposalId
+            && proposal.State == PaguaiDraftProposal.PendingState));
+    }
+
     [Fact]
     public async Task Safe_fields_are_persisted_and_get_returns_only_the_typed_proposal()
     {
@@ -213,27 +311,131 @@ public sealed class PaguaiProposalEndpointTests
         var service = scope.ServiceProvider.GetRequiredService<PaguaiProposalService>();
         var result = await service.CreateAsync(
             new ActorContext(factory.ActorUserId, factory.CorrelationId),
-            new CreatePaguaiProposalCommand(
-                scenario.CompanyId,
-                requestId ?? Guid.NewGuid(),
-                "Office supplies",
-                "Replacement paper",
-                250.00m,
-                "BRL",
-                new DateOnly(2026, 9, 10),
-                "Fornecedor Demo",
-                "optional",
-                scenario.FileId,
-                0.91,
-                [
-                    new PaguaiProposalSource("amount", $"{scenario.FileId:D}:p1"),
-                    new PaguaiProposalSource("dueDate", $"{scenario.FileId:D}:p1"),
-                    new PaguaiProposalSource("beneficiaryDisplayName", $"{scenario.FileId:D}:p1"),
-                ],
-                "paguai_from_document_v1"),
+            NewProposalCommand(scenario, requestId ?? Guid.NewGuid()),
             CancellationToken.None);
         Assert.Equal(PaguaiProposalOperationState.Created, result.State);
         return Assert.IsType<PaguaiProposal>(result.Proposal);
+    }
+
+    private static CreatePaguaiProposalCommand NewProposalCommand(Scenario scenario, Guid requestId) => new(
+        scenario.CompanyId,
+        requestId,
+        "Office supplies",
+        "Replacement paper",
+        250.00m,
+        "BRL",
+        new DateOnly(2026, 9, 10),
+        "Fornecedor Demo",
+        "optional",
+        scenario.FileId,
+        0.91,
+        [
+            new PaguaiProposalSource("amount", $"{scenario.FileId:N}:p1"),
+            new PaguaiProposalSource("dueDate", $"{scenario.FileId:N}:p1"),
+            new PaguaiProposalSource("beneficiaryDisplayName", $"{scenario.FileId:N}:p1"),
+        ],
+        AgentPolicyVersion.Current);
+
+    private static async Task<AgentCommand> SeedCompletedPaguaiLedgerAsync(
+        FoundationApiFactory factory,
+        Scenario scenario)
+    {
+        var requestId = Guid.NewGuid();
+        var actor = new ActorContext(factory.ActorUserId, factory.CorrelationId);
+        var command = new AgentCommand(
+            actor,
+            "web",
+            InboundMessageId: null,
+            requestId,
+            AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+            "extraia a fatura",
+            scenario.CompanyId,
+            [scenario.FileId]);
+        var proposalCommand = NewProposalCommand(scenario, requestId);
+        var safeOutcome = new AgentOutcome(
+            AgentOutcomeStatus.Completed,
+            AgentOutputGate.Ok,
+            Text: null,
+            ProposedActionName: null,
+            actor.CorrelationId,
+            TimeSpan.FromMilliseconds(10),
+            new PaguaiDocumentProposal(
+                proposalCommand.Title,
+                proposalCommand.Description,
+                proposalCommand.Amount,
+                proposalCommand.Currency,
+                proposalCommand.DueDate,
+                proposalCommand.BeneficiaryDisplayName,
+                proposalCommand.ProofRequirement,
+                proposalCommand.InvoiceFileId,
+                proposalCommand.Confidence,
+                [.. proposalCommand.SourceReferences.Select(source =>
+                    new PaguaiProposalSourceReference(source.Field, source.Source))]),
+            AgentPolicyVersion.Current);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            JsonSerializer.Serialize(new
+            {
+                command.Journey,
+                command.Message,
+                command.CompanyId,
+                command.Attachments,
+            })))).ToLowerInvariant();
+        var ledger = AgentExecutionLedger.Create(
+            Guid.NewGuid(),
+            scenario.CompanyId,
+            actor.UserId,
+            command.Channel,
+            command.InboundMessageId,
+            command.RequestId,
+            command.Journey,
+            payloadHash);
+        ledger.MarkModelInFlight(actor.UserId, requestId);
+        ledger.Complete(JsonSerializer.Serialize(safeOutcome), actor.UserId, requestId);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        administrator.AgentExecutionLedger.Add(ledger);
+        await administrator.SaveChangesAsync();
+        return command;
+    }
+
+    private static async Task<AgentExecutionResult> ExecuteAgentAsync(
+        FoundationApiFactory factory,
+        AgentCommand command)
+    {
+        using var scope = factory.Services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<AgentExecutionService>()
+            .ExecuteAsync(command, CancellationToken.None);
+    }
+
+    private static async Task SetProposalTerminalAsync(
+        FoundationApiFactory factory,
+        Guid proposalId,
+        string terminalState)
+    {
+        if (terminalState == "expired")
+        {
+            await SetExpiredByDatabaseClockAsync(factory, proposalId);
+            return;
+        }
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var proposal = await administrator.PaguaiDraftProposals.SingleAsync(item => item.Id == proposalId);
+        var now = proposal.CreatedAt.AddMinutes(1);
+        switch (terminalState)
+        {
+            case "consumed":
+                proposal.Consume(Guid.NewGuid(), factory.ActorUserId, Guid.NewGuid(), now);
+                break;
+            case "rejected":
+                proposal.Reject(factory.ActorUserId, Guid.NewGuid(), now);
+                break;
+            case "invalidated":
+                proposal.Invalidate(factory.ActorUserId, Guid.NewGuid(), now);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(terminalState));
+        }
+
+        await administrator.SaveChangesAsync();
     }
 
     private static async Task<Scenario> SeedScenarioAsync(FoundationApiFactory factory)
@@ -288,7 +490,13 @@ public sealed class PaguaiProposalEndpointTests
     {
         await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
-            "UPDATE paguai.draft_proposals SET expires_at = clock_timestamp() - interval '1 second' WHERE id = @id",
+            """
+            UPDATE paguai.draft_proposals
+            SET created_at = database_clock.now - interval '16 minutes',
+                expires_at = database_clock.now - interval '1 minute'
+            FROM (SELECT clock_timestamp() AS now) AS database_clock
+            WHERE id = @id
+            """,
             connection);
         command.Parameters.AddWithValue("id", proposalId);
         await command.ExecuteNonQueryAsync();
@@ -326,6 +534,15 @@ public sealed class PaguaiProposalEndpointTests
         await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
             "REVOKE EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) FROM vinx_runtime;",
+            connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task GrantAuditAppendAsync(FoundationApiFactory factory)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "GRANT EXECUTE ON FUNCTION audit.append_event(uuid,text,uuid,text,text,text,uuid,text,uuid,text,jsonb) TO vinx_runtime;",
             connection);
         await command.ExecuteNonQueryAsync();
     }

@@ -273,6 +273,7 @@ public sealed class AgentRunnerGateIntegrationTests
 
         Assert.Equal(AgentOutcomeStatus.Completed, outcome.Status);
         Assert.Equal(AgentOutputGate.Ok, outcome.ReasonCode);
+        Assert.Equal(AgentPolicyVersion.Current, outcome.PolicyVersion);
         Assert.Null(outcome.Text);
         var proposal = Assert.IsType<PaguaiDocumentProposal>(outcome.PaguaiProposal);
         Assert.Equal(250m, proposal.Amount);

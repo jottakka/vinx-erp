@@ -214,7 +214,8 @@ public sealed class AgentRunner(
                     actor,
                     stopwatch,
                     text: gated.Text,
-                    proposedActionName: toolCall.Name);
+                    proposedActionName: toolCall.Name,
+                    policyVersion: gated.PolicyVersion);
             }
 
             var gatedStatus = MapOutputGateStatus(gated.Status);
@@ -224,7 +225,8 @@ public sealed class AgentRunner(
                 actor,
                 stopwatch,
                 text: gated.Text,
-                paguaiProposal: gated.PaguaiProposal);
+                paguaiProposal: gated.PaguaiProposal,
+                policyVersion: gated.PolicyVersion);
         }
 
         if (toolCall is not null)
@@ -372,6 +374,7 @@ public sealed class AgentRunner(
         string? text = null,
         string? proposedActionName = null,
         PaguaiDocumentProposal? paguaiProposal = null,
+        string? policyVersion = null,
         Exception? exception = null)
     {
         stopwatch.Stop();
@@ -382,7 +385,8 @@ public sealed class AgentRunner(
             proposedActionName,
             actor.CorrelationId,
             stopwatch.Elapsed,
-            paguaiProposal);
+            paguaiProposal,
+            policyVersion);
         AgentTelemetry.RecordExecution(status, reasonCode);
 
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = actor.CorrelationId });

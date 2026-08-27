@@ -3,11 +3,13 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Foundation.Persistence.Configurations;
 
 namespace Vinx.Erp.Paguai;
 
@@ -46,22 +48,16 @@ public sealed class PaguaiProposalService(
                 return PaguaiProposalResult.Of(PaguaiProposalOperationState.Forbidden);
             }
 
-            var existing = await database.PaguaiDraftProposals.SingleOrDefaultAsync(proposal =>
-                proposal.CompanyId == command.CompanyId
-                && proposal.ActorUserId == actor.UserId
-                && proposal.RequestId == command.RequestId
-                && proposal.State == PaguaiDraftProposal.PendingState,
-                cancellationToken);
-            if (existing is not null && existing.ExpireIfDue(databaseNow, actor.UserId, command.RequestId))
-            {
-                await AppendAuditAsync(actor, command.CompanyId, "paguai.proposal.expire", existing.Id,
-                    AuditOutcome.Denied, "proposal_expired", AuditSource.Ai, cancellationToken);
-                await database.SaveChangesAsync(cancellationToken);
-                existing = null;
-            }
-
+            var existing = await FindByRequestAsync(actor, command.CompanyId, command.RequestId, cancellationToken);
             if (existing is not null)
             {
+                if (existing.ExpireIfDue(databaseNow, actor.UserId, command.RequestId))
+                {
+                    await AppendAuditAsync(actor, command.CompanyId, "paguai.proposal.expire", existing.Id,
+                        AuditOutcome.Denied, "proposal_expired", AuditSource.Ai, cancellationToken);
+                    await database.SaveChangesAsync(cancellationToken);
+                }
+
                 if (!string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal))
                 {
                     await AppendAuditAsync(actor, command.CompanyId, "paguai.proposal.create", existing.Id,
@@ -97,6 +93,12 @@ public sealed class PaguaiProposalService(
             await transaction.CommitAsync(cancellationToken);
             return new PaguaiProposalResult(PaguaiProposalOperationState.Created, ToView(proposal));
         }
+        catch (DbUpdateException exception) when (IsLiveRequestRace(exception))
+        {
+            database.ChangeTracker.Clear();
+            return await ReconcileCreateAsync(
+                actor, command.CompanyId, command.RequestId, payloadHash, cancellationToken);
+        }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
@@ -107,6 +109,56 @@ public sealed class PaguaiProposalService(
             logger.LogError(exception,
                 "Paguai proposal {Operation} {Module} {Result} {Reason}",
                 "create", "paguai", "unavailable", "database_or_audit_unavailable");
+            return PaguaiProposalResult.Of(PaguaiProposalOperationState.Unavailable);
+        }
+    }
+
+    private async Task<PaguaiProposalResult> ReconcileCreateAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid requestId,
+        string payloadHash,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await ApplyContextAsync(actor, companyId, cancellationToken);
+            var membership = await FindMembershipAsync(actor, companyId, cancellationToken);
+            if (membership is null || !await HasRequiredCapabilitiesAsync(companyId, membership.Id, cancellationToken))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return PaguaiProposalResult.Of(PaguaiProposalOperationState.Forbidden);
+            }
+
+            var existing = await FindByRequestAsync(actor, companyId, requestId, cancellationToken);
+            if (existing is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return PaguaiProposalResult.Of(PaguaiProposalOperationState.Unavailable);
+            }
+
+            if (!string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal))
+            {
+                await AppendAuditAsync(actor, companyId, "paguai.proposal.create", existing.Id,
+                    AuditOutcome.Denied, "idempotency_conflict", AuditSource.Ai, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return PaguaiProposalResult.Of(PaguaiProposalOperationState.IdempotencyConflict);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return new PaguaiProposalResult(PaguaiProposalOperationState.Replay, ToView(existing));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            database.ChangeTracker.Clear();
+            logger.LogError(exception,
+                "Paguai proposal {Operation} {Module} {Result} {Reason}",
+                "reconcile", "paguai", "unavailable", "proposal_reconciliation_failed");
             return PaguaiProposalResult.Of(PaguaiProposalOperationState.Unavailable);
         }
     }
@@ -238,7 +290,7 @@ public sealed class PaguaiProposalService(
         var sources = command.SourceReferences.OrderBy(source => source.Field, StringComparer.Ordinal).ToArray();
         if (!sources.Select(source => source.Field).SequenceEqual(requiredFields, StringComparer.Ordinal)
             || sources.Any(source => string.IsNullOrWhiteSpace(source.Source)
-                || !source.Source.StartsWith($"{command.InvoiceFileId:D}:p", StringComparison.Ordinal)
+                || !source.Source.StartsWith($"{command.InvoiceFileId:N}:p", StringComparison.Ordinal)
                 || source.Source.Any(char.IsControl)))
         {
             return false;
@@ -268,6 +320,28 @@ public sealed class PaguaiProposalService(
         database.Memberships.SingleOrDefaultAsync(membership =>
             membership.CompanyId == companyId && membership.UserId == actor.UserId,
             cancellationToken);
+
+    private Task<PaguaiDraftProposal?> FindByRequestAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid requestId,
+        CancellationToken cancellationToken) =>
+        database.PaguaiDraftProposals
+            .Where(proposal =>
+                proposal.CompanyId == companyId
+                && proposal.ActorUserId == actor.UserId
+                && proposal.RequestId == requestId)
+            .OrderBy(proposal => proposal.CreatedAt)
+            .ThenBy(proposal => proposal.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    private static bool IsLiveRequestRace(DbUpdateException exception) =>
+        exception.InnerException is PostgresException postgresException
+        && postgresException.SqlState == PostgresErrorCodes.UniqueViolation
+        && string.Equals(
+            postgresException.ConstraintName,
+            PaguaiDraftProposalConfiguration.LiveRequestIndexName,
+            StringComparison.Ordinal);
 
     private async Task<bool> HasRequiredCapabilitiesAsync(
         Guid companyId,

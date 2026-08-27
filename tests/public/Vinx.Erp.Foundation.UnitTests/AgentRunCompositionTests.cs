@@ -12,6 +12,7 @@ using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Paguai;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.UnitTests;
@@ -248,6 +249,8 @@ public sealed class AgentRunCompositionTests
         services.AddDbContext<FoundationDbContext>(options =>
             options.UseNpgsql("Host=localhost;Database=vinx;Username=postgres;Password=postgres"));
         services.AddScoped<AuditAppender>();
+        services.AddScoped<CapabilityEvaluator>();
+        services.AddScoped<PaguaiProposalService>();
         services.AddScoped<AuthorizedCompanySetResolver>();
         return services;
     }

@@ -6,6 +6,7 @@ using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Paguai;
 
 namespace Vinx.Erp.AI;
 
@@ -17,16 +18,26 @@ namespace Vinx.Erp.AI;
 public sealed class AgentExecutionService(
     FoundationDbContext database,
     AuditAppender auditAppender,
-    AgentRunner runner)
+    AgentRunner runner,
+    PaguaiProposalService paguaiProposalService)
 {
     private const string CommandName = "agent.run";
     private const string ResourceType = "agent_run";
     private const string StaleInFlightReason = "execution_stale";
     private const string CancelledReason = "provider_cancelled";
     private const string UnavailableReason = "provider_unavailable";
+    private const string PaguaiProposalUnavailableReason = "paguai_proposal_unavailable";
     private static readonly TimeSpan InFlightStaleAfter = TimeSpan.FromMinutes(10);
 
     public async Task<AgentExecutionResult> ExecuteAsync(
+        AgentCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await ExecuteDurablyAsync(command, cancellationToken).ConfigureAwait(false);
+        return await MaterializePaguaiProposalAsync(command, result, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<AgentExecutionResult> ExecuteDurablyAsync(
         AgentCommand command,
         CancellationToken cancellationToken)
     {
@@ -101,6 +112,56 @@ public sealed class AgentExecutionService(
                 ? await MarkAmbiguousAsync(claim.Ledger!, command, UnavailableReason, CancellationToken.None).ConfigureAwait(false)
                 : await FailClosedAsync(claim.Ledger!, command, UnavailableReason, CancellationToken.None).ConfigureAwait(false);
         }
+    }
+
+    private async Task<AgentExecutionResult> MaterializePaguaiProposalAsync(
+        AgentCommand command,
+        AgentExecutionResult result,
+        CancellationToken cancellationToken)
+    {
+        if (result is not
+            {
+                Disposition: AgentExecutionDisposition.Completed,
+                Outcome.PaguaiProposal: { } proposal,
+                Outcome.PolicyVersion: { Length: > 0 } policyVersion,
+            })
+        {
+            return result;
+        }
+
+        if (command.CompanyId is not { } companyId)
+        {
+            return AgentExecutionResult.FailedClosed(PaguaiProposalUnavailableReason);
+        }
+
+        var materialized = await paguaiProposalService.CreateAsync(
+            command.Actor,
+            new CreatePaguaiProposalCommand(
+                companyId,
+                command.RequestId,
+                proposal.Title,
+                proposal.Description,
+                proposal.Amount,
+                proposal.Currency,
+                proposal.DueDate,
+                proposal.BeneficiaryDisplayName,
+                proposal.ProofRequirement,
+                proposal.InvoiceFileId,
+                proposal.Confidence,
+                [.. proposal.SourceReferences.Select(source =>
+                    new PaguaiProposalSource(source.Field, source.Source))],
+                policyVersion),
+            cancellationToken).ConfigureAwait(false);
+
+        return materialized is
+            {
+                State: PaguaiProposalOperationState.Created or PaguaiProposalOperationState.Replay,
+                Proposal: { } persisted,
+            }
+                ? AgentExecutionResult.Completed(result.Outcome!, persisted.Id)
+                : materialized.State == PaguaiProposalOperationState.IdempotencyConflict
+                    ? AgentExecutionResult.Conflict()
+                    : AgentExecutionResult.FailedClosed(PaguaiProposalUnavailableReason);
     }
 
     private async Task<AgentOutcome> RunAsync(
