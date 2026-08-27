@@ -33,9 +33,18 @@ compatibilidade de API. Não houve envio por WhatsApp ou Telegram.
 
 ## Escopo congelado
 
-- 153 arquivos no total: 94 não teste e 59 de teste.
-- Alterações manuais: +13.414/-4.072 linhas (17.486 de churn).
-- Gerados: 16 arquivos, +8.345/-10 linhas (8.355 de churn).
+- Correção de 2026-08-27 (rodada Sol 2/3): escopo recalculado em 174 arquivos
+  contra a `main` viva; contratos focados adicionais registrados abaixo.
+- Contratos focados da rodada de correção: `WorkerAgentEfPathsTests` (caminhos
+  EF reais na conexão do worker), `AgentMigrationCompositionTests` (guardas de
+  downgrade stateful + contrato pré-branch das funções Telegram),
+  `TelegramInboundWorkerTests.Worker_outbox_failure_rolls_back_telegram_selection_intent_and_envelope_then_recovers`
+  (prova de rollback/recovery do outbox transacional) e o contrato de
+  construção do handler em `Vinx.Erp.Hosts.IntegrationTests` (dependência
+  `IDbContextOutbox`). Fatia consolidada local: 50/50 verdes; verifiers
+  `verify-foundation-database.sh` e `verify-ef-negative-guards.sh` EXIT 0 no
+  head da correção. O gate público local não foi rerun (regra de uma execução);
+  CI permanece o boundary completo.
 
 A entrega única é a exceção aprovada para a issue #335: o mesmo recorte reúne
 núcleo, adapters, persistência, proposta e prova, sem expandir capacidade fora

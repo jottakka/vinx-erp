@@ -585,9 +585,15 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             )
         );
         await using var database = CreateWorkerDatabase(factory);
+        await using var outboxWorker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        );
+        await using var outboxScope = outboxWorker.Services.CreateAsyncScope();
         var handler = new WorkerHostTypes.InboundTelegramTextReceivedHandler(
             database,
-            new CapturingLogger<WorkerHostTypes.InboundTelegramTextReceivedHandler>()
+            new CapturingLogger<WorkerHostTypes.InboundTelegramTextReceivedHandler>(),
+            adapter: null,
+            outbox: outboxScope.ServiceProvider.GetRequiredService<IDbContextOutbox>()
         );
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
@@ -724,10 +730,19 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         );
 
         var logger = new CapturingLogger<WorkerHostTypes.InboundTelegramTextReceivedHandler>();
+        await using var outboxWorker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        );
+        await using var outboxScope = outboxWorker.Services.CreateAsyncScope();
         await using (var database = CreateWorkerDatabase(factory))
         {
             await using var transaction = await database.Database.BeginTransactionAsync();
-            var handler = new WorkerHostTypes.InboundTelegramTextReceivedHandler(database, logger);
+            var handler = new WorkerHostTypes.InboundTelegramTextReceivedHandler(
+                database,
+                logger,
+                adapter: null,
+                outbox: outboxScope.ServiceProvider.GetRequiredService<IDbContextOutbox>()
+            );
             await handler.Handle(
                 new InboundTelegramTextReceived(inboundId),
                 CancellationToken.None
@@ -768,12 +783,18 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             )
         );
 
+        await using var outboxWorker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        );
+        await using var outboxScope = outboxWorker.Services.CreateAsyncScope();
         await using (var database = CreateWorkerDatabase(factory))
         {
             Assert.Equal(System.Data.ConnectionState.Closed, database.Database.GetDbConnection().State);
             var handler = new WorkerHostTypes.InboundTelegramTextReceivedHandler(
                 database,
-                new CapturingLogger<WorkerHostTypes.InboundTelegramTextReceivedHandler>()
+                new CapturingLogger<WorkerHostTypes.InboundTelegramTextReceivedHandler>(),
+                adapter: null,
+                outbox: outboxScope.ServiceProvider.GetRequiredService<IDbContextOutbox>()
             );
             await handler.Handle(
                 new InboundTelegramTextReceived(inboundId),

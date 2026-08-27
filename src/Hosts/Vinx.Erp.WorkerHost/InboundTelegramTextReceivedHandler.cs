@@ -17,8 +17,8 @@ namespace Vinx.Erp.WorkerHost;
 public sealed class InboundTelegramTextReceivedHandler(
     FoundationDbContext database,
     ILogger<InboundTelegramTextReceivedHandler> logger,
-    InboundAgentChannelAdapter? adapter = null,
-    IDbContextOutbox? outbox = null
+    InboundAgentChannelAdapter? adapter,
+    IDbContextOutbox outbox
 )
 {
     private const string Operation = "telegram_inbound_receipt";
@@ -244,7 +244,7 @@ public sealed class InboundTelegramTextReceivedHandler(
             var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             deliveryId = result is Guid opaqueDeliveryId ? opaqueDeliveryId : null;
 
-            if (deliveryId is { } pendingDeliveryId && outbox is not null)
+            if (deliveryId is { } pendingDeliveryId)
             {
                 outbox.Enroll(database);
                 await outbox.PublishAsync(
@@ -260,7 +260,7 @@ public sealed class InboundTelegramTextReceivedHandler(
         }
 
         await ownedTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        if (deliveryId is not null && outbox is not null)
+        if (deliveryId is not null)
         {
             try
             {

@@ -94,19 +94,29 @@ function TelegramCompanySelection({
   const [result, setResult] = useState<"idle" | "saved" | "failed">("idle");
   // Uma tentativa estável por (mensagem, empresa): um 5xx/perda de resposta
   // reenvia o MESMO requestId para o receipt de idempotência do backend.
+  // Trocar a mensagem do link reinicia a identidade da tentativa.
   const selectionAttemptRef = useRef<{
+    inboundMessageId: string;
     companyId: string;
     requestId: string;
   } | null>(null);
 
   function resolveSelectionRequestId(selectedCompanyId: string) {
     const attempt = selectionAttemptRef.current;
-    if (attempt && attempt.companyId === selectedCompanyId) {
+    if (
+      attempt &&
+      attempt.companyId === selectedCompanyId &&
+      attempt.inboundMessageId === inboundMessageId
+    ) {
       return attempt.requestId;
     }
 
     const requestId = crypto.randomUUID();
-    selectionAttemptRef.current = { companyId: selectedCompanyId, requestId };
+    selectionAttemptRef.current = {
+      inboundMessageId,
+      companyId: selectedCompanyId,
+      requestId,
+    };
     return requestId;
   }
 

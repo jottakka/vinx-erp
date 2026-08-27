@@ -20,7 +20,11 @@ public sealed class TelegramAgentHandlerTests
 
         Assert.Equal(typeof(FoundationDbContext), parameters[0].ParameterType);
         Assert.Equal(typeof(InboundAgentChannelAdapter), parameters[2].ParameterType);
-        Assert.Equal(typeof(IMessageBus), parameters[3].ParameterType);
+        // A publicação do envelope é transacional (ADR 0006): o handler
+        // depende do outbox do EF, não do bus direto.
+        Assert.Equal(
+            typeof(Wolverine.EntityFrameworkCore.IDbContextOutbox),
+            parameters[3].ParameterType);
     }
 
     [Fact]

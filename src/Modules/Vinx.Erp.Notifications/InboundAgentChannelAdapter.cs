@@ -26,7 +26,7 @@ public sealed class InboundAgentChannelAdapter(
     MetaWhatsAppOptions whatsAppOptions,
     TelegramOptions telegramOptions,
     ILogger<InboundAgentChannelAdapter> logger,
-    IDbContextOutbox? outbox = null)
+    IDbContextOutbox outbox)
 {
     private const string Operation = "inbound_agent_channel";
     private const string Module = "notifications";
@@ -735,14 +735,11 @@ public sealed class InboundAgentChannelAdapter(
             }
 
             deliveryId = reader.GetGuid(0);
-            if (outbox is not null)
-            {
-                outbox.Enroll(database);
-                await outbox.PublishAsync(
-                    new NotificationDeliveryRequested(deliveryId),
-                    new DeliveryOptions { CorrelationId = inboundMessageId.ToString("D") }
-                ).ConfigureAwait(false);
-            }
+            outbox.Enroll(database);
+            await outbox.PublishAsync(
+                new NotificationDeliveryRequested(deliveryId),
+                new DeliveryOptions { CorrelationId = inboundMessageId.ToString("D") }
+            ).ConfigureAwait(false);
         }
 
         if (ownedTransaction is null)
@@ -751,11 +748,6 @@ public sealed class InboundAgentChannelAdapter(
         }
 
         await ownedTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        if (outbox is null)
-        {
-            return;
-        }
-
         try
         {
             await outbox.FlushOutgoingMessagesAsync().ConfigureAwait(false);
