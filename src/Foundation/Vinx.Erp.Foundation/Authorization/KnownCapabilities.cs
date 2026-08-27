@@ -79,4 +79,36 @@ public static class KnownCapabilities
     public static readonly Guid ServiceDeskTicketMoveId = Guid.Parse(
         "db9f6a71-6da5-5933-8204-6b16cad2af8a"
     );
+
+    // Núcleo de Demandas (kanban operacional interno). UUIDv5 canônico por nome,
+    // mesma derivação das capabilities anteriores.
+    public const string DemandasDemandRead = "demandas.demand.read";
+    public static readonly Guid DemandasDemandReadId = Guid.Parse(
+        "6ff8b25a-1c37-58cc-894b-97221467c3d4"
+    );
+
+    public const string DemandasDemandCreate = "demandas.demand.create";
+    public static readonly Guid DemandasDemandCreateId = Guid.Parse(
+        "d3c10860-a26c-5eac-b684-8e2faac9ad99"
+    );
+
+    public const string DemandasDemandAdvance = "demandas.demand.advance";
+    public static readonly Guid DemandasDemandAdvanceId = Guid.Parse(
+        "74403a29-bdae-55a9-b43b-774eca3f03b2"
+    );
+
+    public const string DemandasDemandAssign = "demandas.demand.assign";
+    public static readonly Guid DemandasDemandAssignId = Guid.Parse(
+        "00b09e31-8693-5b62-b59a-cad5994f3378"
+    );
+
+    public const string DemandasParticipantsManage = "demandas.demand.participants.manage";
+    public static readonly Guid DemandasParticipantsManageId = Guid.Parse(
+        "d207f7a5-7fdb-5a7d-a87c-2b4210f36712"
+    );
+
+    public const string DemandasRoutineManage = "demandas.routine.manage";
+    public static readonly Guid DemandasRoutineManageId = Guid.Parse(
+        "ec28a347-1ade-5586-bf33-e6f1cbd59620"
+    );
 }

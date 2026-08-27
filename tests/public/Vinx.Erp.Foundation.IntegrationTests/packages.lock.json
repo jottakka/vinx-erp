@@ -1071,6 +1071,7 @@
           "Microsoft.OpenApi": "[2.12.2, )",
           "Vinx.Erp.AI": "[1.0.0, )",
           "Vinx.Erp.Atendimento": "[1.0.0, )",
+          "Vinx.Erp.Demandas": "[1.0.0, )",
           "Vinx.Erp.Foundation": "[1.0.0, )",
           "Vinx.Erp.Notifications": "[1.0.0, )",
           "Vinx.Erp.Paguai": "[1.0.0, )",
@@ -1079,6 +1080,12 @@
         }
       },
       "vinx.erp.atendimento": {
+        "type": "Project",
+        "dependencies": {
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
+      "vinx.erp.demandas": {
         "type": "Project",
         "dependencies": {
           "Vinx.Erp.Foundation": "[1.0.0, )"
