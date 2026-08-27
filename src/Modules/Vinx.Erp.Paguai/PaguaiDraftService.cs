@@ -12,6 +12,8 @@ using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Configurations;
+using Wolverine;
+using Wolverine.EntityFrameworkCore;
 
 namespace Vinx.Erp.Paguai;
 
@@ -22,6 +24,7 @@ public sealed class PaguaiDraftService(
     AuditAppender auditAppender,
     DocumentUploadService documentUploads,
     FileStorage fileStorage,
+    IDbContextOutbox outbox,
     ILogger<PaguaiDraftService> logger
 )
 {
@@ -138,6 +141,16 @@ public sealed class PaguaiDraftService(
             };
             database.PaguaiRequests.Add(request);
             await database.SaveChangesAsync(cancellationToken);
+
+            // Produtor transacional: o envelope dura somente se o commit do
+            // rascunho vencer; destinatários e template são resolvidos depois,
+            // na fila (worker), nunca aqui.
+            outbox.Enroll(database);
+            await outbox.PublishAsync(
+                new PaguaiDraftCreated(command.CompanyId, request.Id, actor.UserId),
+                new DeliveryOptions { CorrelationId = actor.CorrelationId.ToString("D") }
+            );
+
             PaguaiDraft draft;
             if (
                 bindMetadata is { } boundMetadata
