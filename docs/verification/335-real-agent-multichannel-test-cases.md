@@ -33,9 +33,9 @@ compatibilidade de API. Não houve envio por WhatsApp ou Telegram.
 
 ## Escopo congelado
 
-- 142 arquivos no total: 90 não teste e 52 de teste.
-- Alterações manuais: +13.402/-4.072 linhas (17.474 de churn).
-- Gerados: 5 arquivos e +8.261 linhas.
+- 153 arquivos no total: 94 não teste e 59 de teste.
+- Alterações manuais: +13.414/-4.072 linhas (17.486 de churn).
+- Gerados: 16 arquivos, +8.345/-10 linhas (8.355 de churn).
 
 A entrega única é a exceção aprovada para a issue #335: o mesmo recorte reúne
 núcleo, adapters, persistência, proposta e prova, sem expandir capacidade fora
