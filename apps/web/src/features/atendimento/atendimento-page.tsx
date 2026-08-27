@@ -207,18 +207,28 @@ export function AtendimentoPage({
               (card) => card.companyId === result.companyId,
             ) ?? [],
         );
-        // Hidratação monotônica: um snapshot de fila atrasado nunca substitui
-        // uma versão já publicada para o mesmo companyId:cardId; sem o clear
+        // Hidratação monotônica na ordem canônica da resposta: para cada
+        // companyId:cardId vale o snapshot de maior versão (um fila atrasada
+        // nunca rebaixa), a ordem vem de loadedCards (createdAt DESC, id DESC)
+        // e IDs ausentes da resposta são anexados depois. Sem o clear
         // intermediário, um sucesso de mutação publicado durante o loading
         // também não é descartado.
         setCards((current) => {
-          const merged = new Map(
+          const currentByKey = new Map(
             current.map((card) => [cardMutationKey(card), card]),
           );
-          for (const card of loadedCards) {
+          const merged = new Map<string, AtendimentoCard>();
+          for (const loaded of loadedCards) {
+            const key = cardMutationKey(loaded);
+            const known = currentByKey.get(key);
+            merged.set(
+              key,
+              !known || loaded.version >= known.version ? loaded : known,
+            );
+          }
+          for (const card of current) {
             const key = cardMutationKey(card);
-            const known = merged.get(key);
-            if (!known || card.version >= known.version) merged.set(key, card);
+            if (!merged.has(key)) merged.set(key, card);
           }
           return [...merged.values()];
         });

@@ -792,6 +792,44 @@ describe("AtendimentoPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps the queue response order when reloading known and new cards", async () => {
+    const user = userEvent.setup();
+    const existing = { ...alfaCard, title: "Cartão existente" };
+    const created = {
+      ...alfaCard,
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      title: "Cartão criado depois",
+    };
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId !== alfaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      return Promise.resolve(
+        alfaReads === 1 ? [existing] : [created, existing],
+      );
+    });
+
+    renderPage();
+    expect(await screen.findByText(existing.title)).toBeVisible();
+
+    // A recarga devolve o cartão novo primeiro, na ordem canônica da fila.
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Alfa" }));
+    await user.keyboard("{Escape}");
+
+    const novoColumn = screen.getByRole("heading", {
+      name: "Novos",
+    }).parentElement as HTMLElement;
+    const createdElement = await within(novoColumn).findByText(created.title);
+    const existingElement = within(novoColumn).getByText(existing.title);
+    expect(
+      createdElement.compareDocumentPosition(existingElement) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("anchors each card menu to its trigger and preserves Escape close", async () => {
     const user = userEvent.setup();
     vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
