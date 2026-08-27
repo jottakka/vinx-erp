@@ -1239,6 +1239,68 @@ describe("AtendimentoPage", () => {
     });
   });
 
+  it("keeps a newer queue snapshot when an older conflict reload finishes late", async () => {
+    const user = userEvent.setup();
+    const staleRecovery = {
+      ...alfaCard,
+      title: "Recuperação antiga",
+      version: 2,
+    };
+    const newestQueueCard = {
+      ...alfaCard,
+      title: "Fila mais recente",
+      version: 3,
+    };
+    const delayedRecovery = deferred<AtendimentoCard[] | null>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      if (alfaReads === 2) return delayedRecovery.promise;
+      return Promise.resolve([newestQueueCard]);
+    });
+    vi.spyOn(atendimentoClient, "move").mockResolvedValue({
+      code: "integrity_conflict",
+      ok: false,
+    });
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(alfaReads).toBe(2));
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Alfa" }));
+    await user.keyboard("{Escape}");
+    expect(await screen.findByText(newestQueueCard.title)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Visualizar" }));
+    expect(
+      within(await screen.findByRole("dialog")).getByText(
+        newestQueueCard.title,
+      ),
+    ).toBeVisible();
+
+    await act(async () => {
+      delayedRecovery.resolve([staleRecovery]);
+      await delayedRecovery.promise;
+    });
+
+    expect(screen.queryByText(staleRecovery.title)).not.toBeInTheDocument();
+    expect(screen.getAllByText(newestQueueCard.title).length).toBeGreaterThan(
+      1,
+    );
+    expect(
+      screen.queryByText(
+        "O cartão foi atualizado enquanto você atuava. Verifique o estado atual da fila.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it("reports reload failure instead of claiming an integrity conflict was synchronized", async () => {
     const user = userEvent.setup();
     vi.spyOn(atendimentoClient, "list")

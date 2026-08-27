@@ -151,7 +151,9 @@ export function AtendimentoPage({
   const [recoveringCardKeys, setRecoveringCardKeys] = useState<
     readonly string[]
   >([]);
-  const recoveryEpoch = useRef(new Map<string, number>());
+  const reloadSequence = useRef(0);
+  const queueReloadToken = useRef(0);
+  const recoveryTokens = useRef(new Map<string, number>());
 
   const createCompanies = useMemo(
     () =>
@@ -198,6 +200,17 @@ export function AtendimentoPage({
   }, [companyId, createCompanies]);
 
   useEffect(() => {
+    queueReloadToken.current = ++reloadSequence.current;
+    assignmentEpoch.current++;
+    assignmentAbort.current?.abort();
+    setStatusMenu(null);
+    setActionsMenu(null);
+    setViewingCard(null);
+    setAssigningCard(null);
+    setAssignmentOptions([]);
+    setAssigneeMembershipId("");
+    setCancellingCard(null);
+    setCancellationReason("");
     if (!requestedCompanies.length) {
       setCards([]);
       return;
@@ -205,7 +218,6 @@ export function AtendimentoPage({
     let active = true;
     setLoading(true);
     setError(null);
-    setViewingCard(null);
     void Promise.all(
       requestedCompanies.map(async (company) => ({
         companyId: company.companyId,
@@ -455,10 +467,15 @@ export function AtendimentoPage({
     companyId: string,
     cardId: string,
     key: string,
-    epoch: number,
+    token: number,
+    expectedQueueToken: number,
   ) {
     const refreshedCards = await atendimentoClient.list(companyId);
-    if (recoveryEpoch.current.get(key) !== epoch) return;
+    if (
+      recoveryTokens.current.get(key) !== token ||
+      queueReloadToken.current !== expectedQueueToken
+    )
+      return;
     if (!refreshedCards) {
       invalidateCard(companyId, cardId);
       setError(
@@ -506,8 +523,9 @@ export function AtendimentoPage({
     cardId: string,
   ): Promise<void> {
     const key = recoveryKey(companyId, cardId);
-    const epoch = (recoveryEpoch.current.get(key) ?? 0) + 1;
-    recoveryEpoch.current.set(key, epoch);
+    const token = ++reloadSequence.current;
+    const expectedQueueToken = queueReloadToken.current;
+    recoveryTokens.current.set(key, token);
     setRecoveringCardKeys((keys) =>
       keys.includes(key) ? keys : [...keys, key],
     );
@@ -520,13 +538,20 @@ export function AtendimentoPage({
         return;
       }
       if (code === "integrity_conflict") {
-        await reloadAfterConflict(code, companyId, cardId, key, epoch);
+        await reloadAfterConflict(
+          code,
+          companyId,
+          cardId,
+          key,
+          token,
+          expectedQueueToken,
+        );
         return;
       }
       setError(messageFor(code));
     } finally {
-      if (recoveryEpoch.current.get(key) === epoch) {
-        recoveryEpoch.current.delete(key);
+      if (recoveryTokens.current.get(key) === token) {
+        recoveryTokens.current.delete(key);
         setRecoveringCardKeys((keys) => keys.filter((item) => item !== key));
       }
     }
