@@ -190,7 +190,6 @@ export function AtendimentoPage({
       return;
     }
     let active = true;
-    setCards([]);
     setLoading(true);
     setError(null);
     setViewingCard(null);
@@ -208,12 +207,21 @@ export function AtendimentoPage({
               (card) => card.companyId === result.companyId,
             ) ?? [],
         );
-        setCards((current) => [
-          ...loadedCards,
-          ...current.filter(
-            (card) => !loadedCards.some((loaded) => loaded.id === card.id),
-          ),
-        ]);
+        // Hidratação monotônica: um snapshot de fila atrasado nunca substitui
+        // uma versão já publicada para o mesmo companyId:cardId; sem o clear
+        // intermediário, um sucesso de mutação publicado durante o loading
+        // também não é descartado.
+        setCards((current) => {
+          const merged = new Map(
+            current.map((card) => [cardMutationKey(card), card]),
+          );
+          for (const card of loadedCards) {
+            const key = cardMutationKey(card);
+            const known = merged.get(key);
+            if (!known || card.version >= known.version) merged.set(key, card);
+          }
+          return [...merged.values()];
+        });
       } else setError("Não foi possível carregar a fila. Tente novamente.");
       setLoading(false);
     });

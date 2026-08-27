@@ -742,6 +742,56 @@ describe("AtendimentoPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps a published mutation snapshot when a delayed queue load returns an older card", async () => {
+    const user = userEvent.setup();
+    const moveResult =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    const queueLoad = deferred<AtendimentoCard[] | null>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return queueLoad.promise;
+    });
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockReturnValue(moveResult.promise);
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+
+    // Recarga da fila iniciada antes do commit captura a versão 1.
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Alfa" }));
+    await user.keyboard("{Escape}");
+
+    moveResult.resolve({
+      card: { ...alfaCard, column: "em_andamento", version: 2 },
+      ok: true,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+    queueLoad.resolve([alfaCard]);
+
+    const inProgressColumn = screen.getByRole("heading", {
+      name: "Em andamento",
+    }).parentElement as HTMLElement;
+    await waitFor(() =>
+      expect(within(inProgressColumn).getByText(alfaCard.title)).toBeVisible(),
+    );
+    const novoColumn = screen.getByRole("heading", {
+      name: "Novos",
+    }).parentElement as HTMLElement;
+    expect(
+      within(novoColumn).queryByText(alfaCard.title),
+    ).not.toBeInTheDocument();
+  });
+
   it("anchors each card menu to its trigger and preserves Escape close", async () => {
     const user = userEvent.setup();
     vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
