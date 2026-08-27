@@ -41,23 +41,27 @@ export type AtendimentoCreateOptions = {
   slaDueAt?: string | null;
 };
 
-const atendimentoCardSchema = z.object({
-  id: z.string(),
-  companyId: z.string(),
-  title: z.string(),
-  description: z.string(),
-  column: z.enum(["novo", "em_andamento", "concluido", "cancelado"]),
-  version: z.number(),
-  assigneeMembershipId: z.string().nullable(),
-  attachmentFileId: z.string().nullable(),
-  participantMembershipIds: z.array(z.string()),
-  priority: z.enum(["critica", "alta", "media", "baixa"]),
-  channel: z.enum(["whatsapp", "email", "web", "manual"]),
-  slaDueAt: z.string().datetime({ offset: true }).nullable(),
-  isOverdue: z.boolean(),
-  createdAt: z.string().datetime({ offset: true }).nullable(),
-  updatedAt: z.string().datetime({ offset: true }).nullable(),
-});
+const atendimentoIdSchema = z.string().uuid();
+
+const atendimentoCardSchema = z
+  .object({
+    id: atendimentoIdSchema,
+    companyId: atendimentoIdSchema,
+    title: z.string().min(1).max(200),
+    description: z.string().min(1).max(4000),
+    column: z.enum(["novo", "em_andamento", "concluido", "cancelado"]),
+    version: z.number().int().positive(),
+    assigneeMembershipId: atendimentoIdSchema.nullable(),
+    attachmentFileId: atendimentoIdSchema.nullable(),
+    participantMembershipIds: z.array(atendimentoIdSchema),
+    priority: z.enum(["critica", "alta", "media", "baixa"]),
+    channel: z.enum(["whatsapp", "email", "web", "manual"]),
+    slaDueAt: z.string().datetime({ offset: true }).nullable(),
+    isOverdue: z.boolean(),
+    createdAt: z.string().datetime({ offset: true }).nullable(),
+    updatedAt: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict();
 const atendimentoCardsSchema = z.array(atendimentoCardSchema);
 
 function parseCard(value: unknown): AtendimentoCard | null {

@@ -356,7 +356,8 @@ export function AtendimentoPage({
     if (!lease) return;
     try {
       const result = await atendimentoClient.move(card.companyId, card, column);
-      if (!result.ok) return recover(result.code, result.current);
+      if (!result.ok)
+        return recover(result.code, result.current, card.companyId, card.id);
       applyCardSnapshot(result.card, lease);
     } finally {
       finishCardMutation(lease);
@@ -375,7 +376,7 @@ export function AtendimentoPage({
         assigneeMembershipId.trim(),
       );
       if (!result.ok) {
-        recover(result.code, result.current);
+        recover(result.code, result.current, card.companyId, card.id);
         return;
       }
       applyCardSnapshot(result.card, lease);
@@ -418,7 +419,7 @@ export function AtendimentoPage({
         reason,
       );
       if (!result.ok) {
-        recover(result.code, result.current);
+        recover(result.code, result.current, card.companyId, card.id);
         return;
       }
       applyCardSnapshot(result.card, lease);
@@ -430,8 +431,64 @@ export function AtendimentoPage({
     }
   }
 
-  function recover(code: string, current?: AtendimentoCard) {
-    if (current) applyCardSnapshot(current);
+  function applyRecoveredCard(recovered: AtendimentoCard) {
+    applyCardSnapshot(recovered);
+  }
+
+  async function reloadAfterConflict(
+    code: string,
+    companyId: string,
+    cardId: string,
+  ) {
+    const refreshedCards = await atendimentoClient.list(companyId);
+    if (!refreshedCards) {
+      setError(
+        "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
+      );
+      return;
+    }
+    const refreshed = refreshedCards.find(
+      (item) => item.id === cardId && item.companyId === companyId,
+    );
+    if (refreshed) {
+      applyRecoveredCard(refreshed);
+      setError(messageFor(code));
+      return;
+    }
+    setCards((cards) =>
+      cards.filter(
+        (card) => card.id !== cardId || card.companyId !== companyId,
+      ),
+    );
+    setViewingCard((card) =>
+      card?.id === cardId && card.companyId === companyId ? null : card,
+    );
+    setAssigningCard((card) =>
+      card?.id === cardId && card.companyId === companyId ? null : card,
+    );
+    setCancellingCard((card) =>
+      card?.id === cardId && card.companyId === companyId ? null : card,
+    );
+    setError("O atendimento não está mais disponível nesta empresa.");
+  }
+
+  function recover(
+    code: string,
+    current: AtendimentoCard | undefined,
+    companyId: string,
+    cardId: string,
+  ) {
+    const validCurrent =
+      current?.id === cardId && current.companyId === companyId;
+    if (validCurrent) {
+      applyRecoveredCard(current);
+      setError(messageFor(code));
+      return;
+    }
+    if (code === "integrity_conflict") {
+      void reloadAfterConflict(code, companyId, cardId);
+      return;
+    }
     setError(messageFor(code));
   }
 

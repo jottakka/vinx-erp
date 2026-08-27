@@ -1184,6 +1184,96 @@ describe("AtendimentoPage", () => {
     });
   });
 
+  it("refetches the affected card when an integrity conflict has no valid current", async () => {
+    const user = userEvent.setup();
+    const refreshed = { ...alfaCard, version: 2, title: "Cartão atualizado" };
+    vi.spyOn(atendimentoClient, "list")
+      .mockResolvedValueOnce([alfaCard])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([refreshed]);
+    const assign = vi
+      .spyOn(atendimentoClient, "assign")
+      .mockResolvedValueOnce({ code: "integrity_conflict", ok: false })
+      .mockResolvedValueOnce({ card: refreshed, ok: true });
+    vi.spyOn(atendimentoClient, "assignmentOptions").mockResolvedValue([
+      {
+        displayName: "Maria Silva",
+        membershipId: "88888888-8888-4888-8888-888888888888",
+      },
+    ]);
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Atribuir responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("combobox", { name: "Responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Maria Silva" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar atribuição" }),
+    );
+
+    await waitFor(() =>
+      expect(atendimentoClient.list).toHaveBeenCalledTimes(3),
+    );
+    expect(await screen.findByText("Cartão atualizado")).toBeVisible();
+    expect(screen.getByRole("dialog")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar atribuição" }),
+    );
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(2));
+    expect(assign.mock.calls[1]?.[1]).toMatchObject({
+      id: alfaCard.id,
+      version: 2,
+    });
+  });
+
+  it("reports reload failure instead of claiming an integrity conflict was synchronized", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list")
+      .mockResolvedValueOnce([alfaCard])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(null);
+    vi.spyOn(atendimentoClient, "assignmentOptions").mockResolvedValue([
+      {
+        displayName: "Maria Silva",
+        membershipId: "88888888-8888-4888-8888-888888888888",
+      },
+    ]);
+    vi.spyOn(atendimentoClient, "assign").mockResolvedValue({
+      code: "integrity_conflict",
+      ok: false,
+    });
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Mais ações" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "Atribuir responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("combobox", { name: "Responsável" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "Maria Silva" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar atribuição" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("A fila foi sincronizada."),
+    ).not.toBeInTheDocument();
+  });
+
   it("suppresses a duplicate cancellation confirmation while the first request is pending", async () => {
     const user = userEvent.setup();
     const result =

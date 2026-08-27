@@ -299,6 +299,23 @@ describe("atendimento client", () => {
     ).resolves.toEqual({ code: "atendimento_unavailable", ok: false });
   });
 
+  it.each([
+    ["unknown response key", { ...createdCard, unexpected: true }],
+    ["malformed card ID", { ...createdCard, id: "not-an-id" }],
+    ["malformed company ID", { ...createdCard, companyId: "not-an-id" }],
+    ["fractional version", { ...createdCard, version: 1.5 }],
+    ["non-positive version", { ...createdCard, version: 0 }],
+  ] as const)("rejects a card with %s", async (_label, card) => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify([card]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(atendimentoClient.list(createdCard.companyId)).resolves.toBe(
+      null,
+    );
+  });
+
   it("omits a malformed current card from a conflict response", async () => {
     const fetchSpy = vi
       .fn()
