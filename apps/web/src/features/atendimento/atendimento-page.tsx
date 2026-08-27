@@ -84,6 +84,8 @@ type CardMutationLease = {
 function messageFor(code: string) {
   if (code === "integrity_conflict")
     return "O cartão foi atualizado enquanto você atuava. Verifique o estado atual da fila.";
+  if (code === "outcome_unconfirmed")
+    return "Não foi possível confirmar o resultado da ação. O cartão foi sincronizado com o estado atual.";
   if (code === "capability_denied" || code === "membership_required")
     return "Sua sessão não tem permissão para esta ação nesta empresa.";
   return "Não foi possível concluir a ação. Tente novamente.";
@@ -383,6 +385,7 @@ export function AtendimentoPage({
           result.current,
           card.companyId,
           card.id,
+          result.mayHaveCommitted === true,
         );
       applyCardSnapshot(result.card, lease);
       closeCardMenus(card.companyId, card.id);
@@ -403,7 +406,13 @@ export function AtendimentoPage({
         assigneeMembershipId.trim(),
       );
       if (!result.ok) {
-        await recover(result.code, result.current, card.companyId, card.id);
+        await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
         return;
       }
       applyCardSnapshot(result.card, lease);
@@ -448,7 +457,13 @@ export function AtendimentoPage({
         reason,
       );
       if (!result.ok) {
-        await recover(result.code, result.current, card.companyId, card.id);
+        await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
         return;
       }
       applyCardSnapshot(result.card, lease);
@@ -546,6 +561,7 @@ export function AtendimentoPage({
     current: AtendimentoCard | undefined,
     companyId: string,
     cardId: string,
+    mayHaveCommitted = false,
   ): Promise<void> {
     const key = recoveryKey(companyId, cardId);
     const token = ++reloadSequence.current;
@@ -558,14 +574,22 @@ export function AtendimentoPage({
     try {
       const validCurrent =
         current?.id === cardId && current.companyId === companyId;
-      if (validCurrent) {
-        applyRecoveredCard(current);
-        setError(messageFor(code));
+      if (validCurrent && !mayHaveCommitted) {
+        // Um current atrasado só pode publicar se ainda for a geração vigente
+        // da recuperação e da fila: uma fila mais nova já é a autoridade
+        // visual, e o publicador nunca rebaixa a versão do cartão.
+        if (
+          recoveryTokens.current.get(key) === token &&
+          queueReloadToken.current === expectedQueueToken
+        ) {
+          applyRecoveredCard(current);
+          setError(messageFor(code));
+        }
         return;
       }
-      if (code === "integrity_conflict") {
+      if (code === "integrity_conflict" || mayHaveCommitted) {
         await reloadAfterConflict(
-          code,
+          mayHaveCommitted ? "outcome_unconfirmed" : code,
           companyId,
           cardId,
           key,

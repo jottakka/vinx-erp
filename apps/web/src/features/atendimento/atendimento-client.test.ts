@@ -275,7 +275,7 @@ describe("atendimento client", () => {
     );
   });
 
-  it("rejects a malformed successful command response", async () => {
+  it("marks a malformed 2xx command response as possibly committed", async () => {
     const fetchSpy = vi
       .fn()
       .mockResolvedValueOnce(
@@ -296,7 +296,35 @@ describe("atendimento client", () => {
         createdCard,
         "em_andamento",
       ),
-    ).resolves.toEqual({ code: "atendimento_unavailable", ok: false });
+    ).resolves.toEqual({
+      code: "atendimento_unavailable",
+      mayHaveCommitted: true,
+      ok: false,
+    });
+  });
+
+  it("marks a transport failure after POST as possibly committed", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ requestToken: "csrf-token" }), {
+          status: 200,
+        }),
+      )
+      .mockRejectedValueOnce(new TypeError("network error"));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      atendimentoClient.move(
+        createdCard.companyId,
+        createdCard,
+        "em_andamento",
+      ),
+    ).resolves.toEqual({
+      code: "atendimento_unavailable",
+      mayHaveCommitted: true,
+      ok: false,
+    });
   });
 
   it.each([

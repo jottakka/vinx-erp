@@ -444,6 +444,7 @@ describe("AtendimentoPage", () => {
       .spyOn(atendimentoClient, "create")
       .mockResolvedValueOnce({
         code: "atendimento_unavailable",
+        mayHaveCommitted: true,
         ok: false,
       } as Awaited<ReturnType<typeof atendimentoClient.create>>)
       .mockResolvedValueOnce({
@@ -1261,9 +1262,9 @@ describe("AtendimentoPage", () => {
     renderPage();
     // Referências capturadas antes do menu: com o menu aberto o board fica
     // aria-hidden para queries de papel acessível.
-    const card = (
-      await screen.findByText(alfaCard.title)
-    ).closest(".MuiCard-root") as HTMLElement;
+    const card = (await screen.findByText(alfaCard.title)).closest(
+      ".MuiCard-root",
+    ) as HTMLElement;
     const targetColumn = screen.getByRole("heading", {
       name: "Em andamento",
     }).parentElement as HTMLElement;
@@ -1366,6 +1367,153 @@ describe("AtendimentoPage", () => {
         "O cartão foi atualizado enquanto você atuava. Verifique o estado atual da fila.",
       ),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps a newer queue snapshot when a delayed valid current arrives", async () => {
+    const user = userEvent.setup();
+    const moveResult =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    const newestQueueCard = {
+      ...alfaCard,
+      title: "Fila mais recente",
+      version: 3,
+    };
+    const delayedCurrent = {
+      ...alfaCard,
+      title: "Current atrasado",
+      version: 2,
+    };
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return Promise.resolve([newestQueueCard]);
+    });
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockReturnValue(moveResult.promise);
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+
+    // Reload normal da fila publica a versão 3 enquanto a resposta da mutação
+    // ainda não chegou; o detalhe é aberto já na versão nova.
+    await user.click(
+      screen.getByRole("combobox", { name: "Filtrar empresas" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Alfa" }));
+    await user.keyboard("{Escape}");
+    expect(await screen.findByText(newestQueueCard.title)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Visualizar" }));
+    expect(
+      within(await screen.findByRole("dialog")).getByText(
+        newestQueueCard.title,
+      ),
+    ).toBeVisible();
+
+    moveResult.resolve({
+      code: "integrity_conflict",
+      current: delayedCurrent,
+      ok: false,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+
+    await waitFor(() => expect(alfaReads).toBeGreaterThanOrEqual(1));
+    expect(screen.queryByText(delayedCurrent.title)).not.toBeInTheDocument();
+    expect(screen.getAllByText(newestQueueCard.title).length).toBeGreaterThan(
+      1,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(newestQueueCard.title)).toBeVisible();
+    expect(within(dialog).queryByText(delayedCurrent.title)).toBeNull();
+  });
+
+  it("blocks and reads back a card after a possibly committed command outcome", async () => {
+    const user = userEvent.setup();
+    const readback = deferred<AtendimentoCard[] | null>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return readback.promise;
+    });
+    const move = vi.spyOn(atendimentoClient, "move").mockResolvedValue({
+      code: "atendimento_unavailable",
+      mayHaveCommitted: true,
+      ok: false,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(alfaReads).toBe(2));
+
+    expect(
+      screen.getByRole("button", { name: "Alterar status" }),
+    ).toBeDisabled();
+
+    const refreshed = {
+      ...alfaCard,
+      column: "em_andamento" as const,
+      title: "Sincronizado",
+      version: 2,
+    };
+    readback.resolve([refreshed]);
+    expect(await screen.findByText("Sincronizado")).toBeVisible();
+    expect(
+      screen.getByText(
+        "Não foi possível confirmar o resultado da ação. O cartão foi sincronizado com o estado atual.",
+      ),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Alterar status" }),
+      ).toBeEnabled(),
+    );
+  });
+
+  it("invalidates a card when the possibly committed outcome cannot be read back", async () => {
+    const user = userEvent.setup();
+    const readback = deferred<AtendimentoCard[] | null>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return readback.promise;
+    });
+    vi.spyOn(atendimentoClient, "move").mockResolvedValue({
+      code: "atendimento_unavailable",
+      mayHaveCommitted: true,
+      ok: false,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Alterar status" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Em andamento" }));
+    await waitFor(() => expect(alfaReads).toBe(2));
+
+    readback.resolve(null);
+    await waitFor(() =>
+      expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
+      ),
+    ).toBeVisible();
   });
 
   it("reports reload failure instead of claiming an integrity conflict was synchronized", async () => {

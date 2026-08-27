@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { isCanonicalUuid } from "../../shared/http/bff-response";
+import {
+  fetchSameOriginBff,
+  isCanonicalUuid,
+} from "../../shared/http/bff-response";
 
 export type AtendimentoColumn =
   | "novo"
@@ -71,7 +74,12 @@ function parseCard(value: unknown): AtendimentoCard | null {
 
 type CommandResult =
   | { ok: true; card: AtendimentoCard }
-  | { ok: false; code: string; current?: AtendimentoCard };
+  | {
+      ok: false;
+      code: string;
+      current?: AtendimentoCard;
+      mayHaveCommitted?: true;
+    };
 
 const basePath = "/atendimento/cards";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
@@ -114,38 +122,59 @@ async function getAntiforgeryToken(): Promise<string | null> {
 }
 
 async function command(path: string, body: object): Promise<CommandResult> {
-  try {
-    const requestToken = await getAntiforgeryToken();
-    if (!requestToken) return { code: "atendimento_unavailable", ok: false };
+  const requestToken = await getAntiforgeryToken();
+  if (!requestToken) return { code: "atendimento_unavailable", ok: false };
 
-    const response = await request(path, {
+  // Falha de transporte após o disparo do POST e 2xx com corpo que não valida
+  // podem representar um commit no servidor: o resultado é ambíguo
+  // (mayHaveCommitted), nunca uma falha definitiva, e a página reconcilia por
+  // readback em vez de reenviar.
+  const outcome = await fetchSameOriginBff(
+    fetch,
+    path,
+    {
       body: JSON.stringify(body),
       headers: {
         "Content-Type": "application/json",
         [antiforgeryHeaderName]: requestToken,
       },
+      mayHaveCommittedOnAbort: true,
       method: "POST",
-    });
-    if (response.ok) {
-      const card = parseCard(await response.json());
-      return card
-        ? { card, ok: true }
-        : { code: "atendimento_unavailable", ok: false };
-    }
-    const error = (await response.json().catch(() => null)) as {
-      code?: string;
-      current?: unknown;
-    } | null;
-    const current =
-      error?.current === undefined ? undefined : parseCard(error.current);
+    },
+    (kind, { mayHaveCommittedOnAbort }) => ({
+      kind,
+      mayHaveCommitted: mayHaveCommittedOnAbort,
+    }),
+  );
+  if (!("response" in outcome)) {
     return {
-      code: error?.code ?? "atendimento_unavailable",
-      ...(current ? { current } : {}),
+      code: "atendimento_unavailable",
+      ...(outcome.mayHaveCommitted ? { mayHaveCommitted: true } : {}),
       ok: false,
     };
-  } catch {
-    return { code: "atendimento_unavailable", ok: false };
   }
+  const response = outcome.response;
+  if (response.ok) {
+    const card = parseCard(await response.json().catch(() => null));
+    return card
+      ? { card, ok: true }
+      : {
+          code: "atendimento_unavailable",
+          mayHaveCommitted: true,
+          ok: false,
+        };
+  }
+  const error = (await response.json().catch(() => null)) as {
+    code?: string;
+    current?: unknown;
+  } | null;
+  const current =
+    error?.current === undefined ? undefined : parseCard(error.current);
+  return {
+    code: error?.code ?? "atendimento_unavailable",
+    ...(current ? { current } : {}),
+    ok: false,
+  };
 }
 
 export const atendimentoClient = {
