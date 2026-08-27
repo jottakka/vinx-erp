@@ -300,6 +300,7 @@ describe("agent attachment clarification", () => {
       ok: true,
       run: {
         correlationId,
+        paguaiProposalId: null,
         reasonCode: "document_context_unavailable",
         sources: null,
         status: "needs_clarification",
@@ -332,6 +333,7 @@ describe("agent access copy", () => {
         ok: true,
         run: {
           correlationId,
+          paguaiProposalId: null,
           reasonCode,
           sources: null,
           status: "denied",

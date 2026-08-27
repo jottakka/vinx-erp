@@ -88,19 +88,8 @@ public sealed class AgentRunOptions
     internal static bool HasExactApprovedHost(Uri? endpoint, IReadOnlyList<string> approvedHosts)
     {
         ArgumentNullException.ThrowIfNull(approvedHosts);
-
-        if (endpoint is null || !endpoint.IsAbsoluteUri)
-        {
-            return false;
-        }
-
-        var endpointHost = NormalizeHost(endpoint.DnsSafeHost);
-        return endpointHost.Length > 0 && approvedHosts.Any(host =>
-            string.Equals(endpointHost, NormalizeHost(host), StringComparison.Ordinal));
+        return ExactApprovedHostPolicy.Matches(endpoint, approvedHosts);
     }
-
-    private static string NormalizeHost(string host) =>
-        host.Trim().TrimEnd('.').ToLowerInvariant();
 }
 
 /// <summary>Configuração server-side do perfil OpenAI-compatible usado somente por OCR.</summary>

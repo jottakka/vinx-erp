@@ -443,28 +443,37 @@ public sealed class AgentEndpointTests
     [Fact]
     public async Task Requires_confirmation_returns_opaque_state_without_execution()
     {
+        const string withheldText = "O modelo reteve texto que não pode ser persistido.";
         const string proposedAction = "send_invoice_email";
-        var model = ControlledAgentModel.ToolCall(proposedAction);
+        var model = ControlledAgentModel.TextAndToolCall(withheldText, proposedAction);
         await using var factory = await CreateConfiguredFactoryAsync(model);
         var scenario = await SeedScenarioAsync(factory);
         var request = NewRequest(scenario.AlfaCompanyId, "envie a fatura por e-mail");
 
         var response = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
+        var replay = await factory.CreateClient().PostAsJsonAsync("/agent/runs", request);
 
         response.EnsureSuccessStatusCode();
+        replay.EnsureSuccessStatusCode();
         var rawBody = await response.Content.ReadAsStringAsync();
+        var replayBody = await replay.Content.ReadAsStringAsync();
         var result = await ReadResponseAsync(response);
         Assert.Equal("requires_confirmation", result.Status);
         Assert.Equal("tool_proposal_requires_confirmation", result.ReasonCode);
         // Estado opaco: sem texto e sem o nome da ação proposta em nenhum campo.
         Assert.Null(result.Text);
+        Assert.DoesNotContain(withheldText, rawBody, StringComparison.Ordinal);
         Assert.DoesNotContain(proposedAction, rawBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(withheldText, replayBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(proposedAction, replayBody, StringComparison.Ordinal);
         Assert.Equal(1, model.CallCount);
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         var ledger = await administrator.AgentExecutionLedger.SingleAsync();
+        Assert.DoesNotContain(withheldText, ledger.SafeResultJson, StringComparison.Ordinal);
         Assert.DoesNotContain(proposedAction, ledger.SafeResultJson, StringComparison.Ordinal);
         var audit = await administrator.AuditEvents.SingleAsync(auditEvent => auditEvent.Action == "agent.run");
         Assert.Equal(AuditOutcome.Success, audit.Outcome);
+        Assert.DoesNotContain(withheldText, audit.MetadataJson, StringComparison.Ordinal);
         Assert.DoesNotContain(proposedAction, audit.MetadataJson, StringComparison.Ordinal);
     }
 
@@ -748,9 +757,13 @@ public sealed class AgentEndpointTests
 
         public static ControlledAgentModel Text(string text) => new(TextResponse(text));
 
-        public static ControlledAgentModel ToolCall(string toolName) => new(new ChatResponse(new ChatMessage(
-            ChatRole.Assistant,
-            [new FunctionCallContent("call_1", toolName, new Dictionary<string, object?>())])));
+        public static ControlledAgentModel TextAndToolCall(string text, string toolName) =>
+            new(new ChatResponse(new ChatMessage(
+                ChatRole.Assistant,
+                [
+                    new TextContent(text),
+                    new FunctionCallContent("call_1", toolName, new Dictionary<string, object?>()),
+                ])));
 
         public static ControlledAgentModel Delayed(TimeSpan delay) => new(TextResponse("resposta atrasada"))
         {

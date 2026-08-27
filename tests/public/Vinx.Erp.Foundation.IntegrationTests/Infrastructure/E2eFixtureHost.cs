@@ -105,6 +105,7 @@ public static class E2eFixtureAgentConfiguration
                 Provider = AgentRunOptions.OpenAiCompatibleProvider,
                 Endpoint = new Uri("https://agent-provider.example/v1"),
                 Model = "test-agent-model",
+                ApprovedHosts = ["agent-provider.example"],
                 Vision = new AgentRunVisionOptions
                 {
                     Provider = AgentRunOptions.OpenAiCompatibleProvider,

@@ -236,18 +236,16 @@ public sealed class TelegramContractTests
         Assert.Equal(16_384, content.Served);
     }
 
-    [Theory]
-    [InlineData(HttpStatusCode.TooManyRequests)]
-    [InlineData(HttpStatusCode.InternalServerError)]
-    [InlineData(HttpStatusCode.BadGateway)]
-    public async Task Client_maps_rate_limits_and_server_errors_to_sanitized_transient_failure(
-        HttpStatusCode statusCode
-    )
+    [Fact]
+    public async Task Client_maps_rate_limits_to_sanitized_transient_failure()
     {
         const string body = "{\"ok\":false,\"description\":\"remote provider detail\"}";
         var client = BuildClient(
             new CapturingHandler(
-                new HttpResponseMessage(statusCode) { Content = new StringContent(body) }
+                new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent(body),
+                }
             )
         );
 
@@ -259,6 +257,26 @@ public sealed class TelegramContractTests
         Assert.DoesNotContain("api.telegram.test", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(body, exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("remote provider detail", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.BadGateway)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    public async Task Client_maps_server_errors_to_ambiguous_after_one_attempt(
+        HttpStatusCode statusCode
+    )
+    {
+        const string body = "{\"ok\":false,\"description\":\"remote provider detail\"}";
+        var handler = new CapturingHandler(
+            new HttpResponseMessage(statusCode) { Content = new StringContent(body) }
+        );
+        var client = BuildClient(handler);
+
+        var result = await client.SendAsync(Message(), CancellationToken.None);
+
+        Assert.Equal(NotificationProviderResultKind.Ambiguous, result.Kind);
+        Assert.Equal(1, handler.CallCount);
     }
 
     [Fact]
@@ -567,12 +585,14 @@ public sealed class TelegramContractTests
     {
         public HttpRequestMessage? Request { get; private set; }
         public string? Body { get; private set; }
+        public int CallCount { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken
         )
         {
+            CallCount++;
             Request = request;
             Body = request.Content is null
                 ? null

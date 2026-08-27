@@ -68,6 +68,33 @@ public sealed class E2eFixtureHostOptionsTests
     }
 
     [Fact]
+    public void Deterministic_agent_configuration_fixes_main_and_vision_hosts()
+    {
+        var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Deterministic);
+
+        Assert.IsType<DeterministicE2eAgentModel>(configuration.Model);
+        Assert.Equal(new Uri("https://agent-provider.example/v1"), configuration.Options.Endpoint);
+        Assert.Equal(["agent-provider.example"], configuration.Options.ApprovedHosts);
+        var vision = Assert.IsType<AgentRunVisionOptions>(configuration.Options.Vision);
+        Assert.Equal(new Uri("https://agent-provider.example/v1"), vision.Endpoint);
+        Assert.Equal(["agent-provider.example"], vision.ApprovedHosts);
+    }
+
+    [Fact]
+    public async Task Deterministic_agent_configuration_composes_the_credentialless_ApiHost()
+    {
+        var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Deterministic);
+
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            fileStorage: configuration.Storage,
+            agentModel: configuration.Model,
+            agentRunOptions: configuration.Options);
+        using var response = await factory.CreateClient().GetAsync("/health");
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public void Real_agent_configuration_fixes_main_and_vision_profiles_without_a_bindable_key()
     {
         var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Real);

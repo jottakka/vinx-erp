@@ -457,6 +457,7 @@ internal sealed class WorkerAgentRunOptions
         if (!OpenAiCompatibleChatClient.HasServerCredential(readEnvironment)
             || (Provider is not null
                 && (!string.Equals(Provider, OpenAiCompatibleProvider, StringComparison.Ordinal)
+                    || !ExactApprovedHostPolicy.Matches(Endpoint, ApprovedHosts)
                     || new OpenAiCompatibleOptions.Validator()
                         .ValidateForRuntimeCredential(null, ToProviderOptions()).Failed))
             || (Vision is not null && !Vision.IsValid()))
@@ -489,6 +490,7 @@ internal sealed class WorkerAgentVisionOptions
         string.Equals(Provider, "openai_compatible", StringComparison.Ordinal)
         && AllowedClassifications.Count > 0
         && AllowedClassifications.All(value => !string.IsNullOrWhiteSpace(value))
+        && ExactApprovedHostPolicy.Matches(Endpoint, ApprovedHosts)
         && !new OpenAiCompatibleOptions.Validator()
             .ValidateForRuntimeCredential(null, ToProviderOptions()).Failed;
 

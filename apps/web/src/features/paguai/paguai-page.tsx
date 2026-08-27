@@ -88,6 +88,17 @@ type PaguaiCreateAttempt = {
   payload: PaguaiCreatePayload;
   requestId: string;
 };
+type PaguaiProposalOperation = "confirm" | "reject";
+type PaguaiProposalMutationAttempt = {
+  companyId: string;
+  operation: PaguaiProposalOperation;
+  proposalId: string;
+  requestId: string;
+};
+
+function isAmbiguousProposalError(error: PaguaiDraftError) {
+  return error === "network" || error === "protocol" || error === 503;
+}
 
 function sameCreatePayload(
   left: PaguaiCreatePayload,
@@ -210,6 +221,8 @@ export function PaguaiPage({
   const scopeGenerationRef = useRef(0);
   const scopeKeyRef = useRef(scopeKey);
   const createAttemptRef = useRef<PaguaiCreateAttempt | null>(null);
+  const proposalMutationAttemptRef =
+    useRef<PaguaiProposalMutationAttempt | null>(null);
   const detailRequestRef = useRef(0);
   const proposalRequestRef = useRef(0);
 
@@ -225,6 +238,7 @@ export function PaguaiPage({
     scopeKeyRef.current = scopeKey;
     scopeGenerationRef.current += 1;
     createAttemptRef.current = null;
+    proposalMutationAttemptRef.current = null;
     detailRequestRef.current += 1;
     setCreateError(null);
     setCreateRecoveryRequired(false);
@@ -241,6 +255,7 @@ export function PaguaiPage({
   }, [scopeKey]);
 
   useEffect(() => {
+    proposalMutationAttemptRef.current = null;
     const request = proposalRequestRef.current + 1;
     proposalRequestRef.current = request;
     setProposal(null);
@@ -267,34 +282,45 @@ export function PaguaiPage({
   }, [createCompany, draftClient, hasInvalidProposalId, proposalId]);
 
   function closeProposalReview() {
+    proposalMutationAttemptRef.current = null;
     proposalRequestRef.current += 1;
     setProposal(null);
     setProposalError(null);
     navigate(paguaiPath, { replace: true });
   }
 
-  async function resolveProposal(operation: "confirm" | "reject") {
+  async function resolveProposal(operation: PaguaiProposalOperation) {
     if (!proposal || !createCompany || proposalSubmitting) return;
     setProposalSubmitting(true);
     setProposalError(null);
-    const result =
-      operation === "confirm"
-        ? await draftClient.confirmProposal(
-            createCompany.companyId,
-            proposal.id,
-            crypto.randomUUID(),
-          )
-        : await draftClient.rejectProposal(
-            createCompany.companyId,
-            proposal.id,
-            crypto.randomUUID(),
-          );
-    setProposalSubmitting(false);
-    if (!result.ok) {
-      setProposalError(result.error);
-      return;
-    }
+    const previousAttempt = proposalMutationAttemptRef.current;
+    const attempt =
+      previousAttempt?.companyId === createCompany.companyId &&
+      previousAttempt.proposalId === proposal.id &&
+      previousAttempt.operation === operation
+        ? previousAttempt
+        : {
+            companyId: createCompany.companyId,
+            operation,
+            proposalId: proposal.id,
+            requestId: crypto.randomUUID(),
+          };
+    proposalMutationAttemptRef.current = attempt;
     if (operation === "confirm") {
+      const result = await draftClient.confirmProposal(
+        createCompany.companyId,
+        proposal.id,
+        attempt.requestId,
+      );
+      setProposalSubmitting(false);
+      if (!result.ok) {
+        if (!isAmbiguousProposalError(result.error)) {
+          proposalMutationAttemptRef.current = null;
+        }
+        setProposalError(result.error);
+        return;
+      }
+      proposalMutationAttemptRef.current = null;
       setDrafts((current) =>
         [
           ...current.filter((draft) => draft.id !== result.value.id),
@@ -302,9 +328,25 @@ export function PaguaiPage({
         ].sort(sortDrafts),
       );
       notify("Solicitação criada a partir da proposta.");
-    } else {
-      notify("Proposta rejeitada.", "info");
+      closeProposalReview();
+      return;
     }
+
+    const result = await draftClient.rejectProposal(
+      createCompany.companyId,
+      proposal.id,
+      attempt.requestId,
+    );
+    setProposalSubmitting(false);
+    if (!result.ok) {
+      if (!isAmbiguousProposalError(result.error)) {
+        proposalMutationAttemptRef.current = null;
+      }
+      setProposalError(result.error);
+      return;
+    }
+    proposalMutationAttemptRef.current = null;
+    notify("Proposta rejeitada.", "info");
     closeProposalReview();
   }
 

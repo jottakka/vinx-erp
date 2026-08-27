@@ -68,11 +68,16 @@ public sealed class TelegramClient(HttpClient http, TelegramOptions options)
                 return Ambiguous();
             }
 
-            if (response.StatusCode == HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
+            if (response.StatusCode == HttpStatusCode.TooManyRequests)
             {
                 throw new NotificationProviderTransientException(
                     "Telegram outbound request failed transiently."
                 );
+            }
+
+            if ((int)response.StatusCode >= 500)
+            {
+                return Ambiguous();
             }
 
             if (!response.IsSuccessStatusCode)

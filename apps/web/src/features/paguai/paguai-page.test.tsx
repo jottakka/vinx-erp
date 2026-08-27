@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
 import { FeedbackProvider } from "../../shared/ui/feedback-provider";
 import type {
@@ -36,6 +36,30 @@ const draft = {
   state: "rascunho" as const,
   version: 1 as const,
   createdAt: "2026-08-16T12:00:00.000+00:00",
+};
+const proposal = {
+  id: "99999999-9999-4999-8999-999999999999",
+  companyId,
+  title: "Papel extraído",
+  description: "Papel para impressora extraído",
+  amount: "1250.00",
+  currency: "BRL" as const,
+  dueDate: "2026-09-01",
+  beneficiaryDisplayName: "Fornecedor Demo",
+  proofRequirement: "required" as const,
+  invoiceFileId: "88888888-8888-4888-8888-888888888888",
+  confidence: 0.95,
+  sourceReferences: [
+    { field: "amount", source: "88888888888848888888888888888888:p1" },
+    {
+      field: "beneficiaryDisplayName",
+      source: "88888888888848888888888888888888:p1",
+    },
+    { field: "dueDate", source: "88888888888848888888888888888888:p1" },
+  ],
+  state: "pending" as const,
+  createdAt: "2026-08-16T12:00:00.000+00:00",
+  expiresAt: "2026-08-16T12:15:00.000+00:00",
 };
 
 const readCapability = {
@@ -72,6 +96,10 @@ const gateway: MockSessionGateway = {
   login: async () => bootstrap,
   logout: async () => undefined,
 };
+
+afterEach(() => {
+  window.history.pushState({}, "", "/paguai");
+});
 
 function renderPage(
   draftClient: unknown,
@@ -953,5 +981,81 @@ describe("PaguaiPage", () => {
     ).toBeNull();
     await user.click(screen.getByRole("button", { name: "Visualizar" }));
     expect(await screen.findByRole("dialog")).toBeVisible();
+  });
+
+  it("reuses one confirm request ID across network protocol and 503 ambiguity", async () => {
+    const user = userEvent.setup();
+    let attempts = 0;
+    const confirmProposal = vi.fn(
+      async (_company: string, _proposal: string, _requestId: string) => {
+        attempts += 1;
+        if (attempts === 1)
+          return { error: "network" as const, ok: false as const };
+        if (attempts === 2)
+          return { error: "protocol" as const, ok: false as const };
+        if (attempts === 3)
+          return { error: 503 as const, ok: false as const };
+        return { ok: true as const, value: draft };
+      },
+    );
+    const draftClient = {
+      confirmProposal,
+      create: async () => ({ ok: true as const, value: draft }),
+      detail: async () => ({ ok: true as const, value: draft }),
+      getProposal: async () => ({ ok: true as const, value: proposal }),
+      list: async () => ({ ok: true as const, value: [] }),
+      rejectProposal: async () => ({ ok: true as const, value: undefined }),
+    };
+    window.history.pushState({}, "", `/paguai?proposal=${proposal.id}`);
+
+    renderPage(draftClient);
+    await screen.findByRole("heading", { name: "Revisar proposta" });
+    for (let expectedCalls = 1; expectedCalls <= 4; expectedCalls += 1) {
+      await user.click(
+        screen.getByRole("button", { name: "Confirmar solicitação" }),
+      );
+      await waitFor(() =>
+        expect(confirmProposal).toHaveBeenCalledTimes(expectedCalls),
+      );
+    }
+
+    const requestIds = confirmProposal.mock.calls.map((call) => call[2]);
+    expect(new Set(requestIds)).toEqual(new Set([requestIds[0]]));
+    expect(requestIds[0]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it("reuses one reject request ID after a lost response", async () => {
+    const user = userEvent.setup();
+    let attempts = 0;
+    const rejectProposal = vi.fn(
+      async (_company: string, _proposal: string, _requestId: string) => {
+        attempts += 1;
+        return attempts === 1
+          ? { error: "network" as const, ok: false as const }
+          : { ok: true as const, value: undefined };
+      },
+    );
+    const draftClient = {
+      confirmProposal: async () => ({ ok: true as const, value: draft }),
+      create: async () => ({ ok: true as const, value: draft }),
+      detail: async () => ({ ok: true as const, value: draft }),
+      getProposal: async () => ({ ok: true as const, value: proposal }),
+      list: async () => ({ ok: true as const, value: [] }),
+      rejectProposal,
+    };
+    window.history.pushState({}, "", `/paguai?proposal=${proposal.id}`);
+
+    renderPage(draftClient);
+    await screen.findByRole("heading", { name: "Revisar proposta" });
+    await user.click(screen.getByRole("button", { name: "Rejeitar proposta" }));
+    await waitFor(() => expect(rejectProposal).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "Rejeitar proposta" }));
+    await waitFor(() => expect(rejectProposal).toHaveBeenCalledTimes(2));
+
+    expect(rejectProposal.mock.calls[1]?.[2]).toBe(
+      rejectProposal.mock.calls[0]?.[2],
+    );
   });
 });
