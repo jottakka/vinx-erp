@@ -52,9 +52,9 @@ static async Task<int> RunAsync(string[] arguments)
                     var configuration = E2eFixtureAgentConfiguration.Create(request.AgentMode);
                     var sharedHost = await SharedE2eFixtureHost.StartAsync(
                         shutdown.Token,
-                    configuration.Model,
-                    configuration.Options,
-                    configuration.Storage);
+                        configuration.Model,
+                        configuration.Options,
+                        configuration.Storage);
                     host = sharedHost;
                     if (!shutdown.IsCancellationRequested)
                     {
