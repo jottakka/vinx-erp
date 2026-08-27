@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Vinx.Erp.ApiHost.Notifications;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Persistence;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -23,6 +24,9 @@ public sealed class TelegramAgentAdapterTests
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddAuthorization();
+        builder.Services.AddScoped<FoundationDbContext>(_ =>
+            throw new InvalidOperationException(
+                "Authorization must short-circuit before resolving the database."));
         await using var application = builder.Build();
         application.MapAgentChannelCompanySelectionEndpoints();
         await application.StartAsync();

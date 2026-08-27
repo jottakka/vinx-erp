@@ -114,7 +114,6 @@ public partial class AddTelegramAgentAdapter : Migration
                 ALTER COLUMN text_body DROP NOT NULL,
                 ADD COLUMN message_type text NOT NULL DEFAULT 'text'
                     CHECK (message_type IN ('text', 'photo', 'document')),
-                ALTER COLUMN message_type DROP DEFAULT,
                 ADD COLUMN media_id text NULL,
                 ADD COLUMN media_size bigint NULL,
                 ADD COLUMN media_mime_type text NULL,
@@ -184,6 +183,8 @@ public partial class AddTelegramAgentAdapter : Migration
                         AND agent_completed_at IS NOT NULL
                         AND agent_failure_reason IS NOT NULL
                         AND agent_delivery_id IS NULL));
+            ALTER TABLE notifications.inbound_telegram_messages
+                ALTER COLUMN message_type DROP DEFAULT;
             ALTER TABLE notifications.inbound_telegram_messages
                 DROP CONSTRAINT inbound_telegram_messages_resolution_state_check,
                 ADD CONSTRAINT inbound_telegram_messages_resolution_state_check CHECK (
