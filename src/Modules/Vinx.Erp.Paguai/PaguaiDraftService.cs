@@ -11,6 +11,8 @@ using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Configurations;
+using Wolverine;
+using Wolverine.EntityFrameworkCore;
 
 namespace Vinx.Erp.Paguai;
 
@@ -19,6 +21,7 @@ public sealed class PaguaiDraftService(
     FoundationDbContext database,
     CapabilityEvaluator capabilityEvaluator,
     AuditAppender auditAppender,
+    IDbContextOutbox outbox,
     ILogger<PaguaiDraftService> logger
 )
 {
@@ -49,6 +52,7 @@ public sealed class PaguaiDraftService(
         // invoice still inside its retention window at this instant, while a
         // persisted replay stays valid after the window closes.
         var now = DateTimeOffset.UtcNow;
+        var commitAttempted = false;
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(
@@ -163,7 +167,30 @@ public sealed class PaguaiDraftService(
                 cancellationToken
             );
             await database.SaveChangesAsync(cancellationToken);
+            outbox.Enroll(database);
+            await outbox.PublishAsync(
+                new PaguaiDraftCreated(command.CompanyId, draft.Id, actor.UserId),
+                new DeliveryOptions { CorrelationId = actor.CorrelationId.ToString("D") }
+            );
+            commitAttempted = true;
             await transaction.CommitAsync(cancellationToken);
+
+            try
+            {
+                await outbox.FlushOutgoingMessagesAsync();
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Paguai draft {Operation} {Module} {Result} {Reason}",
+                    "create",
+                    "paguai",
+                    "created",
+                    "outbox_flush_deferred"
+                );
+            }
+
             return new PaguaiDraftResult(PaguaiDraftState.Created, draft);
         }
         catch (DbUpdateException exception) when (IsUniqueViolation(exception))
@@ -186,7 +213,7 @@ public sealed class PaguaiDraftService(
                 "create",
                 "paguai",
                 "unavailable",
-                "database_or_audit_unavailable"
+                commitAttempted ? "outbox_commit_outcome_unknown" : "database_or_audit_unavailable"
             );
             return PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
         }

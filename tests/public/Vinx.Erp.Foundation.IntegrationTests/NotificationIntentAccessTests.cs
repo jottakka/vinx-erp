@@ -107,7 +107,8 @@ public sealed class NotificationIntentAccessTests
         // Desde o worker de entregas (#48) o vinx_worker tem USAGE no schema
         // para executar as funções de claim/finalize; continua sem DML direto.
         Assert.True(reader.GetBoolean(4));
-        Assert.False(reader.GetBoolean(5));
+        // #355 permite somente esta função estreita para o produtor Pagaí no worker.
+        Assert.True(reader.GetBoolean(5));
     }
 
     [Fact]

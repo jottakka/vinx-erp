@@ -257,11 +257,13 @@ somente na transição efetiva.
 
 Nenhum envelope guarda telefone, e-mail, corpo de mensagem, payload de negócio
 ou segredo; os contatos persistem somente os endereços necessários ao provider
-e o deep-link é um selector relativo opcional. Não há
-produtor de evento de negócio nesta fatia: Paguai permanece rascunho e nenhum
-evento é fabricado. O worker de entrega (#48) e o adapter Meta (#28) consomem
-a fila `notification-delivery` em fatias posteriores; o WorkerHost não é
-alterado aqui.
+e o deep-link é um selector relativo opcional. A fatia #355 acrescenta o primeiro
+produtor Pagaí: `PaguaiDraftCreated` leva somente `CompanyId`, `DraftId` e
+`RequesterUserId` no outbox transacional. O WorkerHost consome `paguai-events`,
+resolve os aprovadores atuais pelo diretório restrito da #346, exclui o
+solicitante e cria intents in-app com a chave idempotente
+`paguai.<draftId:N>.draft-created`. Template ausente ou reprovado é falha
+best-effort registrada em `Warning`; não desfaz o rascunho confirmado.
 
 A fatia #48 estende a máquina de estados do worker
 (`pending_provider → provider_in_flight →
