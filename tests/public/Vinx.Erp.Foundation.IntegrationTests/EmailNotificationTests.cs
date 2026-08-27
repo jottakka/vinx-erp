@@ -1,3 +1,4 @@
+using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Notifications.Providers.Email;
@@ -58,12 +59,14 @@ public sealed class EmailNotificationTests
         );
         Assert.Equal("delivered", state.Status);
         Assert.Equal(1, state.AttemptCount);
+        Assert.True(state.Resolved);
+        Assert.Null(state.FailureReason);
 
         var mail = Assert.Single(smtp.Mails);
         Assert.NotNull(mail.Recipient);
         Assert.EndsWith("@example.test", mail.Recipient);
         Assert.Contains(TestSubject, mail.Data);
-        Assert.Contains(TestBodyHtml, mail.Data);
+        Assert.Equal(1L, await CountFinalAuditsAsync(factory, deliveryId));
     }
 
     [Fact]
@@ -154,7 +157,11 @@ public sealed class EmailNotificationTests
             TimeSpan.FromSeconds(30)
         );
         Assert.Equal("provider_failed", state.Status);
+        Assert.Equal("provider_rejected", state.FailureReason);
+        Assert.Equal(1, state.AttemptCount);
+        Assert.True(state.Resolved);
         Assert.Empty(smtp.Mails);
+        Assert.Equal(1L, await CountFinalAuditsAsync(factory, deliveryId));
     }
 
     private static async Task<NotificationEnqueueResult> EnqueueEmailAsync(
@@ -172,5 +179,25 @@ public sealed class EmailNotificationTests
                 EmailTemplateKey: NotificationIntentSeed.EmailTemplateKey
             )
         );
+    }
+
+    private static async Task<long> CountFinalAuditsAsync(
+        FoundationApiFactory factory,
+        Guid deliveryId
+    )
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT count(*)
+            FROM audit.audit_events
+            WHERE action = 'notification.delivery.provider'
+              AND resource_id = @delivery_id
+              AND outcome = 'success'
+            """,
+            administrator
+        );
+        command.Parameters.AddWithValue("delivery_id", deliveryId);
+        return (long)(await command.ExecuteScalarAsync())!;
     }
 }
