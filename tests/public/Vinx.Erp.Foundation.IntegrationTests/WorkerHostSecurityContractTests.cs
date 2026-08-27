@@ -109,6 +109,45 @@ public sealed class WorkerHostSecurityContractTests
                     'vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled',
                     'DELETE'
                 ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation',
+                    'SELECT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation',
+                    'INSERT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation',
+                    'UPDATE'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation',
+                    'DELETE'
+                ),                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled',
+                    'SELECT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled',
+                    'INSERT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled',
+                    'UPDATE'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled',
+                    'DELETE'
+                )
                 has_schema_privilege('vinx_worker', 'vinx_wolverine_queues', 'CREATE'),
                 has_database_privilege('vinx_worker', current_database(), 'TEMPORARY'),
                 has_database_privilege('vinx_worker', current_database(), 'CREATE')

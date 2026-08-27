@@ -11,12 +11,12 @@ namespace Vinx.Erp.Demandas;
 /// <summary>
 /// Varredura operacional das automações de demanda: PRIMEIRO avança gatilhos de
 /// tempo vencidos, DEPOIS marca atraso derivado (ordem determinística do mesmo
-/// tick). Cada empresa é processada em transação própria com trava de linha
-/// (FOR UPDATE SKIP LOCKED) e eventos append-only idempotentes por chave
-/// (demanda, etapa, gatilho) — replay do tick não duplica efeito nem aviso.
+/// tick). Cada empresa é UMA transação explícita: set_config vive dentro dela
+/// (set_config(...,true) morre com a transação — nunca solto), lotes FOR UPDATE
+/// SKIP LOCKED e eventos append-only idempotentes por chave (demanda, etapa,
+/// gatilho). Avisos saem pelo compositor APÓS o commit (terminal-only).
 /// Corta com decisão documentada: NÃO avança automaticamente para
-/// awaiting_approval porque o preparo de aprovação exige ator com capability;
-/// a etapa due aguarda avanço manual.
+/// awaiting_approval porque o preparo exige ator com capability.
 /// </summary>
 public sealed class DemandasAutomationScanService(
     FoundationDbContext database,
@@ -28,24 +28,32 @@ public sealed class DemandasAutomationScanService(
     private const string Operation = "demandas_automation_scan";
     private const int BatchSize = 200;
 
+    private sealed record PendingNotes(Guid DemandId, int Cycle, string Kind, IReadOnlyList<Guid> Recipients);
+
     /// <summary>Ator sintético do worker (sem PII; só alimenta GUC/correlação).</summary>
-    private static readonly ActorContext SystemActor =
-        new(Guid.Empty, Guid.NewGuid());
+    private static readonly ActorContext SystemActor = new(Guid.Empty, Guid.NewGuid());
 
     public async Task<DemandasAutomationSummary> ScanAsync(CancellationToken cancellationToken)
     {
+        // Descoberta via função SECURITY DEFINER do dono dedicado: a tabela é
+        // FORCE RLS e o worker não tem GUC aqui — consulta direta sempre é 0 linhas.
         var companies = await database.Database
-            .SqlQuery<Guid>($"SELECT DISTINCT company_id AS \"Value\" FROM demandas.demands WHERE deleted_at IS NULL AND closed_at IS NULL")
+            .SqlQuery<Guid>($"SELECT company_id AS \"Value\" FROM demandas.enumerate_automation_companies()")
             .ToListAsync(cancellationToken);
 
         var advanced = 0;
         var markedOverdue = 0;
         foreach (var companyId in companies)
         {
+            List<PendingNotes> pending = [];
             try
             {
-                advanced += await AdvanceDueStagesAsync(companyId, cancellationToken);
-                markedOverdue += await MarkOverdueAsync(companyId, cancellationToken);
+                await using var unit = await database.Database.BeginTransactionAsync(cancellationToken);
+                await SetCompanyScopeAsync(companyId, cancellationToken);
+                pending.AddRange(await AdvanceDueStagesAsync(companyId, cancellationToken));
+                pending.AddRange(await MarkOverdueAsync(companyId, cancellationToken));
+                await database.SaveChangesAsync(cancellationToken);
+                await unit.CommitAsync(cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -53,37 +61,39 @@ public sealed class DemandasAutomationScanService(
             }
             catch (Exception exception)
             {
+                database.ChangeTracker.Clear();
                 logger.LogError(
                     exception,
                     "Demandas {Operation} {Module} {Result} {Reason} {CompanyId}",
-                    Operation,
-                    Module,
-                    "unavailable",
-                    "company_batch_failed",
-                    companyId
+                    Operation, Module, "unavailable", "company_batch_failed", companyId
                 );
+                continue;
             }
+
+            // Terminal-only: avisos somente depois do commit da unidade.
+            foreach (var note in pending)
+            {
+                await SafeNotifyAsync(companyId, note.DemandId, note.Cycle, note.Kind, note.Recipients, cancellationToken);
+            }
+
+            advanced += pending.Count(note => note.Kind == DemandNotificationKinds.StageAdvanced);
+            markedOverdue += pending.Count(note => note.Kind == DemandNotificationKinds.Overdue);
         }
 
         if (advanced > 0 || markedOverdue > 0)
         {
             logger.LogInformation(
                 "Demandas {Operation} {Module} {Result} {Advanced} {Overdue}",
-                Operation,
-                Module,
-                "succeeded",
-                advanced,
-                markedOverdue
+                Operation, Module, "succeeded", advanced, markedOverdue
             );
         }
 
         return new DemandasAutomationSummary(companies.Count, advanced, markedOverdue);
     }
 
-    private async Task<int> AdvanceDueStagesAsync(Guid companyId, CancellationToken cancellationToken)
+    /// <summary>Lotes mutam entidades rastreadas; SaveChanges fica na unidade.</summary>
+    private async Task<List<PendingNotes>> AdvanceDueStagesAsync(Guid companyId, CancellationToken cancellationToken)
     {
-        await SetCompanyScopeAsync(companyId, cancellationToken);
-        var now = DateTimeOffset.UtcNow;
         var candidates = await database
             .Demands.FromSqlInterpolated(
                 $"""
@@ -103,8 +113,7 @@ public sealed class DemandasAutomationScanService(
             )
             .ToListAsync(cancellationToken);
 
-        var advanced = 0;
-        List<(Guid DemandId, int Cycle, IReadOnlyList<Guid> Recipients)> flushes = [];
+        List<PendingNotes> pending = [];
         foreach (var demand in candidates)
         {
             var stageRules = await LoadStageRulesAsync(demand.CompanyId, demand.RoutineId, cancellationToken);
@@ -116,19 +125,16 @@ public sealed class DemandasAutomationScanService(
                 // o responsável clicar (avanço manual) — registrado por demanda.
                 logger.LogInformation(
                     "Demandas {Operation} {Module} {Result} {Reason} {DemandId}",
-                    Operation,
-                    Module,
-                    "skipped",
-                    "awaiting_approval_needs_actor",
-                    demand.Id
+                    Operation, Module, "skipped", "awaiting_approval_needs_actor", demand.Id
                 );
                 continue;
             }
 
+            var now = DateTimeOffset.UtcNow;
             AppendSystemEvent(
                 demand,
                 "stage_advanced",
-                $"time:{demand.StageCycleCount}:{fromStage}:{toStage}:{demand.StageStartedAt?.UtcTicks ?? now.UtcTicks}",
+                $"time:{demand.StageCycleCount}:{fromStage}:{toStage}:{now.UtcTicks}",
                 now,
                 fromStage,
                 toStage
@@ -136,36 +142,21 @@ public sealed class DemandasAutomationScanService(
             demand.Stage = toStage;
             demand.StageStartedAt = now;
             demand.StageDueAt = ComputeDeadlineFor(stageRules, toStage, now);
-            demand.StageCycleCount = demand.StageCycleCount;
+            demand.OverdueSince = null;
             if (toStage == DemandStages.Closed)
             {
                 demand.ClosedAt = now;
             }
-            demand.OverdueSince = null;
 
-            var entry = database.Entry(demand).Property(row => row.RowVersion);
-            entry.CurrentValue = entry.OriginalValue + 1;
-            entry.IsModified = true;
-
-            advanced++;
-            flushes.Add((demand.Id, demand.StageCycleCount, await RecipientsAsync(demand, cancellationToken)));
+            MarkRowVersion(demand);
+            pending.Add(new(demand.Id, demand.StageCycleCount, DemandNotificationKinds.StageAdvanced, await RecipientsAsync(demand, cancellationToken)));
         }
 
-        if (advanced > 0)
-        {
-            await database.SaveChangesAsync(cancellationToken);
-        }
-
-        foreach (var flush in flushes)
-        {
-            await SafeNotifyAsync(companyId, flush.DemandId, flush.Cycle, DemandNotificationKinds.StageAdvanced, flush.Recipients, cancellationToken);
-        }
-        return advanced;
+        return pending;
     }
 
-    private async Task<int> MarkOverdueAsync(Guid companyId, CancellationToken cancellationToken)
+    private async Task<List<PendingNotes>> MarkOverdueAsync(Guid companyId, CancellationToken cancellationToken)
     {
-        await SetCompanyScopeAsync(companyId, cancellationToken);
         var now = DateTimeOffset.UtcNow;
         var candidates = await database
             .Demands.FromSqlInterpolated(
@@ -185,11 +176,11 @@ public sealed class DemandasAutomationScanService(
             )
             .ToListAsync(cancellationToken);
 
-        List<(Guid DemandId, int Cycle, IReadOnlyList<Guid> Recipients)> flushes = [];
+        List<PendingNotes> pending = [];
         foreach (var demand in candidates)
         {
-            // Entre "prazo efetivo vencido" e "agora" pode ter havido avanço no
-            // primeiro passo do mesmo tick: só marca se ainda houver prazo vivo.
+            // Avanços do passo 1 no mesmo tick podem ter renovado os prazos:
+            // marca apenas quem ainda está vencido após eles.
             var effective = EffectiveDeadlineOf(demand);
             if (!effective.HasValue || effective.Value >= now)
             {
@@ -197,23 +188,21 @@ public sealed class DemandasAutomationScanService(
             }
 
             demand.OverdueSince = now;
-            AppendSystemEvent(demand, "overdue", $"overdue:{demand.StageCycleCount}:{effective!.Value.UtcTicks}", now);
-            var entry = database.Entry(demand).Property(row => row.RowVersion);
-            entry.CurrentValue = entry.OriginalValue + 1;
-            entry.IsModified = true;
-            flushes.Add((demand.Id, demand.StageCycleCount, await RecipientsAsync(demand, cancellationToken)));
+            AppendSystemEvent(demand, "overdue", $"overdue:{demand.StageCycleCount}:{effective.Value.UtcTicks}", now);
+            MarkRowVersion(demand);
+            pending.Add(new(demand.Id, demand.StageCycleCount, DemandNotificationKinds.Overdue, await RecipientsAsync(demand, cancellationToken)));
         }
 
-        if (flushes.Count > 0)
-        {
-            await database.SaveChangesAsync(cancellationToken);
-        }
+        return pending;
+    }
 
-        foreach (var flush in flushes)
-        {
-            await SafeNotifyAsync(companyId, flush.DemandId, flush.Cycle, DemandNotificationKinds.Overdue, flush.Recipients, cancellationToken);
-        }
-        return flushes.Count;
+    private void MarkRowVersion(Demand demand)
+    {
+        // Raiz tocada manualmente (o interceptor avança Modified entries): fixa
+        // expected=original+1 determinístico para conflito otimista real.
+        var entry = database.Entry(demand).Property(row => row.RowVersion);
+        entry.CurrentValue = entry.OriginalValue + 1;
+        entry.IsModified = true;
     }
 
     private static DateTimeOffset? EffectiveDeadlineOf(Demand demand) =>
@@ -265,10 +254,11 @@ public sealed class DemandasAutomationScanService(
 
     private async Task<List<Guid>> RecipientsAsync(Demand demand, CancellationToken cancellationToken)
     {
-        var responsibleUser = await database.Memberships.AsNoTracking()
-            .Where(candidate => candidate.CompanyId == demand.CompanyId && candidate.Id == demand.ResponsibleMembershipId)
-            .Select(candidate => candidate.UserId)
-            .SingleOrDefaultAsync(cancellationToken);
+        // Responsável resolvido pela função do dono dedicada (memberships estão
+        // fora dos grants diretos do worker); observadores leem da própria tabela.
+        var responsibleUser = (await database.Database
+            .SqlQuery<Guid?>($"SELECT demand_responsible_user AS \"Value\" FROM demandas.demand_responsible_user({demand.Id})")
+            .SingleOrDefaultAsync(cancellationToken)) ?? Guid.Empty;
         var participantUsers = await database.DemandParticipants.AsNoTracking()
             .Where(participant => participant.CompanyId == demand.CompanyId && participant.DemandId == demand.Id && participant.DeletedAt == null)
             .Select(participant => participant.UserId)
@@ -301,18 +291,14 @@ public sealed class DemandasAutomationScanService(
             logger.LogWarning(
                 exception,
                 "Demandas {Operation} {Module} {Result} {Reason} {DemandId}",
-                Operation,
-                Module,
-                "succeeded",
-                "notification_flush_deferred",
-                demandId
+                Operation, Module, "succeeded", "notification_flush_deferred", demandId
             );
         }
     }
 
+    /// <summary>GUC scoping VIVE dentro da transação explicitamente aberta pela unidade.</summary>
     private async Task SetCompanyScopeAsync(Guid companyId, CancellationToken cancellationToken)
     {
-        // Escopo fail-closed apenas com company; user do sistema é vazio.
         await database.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT set_config('app.user_id', '', true), set_config('app.company_id', {companyId.ToString()}, true), set_config('app.correlation_id', {SystemActor.CorrelationId.ToString()}, true)",
             cancellationToken
@@ -321,3 +307,4 @@ public sealed class DemandasAutomationScanService(
 }
 
 public sealed record DemandasAutomationSummary(int CompaniesScanned, int StagesAdvanced, int DemandsMarkedOverdue);
+
