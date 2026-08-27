@@ -10,6 +10,8 @@ public sealed class AgentTaskProfileCatalog
 {
     public const string ReadOnlySummarizeProfileId = "read_only_summarize_v1";
 
+    public const string PaguaiFromDocumentProfileId = "paguai_from_document_v1";
+
     private static readonly IReadOnlyDictionary<string, AgentTaskProfile> Profiles = CreateProfiles();
 
     private AgentTaskProfileCatalog()
@@ -47,6 +49,9 @@ public sealed class AgentTaskProfileCatalog
             [ReadOnlySummarizeProfileId] = CreateReadOnlySummarize(
                 modelSelection: null,
                 AgentInputLimits.MainTurnMaxCharacters),
+            [PaguaiFromDocumentProfileId] = CreatePaguaiFromDocument(
+                modelSelection: null,
+                AgentInputLimits.MainTurnMaxCharacters),
         };
 
     private static AgentTaskProfile CreateReadOnlySummarize(
@@ -55,6 +60,22 @@ public sealed class AgentTaskProfileCatalog
         AgentTaskProfile.CreateValidated(
             ReadOnlySummarizeProfileId,
             "summarize",
+            AgentJourneyScope.Company,
+            AgentCapabilities.Read,
+            modelSelection,
+            timeout: TimeSpan.FromSeconds(30),
+            turnLimit: 1,
+            maxTotalTokens: 8_000,
+            allowedTools: [],
+            allowDocumentAttachments: true,
+            maxInputCharacters);
+
+    private static AgentTaskProfile CreatePaguaiFromDocument(
+        AgentModelSelection? modelSelection,
+        int maxInputCharacters) =>
+        AgentTaskProfile.CreateValidated(
+            PaguaiFromDocumentProfileId,
+            PaguaiFromDocumentProfileId,
             AgentJourneyScope.Company,
             AgentCapabilities.Read,
             modelSelection,

@@ -28,6 +28,7 @@ public sealed class AgentRunner(
 {
     private const string Operation = "run";
     private const string Module = "Vinx.Erp.AI";
+    private const string ExactlyOneAttachmentRequired = "exactly_one_attachment_required";
     private const string ExecutionLogTemplate = "Agent execution {Operation} {Module} {Result} {Reason} {ElapsedMs}";
 
     private static readonly IReadOnlySet<string> NoRequiredOutputFields = new HashSet<string>();
@@ -77,6 +78,11 @@ public sealed class AgentRunner(
             return Finish(AgentOutcomeStatus.Invalid, AgentOutcomeReason.AttachmentsNotAllowed, actor, stopwatch);
         }
 
+        if (profile!.ProfileId == AgentTaskProfileCatalog.PaguaiFromDocumentProfileId && attachmentIds.Count != 1)
+        {
+            return Finish(AgentOutcomeStatus.Invalid, ExactlyOneAttachmentRequired, actor, stopwatch);
+        }
+
         // 2. Contexto confiável resolvido ANTES do modelo; reason copiado.
         var resolution = await contextResolver.ResolveAsync(actor, profile!, requestedCompanyId, cancellationToken);
         if (resolution.Status != AgentContextResolutionStatus.Resolved)
@@ -94,6 +100,7 @@ public sealed class AgentRunner(
         }
 
         var turnText = message;
+        PaguaiDocumentProposalParseRequest? paguaiDocumentProposalRequest = null;
         if (attachmentIds.Count > 0)
         {
             var documentContexts = new List<DocumentContextResult>(attachmentIds.Count);
@@ -120,6 +127,15 @@ public sealed class AgentRunner(
             }
 
             turnText = ComposeTurn(message, documentContexts, profile!.MaxInputCharacters);
+            if (profile.ProfileId == AgentTaskProfileCatalog.PaguaiFromDocumentProfileId)
+            {
+                paguaiDocumentProposalRequest = new PaguaiDocumentProposalParseRequest(
+                    documentContexts[0].FileRecordId,
+                    documentContexts.SelectMany(document => document.Segments)
+                        .Select(segment => segment.SourceRef)
+                        .ToHashSet(StringComparer.Ordinal),
+                    StructuredJson: string.Empty);
+            }
         }
 
         // 3. Provider não atribuído ou cliente ausente: fail-closed até #135.
@@ -180,9 +196,13 @@ public sealed class AgentRunner(
         {
             var gated = outputGate.Evaluate(new AgentOutputGateRequest(
                 resolution.Context!,
-                ToModelResponse(response, toolCall is not null),
+                ToModelResponse(
+                    response,
+                    toolCall is not null,
+                    profile!.ProfileId == AgentTaskProfileCatalog.PaguaiFromDocumentProfileId),
                 new AgentOutputContract(profile!.Journey, profile.RequiredOutputFields ?? NoRequiredOutputFields),
-                profile.SourcesRequired));
+                profile.SourcesRequired,
+                paguaiDocumentProposalRequest));
 
             // Proposta de tool domina o desfecho do gate: segue exigindo
             // confirmação, com o texto que o gate liberou.
@@ -220,7 +240,10 @@ public sealed class AgentRunner(
     /// estruturado, sem fontes citadas e sem confiança — as regras completas
     /// permanecem no gate.
     /// </summary>
-    private static AgentModelResponse ToModelResponse(ChatResponse response, bool hasToolProposal)
+    private static AgentModelResponse ToModelResponse(
+        ChatResponse response,
+        bool hasToolProposal,
+        bool structuredOutputRequired)
     {
         var firstText = response.Messages
             .SelectMany(messageContent => messageContent.Contents)
@@ -228,8 +251,8 @@ public sealed class AgentRunner(
             .FirstOrDefault();
 
         return new AgentModelResponse(
-            firstText?.Text,
-            StructuredJson: null,
+            structuredOutputRequired ? null : firstText?.Text,
+            StructuredJson: structuredOutputRequired ? firstText?.Text : null,
             CitedSources: [],
             Confidence: null,
             HasToolProposal: hasToolProposal);
