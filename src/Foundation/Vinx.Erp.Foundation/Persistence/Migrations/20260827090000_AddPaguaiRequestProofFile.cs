@@ -21,7 +21,7 @@ public partial class AddPaguaiRequestProofFile : Migration
 
             -- Um comprovante só pode estar vinculado a um rascunho; o índice
             -- parcial único torna duplo vínculo impossível no storage.
-            CREATE UNIQUE INDEX paguai.uq_paguai_requests_proof_file
+            CREATE UNIQUE INDEX uq_paguai_requests_proof_file
                 ON paguai.requests (proof_file_id)
                 WHERE proof_file_id IS NOT NULL;
 
