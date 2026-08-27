@@ -140,6 +140,50 @@ describe("DemandasPage", () => {
     expect(screen.queryByText("Atrasos")).not.toBeInTheDocument();
   });
 
+  it("appends the next page through the load-more affordance and hides it at the end", async () => {
+    const boardSpy = vi
+      .spyOn(demandasClient, "board")
+      .mockResolvedValueOnce({
+        items: [initiationCard],
+        total: 2,
+        hasMore: true,
+        nextCursor: "cur-1",
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            ...initiationCard,
+            id: "55555555-5555-4555-8555-555555555555",
+            demandNumber: 2,
+            demandDisplayNumber: "DEM-000002",
+            title: "Renovar contrato",
+          },
+        ],
+        total: 2,
+        hasMore: false,
+        nextCursor: null,
+      });
+
+    renderPage();
+
+    expect(await screen.findByText("Pagar fornecedor")).toBeVisible();
+    const loadMore = await screen.findByTestId("demandas-load-more");
+    expect(loadMore).toBeVisible();
+
+    await userEvent.click(loadMore);
+    expect(await screen.findByText("Renovar contrato")).toBeVisible();
+    expect(screen.getByText("Pagar fornecedor")).toBeVisible();
+    expect(boardSpy).toHaveBeenLastCalledWith(
+      alfaCompanyId,
+      expect.objectContaining({ after: "cur-1" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("demandas-load-more"),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
   it("opens the deep-linked detail dialog with checklist and history", async () => {
     const spy = vi.spyOn(demandasClient, "detail").mockImplementation(
       vi.fn(() =>

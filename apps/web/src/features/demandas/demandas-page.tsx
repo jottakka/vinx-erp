@@ -103,19 +103,44 @@ export function DemandasPage() {
     }
   }, [companies, companyId]);
 
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+
   const loadBoard = useCallback(
-    async (options?: { silent?: boolean }) => {
+    async (options?: {
+      silent?: boolean;
+      append?: boolean;
+      after?: string;
+    }) => {
       if (!companyId) return;
       let active = true;
-      if (!options?.silent) setLoading(true);
+      if (!options?.silent && !options?.append) setLoading(true);
       const result = await demandasClient.board(companyId, {
         priority,
         responsibleMembershipId: responsible,
         search,
+        after: options?.after ?? undefined,
       });
       if (!active) return;
-      if (result) setCards(result.items);
-      else setError("Não foi possível carregar o quadro. Tente novamente.");
+      if (result) {
+        setTotal(result.total);
+        setHasMore(result.hasMore);
+        setNextCursor(result.nextCursor);
+        setCards((current) =>
+          options?.append
+            ? [
+                ...current,
+                ...result.items.filter(
+                  (incoming) =>
+                    !current.some((card) => card.id === incoming.id),
+                ),
+              ]
+            : result.items,
+        );
+      } else {
+        setError("Não foi possível carregar o quadro. Tente novamente.");
+      }
       setLoading(false);
       return () => {
         active = false;
@@ -125,7 +150,10 @@ export function DemandasPage() {
   );
 
   useEffect(() => {
-    void loadBoard();
+    const cleanup = loadBoard();
+    return () => {
+      void cleanup.then((dispose) => dispose?.());
+    };
   }, [loadBoard]);
 
   // Deep link /demandas?demand=<id>: abre o detalhe direto.
@@ -304,6 +332,22 @@ export function DemandasPage() {
             </Box>
           ))}
         </Box>
+        {hasMore ? (
+          <Button
+            data-testid="demandas-load-more"
+            disabled={loading}
+            onClick={() =>
+              void loadBoard({
+                silent: true,
+                append: true,
+                after: nextCursor ?? undefined,
+              })
+            }
+            variant="outlined"
+          >
+            Carregar mais ({cards.length}/{total})
+          </Button>
+        ) : null}
       </Stack>
 
       <DemandDetailDialog
