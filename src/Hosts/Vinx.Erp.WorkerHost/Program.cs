@@ -6,11 +6,13 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Vinx.Erp.Foundation.Configuration;
 using Vinx.Erp.Foundation.Identity;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Observability;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
+using Vinx.Erp.Paguai;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Email;
 using Vinx.Erp.Notifications.Providers.Meta;
@@ -136,6 +138,7 @@ builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
 builder.Services.AddScoped<INotificationProvider, EmailNotificationProvider>();
 builder.Services.AddScoped<INotificationProvider, TelegramProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
+builder.Services.AddScoped<NotificationIntentService>();
 builder.Services.AddScoped<InboundWhatsAppInteractionService>();
 builder.Services.AddScoped<InboundWhatsAppDocumentService>();
 // Storage privado condicionado por configuração (padrão do antimalware):
@@ -335,6 +338,7 @@ builder.Host.UseWolverine(options =>
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<MemberInvitationDeliveryRequestedHandler>();
     options.Discovery.IncludeType<NotificationDeliveryRequestedHandler>();
+    options.Discovery.IncludeType<PaguaiDraftCreatedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppImageReceivedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppTextCorrelationExpiredHandler>();
     options.Discovery.IncludeType<InboundWhatsAppDocumentReceivedHandler>();
@@ -349,9 +353,14 @@ builder.Host.UseWolverine(options =>
     options.ListenToPostgresqlQueue("owner-invitation-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("member-invitation-delivery").UseDurableInbox();
     options.ListenToPostgresqlQueue("notification-delivery").UseDurableInbox();
+    options.ListenToPostgresqlQueue("paguai-events").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound-documents").UseDurableInbox();
     options.ListenToPostgresqlQueue("telegram-inbound").UseDurableInbox();
+    options
+        .PublishMessage<NotificationDeliveryRequested>()
+        .ToPostgresqlQueue("notification-delivery")
+        .UseDurableOutbox();
 });
 
 

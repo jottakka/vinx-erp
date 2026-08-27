@@ -257,11 +257,23 @@ somente na transição efetiva.
 
 Nenhum envelope guarda telefone, e-mail, corpo de mensagem, payload de negócio
 ou segredo; os contatos persistem somente os endereços necessários ao provider
-e o deep-link é um selector relativo opcional. Não há
-produtor de evento de negócio nesta fatia: Paguai permanece rascunho e nenhum
-evento é fabricado. O worker de entrega (#48) e o adapter Meta (#28) consomem
-a fila `notification-delivery` em fatias posteriores; o WorkerHost não é
-alterado aqui.
+e o deep-link é um selector relativo opcional. A fatia #355 acrescenta o primeiro
+produtor Pagaí: `PaguaiDraftCreated` leva somente `CompanyId`, `DraftId` e
+`RequesterUserId` no outbox transacional. O WorkerHost consome `paguai-events`
+e chama somente `notifications.enqueue_paguai_draft_created_notification`;
+a função `SECURITY DEFINER` valida o rascunho, empresa e solicitante, resolve
+os aprovadores atuais, exclui o solicitante e fixa internamente canal `in_app`,
+template, chave idempotente `paguai.<draftId:N>.draft-created` e deep-link
+`/paguai`. Para cada intent nova, devolve seu id de delivery; o handler grava
+na mesma transação os envelopes `NotificationDeliveryRequested` e só tenta o
+flush após o commit. O `vinx_worker` não tem DML direto nas tabelas de negócio
+ou de intents e não tem `EXECUTE` no helper genérico
+`notifications.enqueue_notification_intent`; ele opera apenas pelas funções
+worker-only estreitas `enqueue_paguai_draft_created_notification`,
+`accept_notification_delivery`, `claim_notification_delivery`,
+`finalize_notification_delivery` e `release_notification_delivery`. Template
+ausente ou reprovado é falha best-effort registrada em `Warning`; não desfaz o
+rascunho confirmado.
 
 A fatia #48 estende a máquina de estados do worker
 (`pending_provider → provider_in_flight →
@@ -650,11 +662,13 @@ remover acesso ou estado observado.
 
 `vinx_notifications_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui o schema
 `notifications` (intenções, preferências e templates), com RLS forçado e
-policies restritas ao próprio owner, e as duas funções
-`SECURITY DEFINER` de enfileiramento e preferência. O runtime recebe somente
-`USAGE` no schema e `EXECUTE` nas funções — nenhum DML direto nas tabelas — e
-o worker não recebe qualquer privilégio em `notifications`. O downgrade falha
-fechado enquanto existir qualquer estado nas tabelas do schema.
+policies restritas ao próprio owner, e funções `SECURITY DEFINER` estreitas de
+enfileiramento, preferência e ciclo de entrega. O runtime recebe somente
+`USAGE` no schema e `EXECUTE` nas funções de runtime, sem DML direto nas
+tabelas. O `vinx_worker` também não recebe DML direto nem `EXECUTE` no helper
+genérico; executa somente as funções worker-only estreitas enumeradas nesta
+seção. O downgrade falha fechado enquanto existir qualquer estado nas tabelas
+do schema.
 
 A revogação de membership marca somente soft-delete e auditoria técnica da
 membership própria. O runtime recebe `UPDATE` apenas nas colunas de ciclo de

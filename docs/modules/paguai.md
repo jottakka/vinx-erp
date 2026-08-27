@@ -43,9 +43,18 @@ além do seu id quando visível ao próprio ator.
 
 Este corte não representa documento binário, cobrança ou pagamento. Também não oferece
 edição, remoção, envio, conferência, aprovação, devolução, cancelamento,
-integração de provedor, PIX, cartão, WhatsApp, MCP, outbox ou automação.
+integração de provedor, PIX, cartão, WhatsApp, MCP ou automação financeira.
 O estado permanece sempre `rascunho`; esses comportamentos permanecem bloqueados
-até as decisões de #45.
+até as decisões de #45. A #355 apenas publica `PaguaiDraftCreated` no mesmo
+commit da criação, com `CompanyId`, `DraftId` e `RequesterUserId`, e o worker
+cria alertas in-app idempotentes para aprovadores explícitos atuais. Para cada
+intent realmente criada, a função worker-only devolve um delivery id e o mesmo
+commit persiste um envelope `NotificationDeliveryRequested` por id; replay não
+devolve id nem cria envelope. O deep-link persistido é exatamente `/paguai`.
+Na inbox, somente a gramática ASCII lowercase
+`paguai.<32-hex>.draft-created` projeta `Pagaí` e `Novo rascunho para aprovação`;
+qualquer lookalike continua `Sistema` sem ecoar a chave. O evento, os metadados
+e os logs não carregam conteúdo financeiro, arquivo, URL ou PII.
 
 O módulo Paguai mantém DTOs, validação, hash e SQL parametrizado fora do
 domínio de negócio Foundation. Ele usa o único `FoundationDbContext` injetado
