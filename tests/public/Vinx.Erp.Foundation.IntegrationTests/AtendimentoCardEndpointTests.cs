@@ -143,7 +143,9 @@ public sealed class AtendimentoCardEndpointTests
         using var client = factory.CreateClient();
         var request = new CreateCardRequest(scenario.CompanyId, Guid.NewGuid(), "Hash", "Inclui cada metadado.")
         {
-            Priority = "alta", Channel = "web", SlaDueAt = DateTimeOffset.UtcNow.AddDays(1),
+            Priority = "alta",
+            Channel = "web",
+            SlaDueAt = DateTimeOffset.UtcNow.AddDays(1),
         };
         using var createdResponse = await client.PostAsJsonAsync("/atendimento/cards", request);
         Assert.Equal(HttpStatusCode.Created, createdResponse.StatusCode);
