@@ -198,18 +198,20 @@ public sealed class FoundationAuthorizedDocumentSource(
         CancellationToken cancellationToken)
     {
         // Membership revogada (soft delete, sem query filter global no mapa
-        // de memberships) não autoriza leitura.
-        var membership = await database.Memberships.SingleOrDefaultAsync(
-            membership => membership.CompanyId == companyId
+        // de memberships) não autoriza leitura. Projeta apenas o id: o grant
+        // de coluna do worker não cobre a materialização completa da entidade.
+        var membershipId = await database.Memberships
+            .Where(membership => membership.CompanyId == companyId
                 && membership.UserId == actor.UserId
-                && membership.DeletedAt == null,
-            cancellationToken);
-        if (membership is null)
+                && membership.DeletedAt == null)
+            .Select(membership => membership.Id)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (membershipId == Guid.Empty)
         {
             return (null!, MembershipRequired);
         }
 
-        if (!await capabilityEvaluator.HasGrantAsync(companyId, membership.Id, ReadOcrCapability, cancellationToken))
+        if (!await capabilityEvaluator.HasGrantAsync(companyId, membershipId, ReadOcrCapability, cancellationToken))
         {
             return (null!, CapabilityDenied);
         }

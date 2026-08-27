@@ -1,12 +1,16 @@
 using System.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Vinx.Erp.AI;
 using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Foundation.Identity;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications.Providers.Meta;
 using Vinx.Erp.Notifications.Providers.Telegram;
+using Wolverine;
+using Wolverine.EntityFrameworkCore;
 
 namespace Vinx.Erp.Notifications;
 
@@ -21,7 +25,8 @@ public sealed class InboundAgentChannelAdapter(
     IHttpClientFactory httpClientFactory,
     MetaWhatsAppOptions whatsAppOptions,
     TelegramOptions telegramOptions,
-    ILogger<InboundAgentChannelAdapter> logger)
+    ILogger<InboundAgentChannelAdapter> logger,
+    IDbContextOutbox? outbox = null)
 {
     private const string Operation = "inbound_agent_channel";
     private const string Module = "notifications";
@@ -684,6 +689,12 @@ public sealed class InboundAgentChannelAdapter(
             ("reason", reason is null ? DBNull.Value : reason)).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Insere o intent de reply e publica o envelope de entrega na MESMA
+    /// transação (ADR 0006): falha de persistência do outbox desfaz o intent;
+    /// flush pós-commit é best-effort porque o inbox durável reenvia. Em uma
+    /// transação ambiente, o commit e o flush pertencem ao dono da transação.
+    /// </summary>
     private async Task EnqueueTelegramReplyAsync(
         Guid inboundMessageId,
         string resultKind,
@@ -691,28 +702,73 @@ public sealed class InboundAgentChannelAdapter(
         string? deepLinkSelector,
         CancellationToken cancellationToken)
     {
+        Guid deliveryId;
+        var ambientTransaction = database.Database.CurrentTransaction;
+        await using var ownedTransaction = ambientTransaction is null
+            ? await database.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+        var transaction = ambientTransaction ?? ownedTransaction!;
         var connection = database.Database.GetDbConnection();
         if (!connection.State.HasFlag(ConnectionState.Open))
         {
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT delivery_id, created FROM notifications.enqueue_inbound_telegram_agent_reply("
-            + "@inbound_id, @result_kind, @reply_text, @deep_link_selector)";
-        AddParameter(command, "inbound_id", inboundMessageId);
-        AddParameter(command, "result_kind", resultKind);
-        AddParameter(command, "reply_text", text);
-        AddParameter(
-            command,
-            "deep_link_selector",
-            deepLinkSelector is null ? DBNull.Value : deepLinkSelector);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            || reader.IsDBNull(0))
+        await using (var command = connection.CreateCommand())
         {
-            throw new InvalidOperationException("Inbound Telegram Agent outbox returned no delivery.");
+            command.Transaction = transaction.GetDbTransaction();
+            command.CommandText =
+                "SELECT delivery_id, created FROM notifications.enqueue_inbound_telegram_agent_reply("
+                + "@inbound_id, @result_kind, @reply_text, @deep_link_selector)";
+            AddParameter(command, "inbound_id", inboundMessageId);
+            AddParameter(command, "result_kind", resultKind);
+            AddParameter(command, "reply_text", text);
+            AddParameter(
+                command,
+                "deep_link_selector",
+                deepLinkSelector is null ? DBNull.Value : deepLinkSelector);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+                || reader.IsDBNull(0))
+            {
+                throw new InvalidOperationException("Inbound Telegram Agent outbox returned no delivery.");
+            }
+
+            deliveryId = reader.GetGuid(0);
+            if (outbox is not null)
+            {
+                outbox.Enroll(database);
+                await outbox.PublishAsync(
+                    new NotificationDeliveryRequested(deliveryId),
+                    new DeliveryOptions { CorrelationId = inboundMessageId.ToString("D") }
+                ).ConfigureAwait(false);
+            }
+        }
+
+        if (ownedTransaction is null)
+        {
+            return;
+        }
+
+        await ownedTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        if (outbox is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await outbox.FlushOutgoingMessagesAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Inbound agent {Operation} {Module} {Result} {Reason}",
+                Operation,
+                Module,
+                "telegram_reply",
+                "outbox_flush_deferred");
         }
     }
 

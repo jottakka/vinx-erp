@@ -138,8 +138,8 @@ padronizado. `ok=true` com `result.message_id` positivo confirma o provider;
 corpo 2xx acima do limite de 8192 bytes — com ou sem anúncio de comprimento — é
 ambíguo sem ser lido até o fim. `4xx` ordinário, exceto `408`/`429`, ou
 `ok=false` é rejeição; `408`, timeout, transporte incerto e 2xx malformado
-são ambíguos terminais; `429`/`5xx` são
-transitivos e usam somente o retry finito do worker. Não há retry no adapter,
+são ambíguos terminais; `429` é
+transitivo e usa somente o retry finito do worker; `5xx` é ambíguo terminal. Não há retry no adapter,
 webhook, inbound ou resposta automática nesta fatia. Runbook:
 `docs/runbooks/telegram-outbound.md`.
 

@@ -39,8 +39,8 @@ public sealed class PaguaiProposalService(
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
             await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
             var databaseNow = await ReadDatabaseClockAsync(cancellationToken);
-            var membership = await FindMembershipAsync(actor, command.CompanyId, cancellationToken);
-            if (membership is null || !await HasRequiredCapabilitiesAsync(command.CompanyId, membership.Id, cancellationToken))
+            var membershipId = await FindMembershipIdAsync(actor, command.CompanyId, cancellationToken);
+            if (membershipId == Guid.Empty || !await HasRequiredCapabilitiesAsync(command.CompanyId, membershipId, cancellationToken))
             {
                 await AppendAuditAsync(actor, command.CompanyId, "paguai.proposal.create", null,
                     AuditOutcome.Denied, "capability_denied", AuditSource.Ai, cancellationToken);
@@ -124,8 +124,8 @@ public sealed class PaguaiProposalService(
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
             await ApplyContextAsync(actor, companyId, cancellationToken);
-            var membership = await FindMembershipAsync(actor, companyId, cancellationToken);
-            if (membership is null || !await HasRequiredCapabilitiesAsync(companyId, membership.Id, cancellationToken))
+            var membershipId = await FindMembershipIdAsync(actor, companyId, cancellationToken);
+            if (membershipId == Guid.Empty || !await HasRequiredCapabilitiesAsync(companyId, membershipId, cancellationToken))
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return PaguaiProposalResult.Of(PaguaiProposalOperationState.Forbidden);
@@ -178,8 +178,8 @@ public sealed class PaguaiProposalService(
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
             await ApplyContextAsync(actor, companyId, cancellationToken);
-            var membership = await FindMembershipAsync(actor, companyId, cancellationToken);
-            if (membership is null || !await HasRequiredCapabilitiesAsync(companyId, membership.Id, cancellationToken))
+            var membershipId = await FindMembershipIdAsync(actor, companyId, cancellationToken);
+            if (membershipId == Guid.Empty || !await HasRequiredCapabilitiesAsync(companyId, membershipId, cancellationToken))
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return PaguaiProposalResult.Of(PaguaiProposalOperationState.NotFound);
@@ -332,13 +332,19 @@ public sealed class PaguaiProposalService(
         }
     }
 
-    private Task<Membership?> FindMembershipAsync(
+    /// <summary>
+    /// Projeta apenas o id da membership: o grant de coluna do worker não
+    /// cobre a materialização completa da entidade.
+    /// </summary>
+    private Task<Guid> FindMembershipIdAsync(
         ActorContext actor,
         Guid companyId,
         CancellationToken cancellationToken) =>
-        database.Memberships.SingleOrDefaultAsync(membership =>
-            membership.CompanyId == companyId && membership.UserId == actor.UserId,
-            cancellationToken);
+        database.Memberships
+            .Where(membership => membership.CompanyId == companyId
+                && membership.UserId == actor.UserId)
+            .Select(membership => membership.Id)
+            .SingleOrDefaultAsync(cancellationToken);
 
     private Task<PaguaiDraftProposal?> FindByRequestAsync(
         ActorContext actor,

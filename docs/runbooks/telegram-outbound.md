@@ -45,9 +45,9 @@ registra webhook nem processa mensagens recebidas.
   `HttpClient` nomeado. Isso não desativa telemetria ou instrumentação externa
   autorizada.
 - Estados: `pending_delivery → pending_provider → provider_in_flight →
-  delivered|provider_failed|provider_ambiguous`. `429` e `5xx` liberam a
-  tentativa para o retry finito do worker (1s/5s/30s); `408`, timeout,
-  transporte incerto e resposta 2xx malformada fecham como
+  delivered|provider_failed|provider_ambiguous`. `429` libera a tentativa para
+  o retry finito do worker (1s/5s/30s); `408`, timeout, transporte incerto,
+  `5xx` e resposta 2xx malformada fecham como
   `provider_ambiguous`, sem reenvio cego.
 - Para rotacionar o token: gere/revogue pelo BotFather conforme o procedimento
   aprovado, atualize o secret store, reinicie o WorkerHost e confirme que não

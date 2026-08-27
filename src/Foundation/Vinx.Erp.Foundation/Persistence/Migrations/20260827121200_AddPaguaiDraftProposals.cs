@@ -156,6 +156,31 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // Propostas e o vínculo draft→proposta são estado terminal e
+            // proveniência financeira: recusa fail-closed enquanto existir
+            // qualquer proposta ou request que preserve a proveniência.
+            migrationBuilder.Sql(
+                """
+                ALTER TABLE paguai.draft_proposals NO FORCE ROW LEVEL SECURITY;
+                ALTER TABLE paguai.requests NO FORCE ROW LEVEL SECURITY;
+
+                DO $block$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM paguai.draft_proposals) THEN
+                        RAISE EXCEPTION 'cannot downgrade paguai proposals while any proposal exists'
+                            USING ERRCODE = '23514';
+                    END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM paguai.requests
+                        WHERE source_proposal_id IS NOT NULL) THEN
+                        RAISE EXCEPTION 'cannot downgrade paguai proposals while drafts keep provenance'
+                            USING ERRCODE = '23514';
+                    END IF;
+                END;
+                $block$;
+
+                ALTER TABLE paguai.requests FORCE ROW LEVEL SECURITY;
+                """);
             migrationBuilder.DropForeignKey(
                 name: "fk_requests_draft_proposals_company_id_source_proposal_id",
                 schema: "paguai",

@@ -9,7 +9,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { isCanonicalUuid } from "../../shared/http/bff-response";
 import { PageHeader } from "../../shared/ui/page-header";
@@ -92,11 +92,29 @@ function TelegramCompanySelection({
   const [companyId, setCompanyId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<"idle" | "saved" | "failed">("idle");
+  // Uma tentativa estável por (mensagem, empresa): um 5xx/perda de resposta
+  // reenvia o MESMO requestId para o receipt de idempotência do backend.
+  const selectionAttemptRef = useRef<{
+    companyId: string;
+    requestId: string;
+  } | null>(null);
+
+  function resolveSelectionRequestId(selectedCompanyId: string) {
+    const attempt = selectionAttemptRef.current;
+    if (attempt && attempt.companyId === selectedCompanyId) {
+      return attempt.requestId;
+    }
+
+    const requestId = crypto.randomUUID();
+    selectionAttemptRef.current = { companyId: selectedCompanyId, requestId };
+    return requestId;
+  }
 
   async function selectCompany() {
     if (!companyId || submitting) return;
     setSubmitting(true);
     setResult("idle");
+    const requestId = resolveSelectionRequestId(companyId);
     try {
       const tokenResponse = await fetch(
         "/foundation/identity/browser-session/antiforgery",
@@ -121,7 +139,7 @@ function TelegramCompanySelection({
         body: JSON.stringify({
           companyId,
           inboundMessageId,
-          requestId: crypto.randomUUID(),
+          requestId,
         }),
         cache: "no-store",
         credentials: "same-origin",

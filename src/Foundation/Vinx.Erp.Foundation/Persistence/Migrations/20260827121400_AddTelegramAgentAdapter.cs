@@ -1015,12 +1015,21 @@ public partial class AddTelegramAgentAdapter : Migration
             REVOKE ALL ON FUNCTION notifications.get_telegram_notification_delivery_target(uuid, uuid)
                 FROM PUBLIC, vinx_worker, vinx_migrator;
             DROP FUNCTION notifications.get_telegram_notification_delivery_target(uuid, uuid);
+            -- Corpo exato da definição pré-branch (20260826121000): validação
+            -- de nulos, guarda btrim e a linha (NULL, NULL) quando nada é visível.
             CREATE FUNCTION notifications.get_telegram_notification_delivery_target(
-                p_delivery_id uuid, p_attempt_id uuid)
+                p_delivery_id uuid,
+                p_attempt_id uuid)
             RETURNS TABLE (chat_id text, message_text text)
-            LANGUAGE sql SECURITY DEFINER
-            SET search_path TO pg_catalog, notifications, pg_temp
-            AS $function$
+            LANGUAGE plpgsql SECURITY DEFINER
+                SET search_path TO pg_catalog, notifications, pg_temp
+                AS $function$
+            BEGIN
+                IF p_delivery_id IS NULL OR p_attempt_id IS NULL THEN
+                    RAISE EXCEPTION 'notification delivery parameters are invalid' USING ERRCODE = '22023';
+                END IF;
+
+                RETURN QUERY
                 SELECT contact.address, template.telegram_text
                 FROM notifications.notification_intents AS intent
                 JOIN notifications.notification_recipient_contacts AS contact
@@ -1031,14 +1040,24 @@ public partial class AddTelegramAgentAdapter : Migration
                     ON template.company_id = intent.company_id
                     AND template.channel = intent.channel
                     AND template.template_key = intent.template_key
-                WHERE intent.id = p_delivery_id AND intent.channel = 'telegram'
+                WHERE intent.id = p_delivery_id
+                    AND intent.channel = 'telegram'
                     AND intent.status = 'provider_in_flight'
                     AND intent.provider_attempt_id = p_attempt_id
-                    AND contact.is_validated AND template.is_approved
-                    AND template.telegram_text IS NOT NULL;
+                    AND contact.is_validated
+                    AND template.is_approved
+                    AND template.telegram_text IS NOT NULL
+                    AND btrim(template.telegram_text) <> '';
+
+                IF NOT FOUND THEN
+                    RETURN QUERY SELECT NULL::text, NULL::text;
+                END IF;
+            END;
             $function$;
             ALTER FUNCTION notifications.get_telegram_notification_delivery_target(uuid, uuid)
                 OWNER TO vinx_notifications_owner;
+            REVOKE ALL ON FUNCTION notifications.get_telegram_notification_delivery_target(uuid, uuid)
+                FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION notifications.get_telegram_notification_delivery_target(uuid, uuid)
                 TO vinx_worker;
 
@@ -1193,34 +1212,60 @@ public partial class AddTelegramAgentAdapter : Migration
                 END IF;
             END;
             $function$;
+            -- Corpo exato da definição pré-branch (20260826140000), incluindo
+            -- a validação de nulo, o comentário e a ACL original.
             CREATE OR REPLACE FUNCTION notifications.complete_inbound_telegram_text(
                 p_inbound_id uuid)
             RETURNS TABLE (status text, transitioned boolean)
             LANGUAGE plpgsql SECURITY DEFINER
-            SET search_path TO pg_catalog, notifications, pg_temp
-            AS $function$
+                SET search_path TO pg_catalog, notifications, pg_temp
+                AS $function$
             DECLARE
                 v_status text;
                 v_resolution_state text;
             BEGIN
+                IF p_inbound_id IS NULL THEN
+                    RAISE EXCEPTION 'inbound telegram text receipt id is required' USING ERRCODE = '22023';
+                END IF;
+
                 SELECT message.status, message.resolution_state
                     INTO v_status, v_resolution_state
                 FROM notifications.inbound_telegram_messages AS message
-                WHERE message.id = p_inbound_id FOR UPDATE;
-                IF NOT FOUND THEN RETURN QUERY SELECT 'not_found'::text, false; RETURN; END IF;
+                WHERE message.id = p_inbound_id
+                    FOR UPDATE;
+
+                IF NOT FOUND THEN
+                    RETURN QUERY SELECT 'not_found'::text, false;
+                    RETURN;
+                END IF;
+
                 IF v_resolution_state <> 'admitted' THEN
-                    RETURN QUERY SELECT 'not_admitted'::text, false; RETURN;
+                    RETURN QUERY SELECT 'not_admitted'::text, false;
+                    RETURN;
                 END IF;
+
                 IF v_status <> 'pending' THEN
-                    RETURN QUERY SELECT 'completed'::text, false; RETURN;
+                    RETURN QUERY SELECT 'completed'::text, false;
+                    RETURN;
                 END IF;
+
                 UPDATE notifications.inbound_telegram_messages AS message
                 SET status = 'completed', completed_at = clock_timestamp()
-                WHERE message.id = p_inbound_id AND message.status = 'pending'
+                WHERE message.id = p_inbound_id
+                    AND message.status = 'pending'
                     AND message.resolution_state = 'admitted';
+
                 RETURN QUERY SELECT 'completed'::text, true;
             END;
             $function$;
+            COMMENT ON FUNCTION notifications.complete_inbound_telegram_text(uuid) IS
+                'Registra somente o recibo técnico da fila Telegram; não confirma resposta humana nem processa o texto.';
+            ALTER FUNCTION notifications.complete_inbound_telegram_text(uuid)
+                OWNER TO vinx_notifications_owner;
+            REVOKE ALL ON FUNCTION notifications.complete_inbound_telegram_text(uuid)
+                FROM PUBLIC, vinx_migrator;
+            GRANT EXECUTE ON FUNCTION notifications.complete_inbound_telegram_text(uuid)
+                TO vinx_worker;
             ALTER FUNCTION notifications.resolve_inbound_telegram_actor(bigint)
                 OWNER TO vinx_notifications_owner;
             ALTER FUNCTION notifications.admit_inbound_telegram_text(uuid, bigint, bigint, bigint, text)

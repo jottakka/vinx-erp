@@ -15,6 +15,8 @@ using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Telegram;
 using Wolverine;
+using Microsoft.Extensions.Logging.Abstractions;
+using Wolverine.EntityFrameworkCore;
 using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Serialization;
 using Xunit;
@@ -1405,4 +1407,192 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         string ExceptionType,
         string ExceptionMessage
     );
+
+    [Fact]
+    public async Task Worker_outbox_failure_rolls_back_telegram_selection_intent_and_envelope_then_recovers()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        const string address = "841001";
+        var first = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: address,
+            telegramContactValidated: true
+        );
+        var second = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: address,
+            telegramContactValidated: true
+        );
+        await RebindCompanyToLinkedUserAsync(
+            factory,
+            second.CompanyId,
+            second.RecipientUserId,
+            first.RecipientUserId,
+            address);
+        var inboundId = Guid.NewGuid();
+        var admission = await AdmitSelectionMessageAsync(factory, inboundId, 1, 1, address);
+        Assert.Equal("selection_required", admission.Resolution);
+
+        await SetTelegramWorkerOutboxInsertAsync(factory, granted: false);
+        try
+        {
+            await using var worker = new NotificationWorkerHostFactory(
+                factory.Fixture.WorkerConnectionString
+            );
+            await using (var scope = worker.Services.CreateAsyncScope())
+            {
+                var handler = new WorkerHostTypes.InboundTelegramTextReceivedHandler(
+                    scope.ServiceProvider.GetRequiredService<FoundationDbContext>(),
+                    NullLogger<WorkerHostTypes.InboundTelegramTextReceivedHandler>.Instance,
+                    adapter: null,
+                    outbox: scope.ServiceProvider.GetRequiredService<IDbContextOutbox>()
+                );
+                await Assert.ThrowsAnyAsync<Exception>(() =>
+                    handler.Handle(
+                        new InboundTelegramTextReceived(inboundId),
+                        CancellationToken.None
+                    )
+                );
+            }
+
+            Assert.Equal(0L, await CountSelectionIntentsAsync(factory, inboundId));
+            Assert.Equal(0L, await CountSelectionAuditsAsync(factory, inboundId));
+            Assert.Equal(0L, await CountWorkerOutgoingEnvelopesAsync(factory));
+        }
+        finally
+        {
+            await SetTelegramWorkerOutboxInsertAsync(factory, granted: true);
+        }
+
+        await using (var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        ))
+        await using (var scope = worker.Services.CreateAsyncScope())
+        {
+            var handler = new WorkerHostTypes.InboundTelegramTextReceivedHandler(
+                scope.ServiceProvider.GetRequiredService<FoundationDbContext>(),
+                NullLogger<WorkerHostTypes.InboundTelegramTextReceivedHandler>.Instance,
+                adapter: null,
+                outbox: scope.ServiceProvider.GetRequiredService<IDbContextOutbox>()
+            );
+            await handler.Handle(
+                new InboundTelegramTextReceived(inboundId),
+                CancellationToken.None
+            );
+        }
+
+        Assert.Equal(1L, await CountSelectionIntentsAsync(factory, inboundId));
+    }
+
+    private static async Task RebindCompanyToLinkedUserAsync(
+        FoundationApiFactory factory,
+        Guid companyId,
+        Guid oldUserId,
+        Guid linkedUserId,
+        string address)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            DELETE FROM notifications.notification_recipient_contacts
+            WHERE company_id = @company_id AND user_id = @old_user_id AND channel = 'telegram';
+            DELETE FROM foundation.memberships
+            WHERE company_id = @company_id AND user_id = @old_user_id;
+            INSERT INTO foundation.memberships (
+                id, company_id, user_id, created_by_user_id, updated_by_user_id,
+                request_id, created_at, updated_at)
+            VALUES (
+                gen_random_uuid(), @company_id, @linked_user_id, @actor, @actor,
+                gen_random_uuid(), clock_timestamp(), clock_timestamp());
+            INSERT INTO notifications.notification_recipient_contacts (
+                company_id, user_id, channel, address, is_validated, updated_by_user_id)
+            VALUES (@company_id, @linked_user_id, 'telegram', @address, true, @linked_user_id);
+            """,
+            administrator);
+        command.Parameters.AddWithValue("company_id", companyId);
+        command.Parameters.AddWithValue("old_user_id", oldUserId);
+        command.Parameters.AddWithValue("linked_user_id", linkedUserId);
+        command.Parameters.AddWithValue("actor", factory.ActorUserId);
+        command.Parameters.AddWithValue("address", address);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<(string Status, string Resolution, Guid? DeliveryId)> AdmitSelectionMessageAsync(
+        FoundationApiFactory factory,
+        Guid inboundId,
+        long updateId,
+        long messageId,
+        string address)
+    {
+        await using var runtime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT status, resolution_state, delivery_id
+            FROM notifications.admit_inbound_telegram_message(
+                @id, @update_id, @chat_id, @message_id,
+                'text', 'Mensagem sintética', NULL, NULL, NULL)
+            """,
+            runtime);
+        command.Parameters.AddWithValue("id", inboundId);
+        command.Parameters.AddWithValue("update_id", updateId);
+        command.Parameters.AddWithValue("chat_id", long.Parse(address, System.Globalization.CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("message_id", messageId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetGuid(2));
+    }
+
+    private static async Task SetTelegramWorkerOutboxInsertAsync(
+        FoundationApiFactory factory,
+        bool granted)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"{(granted ? "GRANT" : "REVOKE")} INSERT ON vinx_wolverine_worker.wolverine_outgoing_envelopes {(granted ? "TO" : "FROM")} vinx_worker",
+            connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<long> CountSelectionIntentsAsync(
+        FoundationApiFactory factory,
+        Guid inboundId)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM notifications.notification_intents WHERE event_key = @event_key",
+            connection);
+        command.Parameters.AddWithValue("event_key", $"telegram-agent:{inboundId}:selection_required");
+        return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task<long> CountSelectionAuditsAsync(
+        FoundationApiFactory factory,
+        Guid inboundId)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT count(*) FROM audit.audit_events
+            WHERE action = 'agent.channel.selection_required'
+              AND resource_type = 'inbound_telegram_message'
+              AND resource_id = @inbound_id
+            """,
+            connection);
+        command.Parameters.AddWithValue("inbound_id", inboundId);
+        return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task<long> CountWorkerOutgoingEnvelopesAsync(
+        FoundationApiFactory factory)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM vinx_wolverine_worker.wolverine_outgoing_envelopes",
+            connection);
+        return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
 }

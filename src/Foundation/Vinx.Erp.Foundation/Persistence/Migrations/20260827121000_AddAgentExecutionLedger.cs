@@ -76,6 +76,24 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // O ledger é evidência durável de replay/ambiguidade: recusa
+            // fail-closed enquanto existir qualquer execução (o FORCE RLS
+            // esconde linhas sem contexto, então a checagem roda sem FORCE).
+            migrationBuilder.Sql(
+                """
+                ALTER TABLE foundation.agent_execution_ledger NO FORCE ROW LEVEL SECURITY;
+
+                DO $block$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM foundation.agent_execution_ledger) THEN
+                        RAISE EXCEPTION 'cannot downgrade agent execution ledger while executions exist'
+                            USING ERRCODE = '23514';
+                    END IF;
+                END;
+                $block$;
+
+                ALTER TABLE foundation.agent_execution_ledger FORCE ROW LEVEL SECURITY;
+                """);
             migrationBuilder.DropTable(
                 name: "agent_execution_ledger",
                 schema: "foundation");
