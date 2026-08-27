@@ -4,6 +4,8 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 const ALLOWED_PROFILES = new Set(["maria", "beatriz", "joao", "clara"]);
+const AGENT_MODES = new Set(["deterministic", "real"]);
+const AGENT_PROVIDER_API_KEY = "VINX_AGENT_PROVIDER_API_KEY";
 const WEB_HOST = "127.0.0.1";
 const WEB_PORTS = { clara: 4175, maria: 4174 };
 const WEB_PORT = WEB_PORTS.maria;
@@ -37,18 +39,39 @@ class LauncherError extends Error {
 
 export function parseLauncherArgs(args) {
   if (
-    args.length === 2 &&
+    args.length === 4 &&
     args[0] === "--profile" &&
-    ALLOWED_PROFILES.has(args[1])
+    ALLOWED_PROFILES.has(args[1]) &&
+    args[2] === "--agent-mode" &&
+    AGENT_MODES.has(args[3])
   ) {
-    return { mode: "single", profile: args[1] };
+    return { mode: "single", profile: args[1], agentMode: args[3] };
   }
 
-  if (args.length === 2 && args[0] === "--profiles" && args[1] === "maria,clara") {
-    return { mode: "shared", profiles: ["maria", "clara"] };
+  if (
+    args.length === 4 &&
+    args[0] === "--profiles" &&
+    args[1] === "maria,clara" &&
+    args[2] === "--agent-mode" &&
+    AGENT_MODES.has(args[3])
+  ) {
+    return { mode: "shared", profiles: ["maria", "clara"], agentMode: args[3] };
   }
 
   throw new LauncherError("invalid_arguments");
+}
+
+function hasValidAgentProviderCredential(environment) {
+  const value = environment[AGENT_PROVIDER_API_KEY];
+  return typeof value === "string" && value.trim().length > 0 && !/[\0\r\n]/.test(value);
+}
+
+function childEnvironment(environment, agentMode, serverProcess) {
+  const child = { ...environment };
+  if (agentMode !== "real" || !serverProcess) {
+    delete child[AGENT_PROVIDER_API_KEY];
+  }
+  return child;
 }
 
 export function parseReadyOrigin(line) {
@@ -435,11 +458,13 @@ function startHost(request, deps) {
       ...(request.mode === "shared"
         ? ["--profiles", "maria,clara"]
         : ["--profile", request.profile]),
+      "--agent-mode",
+      request.agentMode,
     ],
     {
       cwd: deps.repositoryRoot,
       detached: deps.platform !== "win32",
-      env: deps.environment,
+      env: childEnvironment(deps.environment, request.agentMode, true),
       stdio: ["ignore", "pipe", "pipe"],
     },
     {
@@ -451,7 +476,7 @@ function startHost(request, deps) {
   );
 }
 
-function startVite(apiOrigin, port, deps) {
+function startVite(apiOrigin, port, agentMode, deps) {
   const viteCli = path.resolve(
     deps.repositoryRoot,
     "node_modules/vite/bin/vite.js",
@@ -469,7 +494,10 @@ function startVite(apiOrigin, port, deps) {
     {
       cwd: path.resolve(deps.repositoryRoot, "apps/web"),
       detached: deps.platform !== "win32",
-      env: { ...deps.environment, VINX_API_ORIGIN: apiOrigin },
+      env: {
+        ...childEnvironment(deps.environment, agentMode, false),
+        VINX_API_ORIGIN: apiOrigin,
+      },
       stdio: ["ignore", "ignore", "ignore"],
     },
     { exit: "vite_exit", spawn: "vite_spawn_failed" },
@@ -478,7 +506,7 @@ function startVite(apiOrigin, port, deps) {
 }
 
 async function runSingleSupervised(profile, deps, signals, children) {
-  children.host = startHost({ mode: "single", profile }, deps);
+  children.host = startHost({ mode: "single", profile, agentMode: deps.agentMode }, deps);
   const hostFailure = waitForHostFailure(children.host.child.stderr);
   const hostOutcome = hostOutcomeWithDiagnostic(
     children.host.outcome,
@@ -509,7 +537,7 @@ async function runSingleSupervised(profile, deps, signals, children) {
   if (signal) return signal;
   const apiOrigin = event.value;
 
-  children.vite = startVite(apiOrigin, WEB_PORT, deps);
+  children.vite = startVite(apiOrigin, WEB_PORT, deps.agentMode, deps);
   event = await Promise.race([
     children.vite.spawned.then(() => ({ kind: "spawned" })),
     hostOutcome,
@@ -554,7 +582,7 @@ async function runSingleSupervised(profile, deps, signals, children) {
 }
 
 async function runSharedSupervised(deps, signals, children) {
-  children.host = startHost({ mode: "shared" }, deps);
+  children.host = startHost({ mode: "shared", agentMode: deps.agentMode }, deps);
   const hostFailure = waitForHostFailure(children.host.child.stderr);
   const hostOutcome = hostOutcomeWithDiagnostic(
     children.host.outcome,
@@ -581,7 +609,7 @@ async function runSharedSupervised(deps, signals, children) {
   if (signal) return signal;
   const readiness = event.value;
 
-  children.mariaVite = startVite(readiness.mariaApiOrigin, WEB_PORTS.maria, deps);
+  children.mariaVite = startVite(readiness.mariaApiOrigin, WEB_PORTS.maria, deps.agentMode, deps);
   event = await Promise.race([
     children.mariaVite.spawned.then(() => ({ kind: "spawned" })),
     hostOutcome,
@@ -591,7 +619,7 @@ async function runSharedSupervised(deps, signals, children) {
   if (signal) return signal;
   confirmSpawn(children.mariaVite);
 
-  children.claraVite = startVite(readiness.claraApiOrigin, WEB_PORTS.clara, deps);
+  children.claraVite = startVite(readiness.claraApiOrigin, WEB_PORTS.clara, deps.agentMode, deps);
   event = await Promise.race([
     children.claraVite.spawned.then(() => ({ kind: "spawned" })),
     hostOutcome,
@@ -773,6 +801,10 @@ export async function runLauncher(overrides = {}) {
     ...overrides,
   };
   const request = parseLauncherArgs(deps.args);
+  if (request.agentMode === "real" && !hasValidAgentProviderCredential(deps.environment)) {
+    throw new LauncherError("invalid_agent_provider_credential");
+  }
+  deps.agentMode = request.agentMode;
   try {
     const webPorts = request.mode === "shared"
       ? [WEB_PORTS.maria, WEB_PORTS.clara]

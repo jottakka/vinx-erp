@@ -44,7 +44,13 @@ function builtE2eHostDll() {
 }
 
 function startDirectE2eHost(profile) {
-  const child = spawn("dotnet", [builtE2eHostDll(), "--profile", profile], {
+  const child = spawn("dotnet", [
+    builtE2eHostDll(),
+    "--profile",
+    profile,
+    "--agent-mode",
+    "deterministic",
+  ], {
     cwd: REPOSITORY_ROOT,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -169,7 +175,7 @@ function createHarness(overrides = {}) {
   };
 
   const deps = {
-    args: ["--profile", "maria"],
+    args: ["--profile", "maria", "--agent-mode", "deterministic"],
     repositoryRoot: "/repo",
     platform: "darwin",
     processExecPath: "/opt/node/bin/node",
@@ -242,7 +248,7 @@ function createSharedHarness(overrides = {}) {
   const output = [];
   const children = [host, mariaVite, claraVite];
   const deps = {
-    args: ["--profiles", "maria,clara"],
+    args: ["--profiles", "maria,clara", "--agent-mode", "deterministic"],
     repositoryRoot: "/repo",
     platform: "darwin",
     processExecPath: "/opt/node/bin/node",
@@ -360,17 +366,19 @@ function isPortOpen(port) {
 
 test("parseLauncherArgs accepts each allow-listed profile", () => {
   for (const profile of ["maria", "beatriz", "joao", "clara"]) {
-    assert.deepEqual(parseLauncherArgs(["--profile", profile]), {
+    assert.deepEqual(parseLauncherArgs(["--profile", profile, "--agent-mode", "deterministic"]), {
       mode: "single",
       profile,
+      agentMode: "deterministic",
     });
   }
 });
 
 test("parseLauncherArgs accepts only the exact shared Maria and Clara request", () => {
-  assert.deepEqual(parseLauncherArgs(["--profiles", "maria,clara"]), {
+  assert.deepEqual(parseLauncherArgs(["--profiles", "maria,clara", "--agent-mode", "real"]), {
     mode: "shared",
     profiles: ["maria", "clara"],
+    agentMode: "real",
   });
 });
 
@@ -378,6 +386,10 @@ test("parseLauncherArgs rejects missing, extra, duplicate, and unknown arguments
   for (const args of [
     [],
     ["--profile"],
+    ["--profile", "maria"],
+    ["--profiles", "maria,clara"],
+    ["--profile", "maria", "--agent-mode"],
+    ["--profile", "maria", "--agent-mode", "unknown"],
     ["--profile", "maria", "extra"],
     ["--profile", "maria", "--profile", "clara"],
     ["--profile", "desconhecido"],
@@ -392,6 +404,48 @@ test("parseLauncherArgs rejects missing, extra, duplicate, and unknown arguments
       /E2E launcher failed: invalid_arguments/,
     );
   }
+});
+
+test("real mode rejects a missing or invalid provider key before checking ports or spawning the host", async () => {
+  for (const providerKey of [undefined, "", "  ", "invalid\nkey"]) {
+    const harness = createSharedHarness({
+      args: ["--profiles", "maria,clara", "--agent-mode", "real"],
+      environment: { KEEP_ME: "yes", VINX_AGENT_PROVIDER_API_KEY: providerKey },
+    });
+
+    await assert.rejects(
+      runLauncher(harness.deps),
+      /E2E launcher failed: invalid_agent_provider_credential/,
+    );
+    assert.deepEqual(harness.events, []);
+    assert.deepEqual(harness.spawns, []);
+  }
+});
+
+test("deterministic mode strips the provider key from every child environment", async () => {
+  const harness = createSharedHarness({
+    environment: { KEEP_ME: "yes", VINX_AGENT_PROVIDER_API_KEY: "real-key" },
+  });
+
+  assert.equal(await runLauncher(harness.deps), 0);
+  assert.equal(harness.spawns.length, 3);
+  for (const child of harness.spawns) {
+    assert.equal(child.options.env.VINX_AGENT_PROVIDER_API_KEY, undefined);
+  }
+});
+
+test("real mode passes the provider key only to the E2E host and never publishes it", async () => {
+  const providerKey = "real-key";
+  const harness = createSharedHarness({
+    args: ["--profiles", "maria,clara", "--agent-mode", "real"],
+    environment: { KEEP_ME: "yes", VINX_AGENT_PROVIDER_API_KEY: providerKey },
+  });
+
+  assert.equal(await runLauncher(harness.deps), 0);
+  assert.equal(harness.spawns[0].options.env.VINX_AGENT_PROVIDER_API_KEY, providerKey);
+  assert.equal(harness.spawns[1].options.env.VINX_AGENT_PROVIDER_API_KEY, undefined);
+  assert.equal(harness.spawns[2].options.env.VINX_AGENT_PROVIDER_API_KEY, undefined);
+  assert.doesNotMatch(harness.output.join("\n"), /real-key|opencode\.ai|deepseek-v4-flash-vision-exp/);
 });
 
 test("direct E2E host rejects unknown arguments without output or readiness", () => {
@@ -648,7 +702,12 @@ test("shared launcher starts one host and two Vites on the fixed Maria and Clara
     ["port-checked:4174", "port-checked:4175"],
   );
   assert.equal(harness.spawns.length, 3);
-  assert.deepEqual(harness.spawns[0].args.slice(-2), ["--profiles", "maria,clara"]);
+  assert.deepEqual(harness.spawns[0].args.slice(-4), [
+    "--profiles",
+    "maria,clara",
+    "--agent-mode",
+    "deterministic",
+  ]);
   assert.deepEqual(harness.spawns[1].args.slice(-3), ["--port", "4174", "--strictPort"]);
   assert.deepEqual(harness.spawns[2].args.slice(-3), ["--port", "4175", "--strictPort"]);
   assert.equal(harness.spawns[1].options.env.VINX_API_ORIGIN, "http://127.0.0.1:54321");
@@ -1140,6 +1199,8 @@ test("runLauncher starts exact child commands and shuts Vite down before host", 
       "--",
       "--profile",
       "maria",
+      "--agent-mode",
+      "deterministic",
     ],
     options: {
       cwd: "/repo",

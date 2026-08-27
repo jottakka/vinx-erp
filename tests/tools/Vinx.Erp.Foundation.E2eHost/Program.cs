@@ -1,12 +1,20 @@
 using System.Runtime.InteropServices;
+using Vinx.Erp.AI;
 using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
 
 return await RunAsync(args);
 
 static async Task<int> RunAsync(string[] arguments)
 {
     if (!E2eFixtureHostOptions.TryParse(arguments, out var request) || request is null)
+    {
+        return 2;
+    }
+
+    if (request.AgentMode == E2eFixtureAgentMode.Real
+        && !OpenAiCompatibleChatClient.HasServerCredential(Environment.GetEnvironmentVariable))
     {
         return 2;
     }
@@ -34,16 +42,29 @@ static async Task<int> RunAsync(string[] arguments)
                     }
 
                     break;
-                }
+            }
             case E2eFixtureHostMode.Shared:
                 {
-                    var testAgentModel = new DeterministicE2eAgentModel();
-                    var testAgentRunOptions = new AgentRunOptions
+                    var (testAgentModel, testAgentRunOptions) = request.AgentMode switch
                     {
-                        Provider = AgentRunOptions.OpenAiCompatibleProvider,
-                        Endpoint = new Uri("https://agent-provider.example/v1"),
-                        ApiKey = "test-agent-key",
-                        Model = "test-agent-model",
+                        E2eFixtureAgentMode.Deterministic => (
+                            (IAgentModel)new DeterministicE2eAgentModel(),
+                            new AgentRunOptions
+                            {
+                                Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                                Endpoint = new Uri("https://agent-provider.example/v1"),
+                                Model = "test-agent-model",
+                            }),
+                        E2eFixtureAgentMode.Real => (
+                            (IAgentModel?)null,
+                            new AgentRunOptions
+                            {
+                                Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                                Endpoint = new Uri("https://opencode.ai/zen/go/v1"),
+                                Model = "deepseek-v4-flash-vision-exp",
+                                ApprovedHosts = ["opencode.ai"],
+                            }),
+                        _ => throw new InvalidOperationException("The E2E agent mode was invalid."),
                     };
                     var sharedHost = await SharedE2eFixtureHost.StartAsync(
                         shutdown.Token,

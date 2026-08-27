@@ -16,16 +16,25 @@ public sealed class E2eFixtureHostOptionsTests
     public void TryParse_accepts_an_exact_allowlisted_single_profile(string profileName)
     {
         Assert.True(
-            E2eFixtureHostOptions.TryParse(["--profile", profileName], out var request));
-        Assert.Equal(new E2eFixtureHostRequest(E2eFixtureHostMode.Single, profileName), request);
+            E2eFixtureHostOptions.TryParse(
+                ["--profile", profileName, "--agent-mode", "deterministic"], out var request));
+        Assert.Equal(
+            new E2eFixtureHostRequest(
+                E2eFixtureHostMode.Single,
+                profileName,
+                E2eFixtureAgentMode.Deterministic),
+            request);
     }
 
     [Fact]
     public void TryParse_accepts_only_the_literal_shared_maria_clara_pair()
     {
         Assert.True(
-            E2eFixtureHostOptions.TryParse(["--profiles", "maria,clara"], out var request));
-        Assert.Equal(new E2eFixtureHostRequest(E2eFixtureHostMode.Shared, null), request);
+            E2eFixtureHostOptions.TryParse(
+                ["--profiles", "maria,clara", "--agent-mode", "real"], out var request));
+        Assert.Equal(
+            new E2eFixtureHostRequest(E2eFixtureHostMode.Shared, null, E2eFixtureAgentMode.Real),
+            request);
     }
 
     [Theory]
@@ -298,6 +307,9 @@ public sealed class E2eFixtureHostOptionsTests
     [
         [],
         ["--profile"],
+        ["--profile", "maria"],
+        ["--profiles", "maria,clara"],
+        ["--profile", "maria", "--agent-mode", "unknown"],
         ["maria"],
         ["--profile", "unknown"],
         ["--profile", "Maria"],

@@ -40,13 +40,22 @@ ele não compila o host implicitamente em cada execução.
 Na raiz do repositório, o modo compartilhado é o roteiro multiempresa:
 
 ```bash
-npm run dev:real-e2e -- --profiles maria,clara
+npm run dev:real-e2e -- --profiles maria,clara --agent-mode deterministic
 ```
 
 O modo compatível individual continua aceitando `--profile maria`, `beatriz`,
-`joao` ou `clara`. O modo compartilhado aceita somente o literal
-`--profiles maria,clara`; não aceita inversão, espaços, profiles extras ou
-troca por header, cookie, query string ou interface web.
+`joao` ou `clara`. Todo comando exige exatamente `--agent-mode deterministic`
+ou `--agent-mode real`; o modo compartilhado aceita somente o literal
+`--profiles maria,clara`, sem inversão, espaços, profiles extras ou troca por
+header, cookie, query string ou interface web.
+
+`deterministic` não faz rede externa e remove
+`VINX_AGENT_PROVIDER_API_KEY` de todos os filhos. `real` exige essa variável
+válida antes de verificar portas ou iniciar Docker; a chave chega somente aos
+ApiHosts, que fixam internamente o endpoint OpenAI-compatible e o modelo de
+smoke. Vite, browser, readiness e diagnóstico não recebem nem publicam chave,
+endpoint ou modelo. O smoke real só usa conteúdo sintético e continua sem
+envio de mensagens por canais.
 
 Depois do readback dos dois hosts e do HTTP dos dois Vites, o modo compartilhado
 publica somente:
@@ -100,8 +109,9 @@ printf %s '' | pbcopy
 - Maria participa de Alfa e Beta; Beatriz, somente de Alfa; João, somente de
   Beta; Clara, somente de Gama.
 - Unidades, equipes, cargos, assignments e capabilities distintos por empresa.
-- Employees em cada empresa, quatro rascunhos Paguai, cinco cards Atendimento e
-  notificações entregues, incluindo uma já lida.
+- Employees em cada empresa, quatro rascunhos Paguai, cinco cards Atendimento,
+  notificações entregues e um anexo sintético confirmado `agentic_attachment`
+  de Maria/Alfa. Não há token, endereço de canal, OCR bruto ou saída de provider.
 
 No modo compartilhado, seed e verify executam uma vez antes dos dois Kestrels.
 Uma mutação de Maria é persistida no mesmo PostgreSQL usado por Clara; Clara só

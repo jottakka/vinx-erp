@@ -28,7 +28,16 @@ public enum E2eFixtureHostMode
     Shared,
 }
 
-public sealed record E2eFixtureHostRequest(E2eFixtureHostMode Mode, string? Profile);
+public enum E2eFixtureAgentMode
+{
+    Deterministic,
+    Real,
+}
+
+public sealed record E2eFixtureHostRequest(
+    E2eFixtureHostMode Mode,
+    string? Profile,
+    E2eFixtureAgentMode AgentMode);
 
 public sealed record E2eSharedFixtureReadiness(
     Uri MariaOrigin,
@@ -45,20 +54,39 @@ public static class E2eFixtureHostOptions
     public static bool TryParse(string[] arguments, out E2eFixtureHostRequest? request)
     {
         request = null;
-        if (arguments is ["--profile", var candidate]
+        if (arguments is ["--profile", var candidate, "--agent-mode", var agentMode]
+            && TryParseAgentMode(agentMode, out var parsedAgentMode)
             && E2eFixtureProfileCatalog.TryGet(candidate, out _))
         {
-            request = new E2eFixtureHostRequest(E2eFixtureHostMode.Single, candidate);
+            request = new E2eFixtureHostRequest(
+                E2eFixtureHostMode.Single,
+                candidate,
+                parsedAgentMode);
             return true;
         }
 
-        if (arguments is ["--profiles", "maria,clara"])
+        if (arguments is ["--profiles", "maria,clara", "--agent-mode", var sharedAgentMode]
+            && TryParseAgentMode(sharedAgentMode, out var parsedSharedAgentMode))
         {
-            request = new E2eFixtureHostRequest(E2eFixtureHostMode.Shared, null);
+            request = new E2eFixtureHostRequest(
+                E2eFixtureHostMode.Shared,
+                null,
+                parsedSharedAgentMode);
             return true;
         }
 
         return false;
+    }
+
+    private static bool TryParseAgentMode(string candidate, out E2eFixtureAgentMode agentMode)
+    {
+        agentMode = candidate switch
+        {
+            "deterministic" => E2eFixtureAgentMode.Deterministic,
+            "real" => E2eFixtureAgentMode.Real,
+            _ => default,
+        };
+        return candidate is "deterministic" or "real";
     }
 }
 
