@@ -1187,10 +1187,11 @@ describe("AtendimentoPage", () => {
   it("refetches the affected card when an integrity conflict has no valid current", async () => {
     const user = userEvent.setup();
     const refreshed = { ...alfaCard, version: 2, title: "Cartão atualizado" };
+    const refreshedCards = deferred<AtendimentoCard[] | null>();
     vi.spyOn(atendimentoClient, "list")
       .mockResolvedValueOnce([alfaCard])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([refreshed]);
+      .mockReturnValueOnce(refreshedCards.promise);
     const assign = vi
       .spyOn(atendimentoClient, "assign")
       .mockResolvedValueOnce({ code: "integrity_conflict", ok: false })
@@ -1220,6 +1221,12 @@ describe("AtendimentoPage", () => {
     await waitFor(() =>
       expect(atendimentoClient.list).toHaveBeenCalledTimes(3),
     );
+    const pendingConfirm = screen.getByRole("button", {
+      name: "Atribuindo…",
+    });
+    expect(pendingConfirm).toBeDisabled();
+    expect(assign).toHaveBeenCalledTimes(1);
+    refreshedCards.resolve([refreshed]);
     expect(await screen.findByText("Cartão atualizado")).toBeVisible();
     expect(screen.getByRole("dialog")).toBeVisible();
     await user.click(
@@ -1269,6 +1276,10 @@ describe("AtendimentoPage", () => {
         "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
       ),
     ).toBeVisible();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
+    });
     expect(
       screen.queryByText("A fila foi sincronizada."),
     ).not.toBeInTheDocument();

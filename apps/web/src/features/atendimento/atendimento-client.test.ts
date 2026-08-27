@@ -303,6 +303,27 @@ describe("atendimento client", () => {
     ["unknown response key", { ...createdCard, unexpected: true }],
     ["malformed card ID", { ...createdCard, id: "not-an-id" }],
     ["malformed company ID", { ...createdCard, companyId: "not-an-id" }],
+    [
+      "nil assignee ID",
+      {
+        ...createdCard,
+        assigneeMembershipId: "00000000-0000-0000-0000-000000000000",
+      },
+    ],
+    [
+      "nil attachment ID",
+      {
+        ...createdCard,
+        attachmentFileId: "00000000-0000-0000-0000-000000000000",
+      },
+    ],
+    [
+      "nil participant ID",
+      {
+        ...createdCard,
+        participantMembershipIds: ["00000000-0000-0000-0000-000000000000"],
+      },
+    ],
     ["fractional version", { ...createdCard, version: 1.5 }],
     ["non-positive version", { ...createdCard, version: 0 }],
   ] as const)("rejects a card with %s", async (_label, card) => {

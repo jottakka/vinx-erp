@@ -41,7 +41,7 @@ export type AtendimentoCreateOptions = {
   slaDueAt?: string | null;
 };
 
-const atendimentoIdSchema = z.string().uuid();
+const atendimentoIdSchema = z.string().refine(isCanonicalUuid);
 
 const atendimentoCardSchema = z
   .object({

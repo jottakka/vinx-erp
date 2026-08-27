@@ -148,6 +148,10 @@ export function AtendimentoPage({
   const assignmentAbort = useRef<AbortController | null>(null);
   const mutationGenerations = useRef(new Map<string, number>());
   const pendingMutations = useRef(new Map<string, number>());
+  const [recoveringCardKeys, setRecoveringCardKeys] = useState<
+    readonly string[]
+  >([]);
+  const recoveryEpoch = useRef(new Map<string, number>());
 
   const createCompanies = useMemo(
     () =>
@@ -351,13 +355,24 @@ export function AtendimentoPage({
   }
 
   async function move(card: AtendimentoCard, column: AtendimentoColumn) {
-    if (card.column === column || card.column === "cancelado") return;
+    const key = recoveryKey(card.companyId, card.id);
+    if (
+      card.column === column ||
+      card.column === "cancelado" ||
+      recoveringCardKeys.includes(key)
+    )
+      return;
     const lease = beginCardMutation(card);
     if (!lease) return;
     try {
       const result = await atendimentoClient.move(card.companyId, card, column);
       if (!result.ok)
-        return recover(result.code, result.current, card.companyId, card.id);
+        return await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+        );
       applyCardSnapshot(result.card, lease);
     } finally {
       finishCardMutation(lease);
@@ -376,7 +391,7 @@ export function AtendimentoPage({
         assigneeMembershipId.trim(),
       );
       if (!result.ok) {
-        recover(result.code, result.current, card.companyId, card.id);
+        await recover(result.code, result.current, card.companyId, card.id);
         return;
       }
       applyCardSnapshot(result.card, lease);
@@ -419,7 +434,7 @@ export function AtendimentoPage({
         reason,
       );
       if (!result.ok) {
-        recover(result.code, result.current, card.companyId, card.id);
+        await recover(result.code, result.current, card.companyId, card.id);
         return;
       }
       applyCardSnapshot(result.card, lease);
@@ -439,9 +454,13 @@ export function AtendimentoPage({
     code: string,
     companyId: string,
     cardId: string,
+    key: string,
+    epoch: number,
   ) {
     const refreshedCards = await atendimentoClient.list(companyId);
+    if (recoveryEpoch.current.get(key) !== epoch) return;
     if (!refreshedCards) {
+      invalidateCard(companyId, cardId);
       setError(
         "Não foi possível sincronizar a fila. Atualize a página e tente novamente.",
       );
@@ -455,6 +474,15 @@ export function AtendimentoPage({
       setError(messageFor(code));
       return;
     }
+    invalidateCard(companyId, cardId);
+    setError("O atendimento não está mais disponível nesta empresa.");
+  }
+
+  function recoveryKey(companyId: string, cardId: string) {
+    return `${companyId}:${cardId}`;
+  }
+
+  function invalidateCard(companyId: string, cardId: string) {
     setCards((cards) =>
       cards.filter(
         (card) => card.id !== cardId || card.companyId !== companyId,
@@ -469,27 +497,39 @@ export function AtendimentoPage({
     setCancellingCard((card) =>
       card?.id === cardId && card.companyId === companyId ? null : card,
     );
-    setError("O atendimento não está mais disponível nesta empresa.");
   }
 
-  function recover(
+  async function recover(
     code: string,
     current: AtendimentoCard | undefined,
     companyId: string,
     cardId: string,
-  ) {
-    const validCurrent =
-      current?.id === cardId && current.companyId === companyId;
-    if (validCurrent) {
-      applyRecoveredCard(current);
+  ): Promise<void> {
+    const key = recoveryKey(companyId, cardId);
+    const epoch = (recoveryEpoch.current.get(key) ?? 0) + 1;
+    recoveryEpoch.current.set(key, epoch);
+    setRecoveringCardKeys((keys) =>
+      keys.includes(key) ? keys : [...keys, key],
+    );
+    try {
+      const validCurrent =
+        current?.id === cardId && current.companyId === companyId;
+      if (validCurrent) {
+        applyRecoveredCard(current);
+        setError(messageFor(code));
+        return;
+      }
+      if (code === "integrity_conflict") {
+        await reloadAfterConflict(code, companyId, cardId, key, epoch);
+        return;
+      }
       setError(messageFor(code));
-      return;
+    } finally {
+      if (recoveryEpoch.current.get(key) === epoch) {
+        recoveryEpoch.current.delete(key);
+        setRecoveringCardKeys((keys) => keys.filter((item) => item !== key));
+      }
     }
-    if (code === "integrity_conflict") {
-      void reloadAfterConflict(code, companyId, cardId);
-      return;
-    }
-    setError(messageFor(code));
   }
 
   function handleDrop(column: AtendimentoColumn) {
