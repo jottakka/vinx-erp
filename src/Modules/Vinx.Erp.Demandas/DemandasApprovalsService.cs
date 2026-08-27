@@ -253,6 +253,9 @@ public sealed class DemandasApprovalsService(
 
     private DemandOperationState ReturnToExecution(Demand demand, ActorContext actor, Guid requestId, DateTimeOffset now)
     {
+        // Veto é re-iniciação funcional: ciclo ANTES do evento/aviso, senão o
+        // dedupe por chave de ciclo suprime todos os avisos seguintes.
+        demand.StageCycleCount += 1;
         AppendEvent(actor, demand, "approval_rejected", $"reject:{requestId:N}:{demand.StageCycleCount}", now, fromStage: DemandStages.AwaitingApproval, toStage: DemandStages.Execution);
         demand.Stage = DemandStages.Execution;
         demand.StageStartedAt = now;

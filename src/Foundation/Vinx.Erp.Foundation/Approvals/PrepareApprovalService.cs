@@ -52,7 +52,8 @@ public sealed class PrepareApprovalService(
 
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
             var actorMembership = await database.Memberships.SingleOrDefaultAsync(membership =>
                 membership.CompanyId == command.CompanyId && membership.UserId == actor.UserId,
@@ -79,7 +80,7 @@ public sealed class PrepareApprovalService(
                     cancellationToken);
                 if (existing is not null)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     if (!string.Equals(existing.PayloadHash, idempotencyHash, StringComparison.Ordinal))
                     {
                         return await ReturnAuditedDenialAsync(
@@ -106,7 +107,7 @@ public sealed class PrepareApprovalService(
                     cancellationToken);
                 if (liveProposalExists)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     return await ReturnConcurrentReplayAsync(
                         actor,
                         command,
@@ -156,7 +157,7 @@ public sealed class PrepareApprovalService(
                         null,
                         "{}"), cancellationToken);
                     await database.SaveChangesAsync(cancellationToken);
-                    await transaction.CommitAsync(cancellationToken);
+                    await scope.CommitAsync(cancellationToken);
 #pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                     logger.LogInformation(
                         "Preparação de aprovação {Operation} {Module} {Result} {Reason}",
@@ -169,7 +170,7 @@ public sealed class PrepareApprovalService(
                 }
             }
 
-            await transaction.RollbackAsync(cancellationToken);
+            await scope.RollbackAsync(cancellationToken);
         }
         catch (DbUpdateException exception)
         {
@@ -278,7 +279,8 @@ public sealed class PrepareApprovalService(
     {
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, companyId, cancellationToken);
             await auditAppender.AppendAsync(new AuditEventData(
                 actor.UserId,
@@ -292,7 +294,7 @@ public sealed class PrepareApprovalService(
                 new CorrelationContext(actor.CorrelationId).CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            await scope.CommitAsync(cancellationToken);
             return AuthorizationResult<PrepareApprovalResult>.Failure(denial);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -314,7 +316,8 @@ public sealed class PrepareApprovalService(
     {
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
             var record = await database.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(candidate =>
                 candidate.CompanyId == command.CompanyId
@@ -322,7 +325,7 @@ public sealed class PrepareApprovalService(
                 && candidate.CommandName == CommandName
                 && candidate.RequestId == command.RequestId,
                 cancellationToken);
-            await transaction.RollbackAsync(cancellationToken);
+            await scope.RollbackAsync(cancellationToken);
             if (record is null)
             {
                 return await ReturnAuditedDenialAsync(
