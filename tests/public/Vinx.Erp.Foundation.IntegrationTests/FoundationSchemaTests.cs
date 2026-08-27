@@ -282,7 +282,15 @@ public sealed class FoundationSchemaTests
                     WHERE schemaname = 'demandas'
                       AND tablename = 'demands'
                       AND policyname = 'demands_demandas_owner_read'
-                      AND roles::text LIKE '%vinx_demandas_owner%')
+                      AND roles::text LIKE '%vinx_demandas_owner%'),
+                has_schema_privilege('vinx_demandas_owner', 'foundation', 'USAGE'),
+                has_table_privilege('vinx_demandas_owner', 'foundation.memberships', 'SELECT'),
+                has_table_privilege('vinx_runtime', 'demandas.demand_checklist_items', 'DELETE'),
+                EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'foundation'
+                      AND tablename = 'capabilities'
+                      AND policyname = 'capabilities_provisioning_owner')
             """,
             connection
         );
@@ -293,6 +301,10 @@ public sealed class FoundationSchemaTests
         Assert.True(reader.GetBoolean(2), "owner needs SELECT on demandas.demands");
         Assert.True(reader.GetBoolean(3), "worker must execute the enumeration function");
         Assert.True(reader.GetBoolean(4), "permissive owner-read policy must be pinned");
+        Assert.True(reader.GetBoolean(5), "owner needs USAGE on foundation for the memberships join");
+        Assert.True(reader.GetBoolean(6), "owner needs SELECT on foundation.memberships");
+        Assert.True(reader.GetBoolean(7), "runtime needs DELETE on checklist items for re-initiation reset");
+        Assert.True(reader.GetBoolean(8), "pre-existing provisioning capabilities read must remain functional");
     }
 
     [Fact]

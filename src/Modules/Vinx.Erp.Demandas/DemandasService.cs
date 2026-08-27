@@ -109,6 +109,9 @@ public sealed class DemandasService(
 
             // Contrato honesto: limit é ajustável (1..200, padrão 100) — documentado.
             var pageSize = limit is < 1 or > MaximumBoardRows ? BoardPageSize : limit;
+            // Total do conjunto FILTRADO (pré-cursor): a contagem não encolhe
+            // por página — hasMore e o envelope derivam dela.
+            var total = await query.CountAsync(cancellationToken);
             if (!string.IsNullOrWhiteSpace(after))
             {
                 if (!BoardCursor.TryDecode(after, out var decoded))
@@ -120,8 +123,6 @@ public sealed class DemandasService(
                     demand.CreatedAt > decoded.OccurredAt
                     || (demand.CreatedAt == decoded.OccurredAt && demand.Id.CompareTo(decoded.Id) > 0));
             }
-
-            var total = await query.CountAsync(cancellationToken);
             var demands = await query
                 .OrderBy(demand => demand.CreatedAt)
                 .ThenBy(demand => demand.Id)
@@ -566,8 +567,9 @@ public sealed class DemandasService(
             item.DoneByUserId = actor.UserId;
             AppendEvent(actor, demand, "checklist_item_completed", $"chk:{command.ItemId:N}", now, metadataJson: JsonSerializer.Serialize(new { item.Text }));
 
-            pending = [new(demand.StageCycleCount, DemandNotificationKinds.StageAdvanced, await RecipientsForStageChangeAsync(demand, cancellationToken))];
-
+            // Aviso de etapa SOMENTE quando o checklist realmente dispara o
+            // avanço; conclusão sem avanço não emite novo kind (histórico/checklist
+            // já evidenciam a conclusão).
             var stageRules = await LoadStageRulesForDemandAsync(demand, cancellationToken);
             if (
                 !demand.AutomationPaused
@@ -731,7 +733,7 @@ public sealed class DemandasService(
     {
         var creator = await database
             .Demands.AsNoTracking()
-            .Where(candidate => candidate.Id == demandId)
+            .Where(candidate => candidate.CompanyId == companyId && candidate.Id == demandId)
             .Select(candidate => (Guid?)candidate.CreatedByUserId)
             .SingleOrDefaultAsync(cancellationToken);
         if (creator == actor.UserId)
@@ -752,7 +754,7 @@ public sealed class DemandasService(
         }
 
         var supervised = await database.DemandParticipants.AsNoTracking().AnyAsync(
-            participant => participant.DemandId == demandId && participant.UserId == actor.UserId && participant.Role == DemandParticipantRoles.Supervisor && participant.DeletedAt == null,
+            participant => participant.CompanyId == companyId && participant.DemandId == demandId && participant.UserId == actor.UserId && participant.Role == DemandParticipantRoles.Supervisor && participant.DeletedAt == null,
             cancellationToken
         );
         return supervised ? null : DemandOperationState.CapabilityDenied;

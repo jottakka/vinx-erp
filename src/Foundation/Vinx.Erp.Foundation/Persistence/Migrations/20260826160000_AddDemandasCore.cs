@@ -234,30 +234,38 @@ public sealed class AddDemandasCore : Migration
                 WITH CHECK (company_id = NULLIF(current_setting('app.company_id', true), '')::uuid);
 
             GRANT USAGE ON SCHEMA demandas TO vinx_runtime;
-            -- Catálogo legível para o dono de provisionamento assim que existir
-            -- grant vivo (padrão capabilities_permissions_owner_granted_select).
+            -- Catálogo legível para o dono de provisionamento. Forma SEGURA da
+            -- linhagem 20260816012000/20260825100000: lista de nomes estática —
+            -- nunca EXISTS sobre role_capabilities (esse papel só tem INSERT lá;
+            -- a consulta dentro da policy falharia e inutilizaria a leitura).
             CREATE POLICY role_capabilities_demandas_owner_read
-                ON foundation.role_capabilities FOR SELECT TO vinx_provisioning_owner USING (true);
+                ON foundation.role_capabilities FOR SELECT TO vinx_provisioning_owner
+                USING (capability_id IN (
+                    '6ff8b25a-1c37-58cc-894b-97221467c3d4'::uuid,
+                    'd3c10860-a26c-5eac-b684-8e2faac9ad99'::uuid,
+                    '74403a29-bdae-55a9-b43b-774eca3f03b2'::uuid,
+                    '00b09e31-8693-5b62-b59a-cad5994f3378'::uuid,
+                    'd207f7a5-7fdb-5a7d-a87c-2b4210f36712'::uuid,
+                    'ec28a347-1ade-5586-bf33-e6f1cbd59620'::uuid));
             CREATE POLICY capabilities_demandas_owner_read
                 ON foundation.capabilities FOR SELECT TO vinx_provisioning_owner
-                USING (
-                    EXISTS (
-                        SELECT 1 FROM foundation.role_capabilities AS grant_record
-                        WHERE grant_record.capability_id = capabilities.id
-                          AND grant_record.deleted_at IS NULL
-                          AND grant_record.capability_id IN (
-                              '6ff8b25a-1c37-58cc-894b-97221467c3d4'::uuid,
-                              'd3c10860-a26c-5eac-b684-8e2faac9ad99'::uuid,
-                              '74403a29-bdae-55a9-b43b-774eca3f03b2'::uuid,
-                              '00b09e31-8693-5b62-b59a-cad5994f3378'::uuid,
-                              'd207f7a5-7fdb-5a7d-a87c-2b4210f36712'::uuid,
-                              'ec28a347-1ade-5586-bf33-e6f1cbd59620'::uuid)));
+                USING (name IN (
+                    'demandas.demand.read', 'demandas.demand.create',
+                    'demandas.demand.advance', 'demandas.demand.assign',
+                    'demandas.demand.participants.manage', 'demandas.routine.manage'));
 
             -- Espelho exato de 20260812040429: o papel dono lê as linhas que as
             -- funções SECURITY DEFINER enxergam — sem isto é permission-denied
             -- sob FORCE RLS com papel NOBYPASSRLS.
             GRANT USAGE ON SCHEMA demandas TO vinx_demandas_owner;
             GRANT SELECT ON TABLE demandas.demands TO vinx_demandas_owner;
+            -- demand_responsible_user cruza foundation.memberships: mesmo trio
+            -- de acessos do precedente authorization_owner (20260812040429).
+            GRANT USAGE ON SCHEMA foundation TO vinx_demandas_owner;
+            GRANT SELECT ON TABLE foundation.memberships TO vinx_demandas_owner;
+            CREATE POLICY memberships_demandas_owner_read
+                ON foundation.memberships FOR SELECT TO vinx_demandas_owner
+                USING (true);
 
             CREATE POLICY demands_demandas_owner_read
                 ON demandas.demands
@@ -320,7 +328,7 @@ public sealed class AddDemandasCore : Migration
             GRANT SELECT, INSERT, UPDATE ON demandas.demand_routines TO vinx_runtime;
             GRANT SELECT, INSERT, UPDATE ON demandas.demand_routine_stages TO vinx_runtime;
             GRANT SELECT, INSERT, UPDATE ON demandas.demand_participants TO vinx_runtime;
-            GRANT SELECT, INSERT, UPDATE ON demandas.demand_checklist_items TO vinx_runtime;
+            GRANT SELECT, INSERT, UPDATE, DELETE ON demandas.demand_checklist_items TO vinx_runtime;
             -- Projeção de histórico é append-only para o runtime.
             GRANT SELECT, INSERT ON demandas.demand_events TO vinx_runtime;
             """
@@ -336,9 +344,13 @@ public sealed class AddDemandasCore : Migration
             DROP POLICY demands_demandas_owner_read ON demandas.demands;
             REVOKE SELECT ON TABLE demandas.demands FROM vinx_demandas_owner;
             REVOKE USAGE ON SCHEMA demandas FROM vinx_demandas_owner;
+            DROP POLICY memberships_demandas_owner_read ON foundation.memberships;
+            REVOKE SELECT ON TABLE foundation.memberships FROM vinx_demandas_owner;
+            REVOKE USAGE ON SCHEMA foundation FROM vinx_demandas_owner;
             REVOKE ALL ON demandas.demand_events, demandas.demand_checklist_items,
                 demandas.demand_participants, demandas.demands, demandas.demand_routine_stages,
                 demandas.demand_routines FROM vinx_runtime;
+            REVOKE DELETE ON demandas.demand_checklist_items FROM vinx_runtime;
             REVOKE USAGE, SELECT ON SEQUENCE demandas.demands_demand_number_seq FROM vinx_runtime;
             REVOKE ALL ON SCHEMA demandas FROM vinx_worker;
             DROP TABLE demandas.demand_events;

@@ -16,7 +16,7 @@ Re-iniciação (voltar ao `initiation` com ciclo novo) ocorre SOMENTE quando mud
 
 MVP interno sem versão paralela. Rotas sob `/demandas`:
 
-- `GET /demandas/board?companyId=&search=&priority=&responsibleMembershipId=` — cartões derivados (`effectiveDeadline`, `isOverdue`), teto de 400 linhas.
+- `GET /demandas/board?companyId=&search=&priority=&responsibleMembershipId=` — cartões derivados (`effectiveDeadline`, `isOverdue`), limite por página ≤200 (padrão 100), continuação por cursor.
 - `GET /demandas/demands/{id}?companyId=` — detalhe com checklist, participantes vigentes e histórico append-only.
 - `POST /demandas/demands`, `/demands/{id}/advance`, `/demands/{id}/checklist-items/complete`, `/demands/{id}/responsible`, `/demands/{id}/pause`, `/demands/{id}/resume`, `/demands/{id}/resume-overdue`, `/demands/{id}/participants`; `DELETE /demands/{id}/participants/{participantId}` (query params).
 - Rotinas (CRUD capability-gated, ZERO seeds): `GET/POST /demandas/routines` e `POST /demandas/routines/{id}/status`.
