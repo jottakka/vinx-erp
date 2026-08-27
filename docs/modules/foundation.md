@@ -662,11 +662,13 @@ remover acesso ou estado observado.
 
 `vinx_notifications_owner NOLOGIN NOINHERIT NOBYPASSRLS` possui o schema
 `notifications` (intenções, preferências e templates), com RLS forçado e
-policies restritas ao próprio owner, e as duas funções
-`SECURITY DEFINER` de enfileiramento e preferência. O runtime recebe somente
-`USAGE` no schema e `EXECUTE` nas funções — nenhum DML direto nas tabelas — e
-o worker não recebe qualquer privilégio em `notifications`. O downgrade falha
-fechado enquanto existir qualquer estado nas tabelas do schema.
+policies restritas ao próprio owner, e funções `SECURITY DEFINER` estreitas de
+enfileiramento, preferência e ciclo de entrega. O runtime recebe somente
+`USAGE` no schema e `EXECUTE` nas funções de runtime, sem DML direto nas
+tabelas. O `vinx_worker` também não recebe DML direto nem `EXECUTE` no helper
+genérico; executa somente as funções worker-only estreitas enumeradas nesta
+seção. O downgrade falha fechado enquanto existir qualquer estado nas tabelas
+do schema.
 
 A revogação de membership marca somente soft-delete e auditoria técnica da
 membership própria. O runtime recebe `UPDATE` apenas nas colunas de ciclo de

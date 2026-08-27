@@ -176,6 +176,6 @@ public static partial class NotificationInboxPresentation
         return new NotificationInboxItem(id, companyId, source, eventName, createdAt, readAt, action);
     }
 
-    [GeneratedRegex("^paguai\\.[0-9a-f]{32}\\.draft-created$")]
+    [GeneratedRegex("^paguai\\.[0-9a-f]{32}\\.draft-created\\z")]
     private static partial Regex PaguaiDraftCreatedEventKeyRegex();
 }

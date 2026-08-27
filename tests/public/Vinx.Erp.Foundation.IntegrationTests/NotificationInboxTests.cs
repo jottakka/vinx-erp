@@ -35,6 +35,11 @@ public sealed class NotificationInboxTests
             "paguai.0123456789abcdef0123456789abcdef.draft-created.extra",
             "xpaguai.0123456789abcdef0123456789abcdef.draft-created",
             "paguai.0123456789abcdef0123456789abcdeg.draft-created",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created\n",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created\r\n",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created ",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created\t",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created\0",
         })
         {
             var rejected = NotificationInboxPresentation.Project(
