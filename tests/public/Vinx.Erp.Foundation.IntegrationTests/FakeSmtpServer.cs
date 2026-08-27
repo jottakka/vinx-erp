@@ -210,7 +210,6 @@ public sealed class FakeSmtpServer : IAsyncDisposable
     private static async Task<string> ReadDataAsync(NetworkStream stream)
     {
         var buffer = new StringBuilder();
-        string? previous = null;
         while (true)
         {
             var line = await ReadLineAsync(stream);
@@ -219,12 +218,7 @@ public sealed class FakeSmtpServer : IAsyncDisposable
                 break;
             }
 
-            if (previous is not null)
-            {
-                buffer.Append(previous).Append('\n');
-            }
-
-            previous = line;
+            buffer.Append(line).Append('\n');
         }
 
         return buffer.ToString();

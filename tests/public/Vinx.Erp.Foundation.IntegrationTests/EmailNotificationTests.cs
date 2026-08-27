@@ -1,3 +1,5 @@
+using System.Text;
+using MimeKit;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Notifications;
@@ -65,7 +67,11 @@ public sealed class EmailNotificationTests
         var mail = Assert.Single(smtp.Mails);
         Assert.NotNull(mail.Recipient);
         Assert.EndsWith("@example.test", mail.Recipient);
-        Assert.Contains(TestSubject, mail.Data);
+        var message = MimeMessage.Load(
+            new MemoryStream(Encoding.UTF8.GetBytes(Assert.IsType<string>(mail.Data)))
+        );
+        Assert.Equal(TestSubject, message.Subject);
+        Assert.Equal(TestBodyHtml, message.HtmlBody);
         Assert.Equal(1L, await CountFinalAuditsAsync(factory, deliveryId));
     }
 
