@@ -23,47 +23,47 @@ static async Task<int> RunAsync(string[] arguments)
         switch (request.Mode)
         {
             case E2eFixtureHostMode.Single:
-            {
-                var profile = request.Profile
-                    ?? throw new InvalidOperationException("The single E2E profile was missing.");
-                var singleHost = await E2eFixtureHost.StartAsync(profile, shutdown.Token);
-                host = singleHost;
-                if (!shutdown.IsCancellationRequested)
                 {
-                    await output.WriteSingleReadinessAsync(singleHost.Origin);
-                }
+                    var profile = request.Profile
+                        ?? throw new InvalidOperationException("The single E2E profile was missing.");
+                    var singleHost = await E2eFixtureHost.StartAsync(profile, shutdown.Token);
+                    host = singleHost;
+                    if (!shutdown.IsCancellationRequested)
+                    {
+                        await output.WriteSingleReadinessAsync(singleHost.Origin);
+                    }
 
-                break;
-            }
+                    break;
+                }
             case E2eFixtureHostMode.Shared:
-            {
-                var testAgentModel = new DeterministicE2eAgentModel();
-                var testAgentRunOptions = new AgentRunOptions
                 {
-                    Provider = AgentRunOptions.OpenAiCompatibleProvider,
-                    Endpoint = new Uri("https://agent-provider.example/v1"),
-                    ApiKey = "test-agent-key",
-                    Model = "test-agent-model",
-                };
-                var sharedHost = await SharedE2eFixtureHost.StartAsync(
-                    shutdown.Token,
-                    testAgentModel,
-                    testAgentRunOptions);
-                host = sharedHost;
-                if (!shutdown.IsCancellationRequested)
-                {
-                    await output.WriteSharedReadinessAsync(new E2eSharedFixtureReadiness(
-                        sharedHost.MariaOrigin,
-                        sharedHost.ClaraOrigin,
-                        sharedHost.DatabaseHost,
-                        sharedHost.DatabasePort,
-                        sharedHost.DatabaseName,
-                        sharedHost.DatabaseUser,
-                        sharedHost.DatabasePasswordFilePath));
-                }
+                    var testAgentModel = new DeterministicE2eAgentModel();
+                    var testAgentRunOptions = new AgentRunOptions
+                    {
+                        Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                        Endpoint = new Uri("https://agent-provider.example/v1"),
+                        ApiKey = "test-agent-key",
+                        Model = "test-agent-model",
+                    };
+                    var sharedHost = await SharedE2eFixtureHost.StartAsync(
+                        shutdown.Token,
+                        testAgentModel,
+                        testAgentRunOptions);
+                    host = sharedHost;
+                    if (!shutdown.IsCancellationRequested)
+                    {
+                        await output.WriteSharedReadinessAsync(new E2eSharedFixtureReadiness(
+                            sharedHost.MariaOrigin,
+                            sharedHost.ClaraOrigin,
+                            sharedHost.DatabaseHost,
+                            sharedHost.DatabasePort,
+                            sharedHost.DatabaseName,
+                            sharedHost.DatabaseUser,
+                            sharedHost.DatabasePasswordFilePath));
+                    }
 
-                break;
-            }
+                    break;
+                }
             default:
                 throw new InvalidOperationException("The E2E host mode was invalid.");
         }
