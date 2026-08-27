@@ -103,7 +103,7 @@ public sealed class PaguaiDraftMigrationTests
     }
 
     [Fact]
-    public async Task Candidate_read_requires_company_context_and_downgrade_restores_the_previous_body()
+    public async Task Candidate_read_requires_company_context_and_downgrade_fails_closed()
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
@@ -121,25 +121,39 @@ public sealed class PaguaiDraftMigrationTests
 
             await SetLocalContextAsync(gated, "app.company_id", seed.CompanyId.ToString());
             Assert.Equal(1L, await CountReadableCandidatesAsync(gated, seed.InboundMessageId));
+
+            // Empresa divergente do candidato sob o mesmo ator multiempresa:
+            // o binding do GUC continua segurando mesmo com membership lá.
+            await SetLocalContextAsync(
+                gated,
+                "app.company_id",
+                Guid.NewGuid().ToString()
+            );
+            Assert.Equal(0L, await CountReadableCandidatesAsync(gated, seed.InboundMessageId));
         }
         finally
         {
             await gatedTransaction.RollbackAsync();
         }
 
-        await migrator.Database.MigrateAsync(BeforeCandidateCompanyContext);
+        // A correção de segurança não é reversível: o downgrade recusa e a
+        // migration permanece aplicada com o binding intacto.
+        var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+            migrator.Database.MigrateAsync(BeforeCandidateCompanyContext)
+        );
+        Assert.Equal(PostgresErrorCodes.FeatureNotSupported, exception.SqlState);
 
-        await using var restored = await fixture.OpenAdministratorConnectionAsync();
-        await using var restoredTransaction = await restored.BeginTransactionAsync();
+        await using var afterRefusal = await fixture.OpenAdministratorConnectionAsync();
+        await using var refusalTransaction = await afterRefusal.BeginTransactionAsync();
         try
         {
-            await SetLocalContextAsync(restored, "app.user_id", seed.UserId.ToString());
-            await SetLocalContextAsync(restored, "app.company_id", string.Empty);
-            Assert.Equal(1L, await CountReadableCandidatesAsync(restored, seed.InboundMessageId));
+            await SetLocalContextAsync(afterRefusal, "app.user_id", seed.UserId.ToString());
+            await SetLocalContextAsync(afterRefusal, "app.company_id", string.Empty);
+            Assert.Equal(0L, await CountReadableCandidatesAsync(afterRefusal, seed.InboundMessageId));
         }
         finally
         {
-            await restoredTransaction.RollbackAsync();
+            await refusalTransaction.RollbackAsync();
         }
     }
 

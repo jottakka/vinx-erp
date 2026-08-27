@@ -206,6 +206,87 @@ public sealed class PaguaiInboundDocumentDraftTests
     }
 
     [Fact]
+    public async Task Second_actor_conflicting_on_a_foreign_draft_gets_no_occupant_data()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory, candidateState: "candidate");
+        using var client = factory.CreateClient();
+
+        using var first = await client.PostAsJsonAsync(
+            "/paguai/requests/from-document",
+            RequestBody(scenario)
+        );
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        using var firstDocument = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        var draftId = ReadGuid(firstDocument.RootElement, "id");
+
+        // Ocupante de outro ator: a política RLS paguai_requests_requester_isolation
+        // (requester_user_id = app.user_id) esconde o rascunho do ator atual.
+        // O recibo do ator é removido para a inserção alcançar a violação real
+        // de unicidade por documento, como na corrida de dois atores.
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            await administrator
+                .IdempotencyRecords.Where(record =>
+                    record.CompanyId == scenario.CompanyId
+                    && record.RequestId == scenario.InboundMessageId
+                )
+                .ExecuteDeleteAsync();
+        }
+        var otherUserId = Guid.NewGuid();
+        await using (var seedContext = factory.Fixture.CreateAdministratorDbContext())
+        {
+            seedContext.Users.Add(new User(otherUserId, "Outro ator", "outro-ator@example.test"));
+            await seedContext.SaveChangesAsync();
+        }
+        await using (var connection = await factory.Fixture.OpenAdministratorConnectionAsync())
+        await using (var transfer = new NpgsqlCommand(
+            "UPDATE paguai.requests SET requester_user_id = @other_user WHERE id = @draft_id",
+            connection
+        ))
+        {
+            transfer.Parameters.AddWithValue("other_user", otherUserId);
+            transfer.Parameters.AddWithValue("draft_id", draftId);
+            Assert.Equal(1, await transfer.ExecuteNonQueryAsync());
+        }
+
+        using var second = await client.PostAsJsonAsync(
+            "/paguai/requests/from-document",
+            RequestBody(scenario)
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        Assert.Equal(
+            "{\"code\":\"idempotency_conflict\"}",
+            await second.Content.ReadAsStringAsync()
+        );
+        await using var audit = factory.Fixture.CreateAdministratorDbContext();
+        var denial = Assert.Single(
+            await audit.AuditEvents.Where(auditEvent =>
+                auditEvent.Action == "source_document_conflict"
+                && auditEvent.RequestedCompanyId == scenario.CompanyId
+            ).ToListAsync()
+        );
+        // Ocupante invisível sob RLS: nenhum id ou dado do rascunho alheio.
+        Assert.Null(denial.ResourceId);
+        Assert.Equal("source_document_conflict", denial.Reason);
+        await using var verify = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(0L,
+            await verify.IdempotencyRecords.LongCountAsync(record =>
+                record.CompanyId == scenario.CompanyId
+                && record.RequestId == scenario.InboundMessageId
+            )
+        );
+        await using var ownership = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM paguai.requests WHERE source_inbound_message_id = @inbound_id",
+            ownership
+        );
+        command.Parameters.AddWithValue("inbound_id", scenario.InboundMessageId);
+        Assert.Equal(1L, await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public async Task Read_function_requires_the_explicit_company_context()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
