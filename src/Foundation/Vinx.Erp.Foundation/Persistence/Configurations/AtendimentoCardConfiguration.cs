@@ -20,6 +20,17 @@ public sealed class AtendimentoCardConfiguration : IEntityTypeConfiguration<Aten
         builder.Property(card => card.Description).HasColumnName("description").HasMaxLength(4000);
         builder.Property(card => card.Column).HasColumnName("column_name").HasMaxLength(30);
         builder
+            .Property(card => card.Priority)
+            .HasColumnName("priority")
+            .HasMaxLength(10)
+            .HasDefaultValue("media");
+        builder
+            .Property(card => card.Channel)
+            .HasColumnName("channel")
+            .HasMaxLength(12)
+            .HasDefaultValue("manual");
+        builder.Property(card => card.SlaDueAt).HasColumnName("sla_due_at");
+        builder
             .Property(card => card.AssigneeMembershipId)
             .HasColumnName("assignee_membership_id");
         builder.Property(card => card.AttachmentFileId).HasColumnName("attachment_file_id");
@@ -42,6 +53,11 @@ public sealed class AtendimentoCardConfiguration : IEntityTypeConfiguration<Aten
             .HasColumnName("row_version")
             .IsConcurrencyToken();
         builder.HasIndex(card => new { card.CompanyId, card.AttachmentFileId });
+        builder
+            .HasIndex(card => new { card.CompanyId, card.CreatedAt, card.Id })
+            .HasDatabaseName("ix_atendimento_cards_company_id_created_at_id_live")
+            .IsDescending(false, true, true)
+            .HasFilter("deleted_at IS NULL");
         builder.HasOne<FileRecord>()
             .WithMany()
             .HasForeignKey(card => new { card.CompanyId, card.AttachmentFileId })

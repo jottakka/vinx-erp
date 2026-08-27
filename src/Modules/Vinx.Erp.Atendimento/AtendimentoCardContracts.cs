@@ -1,4 +1,22 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Vinx.Erp.Atendimento;
+
+public static class AtendimentoPriority
+{
+    public const string Critical = "critica";
+    public const string High = "alta";
+    public const string Medium = "media";
+    public const string Low = "baixa";
+}
+
+public static class AtendimentoChannel
+{
+    public const string WhatsApp = "whatsapp";
+    public const string Email = "email";
+    public const string Web = "web";
+    public const string Manual = "manual";
+}
 
 public sealed record CreateAtendimentoCardCommand(
     Guid CompanyId,
@@ -7,6 +25,12 @@ public sealed record CreateAtendimentoCardCommand(
     string Description
 )
 {
+    public string? Priority { get; init; }
+
+    public string? Channel { get; init; }
+
+    public DateTimeOffset? SlaDueAt { get; init; }
+
     public Guid? AttachmentFileId { get; init; }
 
     public IReadOnlyList<Guid>? ParticipantMembershipIds { get; init; }
@@ -43,6 +67,20 @@ public sealed record AtendimentoCardResponse(
     Guid? AssigneeMembershipId
 )
 {
+    [AllowedValues(AtendimentoPriority.Critical, AtendimentoPriority.High, AtendimentoPriority.Medium, AtendimentoPriority.Low)]
+    public string Priority { get; init; } = AtendimentoPriority.Medium;
+
+    [AllowedValues(AtendimentoChannel.WhatsApp, AtendimentoChannel.Email, AtendimentoChannel.Web, AtendimentoChannel.Manual)]
+    public string Channel { get; init; } = AtendimentoChannel.Manual;
+
+    public DateTimeOffset? SlaDueAt { get; init; }
+
+    public bool IsOverdue { get; init; }
+
+    public DateTimeOffset? CreatedAt { get; init; }
+
+    public DateTimeOffset? UpdatedAt { get; init; }
+
     public Guid? AttachmentFileId { get; init; }
 
     public IReadOnlyList<Guid> ParticipantMembershipIds { get; init; } = [];

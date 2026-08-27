@@ -16,6 +16,12 @@ public sealed class AtendimentoCard
 
     public string Column { get; set; } = "novo";
 
+    public string Priority { get; set; } = "media";
+
+    public string Channel { get; set; } = "manual";
+
+    public DateTimeOffset? SlaDueAt { get; set; }
+
     public Guid? AssigneeMembershipId { get; set; }
 
     public Guid? AttachmentFileId { get; set; }

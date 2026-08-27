@@ -17,6 +17,10 @@ public sealed class AtendimentoCardMigrationTests
         "20260826151000_AddAtendimentoCancellationParticipantsAndAttachment";
     private const string BeforeServiceDeskTicketCancel =
         "20260826151000_AddAtendimentoCancellationParticipantsAndAttachment";
+    private const string BeforeAtendimentoOperationalMetadata =
+        "20260826153000_BindPaguaiInboundCandidateToCompanyContext";
+    private const string AtendimentoOperationalMetadataMigration =
+        "20260826225942_AddAtendimentoOperationalMetadata";
 
     private static readonly (Guid Id, string Name)[] ExpectedCapabilities =
     [
@@ -29,6 +33,97 @@ public sealed class AtendimentoCardMigrationTests
         (KnownCapabilities.ServiceDeskTicketMoveId, KnownCapabilities.ServiceDeskTicketMove),
         (KnownCapabilities.ServiceDeskTicketCancelId, KnownCapabilities.ServiceDeskTicketCancel),
     ];
+
+    [Fact]
+    public async Task Operational_metadata_up_preserves_legacy_cards_with_defaults()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(BeforeAtendimentoOperationalMetadata);
+        var actorId = Guid.NewGuid();
+        var companyId = Guid.NewGuid();
+        var cardId = Guid.NewGuid();
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var insert = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.users (id, display_name, email, created_at)
+            VALUES (@actor, 'Legacy actor', 'legacy-metadata-actor@example.test', clock_timestamp());
+            INSERT INTO foundation.groups (id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at) VALUES (gen_random_uuid(), 'Legacy', @actor, @actor, gen_random_uuid(), clock_timestamp(), clock_timestamp());
+            INSERT INTO foundation.companies (id, group_id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at) VALUES (@company, (SELECT id FROM foundation.groups WHERE name = 'Legacy'), 'Legacy', @actor, @actor, gen_random_uuid(), clock_timestamp(), clock_timestamp());
+            INSERT INTO service_desk.atendimento_cards (id, company_id, title, description, column_name, created_by_user_id, updated_by_user_id, request_id) VALUES (@card, @company, 'Legacy', 'Old columns only.', 'novo', @actor, @actor, gen_random_uuid());
+            """, administrator))
+        {
+            insert.Parameters.AddWithValue("actor", actorId); insert.Parameters.AddWithValue("company", companyId); insert.Parameters.AddWithValue("card", cardId);
+            await insert.ExecuteNonQueryAsync();
+        }
+        await migrator.Database.MigrateAsync();
+        await using var verify = await fixture.OpenAdministratorConnectionAsync();
+        await using var select = new NpgsqlCommand("SELECT priority, channel, sla_due_at IS NULL FROM service_desk.atendimento_cards WHERE id = @card", verify);
+        select.Parameters.AddWithValue("card", cardId);
+        await using var reader = await select.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("media", reader.GetString(0)); Assert.Equal("manual", reader.GetString(1)); Assert.True(reader.GetBoolean(2));
+    }
+
+    [Theory]
+    [InlineData("priority")]
+    [InlineData("channel")]
+    [InlineData("sla_due_at")]
+    public async Task Operational_metadata_migration_fails_closed_for_each_non_default_field(string field)
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+        var seeded = await SeedCancellationDowngradeDataAsync(fixture);
+
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (var update = new NpgsqlCommand(
+            """
+            UPDATE service_desk.atendimento_cards
+            SET priority = CASE WHEN @field = 'priority' THEN 'alta' ELSE priority END,
+                channel = CASE WHEN @field = 'channel' THEN 'web' ELSE channel END,
+                sla_due_at = CASE WHEN @field = 'sla_due_at' THEN clock_timestamp() ELSE sla_due_at END
+            WHERE id = @card_id
+            """,
+            administrator
+        ))
+        {
+            update.Parameters.AddWithValue("field", field);
+            update.Parameters.AddWithValue("card_id", seeded.CardId);
+            Assert.Equal(1, await update.ExecuteNonQueryAsync());
+        }
+
+        await using (var migrator = fixture.CreateMigratorDbContext())
+        {
+            var applied = await migrator.Database.GetAppliedMigrationsAsync();
+            Assert.Contains(AtendimentoOperationalMetadataMigration, applied);
+            var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
+                await migrator.Database.MigrateAsync(BeforeAtendimentoOperationalMetadata)
+            );
+            Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+        }
+
+        await using var verify = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (SELECT 1 FROM "__EFMigrationsHistory" WHERE migration_id = @migration_id),
+                priority, channel, sla_due_at IS NOT NULL
+            FROM service_desk.atendimento_cards
+            WHERE id = @card_id
+            """,
+            verify
+        );
+        command.Parameters.AddWithValue("migration_id", AtendimentoOperationalMetadataMigration);
+        command.Parameters.AddWithValue("card_id", seeded.CardId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.Equal(field == "priority" ? "alta" : "media", reader.GetString(1));
+        Assert.Equal(field == "channel" ? "web" : "manual", reader.GetString(2));
+        Assert.Equal(field == "sla_due_at", reader.GetBoolean(3));
+    }
 
     [Fact]
     public async Task Migration_preserves_legacy_id_for_a_known_name_and_downgrade_leaves_it_intact()

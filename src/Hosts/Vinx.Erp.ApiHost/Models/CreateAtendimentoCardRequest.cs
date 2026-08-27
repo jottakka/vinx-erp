@@ -26,6 +26,14 @@ public sealed class CreateAtendimentoCardRequest : IValidatableObject
     [MaxLength(4000)]
     public string Description { get; init; } = string.Empty;
 
+    [AllowedValues(AtendimentoPriority.Critical, AtendimentoPriority.High, AtendimentoPriority.Medium, AtendimentoPriority.Low)]
+    public string? Priority { get; init; } = AtendimentoPriority.Medium;
+
+    [AllowedValues(AtendimentoChannel.WhatsApp, AtendimentoChannel.Email, AtendimentoChannel.Web, AtendimentoChannel.Manual)]
+    public string? Channel { get; init; } = AtendimentoChannel.Manual;
+
+    public DateTimeOffset? SlaDueAt { get; init; }
+
     [NonEmptyGuid]
     public Guid? AttachmentFileId { get; init; }
 
@@ -34,12 +42,25 @@ public sealed class CreateAtendimentoCardRequest : IValidatableObject
     public CreateAtendimentoCardCommand ToCommand() =>
         new(CompanyId, RequestId, Title, Description)
         {
+            Priority = Priority,
+            Channel = Channel,
+            SlaDueAt = SlaDueAt,
             AttachmentFileId = AttachmentFileId,
             ParticipantMembershipIds = ParticipantMembershipIds ?? [],
         };
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
+        if (Priority is not null && Priority is not (AtendimentoPriority.Critical or AtendimentoPriority.High or AtendimentoPriority.Medium or AtendimentoPriority.Low))
+        {
+            yield return new ValidationResult("Priority must be critica, alta, media, or baixa.", [nameof(Priority)]);
+        }
+
+        if (Channel is not null && Channel is not (AtendimentoChannel.WhatsApp or AtendimentoChannel.Email or AtendimentoChannel.Web or AtendimentoChannel.Manual))
+        {
+            yield return new ValidationResult("Channel must be whatsapp, email, web, or manual.", [nameof(Channel)]);
+        }
+
         if (ParticipantMembershipIds?.Any(id => id == Guid.Empty) == true)
         {
             yield return new ValidationResult(
