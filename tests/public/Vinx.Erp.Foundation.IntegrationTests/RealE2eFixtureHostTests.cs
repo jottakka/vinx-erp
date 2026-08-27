@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text.Json;
 using Npgsql;
+using Vinx.Erp.AI;
 using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
@@ -43,7 +44,8 @@ public sealed class RealE2eFixtureHostTests
             Guid.Parse("a1000000-0000-4000-8000-000000000001"),
             Guid.Parse("a2000000-0000-4000-8000-000000000001"),
             Guid.Parse("a2000000-0000-4000-8000-000000000002"),
-            Guid.Parse("a2000000-0000-4000-8000-000000000003"));
+            Guid.Parse("a2000000-0000-4000-8000-000000000003"),
+            Guid.Parse("f4000000-0000-4000-8000-000000000001"));
 
         var expected = E2eFixtureHost.ExpectedCompaniesForProfile(profileName, receipt);
 
@@ -228,6 +230,14 @@ public sealed class RealE2eFixtureHostTests
             Endpoint = new Uri("https://agent-provider.example/v1"),
             Model = "test-agent-model",
             ApprovedHosts = ["agent-provider.example"],
+            Vision = new AgentRunVisionOptions
+            {
+                Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                Endpoint = new Uri("https://agent-provider.example/v1"),
+                Model = "test-agent-model",
+                ApprovedHosts = ["agent-provider.example"],
+                AllowedClassifications = ["agentic_attachment"],
+            },
         };
         var mariaApiPort = 0;
         var claraApiPort = 0;
@@ -239,7 +249,8 @@ public sealed class RealE2eFixtureHostTests
             sharedHost = await SharedE2eFixtureHost.StartAsync(
                 CancellationToken.None,
                 agentModel,
-                agentRunOptions);
+                agentRunOptions,
+                new E2eFixtureAttachmentStorage());
             mariaApiPort = sharedHost.MariaOrigin.Port;
             claraApiPort = sharedHost.ClaraOrigin.Port;
             databaseHost = sharedHost.DatabaseHost;
@@ -298,6 +309,72 @@ public sealed class RealE2eFixtureHostTests
             Assert.Equal(AgentRunOptions.OpenAiCompatibleProvider, agentModel.LastSelection?.ProviderId);
             Assert.Equal("test-agent-model", agentModel.LastSelection?.ModelId);
 
+            var proposalRunRequestId = Guid.NewGuid();
+            Guid proposalId;
+            using (var mariaPaguaiAgentResponse = await mariaClient.PostAsJsonAsync(
+                "/agent/runs",
+                new AgentRunRequest(
+                    proposalRunRequestId,
+                    AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+                    E2eFixtureAttachmentStorage.PaguaiPrompt,
+                    alfaCompanyId,
+                    [sharedHost.Receipt.MariaAlfaAgenticAttachmentId])))
+            {
+                Assert.Equal(HttpStatusCode.OK, mariaPaguaiAgentResponse.StatusCode);
+                var result = await ReadAgentRunResponseAsync(mariaPaguaiAgentResponse);
+                Assert.Equal("requires_confirmation", result.Status);
+                proposalId = Assert.IsType<Guid>(result.PaguaiProposalId);
+                Assert.Null(result.Text);
+            }
+
+            Assert.Equal(2, agentModel.CallCount);
+            using (var proposal = await GetJsonAsync(
+                mariaClient,
+                $"/paguai/draft-proposals/{proposalId}?companyId={alfaCompanyId}"))
+            {
+                Assert.Equal(proposalId, proposal.RootElement.GetProperty("id").GetGuid());
+                Assert.Equal(sharedHost.Receipt.MariaAlfaAgenticAttachmentId,
+                    proposal.RootElement.GetProperty("invoiceFileId").GetGuid());
+                Assert.Equal("pending", proposal.RootElement.GetProperty("state").GetString());
+            }
+
+            using (var replay = await mariaClient.PostAsJsonAsync(
+                "/agent/runs",
+                new AgentRunRequest(
+                    proposalRunRequestId,
+                    AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+                    E2eFixtureAttachmentStorage.PaguaiPrompt,
+                    alfaCompanyId,
+                    [sharedHost.Receipt.MariaAlfaAgenticAttachmentId])))
+            {
+                Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+                Assert.Equal(proposalId, (await ReadAgentRunResponseAsync(replay)).PaguaiProposalId);
+            }
+
+            Assert.Equal(2, agentModel.CallCount);
+            var proposalAntiforgery = await GetAntiforgeryTokenAsync(mariaClient);
+            using (var confirmation = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/paguai/draft-proposals/{proposalId}/confirm")
+            {
+                Content = JsonContent.Create(new { companyId = alfaCompanyId, requestId = Guid.NewGuid() }),
+            })
+            {
+                confirmation.Headers.Add("X-CSRF-TOKEN", proposalAntiforgery);
+                using var confirmed = await mariaClient.SendAsync(confirmation);
+                Assert.Equal(HttpStatusCode.Created, confirmed.StatusCode);
+                using var draft = JsonDocument.Parse(await confirmed.Content.ReadAsStringAsync());
+                Assert.Equal(proposalId, draft.RootElement.GetProperty("sourceProposalId").GetGuid());
+            }
+
+            await using (var administrator = await sharedHost.OpenAdministratorConnectionAsync())
+            await using (var count = new NpgsqlCommand(
+                "SELECT count(*) FROM paguai.requests WHERE source_proposal_id = @proposal_id", administrator))
+            {
+                count.Parameters.AddWithValue("proposal_id", proposalId);
+                Assert.Equal(1L, Convert.ToInt64(await count.ExecuteScalarAsync()));
+            }
+
             using (var mariaBetaAgentResponse = await mariaClient.PostAsJsonAsync(
                 "/agent/runs",
                 new AgentRunRequest(
@@ -314,7 +391,7 @@ public sealed class RealE2eFixtureHostTests
                 Assert.Null(result.Sources);
             }
 
-            Assert.Equal(1, agentModel.CallCount);
+            Assert.Equal(2, agentModel.CallCount);
 
             using (var claraGamaAgentResponse = await claraClient.PostAsJsonAsync(
                 "/agent/runs",
@@ -332,7 +409,7 @@ public sealed class RealE2eFixtureHostTests
                 Assert.Null(result.Sources);
             }
 
-            Assert.Equal(1, agentModel.CallCount);
+            Assert.Equal(2, agentModel.CallCount);
 
             Assert.Equal(
                 ["Beatriz Costa", "Maria Silva"],
@@ -477,14 +554,16 @@ public sealed class RealE2eFixtureHostTests
         Guid RequestId,
         string Journey,
         string Message,
-        Guid CompanyId);
+        Guid CompanyId,
+        IReadOnlyList<Guid>? Attachments = null);
 
     private sealed record AgentRunResponse(
         string Status,
         string? ReasonCode,
         string? Text,
         IReadOnlyList<AgentRunSourceRef>? Sources,
-        Guid CorrelationId);
+        Guid CorrelationId,
+        Guid? PaguaiProposalId = null);
 
     private sealed record AgentRunSourceRef(string Reference);
 }

@@ -169,7 +169,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     public static async Task<E2eFixtureFactoryContext> CreateWithE2eProfileAsync(
         string profileName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IAgentModel? testAgentModel = null,
+        AgentRunOptions? testAgentRunOptions = null,
+        FileStorage? testFileStorage = null)
     {
         if (!E2eFixtureProfileCatalog.TryGet(profileName, out var profile) || profile is null)
         {
@@ -182,6 +185,9 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             profile.UserId,
             correlationId,
             CreateE2ePrincipalClaims(profile, correlationId),
+            testFileStorage: testFileStorage,
+            testAgentModel: testAgentModel,
+            testAgentRunOptions: testAgentRunOptions,
             provisionWolverineStorage: false,
             disableWolverineForE2e: true);
 
@@ -214,7 +220,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         FoundationPostgresFixtureLease fixtureLease,
         E2eDatasetReceipt receipt,
         IAgentModel? testAgentModel = null,
-        AgentRunOptions? testAgentRunOptions = null)
+        AgentRunOptions? testAgentRunOptions = null,
+        FileStorage? testFileStorage = null)
     {
         ArgumentNullException.ThrowIfNull(fixtureLease);
         if (!E2eFixtureProfileCatalog.TryGet(profileName, out var profile) || profile is null)
@@ -227,6 +234,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             profile.UserId,
             correlationId,
             CreateE2ePrincipalClaims(profile, correlationId),
+            testFileStorage: testFileStorage,
             testAgentModel: testAgentModel,
             testAgentRunOptions: testAgentRunOptions,
             preparedFixtureAccess: fixtureLease,

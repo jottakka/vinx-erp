@@ -63,7 +63,7 @@ export function parseLauncherArgs(args) {
 
 function hasValidAgentProviderCredential(environment) {
   const value = environment[AGENT_PROVIDER_API_KEY];
-  return typeof value === "string" && value.trim().length > 0 && !/[\0\r\n]/.test(value);
+  return typeof value === "string" && value.trim().length > 0 && !/[\p{Cc}]/u.test(value);
 }
 
 function childEnvironment(environment, agentMode, serverProcess) {

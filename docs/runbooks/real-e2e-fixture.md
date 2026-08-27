@@ -126,6 +126,12 @@ determinístico de demonstração. Maria em Alfa recebe o texto fixo marcado com
 automática e prova a ordem autorização-modelo com os principals reais do
 fixture; ela não consulta provider externo nem avalia qualidade de resposta.
 
+Maria/Alfa também possui um roteiro Pagaí compilado: o anexo sintético passa
+pela fonte autorizada real, gera proposta tipada, permite a confirmação e cria
+um único rascunho vinculado à proposta. A execução contra PostgreSQL/containers
+permanece uma evidência runtime pendente; não a trate como já demonstrada neste
+checkout sem executar a fatia focada aprovada.
+
 ## Roteiro manual mínimo
 
 Abra Maria e Clara em contextos de browser separados; não faça login nem injete
@@ -180,6 +186,8 @@ e-mail, IDs do dataset, payloads ou mensagens internas de provider.
 Este fluxo prova migrations, seed, autorização/RLS, session gate de teste,
 ApiHost real, proxy Vite, leitura dos módulos contra PostgreSQL real e, apenas
 no modo compartilhado, a demonstração determinística do endpoint do Agente.
+O roteiro Pagaí determinístico acima está compilado, mas sua prova runtime fica
+pendente quando Docker/Testcontainers não são autorizados.
 Não prova login Supabase, MFA, provider externo, qualidade de IA, WorkerHost,
 Meta, ClamAV, Storage, TLS/ingress, produção, reconnect ou revogação de sessão.
 A automação browser real completa permanece no escopo de #115.

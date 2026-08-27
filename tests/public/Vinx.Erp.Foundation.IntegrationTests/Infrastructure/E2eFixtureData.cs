@@ -1,6 +1,9 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Npgsql;
+using Vinx.Erp.Foundation.Files;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -16,7 +19,101 @@ public sealed record E2eDatasetReceipt(
     Guid GroupId,
     Guid AlfaCompanyId,
     Guid BetaCompanyId,
-    Guid GamaCompanyId);
+    Guid GamaCompanyId,
+    Guid MariaAlfaAgenticAttachmentId);
+
+/// <summary>Storage privado, imutável e exclusivamente sintético do anexo Pagaí da fixture E2E.</summary>
+public sealed class E2eFixtureAttachmentStorage : FileStorage
+{
+    public const string ProviderKey = "e2e/alfa/agentic-attachment";
+    public const string PaguaiPrompt = "gere a proposta Pagaí sintética da nota E2E";
+
+    public static readonly byte[] Content = BuildPdf();
+    public static readonly string Checksum = $"sha256:{Convert.ToHexString(SHA256.HashData(Content)).ToLowerInvariant()}";
+
+    public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(
+        string providerKey,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task UploadObjectAsync(
+        string providerKey,
+        ReadOnlyMemory<byte> content,
+        string contentType,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken)
+    {
+        EnsureExactKey(providerKey);
+        return Task.FromResult(new StorageObjectMetadata(ProviderKey, Content.LongLength, "application/pdf", Checksum));
+    }
+
+    public Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
+    public Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken)
+    {
+        EnsureExactKey(providerKey);
+        return Task.FromResult<Stream>(new MemoryStream(Content, writable: false));
+    }
+
+    public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
+        string providerKey,
+        TimeSpan lifetime,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
+        string prefix,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
+    private static void EnsureExactKey(string providerKey)
+    {
+        if (!string.Equals(providerKey, ProviderKey, StringComparison.Ordinal))
+        {
+            throw new KeyNotFoundException("The synthetic E2E object was not found.");
+        }
+    }
+
+    private static byte[] BuildPdf()
+    {
+        const string text = "Nota fiscal sintetica E2E";
+        var content = $"BT /F1 12 Tf 50 780 Td ({text}) Tj ET";
+        var objects = new[]
+        {
+            "<</Type/Catalog/Pages 2 0 R>>",
+            "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</Font<</F1 4 0 R>>>>/Contents 5 0 R>>",
+            "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+            $"<</Length {content.Length}>>\nstream\n{content}\nendstream",
+        };
+
+        using var buffer = new MemoryStream();
+        using var writer = new StreamWriter(buffer, Encoding.ASCII, leaveOpen: true);
+        writer.Write("%PDF-1.4\n");
+        var offsets = new List<long>();
+        for (var index = 0; index < objects.Length; index++)
+        {
+            offsets.Add(buffer.Position);
+            writer.Write($"{index + 1} 0 obj\n{objects[index]}\nendobj\n");
+            writer.Flush();
+        }
+
+        var xrefOffset = buffer.Position;
+        writer.Write($"xref\n0 {objects.Length + 1}\n0000000000 65535 f \n");
+        foreach (var offset in offsets)
+        {
+            writer.Write($"{offset:D10} 00000 n \n");
+        }
+
+        writer.Write($"trailer\n<</Size {objects.Length + 1}/Root 1 0 R>>\nstartxref\n{xrefOffset}\n%%EOF\n");
+        writer.Flush();
+        return buffer.ToArray();
+    }
+}
 
 public static class E2eFixtureProfileCatalog
 {
@@ -90,12 +187,13 @@ public static class E2eFixtureSeeder
     private static readonly Guid BetaReaderRoleId = FixtureId("d1000000", 3);
     private static readonly Guid BetaFinanceRoleId = FixtureId("d1000000", 4);
     private static readonly Guid GamaRestrictedRoleId = FixtureId("d1000000", 5);
-    private static readonly Guid MariaAlfaAgenticAttachmentId = FixtureId("f4000000", 1);
+    internal static readonly Guid MariaAlfaAgenticAttachmentId = FixtureId("f4000000", 1);
     private static readonly E2eDatasetReceipt ExpectedReceipt = new(
         GroupId,
         AlfaCompanyId,
         BetaCompanyId,
-        GamaCompanyId);
+        GamaCompanyId,
+        MariaAlfaAgenticAttachmentId);
 
     /// <summary>
     /// Semeia o dataset completo em uma transação e recusa banco já populado.
@@ -288,13 +386,16 @@ public static class E2eFixtureSeeder
                         UploaderMembershipId = MariaAlfaMembershipId,
                         OriginalFileName = "nota-fiscal-sintetica.pdf",
                         Extension = ".pdf",
-                        SizeBytes = 1024L,
+                        SizeBytes = E2eFixtureAttachmentStorage.Content.LongLength,
                         MimeType = "application/pdf",
-                        Checksum = "A31F93BE43E8F6A152AFD8A1E3D4CE5A1BF726E7A7497ED7F1AB08AFD0B0A5C4",
+                        Checksum = E2eFixtureAttachmentStorage.Checksum,
                         Classification = "agentic_attachment",
                         Origin = "e2e_fixture",
                         ProviderKey = "e2e/alfa/agentic-attachment",
                         ProcessingState = "confirmed",
+                        ScanEngine = "e2e",
+                        ScanEngineVersion = "1",
+                        ScanSignatureVersion = "fixture",
                         ActorUserId = profile.Maria.UserId,
                         RequestId = RequestId(69),
                     }
@@ -504,16 +605,19 @@ public static class E2eFixtureSeeder
             (id, company_id, uploader_membership_id, original_file_name, extension,
                 size_bytes, mime_type, checksum, classification, origin, retention_until,
                 provider_key, processing_state, created_by_user_id, updated_by_user_id,
-                request_id, created_at, updated_at, row_version)
+                request_id, created_at, updated_at, row_version, scan_engine,
+                scan_engine_version, scan_signature_version, scanned_at_utc)
         SELECT id, company_id, uploader_membership_id, original_file_name, extension,
             size_bytes, mime_type, checksum, classification, origin, @retention_until,
             provider_key, processing_state, actor_user_id, actor_user_id,
-            request_id, @at, @at, 1
+            request_id, @at, @at, 1, scan_engine, scan_engine_version,
+            scan_signature_version, @at
         FROM jsonb_to_recordset(@seed::jsonb -> 'files')
             AS seed(id uuid, company_id uuid, uploader_membership_id uuid,
                 original_file_name text, extension text, size_bytes bigint, mime_type text,
                 checksum text, classification text, origin text, provider_key text,
-                processing_state text, actor_user_id uuid, request_id uuid);
+                processing_state text, scan_engine text, scan_engine_version text,
+                scan_signature_version text, actor_user_id uuid, request_id uuid);
 
         INSERT INTO paguai.requests
             (id, company_id, requester_user_id, request_id, title, description,

@@ -72,7 +72,8 @@ public sealed class E2eFixtureSeederTests
                 Guid.Parse("a1000000-0000-4000-8000-000000000001"),
                 Guid.Parse("a2000000-0000-4000-8000-000000000001"),
                 Guid.Parse("a2000000-0000-4000-8000-000000000002"),
-                Guid.Parse("a2000000-0000-4000-8000-000000000003")),
+                Guid.Parse("a2000000-0000-4000-8000-000000000003"),
+                Guid.Parse("f4000000-0000-4000-8000-000000000001")),
             receipt);
 
         using var beforeSecondSeed = await ReadDatasetSummaryAsync(fixture);

@@ -406,8 +406,8 @@ test("parseLauncherArgs rejects missing, extra, duplicate, and unknown arguments
   }
 });
 
-test("real mode rejects a missing or invalid provider key before checking ports or spawning the host", async () => {
-  for (const providerKey of [undefined, "", "  ", "invalid\nkey"]) {
+test("real mode rejects every Task 1-invalid provider key before checking ports or spawning the host", async () => {
+  for (const providerKey of [undefined, "", "  ", "invalid\nkey", "invalid\tkey", "invalid\u0001key"]) {
     const harness = createSharedHarness({
       args: ["--profiles", "maria,clara", "--agent-mode", "real"],
       environment: { KEEP_ME: "yes", VINX_AGENT_PROVIDER_API_KEY: providerKey },

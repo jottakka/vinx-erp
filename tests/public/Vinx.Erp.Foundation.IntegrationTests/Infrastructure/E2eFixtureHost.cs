@@ -1,6 +1,9 @@
 using System.Net;
 using System.Text.Json;
 using Npgsql;
+using Vinx.Erp.AI;
+using Vinx.Erp.ApiHost.Agent;
+using Vinx.Erp.Foundation.Files;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -312,14 +315,20 @@ public sealed class E2eFixtureHost : IAsyncDisposable
 
     public static async Task<E2eFixtureHost> StartAsync(
         string profileName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IAgentModel? testAgentModel = null,
+        AgentRunOptions? testAgentRunOptions = null,
+        FileStorage? testFileStorage = null)
     {
         E2eFixtureFactoryContext? context = null;
         try
         {
             context = await FoundationApiFactory.CreateWithE2eProfileAsync(
                 profileName,
-                cancellationToken);
+                cancellationToken,
+                testAgentModel,
+                testAgentRunOptions,
+                testFileStorage);
             return await StartPreparedAsync(context, context.Factory.Fixture, cancellationToken);
         }
         catch (ArgumentException) when (context is null)

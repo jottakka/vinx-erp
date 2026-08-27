@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using Npgsql;
 using Vinx.Erp.AI;
 using Vinx.Erp.ApiHost.Agent;
+using Vinx.Erp.Foundation.Files;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -72,7 +73,8 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
     public static async Task<SharedE2eFixtureHost> StartAsync(
         CancellationToken cancellationToken,
         IAgentModel? testAgentModel = null,
-        AgentRunOptions? testAgentRunOptions = null)
+        AgentRunOptions? testAgentRunOptions = null,
+        FileStorage? testFileStorage = null)
     {
         var sharedHost = new SharedE2eFixtureHost();
         var phase = E2eFixtureHostFailurePhase.FixtureStart;
@@ -94,7 +96,8 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
                 mariaLease,
                 receipt,
                 testAgentModel,
-                testAgentRunOptions);
+                testAgentRunOptions,
+                testFileStorage);
             sharedHost._mariaHost = await E2eFixtureHost.StartPreparedAsync(
                 mariaContext,
                 mariaLease,
@@ -107,7 +110,8 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
                 claraLease,
                 receipt,
                 testAgentModel,
-                testAgentRunOptions);
+                testAgentRunOptions,
+                testFileStorage);
             sharedHost._claraHost = await E2eFixtureHost.StartPreparedAsync(
                 claraContext,
                 claraLease,

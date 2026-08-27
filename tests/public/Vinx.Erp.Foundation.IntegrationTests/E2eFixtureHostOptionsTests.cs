@@ -1,5 +1,8 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.AI;
+using Vinx.Erp.AI;
+using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
 
@@ -35,6 +38,33 @@ public sealed class E2eFixtureHostOptionsTests
         Assert.Equal(
             new E2eFixtureHostRequest(E2eFixtureHostMode.Shared, null, E2eFixtureAgentMode.Real),
             request);
+    }
+
+    [Fact]
+    public async Task Deterministic_model_returns_a_closed_paguai_proposal_only_for_the_synthetic_fixture_prompt()
+    {
+        var model = new DeterministicE2eAgentModel();
+        var selection = new AgentModelSelection(
+            AgentRunOptions.OpenAiCompatibleProvider,
+            "test-agent-model");
+        var attachmentId = E2eFixtureSeeder.MariaAlfaAgenticAttachmentId;
+
+        var response = await model.GetResponseAsync(
+            [new ChatMessage(
+                ChatRole.User,
+                $"{E2eFixtureAttachmentStorage.PaguaiPrompt}\n{attachmentId:N}:p1")],
+            selection,
+            CancellationToken.None);
+
+        var proposalJson = Assert.IsType<TextContent>(Assert.Single(response.Messages.Single().Contents)).Text;
+        Assert.Contains($"\"invoiceFileId\":\"{attachmentId:D}\"", proposalJson, StringComparison.Ordinal);
+        Assert.Equal(1, model.CallCount);
+
+        var normal = await model.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "resuma a empresa Alfa")],
+            selection,
+            CancellationToken.None);
+        Assert.Equal(DeterministicE2eAgentModel.ResponseText, normal.Text);
     }
 
     [Theory]
