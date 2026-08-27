@@ -169,6 +169,44 @@ public sealed class PaguaiProposalEndpointTests
     }
 
     [Fact]
+    public async Task First_confirmation_publishes_one_draft_created_event_and_replays_publish_none()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var proposal = await CreateProposalAsync(factory, scenario);
+        var confirmationRequestId = Guid.NewGuid();
+
+        var created = await ConfirmThroughServiceAsync(
+            factory,
+            scenario.CompanyId,
+            proposal.Id,
+            confirmationRequestId);
+        var replay = await ConfirmThroughServiceAsync(
+            factory,
+            scenario.CompanyId,
+            proposal.Id,
+            confirmationRequestId);
+        var secondRequest = await ConfirmThroughServiceAsync(
+            factory,
+            scenario.CompanyId,
+            proposal.Id,
+            Guid.NewGuid());
+
+        Assert.Equal(PaguaiProposalOperationState.Created, created.State);
+        Assert.Equal(PaguaiProposalOperationState.Replay, replay.State);
+        Assert.Equal(PaguaiProposalOperationState.ProposalUnavailable, secondRequest.State);
+        var envelope = Assert.Single(await PaguaiDraftCreatedTests.ReadPaguaiQueueAsync(factory));
+        Assert.Equal(scenario.CompanyId, envelope.CompanyId);
+        Assert.Equal(created.Draft!.Id, envelope.DraftId);
+        Assert.Equal(factory.ActorUserId, envelope.RequesterUserId);
+        Assert.Equal(
+            ["companyId", "draftId", "requesterUserId"],
+            envelope.PayloadPropertyNames.Order());
+        Assert.Empty(envelope.Headers);
+        Assert.Equal(factory.CorrelationId.ToString("D"), envelope.CorrelationId);
+    }
+
+    [Fact]
     public async Task Bearer_cannot_confirm_or_reject_and_browser_cookie_requires_antiforgery()
     {
         var provider = new BrowserSessionProviderHandler();
@@ -493,6 +531,21 @@ public sealed class PaguaiProposalEndpointTests
         using var scope = factory.Services.CreateScope();
         return await scope.ServiceProvider.GetRequiredService<AgentExecutionService>()
             .ExecuteAsync(command, CancellationToken.None);
+    }
+
+    private static async Task<PaguaiProposalConfirmationResult> ConfirmThroughServiceAsync(
+        FoundationApiFactory factory,
+        Guid companyId,
+        Guid proposalId,
+        Guid requestId)
+    {
+        using var scope = factory.Services.CreateScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<PaguaiProposalConfirmationService>()
+            .ConfirmAsync(
+                new ActorContext(factory.ActorUserId, factory.CorrelationId),
+                new ConfirmPaguaiProposalCommand(companyId, proposalId, requestId),
+                CancellationToken.None);
     }
 
     private static async Task SetProposalTerminalAsync(

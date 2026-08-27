@@ -8,6 +8,8 @@ using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
+using Wolverine;
+using Wolverine.EntityFrameworkCore;
 
 namespace Vinx.Erp.Paguai;
 
@@ -16,6 +18,7 @@ public sealed class PaguaiProposalConfirmationService(
     FoundationDbContext database,
     CapabilityEvaluator capabilityEvaluator,
     AuditAppender auditAppender,
+    IDbContextOutbox outbox,
     ILogger<PaguaiProposalConfirmationService> logger)
 {
     private const string ConfirmCommandName = "paguai.proposal.confirm";
@@ -35,6 +38,7 @@ public sealed class PaguaiProposalConfirmationService(
         }
 
         var payloadHash = ComputeMutationHash(command.CompanyId, command.ProposalId);
+        var commitAttempted = false;
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
@@ -131,7 +135,24 @@ public sealed class PaguaiProposalConfirmationService(
             await AppendAuditAsync(actor, command.CompanyId, ConfirmCommandName, proposal.Id,
                 AuditOutcome.Success, null, cancellationToken);
             await database.SaveChangesAsync(cancellationToken);
+            outbox.Enroll(database);
+            await outbox.PublishAsync(
+                new PaguaiDraftCreated(command.CompanyId, draft.Id, actor.UserId),
+                new DeliveryOptions { CorrelationId = actor.CorrelationId.ToString("D") });
+            commitAttempted = true;
             await transaction.CommitAsync(cancellationToken);
+
+            try
+            {
+                await outbox.FlushOutgoingMessagesAsync();
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception,
+                    "Paguai proposal {Operation} {Module} {Result} {Reason}",
+                    "confirm", "paguai", "created", "outbox_flush_deferred");
+            }
+
             return new PaguaiProposalConfirmationResult(PaguaiProposalOperationState.Created, draft);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -143,7 +164,8 @@ public sealed class PaguaiProposalConfirmationService(
             database.ChangeTracker.Clear();
             logger.LogError(exception,
                 "Paguai proposal {Operation} {Module} {Result} {Reason}",
-                "confirm", "paguai", "unavailable", "database_or_audit_unavailable");
+                "confirm", "paguai", "unavailable",
+                commitAttempted ? "outbox_commit_outcome_unknown" : "database_or_audit_unavailable");
             return PaguaiProposalConfirmationResult.Of(PaguaiProposalOperationState.Unavailable);
         }
     }

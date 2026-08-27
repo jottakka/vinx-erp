@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Vinx.Erp.Foundation.Persistence.Migrations;
 
 [DbContext(typeof(FoundationDbContext))]
-[Migration("20260827080300_AddWhatsAppAgentAdapter")]
+[Migration("20260827121300_AddWhatsAppAgentAdapter")]
 public partial class AddWhatsAppAgentAdapter : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder) =>

@@ -7,28 +7,28 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 
 public sealed class AgentMigrationCompositionTests
 {
-    private const string MainApproverDirectory =
-        "20260827073650_AddPaguaiDraftApproverDirectory";
+    private const string MainDraftCreatedWorkerGrant =
+        "20260827120000_AddPaguaiDraftCreatedWorkerGrant";
     private const string FinalBranchMigration =
-        "20260827080400_AddTelegramAgentAdapter";
+        "20260827121400_AddTelegramAgentAdapter";
 
     private static readonly string[] BranchMigrationIds =
     [
-        "20260827080000_AddAgentExecutionLedger",
-        "20260827080100_AddAgentExecutionLedgerConcurrencyAndChannelIntegrity",
-        "20260827080200_AddPaguaiDraftProposals",
-        "20260827080300_AddWhatsAppAgentAdapter",
+        "20260827121000_AddAgentExecutionLedger",
+        "20260827121100_AddAgentExecutionLedgerConcurrencyAndChannelIntegrity",
+        "20260827121200_AddPaguaiDraftProposals",
+        "20260827121300_AddWhatsAppAgentAdapter",
         FinalBranchMigration,
     ];
 
     [Fact]
-    public async Task Branch_applies_after_354_and_downgrades_to_354_without_removing_main_contracts()
+    public async Task Branch_applies_after_356_and_downgrades_to_356_without_removing_main_contracts()
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
         await using var migrator = fixture.CreateMigratorDbContext();
 
-        await migrator.Database.MigrateAsync(MainApproverDirectory);
+        await migrator.Database.MigrateAsync(MainDraftCreatedWorkerGrant);
         await AssertMainContractsAsync(fixture);
         Assert.Equal(0, await CountBranchHistoryAsync(fixture));
 
@@ -36,7 +36,7 @@ public sealed class AgentMigrationCompositionTests
         Assert.Equal(BranchMigrationIds.Length, await CountBranchHistoryAsync(fixture));
         await AssertBranchContractsPresentAsync(fixture);
 
-        await migrator.Database.MigrateAsync(MainApproverDirectory);
+        await migrator.Database.MigrateAsync(MainDraftCreatedWorkerGrant);
 
         Assert.Equal(0, await CountBranchHistoryAsync(fixture));
         await AssertBranchContractsRemovedAsync(fixture);
@@ -111,7 +111,7 @@ public sealed class AgentMigrationCompositionTests
             SELECT
                 EXISTS (
                     SELECT 1 FROM "__EFMigrationsHistory"
-                    WHERE migration_id = '20260827073650_AddPaguaiDraftApproverDirectory'),
+                    WHERE migration_id = '20260827120000_AddPaguaiDraftCreatedWorkerGrant'),
                 to_regprocedure(
                     'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)')
                     IS NOT NULL,
@@ -128,7 +128,31 @@ public sealed class AgentMigrationCompositionTests
                 has_function_privilege(
                     'vinx_worker',
                     'notifications.get_notification_email_delivery_target(uuid,uuid)',
-                    'EXECUTE')
+                    'EXECUTE'),
+                to_regprocedure(
+                    'notifications.enqueue_paguai_draft_created_notification(uuid,uuid,uuid,uuid)')
+                    IS NOT NULL,
+                has_function_privilege(
+                    'vinx_worker',
+                    'notifications.enqueue_paguai_draft_created_notification(uuid,uuid,uuid,uuid)',
+                    'EXECUTE'),
+                has_schema_privilege('vinx_notifications_owner', 'paguai', 'USAGE'),
+                has_column_privilege(
+                    'vinx_notifications_owner', 'paguai.requests', 'id', 'SELECT'),
+                has_column_privilege(
+                    'vinx_notifications_owner', 'paguai.requests', 'company_id', 'SELECT'),
+                has_column_privilege(
+                    'vinx_notifications_owner', 'paguai.requests', 'requester_user_id', 'SELECT'),
+                EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'paguai'
+                        AND tablename = 'requests'
+                        AND policyname = 'paguai_requests_notifications_owner_read'),
+                EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'foundation'
+                        AND tablename = 'capabilities'
+                        AND policyname = 'capabilities_notifications_owner_paguai_approve_read')
             """,
             administrator);
         await using var reader = await command.ExecuteReaderAsync();

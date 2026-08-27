@@ -104,8 +104,10 @@ O rascunho só nasce após confirmação Web/BFF autenticada e antiforgery. Na �
 transação, o serviço reautoriza sessão, membership, capabilities e arquivo,
 promove internamente a classificação para `paguai_request_invoice`, cria no
 máximo um rascunho por proposta, consome a proposta e grava
-idempotência/auditoria. A revisão é imutável. WhatsApp e Telegram não
-confirmam, não alteram classificação e não criam rascunho.
+idempotência/auditoria. A primeira confirmação publica o mesmo
+`PaguaiDraftCreated` no outbox da transação; replay, conflito e falha não
+publicam outro evento. A revisão é imutável. WhatsApp e Telegram não confirmam,
+não alteram classificação e não criam rascunho.
 
 ## Limite da V1
 

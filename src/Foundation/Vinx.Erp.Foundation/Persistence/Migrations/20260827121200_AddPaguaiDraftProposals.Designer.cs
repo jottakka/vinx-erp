@@ -12,8 +12,8 @@ using Vinx.Erp.Foundation.Persistence;
 namespace Vinx.Erp.Foundation.Persistence.Migrations
 {
     [DbContext(typeof(FoundationDbContext))]
-    [Migration("20260827080400_AddTelegramAgentAdapter")]
-    partial class AddTelegramAgentAdapter
+    [Migration("20260827121200_AddPaguaiDraftProposals")]
+    partial class AddPaguaiDraftProposals
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)

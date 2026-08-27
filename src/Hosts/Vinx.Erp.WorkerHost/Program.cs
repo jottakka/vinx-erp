@@ -25,7 +25,6 @@ using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Email;
 using Vinx.Erp.Notifications.Providers.Meta;
 using Vinx.Erp.Notifications.Providers.Telegram;
-using Vinx.Erp.Paguai;
 using Vinx.Erp.WorkerHost;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;

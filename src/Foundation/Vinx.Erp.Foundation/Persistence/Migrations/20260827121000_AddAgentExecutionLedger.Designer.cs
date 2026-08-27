@@ -12,7 +12,7 @@ using Vinx.Erp.Foundation.Persistence;
 namespace Vinx.Erp.Foundation.Persistence.Migrations
 {
     [DbContext(typeof(FoundationDbContext))]
-    [Migration("20260827080000_AddAgentExecutionLedger")]
+    [Migration("20260827121000_AddAgentExecutionLedger")]
     partial class AddAgentExecutionLedger
     {
         /// <inheritdoc />

@@ -12,8 +12,8 @@ using Vinx.Erp.Foundation.Persistence;
 namespace Vinx.Erp.Foundation.Persistence.Migrations
 {
     [DbContext(typeof(FoundationDbContext))]
-    [Migration("20260827080100_AddAgentExecutionLedgerConcurrencyAndChannelIntegrity")]
-    partial class AddAgentExecutionLedgerConcurrencyAndChannelIntegrity
+    [Migration("20260827121400_AddTelegramAgentAdapter")]
+    partial class AddTelegramAgentAdapter
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -226,6 +226,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("cancelled_by_user_id");
 
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(12)
+                        .HasColumnType("character varying(12)")
+                        .HasDefaultValue("manual")
+                        .HasColumnName("channel");
+
                     b.Property<string>("Column")
                         .IsRequired()
                         .HasMaxLength(30)
@@ -263,6 +271,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("character varying(4000)")
                         .HasColumnName("description");
 
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("media")
+                        .HasColumnName("priority");
+
                     b.Property<Guid>("RequestId")
                         .HasColumnType("uuid")
                         .HasColumnName("request_id");
@@ -271,6 +287,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .IsConcurrencyToken()
                         .HasColumnType("bigint")
                         .HasColumnName("row_version");
+
+                    b.Property<DateTimeOffset?>("SlaDueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sla_due_at");
 
                     b.Property<string>("Title")
                         .IsRequired()
@@ -297,6 +317,11 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.HasIndex("CompanyId", "AttachmentFileId")
                         .HasDatabaseName("ix_atendimento_cards_company_id_attachment_file_id");
+
+                    b.HasIndex("CompanyId", "CreatedAt", "Id")
+                        .IsDescending(false, true, true)
+                        .HasDatabaseName("ix_atendimento_cards_company_id_created_at_id_live")
+                        .HasFilter("deleted_at IS NULL");
 
                     b.ToTable("atendimento_cards", "service_desk");
                 });
@@ -994,6 +1019,151 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.ToTable("memberships", "foundation");
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiDraftProposal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("amount");
+
+                    b.Property<string>("BeneficiaryDisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("beneficiary_display_name");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<double>("Confidence")
+                        .HasColumnType("double precision")
+                        .HasColumnName("confidence");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("currency");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("description");
+
+                    b.Property<DateOnly>("DueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("due_date");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<Guid>("FileRecordId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("file_record_id");
+
+                    b.Property<string>("PayloadHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payload_hash");
+
+                    b.Property<string>("PolicyVersion")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("policy_version");
+
+                    b.Property<string>("ProofRequirement")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("proof_requirement");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<Guid?>("ResolutionRequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resolution_request_id");
+
+                    b.Property<DateTimeOffset?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("resolved_at");
+
+                    b.Property<Guid?>("ResultDraftId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("result_draft_id");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("row_version");
+
+                    b.Property<string>("SourceReferences")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("source_references");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("title");
+
+                    b.HasKey("Id")
+                        .HasName("pk_draft_proposals");
+
+                    b.HasAlternateKey("CompanyId", "Id")
+                        .HasName("ak_draft_proposals_company_id_id");
+
+                    b.HasIndex("ActorUserId")
+                        .HasDatabaseName("ix_draft_proposals_actor_user_id");
+
+                    b.HasIndex("CompanyId", "FileRecordId")
+                        .HasDatabaseName("ix_draft_proposals_company_id_file_record_id");
+
+                    b.HasIndex("CompanyId", "ActorUserId", "RequestId")
+                        .IsUnique()
+                        .HasDatabaseName("uq_paguai_draft_proposals_live_request")
+                        .HasFilter("state = 'pending'");
+
+                    b.ToTable("draft_proposals", "paguai", t =>
+                        {
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_confidence", "confidence >= 0 AND confidence <= 1");
+
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_currency_brl", "currency = 'BRL'");
+
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_lifetime", "expires_at = created_at + interval '15 minutes'");
+
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_resolution", "(state = 'pending' AND resolved_at IS NULL AND resolution_request_id IS NULL AND result_draft_id IS NULL) OR (state = 'consumed' AND resolved_at IS NOT NULL AND resolution_request_id IS NOT NULL AND result_draft_id IS NOT NULL) OR (state IN ('rejected', 'invalidated') AND resolved_at IS NOT NULL AND resolution_request_id IS NOT NULL AND result_draft_id IS NULL)");
+
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_state", "state IN ('pending', 'consumed', 'rejected', 'invalidated')");
+                        });
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiRequest", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1057,6 +1227,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("source_inbound_message_id");
 
+                    b.Property<Guid?>("SourceProposalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_proposal_id");
+
                     b.Property<string>("State")
                         .IsRequired()
                         .HasColumnType("text")
@@ -1075,8 +1249,19 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_requests");
 
+                    b.HasAlternateKey("CompanyId", "Id")
+                        .HasName("ak_requests_company_id_id");
+
+                    b.HasIndex("SourceProposalId")
+                        .IsUnique()
+                        .HasDatabaseName("uq_paguai_requests_source_proposal_id")
+                        .HasFilter("source_proposal_id IS NOT NULL");
+
                     b.HasIndex("CompanyId", "InvoiceFileId")
                         .HasDatabaseName("ix_requests_company_id_invoice_file_id");
+
+                    b.HasIndex("CompanyId", "SourceProposalId")
+                        .HasDatabaseName("ix_requests_company_id_source_proposal_id");
 
                     b.ToTable("requests", "paguai", t =>
                         {
@@ -1745,6 +1930,31 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiDraftProposal", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("ActorUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_draft_proposals_users_actor_user_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.Company", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_draft_proposals_companies_company_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.FileRecord", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "FileRecordId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_draft_proposals_files_company_id_file_record_id");
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiRequest", b =>
                 {
                     b.HasOne("Vinx.Erp.Foundation.Domain.FileRecord", null)
@@ -1753,6 +1963,13 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasPrincipalKey("CompanyId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_requests_files_company_id_invoice_file_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.PaguaiDraftProposal", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "SourceProposalId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_requests_draft_proposals_company_id_source_proposal_id");
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Role", b =>
