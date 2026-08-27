@@ -126,8 +126,10 @@ public sealed class PaguaiDraftNotificationTests
         using var document = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
         var draftId = Guid.Parse(document.RootElement.GetProperty("id").GetString()!);
 
-        var service = ResolveIntentService(factory);
-        var directory = new PaguaiApproverDirectory(factory.Fixture.CreateAdministratorDbContext());
+        using var serviceScope = factory.Services.CreateScope();
+        var service = serviceScope.ServiceProvider.GetRequiredService<NotificationIntentService>();
+        await using var directoryContext = factory.Fixture.CreateAdministratorDbContext();
+        var directory = new PaguaiApproverDirectory(directoryContext);
         var handler = new PaguaiDraftCreatedHandler(service, directory, NullLogger());
         var message = new PaguaiDraftCreated(scenario.CompanyId, draftId, factory.ActorUserId);
         var envelope = new Envelope(message)
@@ -160,8 +162,10 @@ public sealed class PaguaiDraftNotificationTests
         using var document = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
         var draftId = Guid.Parse(document.RootElement.GetProperty("id").GetString()!);
 
-        var service = ResolveIntentService(factory);
-        var directory = new PaguaiApproverDirectory(factory.Fixture.CreateAdministratorDbContext());
+        using var serviceScope = factory.Services.CreateScope();
+        var service = serviceScope.ServiceProvider.GetRequiredService<NotificationIntentService>();
+        await using var directoryContext = factory.Fixture.CreateAdministratorDbContext();
+        var directory = new PaguaiApproverDirectory(directoryContext);
         var handler = new PaguaiDraftCreatedHandler(service, directory, NullLogger());
         var message = new PaguaiDraftCreated(scenario.CompanyId, draftId, factory.ActorUserId);
         await handler.Handle(message, new Envelope(message), CancellationToken.None);
@@ -169,9 +173,6 @@ public sealed class PaguaiDraftNotificationTests
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         Assert.Empty(await ReadIntentsAsync(administrator));
     }
-
-    private static NotificationIntentService ResolveIntentService(FoundationApiFactory factory) =>
-        ActivatorUtilities.CreateInstance<NotificationIntentService>(factory.Services);
 
     private static Microsoft.Extensions.Logging.ILogger<PaguaiDraftCreatedHandler> NullLogger() =>
         Microsoft.Extensions.Logging.Abstractions.NullLogger<PaguaiDraftCreatedHandler>.Instance;
@@ -291,8 +292,16 @@ public sealed class PaguaiDraftNotificationTests
         Guid id,
         string name)
     {
-        return await database.Capabilities.SingleOrDefaultAsync(capability =>
-            capability.Name == name)
-            ?? new Capability(id, name);
+        // Catálogo já semeado pela migration: somente adicionar quando ausente.
+        var existing = await database.Capabilities.SingleOrDefaultAsync(capability =>
+            capability.Name == name);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var created = new Capability(id, name);
+        database.Capabilities.Add(created);
+        return created;
     }
 }

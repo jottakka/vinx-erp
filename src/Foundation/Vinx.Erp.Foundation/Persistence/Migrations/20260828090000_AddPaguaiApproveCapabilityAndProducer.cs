@@ -1,16 +1,23 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Vinx.Erp.Foundation.Persistence;
 
 #nullable disable
 
 namespace Vinx.Erp.Foundation.Persistence.Migrations;
 
-/// <inheritdoc />
+// SQL-only: snapshot do modelo já coberto pela migration irmã de comprovante.
+[DbContext(typeof(FoundationDbContext))]
+[Migration("20260828090000_AddPaguaiApproveCapabilityAndProducer")]
 public partial class AddPaguaiApproveCapabilityAndProducer : Migration
 {
     /// <inheritdoc />
-    protected override void Up(MigrationBuilder migrationBuilder) =>
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
         migrationBuilder.Sql(
             """
+            RESET ROLE;
+
             -- Capability canônica (UUIDv5 estável, espelhada em KnownCapabilities);
             -- conflito de nome é idempotente, colisão de id falha a migração.
             INSERT INTO foundation.capabilities (id, name, created_at)
@@ -32,6 +39,10 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
             -- (como foundation.files.confirm), nunca ao member. A função já é
             -- de vinx_permissions_owner; a reescrita acontece DENTRO do papel
             -- (transient CREATE + SET ROLE), no padrão das migrações irmãs.
+"""
+        );
+        migrationBuilder.Sql(
+            """
             GRANT CREATE ON SCHEMA foundation TO vinx_permissions_owner;
             SET ROLE vinx_permissions_owner;
             CREATE OR REPLACE FUNCTION foundation.ensure_company_default_roles(p_company_id uuid)
@@ -146,13 +157,17 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                 END IF;
             END;
             $function$;
-            RESET ROLE;
-            REVOKE CREATE ON SCHEMA foundation FROM vinx_permissions_owner;
             REVOKE ALL ON FUNCTION foundation.ensure_company_default_roles(uuid)
                 FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION foundation.ensure_company_default_roles(uuid)
                 TO vinx_runtime;
+            RESET ROLE;
+            REVOKE CREATE ON SCHEMA foundation FROM vinx_permissions_owner;
 
+"""
+        );
+        migrationBuilder.Sql(
+            """
             -- Backfill: empresas com admin existente recebem o novo grant
             -- (executado como migrator, bypass de RLS, como na migração original).
             DO $block$
@@ -202,13 +217,17 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                 END LOOP;
             END;
             $block$;
-
+"""
+        );
+        migrationBuilder.Sql(
+            """
             -- Diretório de destinatários na fila: resolução só na entrega. O
             -- DEFINER é vinx_permissions_owner (dá vazão às policies _owner_select
             -- existentes + role_assignments acima) e o contexto de empresa é fixado
             -- INTERNAMENTE pela própria função — sem isso o FORCE RLS devolve zero
             -- linhas quando o chamador veio de outra empresa ou sem contexto.
-            GRANT CREATE ON SCHEMA paguai TO vinx_permissions_owner;
+            -- USAGE é obrigatório além de CREATE para o dono do diretório criar aqui.
+            GRANT USAGE, CREATE ON SCHEMA paguai TO vinx_permissions_owner;
             SET ROLE vinx_permissions_owner;
             CREATE FUNCTION paguai.list_draft_approver_user_ids(
                 p_company_id uuid,
@@ -248,19 +267,27 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                   AND membership.user_id <> p_exclude_user_id;
             END;
             $function$;
-            RESET ROLE;
-            REVOKE CREATE ON SCHEMA paguai FROM vinx_permissions_owner;
             REVOKE ALL ON FUNCTION paguai.list_draft_approver_user_ids(uuid, uuid)
                 FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION paguai.list_draft_approver_user_ids(uuid, uuid)
                 TO vinx_worker;
+            RESET ROLE;
+            REVOKE CREATE, USAGE ON SCHEMA paguai FROM vinx_permissions_owner;
 
-            -- O handler do worker enfileira intents na mesma conexão do worker.
+"""
+        );
+        migrationBuilder.Sql(
+            """
+            -- O handler do worker enfileira intents na mesma conexão do worker;
+            -- o EXECUTE é concedido pelo DONO da função (janela transiente).
+            SET ROLE vinx_notifications_owner;
             GRANT EXECUTE ON FUNCTION notifications.enqueue_notification_intent(
                 uuid, uuid, text, text, text, text)
                 TO vinx_worker;
-            """
+            RESET ROLE;
+"""
         );
+    }
 
     /// <inheritdoc />
     protected override void Down(MigrationBuilder migrationBuilder) =>
@@ -284,10 +311,18 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
             $block$;
 
             -- Revoke escopado aos objetos deste produtor.
+            SET ROLE vinx_notifications_owner;
             REVOKE EXECUTE ON FUNCTION notifications.enqueue_notification_intent(
                 uuid, uuid, text, text, text, text)
                 FROM vinx_worker;
+            RESET ROLE;
+
+            GRANT CREATE ON SCHEMA paguai TO vinx_permissions_owner;
+            SET ROLE vinx_permissions_owner;
             DROP FUNCTION paguai.list_draft_approver_user_ids(uuid, uuid);
+            RESET ROLE;
+            REVOKE CREATE ON SCHEMA paguai FROM vinx_permissions_owner;
+
             DELETE FROM foundation.capabilities
             WHERE (id, name) IN (
                     ('e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a'::uuid, 'paguai.draft.approve'));
@@ -414,12 +449,12 @@ public partial class AddPaguaiApproveCapabilityAndProducer : Migration
                 END IF;
             END;
             $function$;
-            RESET ROLE;
-            REVOKE CREATE ON SCHEMA foundation FROM vinx_permissions_owner;
             REVOKE ALL ON FUNCTION foundation.ensure_company_default_roles(uuid)
                 FROM PUBLIC, vinx_migrator;
             GRANT EXECUTE ON FUNCTION foundation.ensure_company_default_roles(uuid)
                 TO vinx_runtime;
+            RESET ROLE;
+            REVOKE CREATE ON SCHEMA foundation FROM vinx_permissions_owner;
             """
         );
 }

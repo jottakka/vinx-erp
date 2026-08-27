@@ -555,19 +555,27 @@ public sealed class PaguaiProofBindingEndpointTests
             factory.ActorUserId,
             requestId
         );
+        // Catálogo já semeado pela migration: somente adicionar quando ausente.
         var readCapability = await administrator.Capabilities.SingleOrDefaultAsync(capability =>
             capability.Name == "paguai.draft.read"
-        ) ?? new Capability(
-            Guid.Parse("766bdb56-80c0-5dee-982f-be7f0d3eaea8"),
-            "paguai.draft.read"
         );
+        if (readCapability is null)
+        {
+            readCapability = new Capability(
+                Guid.Parse("766bdb56-80c0-5dee-982f-be7f0d3eaea8"),
+                "paguai.draft.read");
+            administrator.Capabilities.Add(readCapability);
+        }
         var createCapability = await administrator.Capabilities.SingleOrDefaultAsync(capability =>
             capability.Name == "paguai.draft.create"
-        ) ?? new Capability(
-            Guid.Parse("aecaa296-6a6f-5815-93ac-bd1ccdff3f44"),
-            "paguai.draft.create"
         );
-        administrator.AddRange(readCapability, createCapability);
+        if (createCapability is null)
+        {
+            createCapability = new Capability(
+                Guid.Parse("aecaa296-6a6f-5815-93ac-bd1ccdff3f44"),
+                "paguai.draft.create");
+            administrator.Capabilities.Add(createCapability);
+        }
 
         var grants = new[]
         {
