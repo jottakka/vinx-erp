@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
@@ -9,11 +10,8 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 
 public sealed class PaguaiDraftApproverDirectoryTests
 {
-    private const string DraftApproveCapability = "paguai.draft.approve";
     private const string BeforeDraftApproverDirectory =
         "20260826225942_AddAtendimentoOperationalMetadata";
-    private static readonly Guid DraftApproveCapabilityId =
-        Guid.Parse("e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a");
 
     [Fact]
     public async Task Worker_lists_only_explicit_non_requester_approvers_from_the_requested_company()
@@ -82,16 +80,20 @@ public sealed class PaguaiDraftApproverDirectoryTests
             FROM pg_proc AS function_row
             INNER JOIN pg_roles AS owner ON owner.oid = function_row.proowner
             INNER JOIN foundation.capabilities AS capability
-                ON capability.name = 'paguai.draft.approve'
+                ON capability.name = @capability_name
             WHERE function_row.oid =
                 'paguai.list_draft_approver_user_ids(uuid,uuid)'::regprocedure;
             """,
             administrator
         );
+        command.Parameters.AddWithValue(
+            "capability_name",
+            KnownCapabilities.PaguaiDraftApprove
+        );
         await using var reader = await command.ExecuteReaderAsync();
 
         Assert.True(await reader.ReadAsync());
-        Assert.Equal(DraftApproveCapabilityId, reader.GetGuid(0));
+        Assert.Equal(KnownCapabilities.PaguaiDraftApproveId, reader.GetGuid(0));
         Assert.True(reader.GetBoolean(1));
         Assert.Equal("vinx_permissions_owner", reader.GetString(2));
         Assert.Equal(
@@ -178,7 +180,7 @@ public sealed class PaguaiDraftApproverDirectoryTests
                     )
                     .Select(grant => grant.Capability.Name)
                     .ToListAsync(),
-                name => name == DraftApproveCapability
+                name => name == KnownCapabilities.PaguaiDraftApprove
             );
         }
 
@@ -273,7 +275,7 @@ public sealed class PaguaiDraftApproverDirectoryTests
     }
 
     [Fact]
-    public async Task Downgrade_refuses_references_then_removes_only_the_new_contracts()
+    public async Task Downgrade_refuses_references_then_removes_only_the_directory_contract()
     {
         await using var fixture = await StartFixtureAsync();
         var actorId = Guid.NewGuid();
@@ -310,9 +312,10 @@ public sealed class PaguaiDraftApproverDirectoryTests
         await using var command = new NpgsqlCommand(
             """
             SELECT
-                NOT EXISTS (
+                EXISTS (
                     SELECT 1 FROM foundation.capabilities
-                    WHERE name = 'paguai.draft.approve'),
+                    WHERE id = @capability_id
+                      AND name = @capability_name),
                 to_regprocedure('foundation.ensure_company_default_roles(uuid)') IS NOT NULL,
                 to_regprocedure('foundation.list_company_members_with_roles(uuid)') IS NOT NULL,
                 EXISTS (
@@ -321,12 +324,84 @@ public sealed class PaguaiDraftApproverDirectoryTests
             """,
             verify
         );
+        command.Parameters.AddWithValue(
+            "capability_id",
+            KnownCapabilities.PaguaiDraftApproveId
+        );
+        command.Parameters.AddWithValue(
+            "capability_name",
+            KnownCapabilities.PaguaiDraftApprove
+        );
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.True(reader.GetBoolean(0));
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
+    }
+
+    [Fact]
+    public async Task Preexisting_canonical_capability_survives_upgrade_and_successful_downgrade()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using (var migrator = fixture.CreateMigratorDbContext())
+        {
+            await migrator.Database.MigrateAsync(BeforeDraftApproverDirectory);
+        }
+        var createdAt = new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        await using (
+            var seed = new NpgsqlCommand(
+                """
+                INSERT INTO foundation.capabilities (id, name, description, created_at)
+                VALUES (
+                    @capability_id,
+                    @capability_name,
+                    'pre-existing capability',
+                    @created_at)
+                """,
+                administrator
+            )
+        )
+        {
+            seed.Parameters.AddWithValue(
+                "capability_id",
+                KnownCapabilities.PaguaiDraftApproveId
+            );
+            seed.Parameters.AddWithValue(
+                "capability_name",
+                KnownCapabilities.PaguaiDraftApprove
+            );
+            seed.Parameters.AddWithValue("created_at", createdAt);
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        await using (var migrator = fixture.CreateMigratorDbContext())
+        {
+            await migrator.Database.MigrateAsync();
+            await migrator.Database.MigrateAsync(BeforeDraftApproverDirectory);
+        }
+
+        await using var verify = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT id, name, description, created_at
+            FROM foundation.capabilities
+            WHERE name = @capability_name
+            """,
+            verify
+        );
+        command.Parameters.AddWithValue(
+            "capability_name",
+            KnownCapabilities.PaguaiDraftApprove
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(KnownCapabilities.PaguaiDraftApproveId, reader.GetGuid(0));
+        Assert.Equal(KnownCapabilities.PaguaiDraftApprove, reader.GetString(1));
+        Assert.Equal("pre-existing capability", reader.GetString(2));
+        Assert.Equal(createdAt, reader.GetFieldValue<DateTimeOffset>(3));
     }
 
     private static async Task<FoundationPostgresFixture> StartFixtureAsync()
@@ -389,7 +464,7 @@ public sealed class PaguaiDraftApproverDirectoryTests
             )
         );
         var capability = await administrator.Capabilities.SingleAsync(candidate =>
-            candidate.Name == DraftApproveCapability
+            candidate.Name == KnownCapabilities.PaguaiDraftApprove
         );
         var grantId = Guid.NewGuid();
         administrator.Add(
@@ -442,7 +517,7 @@ public sealed class PaguaiDraftApproverDirectoryTests
             item.Id == membershipId
         );
         var capability = await administrator.Capabilities.SingleAsync(item =>
-            item.Name == DraftApproveCapability
+            item.Name == KnownCapabilities.PaguaiDraftApprove
         );
         administrator.Add(
             new Role(roleId, companyId, $"approver {roleId:N}", actorId, requestId)

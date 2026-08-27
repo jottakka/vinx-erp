@@ -99,6 +99,28 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
         {
             migrationBuilder.Sql(
                 """
+                -- O catálogo não registra se a linha canônica já existia. O
+                -- DELETE roda em uma subtransação apenas para acionar a FK em
+                -- toda referência, inclusive sob FORCE RLS; a exceção sentinela
+                -- desfaz o DELETE e conserva a capability em qualquer Down seguro.
+                DO $block$
+                BEGIN
+                    BEGIN
+                        DELETE FROM foundation.capabilities
+                        WHERE id = 'e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a'::uuid
+                          AND name = 'paguai.draft.approve';
+                        RAISE EXCEPTION 'retain Paguai draft approve capability'
+                            USING ERRCODE = 'P3460';
+                    EXCEPTION
+                        WHEN foreign_key_violation THEN
+                            RAISE EXCEPTION 'cannot downgrade Paguai draft approver directory while capability references remain'
+                                USING ERRCODE = '23503';
+                        WHEN SQLSTATE 'P3460' THEN
+                            NULL;
+                    END;
+                END;
+                $block$;
+
                 SET ROLE vinx_permissions_owner;
                 REVOKE ALL ON FUNCTION paguai.list_draft_approver_user_ids(uuid, uuid)
                     FROM PUBLIC, vinx_runtime, vinx_worker, vinx_migrator;
@@ -106,18 +128,6 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 RESET ROLE;
                 REVOKE USAGE ON SCHEMA paguai FROM vinx_permissions_owner;
                 REVOKE USAGE ON SCHEMA paguai FROM vinx_worker;
-
-                DO $block$
-                BEGIN
-                    DELETE FROM foundation.capabilities
-                    WHERE id = 'e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a'::uuid
-                      AND name = 'paguai.draft.approve';
-                EXCEPTION
-                    WHEN foreign_key_violation THEN
-                        RAISE EXCEPTION 'cannot downgrade Paguai draft approver directory while capability references remain'
-                            USING ERRCODE = '23503';
-                END;
-                $block$;
                 """
             );
         }

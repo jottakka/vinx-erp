@@ -8,6 +8,7 @@
 | Administrador padrão | `Default_admin_is_not_an_approver_without_an_explicit_financial_grant` | Prova que `ensure_company_default_roles` não concede autorização financeira implícita. | Automatizado |
 | Remoções e estado | `Directory_excludes_revoked_memberships_assignments_roles_and_grants` | Exclui membership, assignment, role ou grant removido logicamente. | Automatizado |
 | Duplicidade e concorrência | `Duplicate_grants_are_deduplicated_across_concurrent_directory_reads` | Deduplica usuário com múltiplos grants, mantém leituras concorrentes estáveis e respeita revogação do último grant. | Automatizado |
-| Down seguro | `Downgrade_refuses_references_then_removes_only_the_new_contracts` | Recusa referência explícita, preserva a migration na falha e remove só a função/capability quando livre. | Automatizado |
+| Down seguro | `Downgrade_refuses_references_then_removes_only_the_directory_contract` | Recusa referência explícita, preserva a migration na falha e remove só a função quando livre. | Automatizado |
+| Capability preexistente | `Preexisting_canonical_capability_survives_upgrade_and_successful_downgrade` | Conserva UUID, nome, descrição e criação de uma linha canônica anterior à migration. | Automatizado |
 
 Fora desta fatia: endpoint, escolha de política, fluxo de aprovação e grants automáticos.
