@@ -59,7 +59,7 @@ public sealed class PaguaiProofBindingEndpointTests
     }
 
     [Fact]
-    public async Task Create_with_cross_company_file_rejects_with_typed_code()
+    public async Task Create_with_cross_company_file_fails_closed_as_not_found()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory);
@@ -75,15 +75,15 @@ public sealed class PaguaiProofBindingEndpointTests
             ProofRequest(scenario.CompanyId, foreignProof.Id)
         );
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal(
-            "{\"code\":\"proof_file_denied\"}",
+            "{\"code\":\"proof_file_not_found\"}",
             await response.Content.ReadAsStringAsync()
         );
     }
 
     [Fact]
-    public async Task Create_with_file_uploaded_by_another_membership_rejects_owner_denial()
+    public async Task Create_with_file_from_another_uploader_fails_closed_as_not_found()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory);
@@ -99,9 +99,9 @@ public sealed class PaguaiProofBindingEndpointTests
             ProofRequest(scenario.CompanyId, foreignOwned.Id)
         );
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal(
-            "{\"code\":\"proof_file_denied\"}",
+            "{\"code\":\"proof_file_not_found\"}",
             await response.Content.ReadAsStringAsync()
         );
     }
@@ -140,7 +140,12 @@ public sealed class PaguaiProofBindingEndpointTests
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory);
-        var proofId = Guid.NewGuid();
+        var seeded = await SeedConfirmedFileAsync(
+            factory,
+            scenario.CompanyId,
+            scenario.MembershipId,
+            "unico.pdf");
+        var proofId = seeded.Id;
         await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
         const string insertSql = """
             INSERT INTO paguai.requests (
@@ -299,7 +304,8 @@ public sealed class PaguaiProofBindingEndpointTests
         var attempt = Assert.Single(storage.AttemptsSnapshot);
         Assert.Contains($"{scenario.CompanyId:N}", attempt.ProviderKey, StringComparison.Ordinal);
         Assert.Contains($"{proof.Id:N}", attempt.ProviderKey, StringComparison.Ordinal);
-        Assert.True(attempt.Lifetime < TimeSpan.FromMinutes(15));
+        // Pin exato do TTL do produtor de links.
+        Assert.Equal(TimeSpan.FromMinutes(5), attempt.Lifetime);
     }
 
     [Fact]

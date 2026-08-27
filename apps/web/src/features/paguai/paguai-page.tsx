@@ -40,8 +40,6 @@ function message(error: PaguaiDraftError) {
         {
           proof_file_not_found:
             "O comprovante informado não foi encontrado nesta empresa.",
-          proof_file_denied:
-            "Este comprovante não pertence à sua sessão ou empresa.",
           proof_file_not_ready:
             "O comprovante ainda está em análise de segurança. Tente novamente.",
           proof_file_bound:
@@ -338,6 +336,7 @@ export function PaguaiPage({
       <DraftViewDialog
         companyName={selectedCompany?.companyName ?? "Sem empresa"}
         draft={selected}
+        fetchProofLink={(id) => draftClient.proofLink(companyId, id)}
         onClose={() => setViewOpen(false)}
         open={viewOpen}
       />
@@ -348,14 +347,41 @@ export function PaguaiPage({
 function DraftViewDialog({
   companyName,
   draft,
+  fetchProofLink,
   onClose,
   open,
 }: {
   companyName: string;
   draft: PaguaiDraft | null;
+  fetchProofLink: (
+    id: string,
+  ) => Promise<
+    | { ok: true; value: { url: string } }
+    | { ok: false; error: PaguaiDraftError }
+  >;
   onClose: () => void;
   open: boolean;
 }) {
+  const [openingProof, setOpeningProof] = useState(false);
+  const [proofError, setProofError] = useState<string | null>(null);
+
+  // A URL assinada é buscada SOMENTE no clique e nunca guardada em estado.
+  async function abrirComprovante() {
+    if (!draft || openingProof) return;
+    setOpeningProof(true);
+    setProofError(null);
+    try {
+      const result = await fetchProofLink(draft.id);
+      if (result.ok) {
+        window.open(result.value.url, "_blank", "noopener,noreferrer");
+      } else {
+        setProofError(message(result.error));
+      }
+    } finally {
+      setOpeningProof(false);
+    }
+  }
+
   return (
     <EntityDialog
       description={`Solicitação de ${companyName}. Apenas leitura.`}
@@ -389,6 +415,21 @@ function DraftViewDialog({
                 : "Nenhum comprovante anexado."}
             </Typography>
           </Stack>
+          {draft.proofFileId ? (
+            <Button
+              disabled={openingProof}
+              onClick={() => void abrirComprovante()}
+              startIcon={<VisibilityOutlinedIcon />}
+              variant="outlined"
+            >
+              {openingProof ? "Abrindo…" : "Abrir comprovante"}
+            </Button>
+          ) : null}
+          {proofError ? (
+            <Alert role="alert" severity="error">
+              {proofError}
+            </Alert>
+          ) : null}
           <Typography color="text.secondary" variant="caption">
             Criado em {new Date(draft.createdAt).toLocaleString()}
           </Typography>

@@ -36,6 +36,14 @@ const errorSchema = z.object({ code: z.string() }).strict();
 const antiforgerySchema = z
   .object({ requestToken: z.string().min(1) })
   .strict();
+const proofLinkSchema = z
+  .object({
+    url: z.string().url(),
+    expiresAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
+export type PaguaiProofLink = z.infer<typeof proofLinkSchema>;
 
 export type PaguaiDraft = z.infer<typeof draftSchema>;
 export type CreatePaguaiDraftInput = Pick<
@@ -140,6 +148,30 @@ export function createPaguaiDraftClient(
         if (!response.ok)
           return { ok: false, error: await readError(response) };
         const parsed = draftSchema.safeParse(await response.json());
+        return parsed.success
+          ? { ok: true, value: parsed.data }
+          : { ok: false, error: "protocol" };
+      } catch {
+        return { ok: false, error: "network" };
+      }
+    },
+    /**
+     * Busca sob demanda a URL assinada de curta duração; a URL NUNCA é
+     * persistida em estado ou payload — vale só para a abuição imediata.
+     */
+    async proofLink(
+      companyId: string,
+      id: string,
+    ): Promise<PaguaiResult<PaguaiProofLink>> {
+      try {
+        const response = await request(
+          `${draftsPath}/${encodeURIComponent(id)}/proof-link?companyId=${encodeURIComponent(companyId)}`,
+          { method: "GET" },
+          fetchImplementation,
+        );
+        if (!response.ok)
+          return { ok: false, error: await readError(response) };
+        const parsed = proofLinkSchema.safeParse(await response.json());
         return parsed.success
           ? { ok: true, value: parsed.data }
           : { ok: false, error: "protocol" };

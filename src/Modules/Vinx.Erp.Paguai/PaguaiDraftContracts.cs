@@ -137,7 +137,6 @@ public enum PaguaiDraftState
     IdempotencyConflict,
     Unavailable,
     ProofFileNotFound,
-    ProofFileDenied,
     ProofFileNotReady,
     ProofFileBound,
     VersionConflict,

@@ -778,4 +778,89 @@ public sealed class DocumentUploadService(
         public static ConfirmationPreparation Completed(DocumentUploadResult<DocumentUploadConfirmationResult> result) =>
             new(null, result);
     }
+
+    /// <summary>Metadados seguros expostos pela fronteira para módulos que vinculam arquivos.</summary>
+    public sealed record DocumentBindingMetadata(
+        Guid FileId,
+        Guid CompanyId,
+        Guid UploaderMembershipId,
+        string FileName,
+        string MimeType,
+        long SizeBytes,
+        string ProviderKey);
+
+    /// <summary>
+    /// Fronteira pública de vínculo: valida, sob o MESMO contexto transacional do
+    /// chamador (e com trava de linha quando solicitado), existência + mesma
+    /// empresa + autoria do ator + estado confirmado pós-quarentena/scan +
+    /// registro ativo (não removido) e classificação esperada. Retorna apenas
+    /// metadados; bytes e chaves internas nunca atravessam o módulo consumidor.
+    /// </summary>
+    public async Task<DocumentUploadResult<DocumentBindingMetadata>> ValidateActiveForBindAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid fileId,
+        string? requiredClassification = null,
+        bool lockRowForBinding = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (companyId == Guid.Empty || fileId == Guid.Empty)
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_found", 404);
+        }
+
+        var membershipId = await database.Memberships
+            .AsNoTracking()
+            .Where(membership =>
+                membership.CompanyId == companyId && membership.UserId == actor.UserId)
+            .Select(membership => (Guid?)membership.Id)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (membershipId is null)
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_denied", 403);
+        }
+
+        var query = database.Files.AsNoTracking().Where(file => file.Id == fileId);
+        if (lockRowForBinding)
+        {
+            // Trava compartilhada serializa remoção lógica concorrente atrás da
+            // transação do chamador, fechando a janela TOCTOU do bind.
+            query = database.Files
+                .FromSqlInterpolated($"SELECT * FROM foundation.files WHERE id = {fileId} FOR SHARE")
+                .Where(file => file.Id == fileId);
+        }
+
+        var file = await query.SingleOrDefaultAsync(cancellationToken);
+        if (file is null || file.CompanyId != companyId)
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_found", 404);
+        }
+
+        if (file.DeletedAt is not null)
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_deleted", 410);
+        }
+
+        if (!string.Equals(file.ProcessingState, FileRecord.ConfirmedState, StringComparison.Ordinal))
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_ready", 409);
+        }
+
+        if (requiredClassification is { } expected
+            && !string.Equals(file.Classification, expected, StringComparison.Ordinal))
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_ready", 409);
+        }
+
+        return file.UploaderMembershipId == membershipId.Value
+            ? DocumentUploadResult<DocumentBindingMetadata>.Success(new DocumentBindingMetadata(
+                file.Id,
+                file.CompanyId,
+                file.UploaderMembershipId,
+                file.OriginalFileName,
+                file.MimeType,
+                file.SizeBytes,
+                file.ProviderKey))
+            : DocumentUploadResult<DocumentBindingMetadata>.Failure("file_denied", 403);
+    }
 }

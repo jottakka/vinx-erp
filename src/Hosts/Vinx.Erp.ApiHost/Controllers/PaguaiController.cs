@@ -176,14 +176,17 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
                 "capability_denied",
                 StatusCodes.Status403Forbidden
             ),
-            PaguaiDraftState.Invalid or PaguaiDraftState.ProofFileNotFound
-                or PaguaiDraftState.ProofFileNotReady => ApiControllerError.Error(
-                ProofCode(result.State),
+            PaguaiDraftState.ProofFileNotFound => ApiControllerError.Error(
+                "proof_file_not_found",
+                StatusCodes.Status404NotFound
+            ),
+            PaguaiDraftState.ProofFileNotReady => ApiControllerError.Error(
+                "proof_file_not_ready",
                 StatusCodes.Status400BadRequest
             ),
-            PaguaiDraftState.ProofFileDenied => ApiControllerError.Error(
-                "proof_file_denied",
-                StatusCodes.Status403Forbidden
+            PaguaiDraftState.Invalid => ApiControllerError.Error(
+                "invalid_request",
+                StatusCodes.Status400BadRequest
             ),
             PaguaiDraftState.ProofFileBound => ApiControllerError.Error(
                 "proof_file_bound",
@@ -239,12 +242,14 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
                 "resource_not_found",
                 StatusCodes.Status404NotFound
             ),
-            PaguaiDraftState.ProofFileDenied => ApiControllerError.Error(
-                "proof_file_denied",
-                StatusCodes.Status403Forbidden
+            PaguaiDraftState.ProofFileNotFound => ApiControllerError.Error(
+                "proof_file_not_found",
+                StatusCodes.Status404NotFound
             ),
-            PaguaiDraftState.ProofFileNotFound or PaguaiDraftState.ProofFileNotReady =>
-                ApiControllerError.Error(ProofCode(result.State), StatusCodes.Status400BadRequest),
+            PaguaiDraftState.ProofFileNotReady => ApiControllerError.Error(
+                "proof_file_not_ready",
+                StatusCodes.Status400BadRequest
+            ),
             PaguaiDraftState.ProofFileBound => ApiControllerError.Error(
                 "proof_file_bound",
                 StatusCodes.Status409Conflict
@@ -299,14 +304,6 @@ public sealed class PaguaiController(PaguaiDraftService service) : ControllerBas
             ),
         };
     }
-
-    private static string ProofCode(PaguaiDraftState state) =>
-        state switch
-        {
-            PaguaiDraftState.ProofFileNotFound => "proof_file_not_found",
-            PaguaiDraftState.ProofFileNotReady => "proof_file_not_ready",
-            _ => "invalid_request",
-        };
 
     private static bool IsTrimmed(string value) =>
         string.Equals(value, value.Trim(), StringComparison.Ordinal);

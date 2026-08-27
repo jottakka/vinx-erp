@@ -65,8 +65,9 @@ fronteira pública de arquivos Foundation (conjunto `FileRecord` do único
 `FoundationDbContext`, sem nova dependência): arquivo existente, mesma empresa,
 mesma membership autora do upload, estado `confirmed` (quarentena e scan
 antimalware concluídos) e ainda não vinculado a outro rascunho. Rejeições usam
-códigos tipados (`proof_file_not_found`, `proof_file_denied`,
-`proof_file_not_ready`, `proof_file_bound`) e ganham auditoria de negação; a
+códigos tipados (`proof_file_not_found` 404 fail-closed para arquivo ausente,
+de outra empresa ou de outro autor — sem distinguir existência;
+`proof_file_not_ready`; `proof_file_bound`) e ganham auditoria de negação; a
 troca bem-sucedida audita `paguai.draft.replace_proof` no MESMO commit do
 rebind. Em storage, o índice parcial único
 `uq_paguai_requests_proof_file (proof_file_id) WHERE proof_file_id IS NOT NULL`

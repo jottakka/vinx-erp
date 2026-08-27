@@ -490,6 +490,42 @@ describe("PaguaiPage", () => {
     ).toBeVisible();
   });
 
+  it("fetches the signed proof link on click and never stores the URL", async () => {
+    const user = userEvent.setup();
+    const signedUrl = "https://signed.storage.test/comprovante";
+    const proofLink = vi.fn(async () => ({
+      ok: true as const,
+      value: { url: signedUrl, expiresAt: "2026-08-26T12:05:00.000+00:00" },
+    }));
+    const draftClient = {
+      create: async () => ({ ok: true as const, value: draftWithServerProof }),
+      detail: async () => ({ ok: true as const, value: draftWithServerProof }),
+      list: async () => ({ ok: true as const, value: [draftWithServerProof] }),
+      proofLink,
+    };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+
+    renderPage(draftClient);
+
+    await user.click(await screen.findByRole("button", { name: "Visualizar" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Abrir comprovante" }),
+    );
+
+    await waitFor(() => expect(proofLink).toHaveBeenCalledTimes(1));
+    expect(proofLink).toHaveBeenCalledWith(companyId, draft.id);
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith(
+      signedUrl,
+      "_blank",
+      "noopener,noreferrer",
+    );
+    // A URL assinada jamais vira estado/JSX.
+    expect(within(dialog).queryByText(signedUrl)).toBeNull();
+    openSpy.mockRestore();
+  });
+
   it("renders the typed conflict code when the proof is already bound", async () => {
     const user = userEvent.setup();
     const draftClient = {
