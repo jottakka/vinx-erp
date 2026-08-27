@@ -993,8 +993,7 @@ describe("PaguaiPage", () => {
           return { error: "network" as const, ok: false as const };
         if (attempts === 2)
           return { error: "protocol" as const, ok: false as const };
-        if (attempts === 3)
-          return { error: 503 as const, ok: false as const };
+        if (attempts === 3) return { error: 503 as const, ok: false as const };
         return { ok: true as const, value: draft };
       },
     );
