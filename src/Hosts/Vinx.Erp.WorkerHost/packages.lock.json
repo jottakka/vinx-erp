@@ -564,6 +564,12 @@
           "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
+      "vinx.erp.demandas": {
+        "type": "Project",
+        "dependencies": {
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
       "vinx.erp.foundation": {
         "type": "Project",
         "dependencies": {

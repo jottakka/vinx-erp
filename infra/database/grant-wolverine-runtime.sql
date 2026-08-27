@@ -52,7 +52,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE
         vinx_wolverine_queues.wolverine_queue_telegram_inbound,
         vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled,
         vinx_wolverine_queues.wolverine_queue_paguai_events,
-        vinx_wolverine_queues.wolverine_queue_paguai_events_scheduled
+        vinx_wolverine_queues.wolverine_queue_paguai_events_scheduled,
+        vinx_wolverine_queues.wolverine_queue_demandas_automation,
+        vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled
     TO vinx_worker;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE vinx_migrator IN SCHEMA vinx_wolverine_worker
