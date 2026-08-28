@@ -207,20 +207,21 @@ public sealed class PaguaiDraftMigrationTests
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.True(reader.GetBoolean(0));
-        Assert.True(reader.GetBoolean(1));
+        // A troca versionada (UPDATE em `version`) chega no PR empilhado de CAS;
+        // este corte concede apenas o ponteiro do comprovante.
+        Assert.False(reader.GetBoolean(1));
         Assert.False(reader.GetBoolean(2));
         Assert.False(reader.GetBoolean(3));
     }
 
     [Fact]
-    public async Task Proof_downgrade_fails_closed_while_a_proof_is_bound_or_a_version_bumped()
+    public async Task Proof_downgrade_fails_closed_while_a_proof_is_bound()
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
         await using var migrator = fixture.CreateMigratorDbContext();
         await migrator.Database.MigrateAsync(ProofFileMigration);
-        var bound = await SeedProofBoundDraftAsync(fixture, bindProof: true, version: 1);
-        var bumped = await SeedProofBoundDraftAsync(fixture, bindProof: false, version: 2);
+        var bound = await SeedProofBoundDraftAsync(fixture, bindProof: true);
 
         var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
             await migrator.Database.MigrateAsync(BeforeProofFileMigration)
@@ -243,23 +244,22 @@ public sealed class PaguaiDraftMigrationTests
                     SELECT 1 FROM pg_indexes
                     WHERE schemaname = 'paguai'
                       AND indexname = 'uq_paguai_requests_proof_file'),
-                (SELECT count(*) FROM paguai.requests WHERE id IN (@bound_id, @bumped_id))
+                (SELECT count(*) FROM paguai.requests WHERE id = @bound_id)
             """,
             administrator
         );
         verify.Parameters.AddWithValue("migration_id", ProofFileMigration);
         verify.Parameters.AddWithValue("bound_id", bound);
-        verify.Parameters.AddWithValue("bumped_id", bumped);
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.True(reader.GetBoolean(0));
         Assert.True(reader.GetBoolean(1));
         Assert.True(reader.GetBoolean(2));
-        Assert.Equal(2L, reader.GetInt64(3));
+        Assert.Equal(1L, reader.GetInt64(3));
     }
 
     [Fact]
-    public async Task Empty_proof_downgrade_removes_column_grant_and_restores_the_fixed_version_check()
+    public async Task Empty_proof_downgrade_removes_column_and_keeps_the_fixed_version_check()
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
@@ -329,10 +329,10 @@ public sealed class PaguaiDraftMigrationTests
     /// <summary>
     /// Insere um rascunho no estado histórico da migration de prova: quando
     /// <paramref name="bindProof"/> cria arquivo confirmado para satisfazer a
-    /// FK composta e o vincula; a versão explícita cobre a guarda do downgrade.
+    /// FK composta e o vincula.
     /// </summary>
     private static async Task<Guid> SeedProofBoundDraftAsync(
-        FoundationPostgresFixture fixture, bool bindProof, int version)
+        FoundationPostgresFixture fixture, bool bindProof)
     {
         await using var administrator = fixture.CreateAdministratorDbContext();
         var actor = new User(
@@ -375,12 +375,11 @@ public sealed class PaguaiDraftMigrationTests
                 proof_file_id, state, version, created_at)
             VALUES (@id, @company_id, @requester, @request_id, 't', 'd',
                     1.00, 'BRL', '2026-09-01', 'Fornecedor Demo', 'required',
-                    @proof_file_id, 'rascunho', @version, clock_timestamp())
+                    @proof_file_id, 'rascunho', 1, clock_timestamp())
             """,
             connection);
         SeedDraftParameters(command, draftId, company.Id, actor.Id, Guid.NewGuid());
         command.Parameters.AddWithValue("proof_file_id", bindProof ? proof.Id : (object)DBNull.Value);
-        command.Parameters.AddWithValue("version", version);
         await command.ExecuteNonQueryAsync();
         return draftId;
     }

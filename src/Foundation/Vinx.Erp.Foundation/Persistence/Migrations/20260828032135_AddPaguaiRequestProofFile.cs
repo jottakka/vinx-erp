@@ -42,36 +42,28 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 principalColumns: new[] { "company_id", "id" },
                 onDelete: ReferentialAction.Restrict);
 
-            // A troca de comprovante usa verificação otimista: a versão passa a
-            // crescer (expectedVersion -> expectedVersion + 1).
-            migrationBuilder.Sql(
-                """
-                ALTER TABLE paguai.requests DROP CONSTRAINT ck_paguai_requests_version;
-                ALTER TABLE paguai.requests
-                    ADD CONSTRAINT ck_paguai_requests_version CHECK (version >= 1);
-                """);
-
-            // Privilégio mínimo: o runtime só pode atualizar as colunas da troca
-            // de comprovante; valor, beneficiário, estado, requerente, fatura e
+            // Privilégio mínimo: o runtime só pode atualizar o ponteiro do
+            // comprovante; valor, beneficiário, estado, requerente, fatura e
             // demais campos financeiros seguem intocáveis pelo SQL de runtime.
+            // A troca versionada (CAS em `version`) chega em PR empilhado.
             migrationBuilder.Sql(
-                "GRANT UPDATE (proof_file_id, version) ON paguai.requests TO vinx_runtime;");
+                "GRANT UPDATE (proof_file_id) ON paguai.requests TO vinx_runtime;");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            // Reversão fail-closed: recusa enquanto houver comprovante vinculado
-            // ou versão avançada, antes de tocar em qualquer objeto.
+            // Reversão fail-closed: recusa enquanto houver comprovante vinculado,
+            // antes de tocar em qualquer objeto.
             migrationBuilder.Sql(
                 """
                 DO $block$
                 BEGIN
                     IF EXISTS (
                         SELECT 1 FROM paguai.requests
-                        WHERE proof_file_id IS NOT NULL OR version <> 1)
+                        WHERE proof_file_id IS NOT NULL)
                     THEN
-                        RAISE EXCEPTION 'cannot downgrade Paguai proof binding while bound files or bumped versions exist'
+                        RAISE EXCEPTION 'cannot downgrade Paguai proof binding while bound files exist'
                             USING ERRCODE = '23514';
                     END IF;
                 END;
@@ -79,7 +71,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 """);
 
             migrationBuilder.Sql(
-                "REVOKE UPDATE (proof_file_id, version) ON paguai.requests FROM vinx_runtime;");
+                "REVOKE UPDATE (proof_file_id) ON paguai.requests FROM vinx_runtime;");
 
             migrationBuilder.DropForeignKey(
                 name: "fk_paguai_requests_proof_file",
@@ -100,14 +92,6 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 name: "proof_file_id",
                 schema: "paguai",
                 table: "requests");
-
-            // Restaura a invariante anterior: rascunho imutável (version = 1).
-            migrationBuilder.Sql(
-                """
-                ALTER TABLE paguai.requests DROP CONSTRAINT ck_paguai_requests_version;
-                ALTER TABLE paguai.requests
-                    ADD CONSTRAINT ck_paguai_requests_version CHECK (version = 1);
-                """);
         }
     }
 }
