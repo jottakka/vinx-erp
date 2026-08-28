@@ -94,6 +94,21 @@ o hash legado aceito pelo replay durante a transição.
 
 Qualquer PR futuro de comportamento Paguai registra `docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
 
+### Exceção registrada de entrega — #345
+
+A decisão de escopo, autorizada pelo responsável com fundamento na revisão
+independente Sol, é uma emenda única ao congelamento sem exceções deste corte.
+Incluindo este registro, o PR #357 totaliza 2.197 linhas manuais em 14 caminhos:
+856 de produção/documentação/migration e
+1.341 de testes públicos, além de 2.214 linhas EF geradas. O conteúdo comportamental
+revisado no commit `212858f2` era 2.184 (843 + 1.341); este registro acrescenta
+13 linhas manuais de documentação. A fatia CAS já separada na branch
+`codex/issue-345-proof-cas` totaliza 911 linhas manuais estritas, incluindo 75
+linhas SQL escritas manualmente; ela recebe a mesma exceção para compor a pilha.
+Isto não eleva o limiar reutilizável: o escopo create+read+link e CAS permanece
+congelado, sem comportamento, dependência, refatoração ou expansão documental.
+Qualquer correção executável exige nova contagem antes da prontidão de merge.
+
 ## MVP #345 — comprovante do rascunho (documentation-only)
 
 O comprovante é documentação anexada a um rascunho pelo próprio requerente:
