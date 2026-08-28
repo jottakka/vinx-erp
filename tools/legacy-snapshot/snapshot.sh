@@ -14,7 +14,10 @@
 # Postura de segurança:
 #   - Saída recusada dentro da árvore do repositório (raiz resolvida a partir
 #     do DIRETÓRIO DO SCRIPT, nunca do cwd de quem chama); construção ocorre em
-#     diretório irmão privado 0700 e a publicação é um único rename atômico.
+#     diretório irmão privado 0700 com nome mktemp+PID (posse inequívoca) e a
+#     publicação REIVINDICA o destino com mkdir atômico: dois publicadores
+#     concorrentes nunca aninham nem sobrescrevem caminho alheio, e a limpeza
+#     só remove caminhos criados por ESTE processo.
 #   - A connection string nunca é impressa nem entra no bundle.
 #   - O bundle contém metadados de identidade e política: confidencial; destino,
 #     retenção e destruição são decididos e registrados pelo responsável.
@@ -22,8 +25,11 @@
 #     REPEATABLE READ READ ONLY; o DDL vem de uma única passada do pg_dump.
 #     Capturas parciais misturadas invalidam as ledgers e nunca são aproveitadas:
 #     qualquer falha — inclusive INT/TERM/HUP — descarta o bundle inteiro.
-#   - Inventário de Storage parseado estruturalmente (JSON) e paginado: sem
-#     teto silencioso de 10 mil objetos por bucket.
+#   - Inventário de Storage parseado estruturalmente (JSON): a listagem da API
+#     é HIERÁRQUICA (storage.search devolve placeholders de pasta e só objetos
+#     do próprio nível), então o inventário percorre recursivamente os prefixos
+#     de pasta, paginando cada nível — sem teto silencioso de 10 mil objetos e
+#     sem nível aninhado omitido.
 
 set -euo pipefail
 set -o errtrace
@@ -76,22 +82,36 @@ fi
 [[ -e "$dest_abs" ]] && fail "destino já existe (bundles são imutáveis): $dest_abs"
 
 # Construção em diretório irmão PRIVADO (mesmo sistema de arquivos do destino
-# final): o bundle só aparece no destino completo, por rename atômico único.
+# final), com nome mktemp + PID: posse inequívoca para a limpeza. O bundle só
+# aparece no destino após a reivindicação atômica da publicação.
 TMP_DIR=$(mktemp -d)
-STAGE_DIR=$(mktemp -d "$dest_parent/.vinx-snapshot.XXXXXX")
+STAGE_DIR=$(mktemp -d "$dest_parent/.vinx-snapshot.$$.XXXXXX")
 chmod 700 "$STAGE_DIR"
 BUNDLE_COMPLETE=0
+DEST_CLAIMED=0
+
+# Remove o destino REIVINDICADO por este processo (marca de PID confere).
+remove_claimed_dest() {
+  if [[ "$DEST_CLAIMED" == 1 && -n "${dest_abs:-}" ]]; then
+    if [[ "$(cat "$dest_abs/.vinx-owner" 2>/dev/null || true)" == "$$" ]]; then
+      rm -rf "$dest_abs"
+    fi
+  fi
+}
 
 cleanup_all() {
   db_teardown_secrets
   rm -rf "$TMP_DIR" "${STAGE_DIR:-}"
+  [[ "$BUNDLE_COMPLETE" == 1 ]] || remove_claimed_dest
 }
+# Limpeza de abort remove APENAS caminhos criados por este processo: o staging
+# mktemp+PID e o destino que este processo reivindicou (marca .vinx-owner).
+# Um bundle concorrente concluído — mesmo aparecendo durante a captura — é
+# intocável; o antigo rm -rf incondicional do destino podia destruí-lo.
 abort_partial() {
   if [[ "$BUNDLE_COMPLETE" != 1 ]]; then
     rm -rf "${STAGE_DIR:-}"
-    if [[ -e "${dest_abs:-}" ]]; then
-      rm -rf "$dest_abs"
-    fi
+    remove_claimed_dest
     echo "erro: captura interrompida; bundle parcial descartado (evitar capturas mistas)" >&2
   fi
   exit 1
@@ -102,60 +122,121 @@ trap abort_partial ERR INT TERM HUP
 db_setup   # converte a connection string em pgpass 0600; nunca em argv
 psql_conn() { db_psql "$@"; }
 
-# Inventário de um bucket: páginas de 1000 objetos até a resposta curta; as
-# páginas são mescladas estruturalmente (JSON) em um array ordenado por nome.
-# Teto de segurança de 1e6 objetos por bucket evita loop infinito se a API
-# ignorar o offset — e a repetição do primeiro nome também falha fechado.
+# Inventário de um bucket percorrendo a HIERARQUIA da Storage API: cada
+# resposta de /object/list devolve placeholders de pasta (id null) e apenas os
+# objetos do nível do prefixo, com nomes RELATIVOS a ele (storage.search:
+# path_tokens[níveis do prefixo]). O inventário mantém uma fila de prefixos:
+# cada pasta descoberta enfileira prefixo+"/" para nova listagem paginada. Sem
+# isso, objetos abaixo de pastas ficam silenciosamente fora do manifesto.
+# Tetos de segurança (profundidade, pastas, objetos) + guarda de progresso
+# (primeiro nome não pode repetir entre páginas do mesmo prefixo).
 STORAGE_PAGE_SIZE=1000
 STORAGE_MAX_OBJECTS=1000000
+STORAGE_MAX_FOLDERS=10000
+STORAGE_MAX_PREFIX_DEPTH=32
 
 snapshot_bucket_objects() {
   local base_url=$1 auth_header=$2 bucket=$3 out=$4
-  local offset=0 page=0 count=0 total=0 first="" prev_first="<unset>"
-  local page_file
-  while :; do
-    page=$((page + 1))
-    page_file="$TMP_DIR/storage-page-${bucket}-${page}.json"
-    curl -sS -f --header @"$auth_header" \
-      -H 'Content-Type: application/json' \
-      -d "{\"prefix\":\"\",\"limit\":$STORAGE_PAGE_SIZE,\"offset\":$offset,\"sortBy\":{\"column\":\"name\",\"order\":\"asc\"}}" \
-      -o "$page_file" "$base_url/object/list/$bucket"
-    count=$(python3 -c 'import json, sys
+  local pages_dir="$TMP_DIR/storage-pages/$bucket"
+  mkdir -p "$pages_dir"
+  local queue=("")
+  local total=0 part=0 folders_seen=0
+  local prefix offset page_file folders_file meta count first prev_first child slashes
+  while ((${#queue[@]} > 0)); do
+    prefix=${queue[0]}
+    if ((${#queue[@]} > 1)); then
+      queue=("${queue[@]:1}")
+    else
+      queue=()
+    fi
+    offset=0
+    prev_first="<unset>"
+    while :; do
+      part=$((part + 1))
+      page_file="$pages_dir/page-$part.json"
+      folders_file="$pages_dir/page-$part.folders"
+      curl -sS -f --header @"$auth_header" \
+        -H 'Content-Type: application/json' \
+        -d "{\"prefix\":\"$prefix\",\"limit\":$STORAGE_PAGE_SIZE,\"offset\":$offset,\"sortBy\":{\"column\":\"name\",\"order\":\"asc\"}}" \
+        -o "$page_file" "$base_url/object/list/$bucket"
+      printf '%s' "$prefix" > "$pages_dir/page-$part.prefix"
+      # Parse e validação estrutural em comando FOREGROUND: falha do python3
+      # (JSON inválido, página/entrada fora de forma) propaga e aborta o bundle
+      # — substituição de processo não propagaria o status do filho.
+      meta=$(python3 -c 'import json, sys
 page = json.load(open(sys.argv[1], encoding="utf-8"))
 if not isinstance(page, list):
     raise SystemExit("pagina de objetos inesperada")
-print(len(page))' "$page_file") || fail "resposta de objetos invalida para o bucket $bucket"
-    first=$(python3 -c 'import json, sys
-page = json.load(open(sys.argv[1], encoding="utf-8"))
-print(page[0].get("name", "") if page and isinstance(page[0], dict) else "")' "$page_file") \
-      || fail "pagina de objetos invalida para o bucket $bucket"
-    [[ "$first" != "$prev_first" ]] ||
-      fail "paginacao do storage nao avanca para o bucket $bucket (offset=$offset)"
-    prev_first=$first
-    total=$((total + count))
-    if (( count < STORAGE_PAGE_SIZE )); then
-      break
-    fi
-    offset=$((offset + STORAGE_PAGE_SIZE))
-    (( total < STORAGE_MAX_OBJECTS )) ||
-      fail "inventario do bucket $bucket excede o teto de seguranca de $STORAGE_MAX_OBJECTS objetos"
+prefix = sys.argv[3]
+folders = []
+for item in page:
+    if not isinstance(item, dict):
+        raise SystemExit("entrada de objeto invalida")
+    raw = item.get("name")
+    if not isinstance(raw, str) or not raw:
+        raise SystemExit("nome de objeto invalido")
+    name = raw[len(prefix):] if prefix and raw.startswith(prefix) else raw
+    if item.get("id") is None:
+        if "/" in name or not name:
+            raise SystemExit("nome de pasta invalido")
+        folders.append(name)
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    fh.write("".join(name + "\n" for name in folders))
+sys.stdout.write(str(len(page)) + "\t" + (page[0]["name"] if page else ""))' \
+        "$page_file" "$folders_file" "$prefix") ||
+        fail "resposta de objetos invalida para o bucket $bucket (prefixo $prefix)"
+      count=${meta%%$'\t'*}
+      first=${meta#*$'\t'}
+      [[ "$first" != "$prev_first" ]] ||
+        fail "paginacao do storage nao avanca para o bucket $bucket (prefixo $prefix, offset=$offset)"
+      prev_first=$first
+      total=$((total + count))
+      (( total < STORAGE_MAX_OBJECTS )) ||
+        fail "inventario do bucket $bucket excede o teto de seguranca de $STORAGE_MAX_OBJECTS objetos"
+      while IFS= read -r child; do
+        [[ -n "$child" ]] || continue
+        child="$prefix$child/"
+        slashes=${child//[!/]/}
+        ((${#slashes} <= STORAGE_MAX_PREFIX_DEPTH)) ||
+          fail "profundidade de pastas excede o teto de $STORAGE_MAX_PREFIX_DEPTH niveis no bucket $bucket"
+        folders_seen=$((folders_seen + 1))
+        (( folders_seen <= STORAGE_MAX_FOLDERS )) ||
+          fail "inventario do bucket $bucket excede o teto de seguranca de $STORAGE_MAX_FOLDERS pastas"
+        queue+=("$child")
+      done < "$folders_file"
+      if (( count < STORAGE_PAGE_SIZE )); then
+        break
+      fi
+      offset=$((offset + STORAGE_PAGE_SIZE))
+    done
   done
-  python3 - "$out" "$TMP_DIR/storage-page-${bucket}-" <<'PY' > /dev/null
+  # Mesclagem: nomes reabsolutizados por prefixo (nível devolve nome relativo),
+  # dedup por nome e ordenação estável — o manifesto é o inventário completo.
+  python3 - "$out" "$pages_dir" <<'PY' > /dev/null
 import glob
 import json
 import sys
 
-out_path, prefix = sys.argv[1], sys.argv[2]
-items = []
-for path in sorted(glob.glob(prefix + "*.json")):
+out_path, pages_dir = sys.argv[1], sys.argv[2]
+items = {}
+for path in sorted(glob.glob(pages_dir + "/page-*.json")):
     with open(path, encoding="utf-8") as fh:
         page = json.load(fh)
     if not isinstance(page, list):
         raise SystemExit("pagina de objetos inesperada")
-    items.extend(page)
-items.sort(key=lambda item: str(item.get("name", "")) if isinstance(item, dict) else "")
+    with open(path[: -len(".json")] + ".prefix", encoding="utf-8") as fh:
+        prefix = fh.read()
+    for item in page:
+        if not isinstance(item, dict):
+            raise SystemExit("entrada de objeto invalida")
+        name = str(item.get("name", ""))
+        if prefix and not name.startswith(prefix):
+            name = prefix + name
+        entry = dict(item)
+        entry["name"] = name
+        items[name] = entry
 with open(out_path, "w", encoding="utf-8") as fh:
-    json.dump(items, fh, ensure_ascii=False, separators=(",", ":"))
+    json.dump([items[name] for name in sorted(items)], fh, ensure_ascii=False, separators=(",", ":"))
     fh.write("\n")
 PY
 }
@@ -273,17 +354,38 @@ CONSISTENT_SQL
     db_track_bearer_file "$auth_header"   # registra no shell PAI; teardown inclui o arquivo
     curl -sS -f --header @"$auth_header" \
       -o "$bundle_root/json/storage_buckets.json" "$base_url/bucket"
-    local bucket
-    while IFS= read -r bucket; do
-      [[ "$bucket" =~ ^[A-Za-z0-9._-]+$ ]] || fail "nome de bucket inesperado: $bucket"
-      snapshot_bucket_objects "$base_url" "$auth_header" "$bucket" \
-        "$bundle_root/json/storage_objects_${bucket}.json"
-    done < <(python3 -c 'import json, sys
-buckets = json.load(open(sys.argv[1], encoding="utf-8"))
+    # Parse dos buckets em comando FOREGROUND com saída em arquivo checado:
+    # JSON inválido, resposta não-lista ou entrada fora de forma (sem nome,
+    # nome fora do alfabeto seguro) derruba o python3 e o set -e aborta ANTES
+    # do manifesto/publicação. Substituição de processo (`< <(...)`) não
+    # propaga o status do filho: zero iterações seguiriam como sucesso.
+    local bucket_parser="$TMP_DIR/parse-buckets.py"
+    cat > "$bucket_parser" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    buckets = json.load(fh)
 if not isinstance(buckets, list):
     raise SystemExit("resposta de buckets inesperada")
-names = sorted({str(b["name"]) for b in buckets if isinstance(b, dict) and "name" in b})
-sys.stdout.write("".join(name + "\n" for name in names))' "$bundle_root/json/storage_buckets.json")
+names = set()
+for bucket in buckets:
+    if not isinstance(bucket, dict) or not isinstance(bucket.get("name"), str) or not bucket["name"]:
+        raise SystemExit("entrada de bucket invalida")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", bucket["name"]):
+        raise SystemExit("nome de bucket inesperado: " + bucket["name"])
+    names.add(bucket["name"])
+sys.stdout.write("".join(name + "\n" for name in sorted(names)))
+PY
+    local bucket_list="$TMP_DIR/storage-buckets.list"
+    python3 "$bucket_parser" "$bundle_root/json/storage_buckets.json" > "$bucket_list" ||
+      fail "resposta de buckets invalida"
+    local bucket
+    while IFS= read -r bucket; do
+      snapshot_bucket_objects "$base_url" "$auth_header" "$bucket" \
+        "$bundle_root/json/storage_objects_${bucket}.json"
+    done < "$bucket_list"
   else
     printf '%s\n' "etapa de storage pulada: LEGACY_SNAPSHOT_STORAGE_URL não definida" \
       > "$bundle_root/json/storage_skipped.txt"
@@ -349,11 +451,31 @@ AUTHREST
   local file_count
   file_count=$(find "$bundle_root/sql" "$bundle_root/json" "$bundle_root/commands" -type f | wc -l | tr -d ' ')
 
-  # Publicação atômica: até este rename o destino NUNCA existiu; bundle parcial
-  # é estruturalmente invisível para consumidores.
-  mv "$STAGE_DIR" "$dest_abs"
+  # Publicação com REIVINDICAÇÃO atômica de propriedade: mkdir só vence se o
+  # destino NÃO existir — dois publicadores concorrentes nunca aninham o bundle
+  # um dentro do outro nem sobrescrevem caminho alheio (o mv antigo aninhava
+  # silenciosamente e reportava sucesso). A partir da reivindicação o destino
+  # pertence a ESTE processo (marca .vinx-owner com PID); o conteúdo preparado
+  # é movido para dentro e o bundle só é declarado pronto com manifesto verificado.
+  if ! mkdir "$dest_abs"; then
+    fail "destino já existe (bundles são imutáveis): $dest_abs"
+  fi
+  DEST_CLAIMED=1
+  chmod 700 "$dest_abs"
+  printf '%s\n' "$$" > "$dest_abs/.vinx-owner"
+  shopt -s dotglob
+  local entry
+  for entry in "$STAGE_DIR"/*; do
+    mv "$entry" "$dest_abs/"
+  done
+  shopt -u dotglob
+  rmdir "$STAGE_DIR"
   STAGE_DIR=
+  [[ -f "$dest_abs/manifest.sha256" ]] ||
+    fail "publicação incompleta: manifest.sha256 ausente em $dest_abs"
+  rm -f "$dest_abs/.vinx-owner"
   BUNDLE_COMPLETE=1
+  DEST_CLAIMED=0
   echo "bundle pronto: $dest_abs ($file_count arquivos); manifesto: manifest.sha256"
 }
 

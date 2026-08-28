@@ -324,6 +324,134 @@ public sealed class ImporterCommandTests
     }
 
     /// <summary>
+    /// Regressão da reconciliação completa do staging: linha importada no batch 1
+    /// cuja fonte SUMIU antes do batch 2 vira conflito fail-closed — antes a
+    /// staged órfã nunca era examinada (iteração só sobre a fonte corrente) e o
+    /// batch 2 gravava receipt nova reportando imported_new com a linha velha retida.
+    /// </summary>
+    [Fact]
+    public async Task Deleted_source_row_fails_closed_under_new_batch()
+    {
+        await using var fx = new LegacyImportPostgresFixture();
+        await fx.InitializeAsync();
+
+        var mapping = MappingPath;
+        await File.WriteAllTextAsync(mapping, MappingJson("staging-orphan-1"));
+        var mappingNewBatch = MappingPath;
+        await File.WriteAllTextAsync(mappingNewBatch, MappingJson("staging-orphan-2"));
+        try
+        {
+            int run1;
+            using (var io = Capture())
+            {
+                run1 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
+            }
+            Assert.Equal(0, run1);
+
+            // A fonte remove a linha que já está em staging (empresa 1).
+            await fx.ExecuteAsync("DELETE FROM legacy.clientes WHERE codigo = 'CLI-0003'");
+
+            int run2;
+            string stdout2;
+            string stderr2;
+            using (var io = Capture())
+            {
+                run2 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mappingNewBatch]);
+                (stdout2, stderr2) = (io.Stdout, io.Stderr);
+            }
+            Assert.True(run2 != 0 && stdout2.Contains("conflicted_rollback"),
+                $"exit={run2} stdout=[{stdout2}] stderr=[{stderr2}]");
+
+            // Sem receipt do batch novo para a empresa órfã e sem escrita parcial:
+            // a linha staged permanece (rollback), nada foi aceito silenciosamente.
+            Assert.Equal(0, await fx.ExecuteCountAsync("""
+                SELECT count(*) FROM legacy_import.import_receipts
+                WHERE source_batch_id = 'staging-orphan-2'
+                  AND company_key = '11111111-aaaa-4111-8111-111111111111'
+                """));
+            Assert.Equal(1, await fx.ExecuteCountAsync("""
+                SELECT count(*) FROM legacy_import.customers
+                WHERE code = 'CLI-0003'
+                  AND source_payload->>'codigo' = 'CLI-0003'
+                """));
+        }
+        finally
+        {
+            File.Delete(mapping);
+            File.Delete(mappingNewBatch);
+        }
+    }
+
+    /// <summary>
+    /// Regressão da provenance bruta: codigo=null no batch 1 e codigo="" no
+    /// batch 2 projetam a MESMA coluna code='', mas o source_payload diverge —
+    /// agora é conflito fail-closed (antes a comparação sem payload aceitava e
+    /// reportava imported_new retendo provenance velha).
+    /// </summary>
+    [Fact]
+    public async Task Raw_payload_only_divergence_fails_closed_under_new_batch()
+    {
+        await using var fx = new LegacyImportPostgresFixture();
+        await fx.InitializeAsync();
+
+        const string noCodeRow = "c0000000-0000-4000-8000-0000000000a6";
+        await fx.ExecuteAsync($"""
+            INSERT INTO legacy.clientes (id, empresa_id, codigo, nome, email, ativo, criado_em) VALUES
+                ('{noCodeRow}', '11111111-aaaa-4111-8111-111111111111', NULL, 'Cliente Sem Codigo', NULL, true, '2026-02-02T00:00:00Z')
+            """);
+
+        var mapping = MappingPath;
+        await File.WriteAllTextAsync(mapping, MappingJson("payload-divergence-1"));
+        var mappingNewBatch = MappingPath;
+        await File.WriteAllTextAsync(mappingNewBatch, MappingJson("payload-divergence-2"));
+        try
+        {
+            int run1;
+            using (var io = Capture())
+            {
+                run1 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
+            }
+            Assert.Equal(0, run1);
+            // Coluna projetada normalizada: null ⇒ ''.
+            Assert.Equal(1, await fx.ExecuteCountAsync(
+                $"SELECT count(*) FROM legacy_import.customers WHERE legacy_cliente_id = '{noCodeRow}' AND code = ''"));
+            Assert.Equal(1, await fx.ExecuteCountAsync($"""
+                SELECT count(*) FROM legacy_import.customers
+                WHERE legacy_cliente_id = '{noCodeRow}' AND source_payload->>'codigo' IS NULL
+                """));
+
+            // Mutação só na provenance bruta: null ⇒ "" (projeção continua '').
+            await fx.ExecuteAsync($"UPDATE legacy.clientes SET codigo = '' WHERE id = '{noCodeRow}'");
+
+            int run2;
+            string stdout2;
+            using (var io = Capture())
+            {
+                run2 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mappingNewBatch]);
+                stdout2 = io.Stdout;
+            }
+            Assert.NotEqual(0, run2);
+            Assert.Contains("conflicted_rollback", stdout2);
+
+            // Rollback preserva a provenance original; batch novo não gravou receipt.
+            Assert.Equal(1, await fx.ExecuteCountAsync($"""
+                SELECT count(*) FROM legacy_import.customers
+                WHERE legacy_cliente_id = '{noCodeRow}' AND source_payload->>'codigo' IS NULL
+                """));
+            Assert.Equal(0, await fx.ExecuteCountAsync("""
+                SELECT count(*) FROM legacy_import.import_receipts
+                WHERE source_batch_id = 'payload-divergence-2'
+                  AND company_key = '11111111-aaaa-4111-8111-111111111111'
+                """));
+        }
+        finally
+        {
+            File.Delete(mapping);
+            File.Delete(mappingNewBatch);
+        }
+    }
+
+    /// <summary>
     /// Regressão do preflight do --apply: mapeamento incompleto (empresa
     /// legada sem linha no mapa) aborta com a MESMA validação do dry-run ANTES
     /// de qualquer DDL — nem schema de staging é criado. Antes o --apply

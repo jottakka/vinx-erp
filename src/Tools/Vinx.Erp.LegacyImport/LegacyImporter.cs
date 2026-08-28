@@ -258,37 +258,73 @@ public sealed class LegacyImporter
         return (int)(long)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 
+    /// <summary>
+    /// Linha de staging esperada/observada. Inclui o source_payload CANONIZADO:
+    /// provenance bruta (ex.: <c>codigo</c> null vs "") decide conflito mesmo
+    /// quando as colunas projetadas coincidem.
+    /// </summary>
     private sealed record StagedCustomer(
-        Guid TargetCompanyId, string CompanyKey, string Code, string LegalName, string? Email, bool Active);
+        Guid LegacyClienteId,
+        Guid TargetCompanyId,
+        string CompanyKey,
+        string Code,
+        string LegalName,
+        string? Email,
+        bool Active,
+        string SourcePayloadCanonical);
 
-    private static async Task<StagedCustomer?> ReadStagedCustomerAsync(
+    /// <summary>Conjunto COMPLETO já em staging para a empresa (por legacy_cliente_id).</summary>
+    private static async Task<Dictionary<Guid, StagedCustomer>> ReadStagedCustomersAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        Guid legacyClienteId,
+        string companyKey,
         CancellationToken cancellationToken)
     {
+        var staged = new Dictionary<Guid, StagedCustomer>();
         await using var command = new NpgsqlCommand(
             """
-            SELECT target_company_id, company_key, code, legal_name, email, active
-            FROM legacy_import.customers WHERE legacy_cliente_id = @legacy_cliente_id
+            SELECT legacy_cliente_id, target_company_id, company_key, code, legal_name, email, active, source_payload::text
+            FROM legacy_import.customers WHERE company_key = @company_key
             """,
             connection, transaction);
-        command.Parameters.AddWithValue("@legacy_cliente_id", legacyClienteId);
+        command.Parameters.AddWithValue("@company_key", companyKey);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
+        while (await reader.ReadAsync(cancellationToken))
         {
-            return null;
+            var legacyClienteId = reader.GetGuid(0);
+            staged[legacyClienteId] = new StagedCustomer(
+                legacyClienteId,
+                reader.GetGuid(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.GetBoolean(6),
+                CanonicalizeJsonText(reader.GetString(7)));
         }
 
-        return new StagedCustomer(
-            reader.GetGuid(0),
-            reader.GetString(1),
-            reader.GetString(2),
-            reader.GetString(3),
-            reader.IsDBNull(4) ? null : reader.GetString(4),
-            reader.GetBoolean(5));
+        return staged;
     }
 
+    /// <summary>Provenance bruta determinística da linha-fonte (mesma forma gravada em staging).</summary>
+    private static string BuildSourcePayload(ClientRow row, CompanyMapping mapping) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["legacy_cliente_id"] = row.IdText,
+            ["legacy_empresa_id"] = mapping.LegacyEmpresaId.ToString(),
+            ["codigo"] = row.Code,
+            ["nome"] = row.Name,
+            ["email"] = row.Email,
+            ["ativo"] = row.Active,
+        });
+
+    /// <summary>
+    /// Reconciliação BIDIRECIONAL do conjunto completo por empresa: o staged da
+    /// empresa é comparado INTEIRO contra o esperado da fonte — extra (linha
+    /// cuja fonte sumiu entre batches), ausente ou divergente (colunas
+    /// projetadas OU payload bruto) é conflito fail-closed. Nunca resta linha
+    /// órfã em staging sob receipt nova, nem falso imported_new.
+    /// </summary>
     private static async Task<int> StageCustomersAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -296,19 +332,27 @@ public sealed class LegacyImporter
         IReadOnlyList<ClientRow> rows,
         CancellationToken cancellationToken)
     {
+        var stagedByLegacyId = await ReadStagedCustomersAsync(
+            connection, transaction, mapping.CompanyKey, cancellationToken);
         var staged = 0;
         foreach (var row in rows)
         {
             var legacyClienteId = Guid.Parse(row.IdText);
+            var payload = BuildSourcePayload(row, mapping);
             var expected = new StagedCustomer(
-                mapping.TargetCompanyId, mapping.CompanyKey, row.Code ?? string.Empty, row.Name, row.Email, row.Active);
+                legacyClienteId,
+                mapping.TargetCompanyId,
+                mapping.CompanyKey,
+                row.Code ?? string.Empty,
+                row.Name,
+                row.Email,
+                row.Active,
+                CanonicalizeJsonText(payload));
 
-            // Fail-closed em staging: linha preexistente é comparada campo a campo.
-            // Divergência (staging velho/torto sob receipt nova) é conflito, nunca
-            // ON CONFLICT DO NOTHING silencioso — falso imported_new não existe.
-            var existing = await ReadStagedCustomerAsync(
-                connection, transaction, legacyClienteId, cancellationToken);
-            if (existing is not null)
+            // Fail-closed em staging: linha preexistente é comparada campo a
+            // campo, inclusive o payload bruto. Divergência (staging velho/
+            // torto sob receipt nova) é conflito, nunca aceitação silenciosa.
+            if (stagedByLegacyId.Remove(legacyClienteId, out var existing))
             {
                 if (!existing.Equals(expected))
                 {
@@ -333,22 +377,47 @@ public sealed class LegacyImporter
             command.Parameters.AddWithValue("@legal_name", row.Name);
             command.Parameters.AddWithValue("@email", (object?)row.Email ?? DBNull.Value);
             command.Parameters.AddWithValue("@active", row.Active);
-            command.Parameters.AddWithValue(
-                "@source_payload",
-                JsonSerializer.Serialize(new Dictionary<string, object?>
-                {
-                    ["legacy_cliente_id"] = row.IdText,
-                    ["legacy_empresa_id"] = mapping.LegacyEmpresaId.ToString(),
-                    ["codigo"] = row.Code,
-                    ["nome"] = row.Name,
-                    ["email"] = row.Email,
-                    ["ativo"] = row.Active,
-                }));
+            command.Parameters.AddWithValue("@source_payload", payload);
             staged += await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        // Sobrou staged sem fonte correspondente: a fonte MUDOU entre batches
+        // (linha removida) — receipt nova sobre conjunto incompleto não existe.
+        if (stagedByLegacyId.Count > 0)
+        {
+            var orphans = string.Join(", ", stagedByLegacyId.Keys.OrderBy(id => id.ToString()));
+            throw new LegacyImportConflictException(
+                $"staging contem linhas ausentes da fonte para a empresa {mapping.CompanyKey} (clientes legados {orphans})");
         }
 
         return staged;
     }
+
+    /// <summary>
+    /// Comparação semântica de JSON de provenance: chaves ordenadas
+    /// recursivamente e strings re-serializadas pela MESMA codificação. O jsonb
+    /// do Postgres reordena chaves e desenrola escapes unicode; o
+    /// JsonSerializer escreve em ordem de inserção com escapes. A forma
+    /// canônica garante que só diferenças SEMÂNTICAS (ex.: <c>null</c> vs "")
+    /// divergem, nunca a representação.
+    /// </summary>
+    private static string CanonicalizeJsonText(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return CanonicalJson(document.RootElement);
+    }
+
+    private static string CanonicalJson(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Object => "{" + string.Join(
+            ",",
+            element.EnumerateObject()
+                .Select(property => JsonSerializer.Serialize(property.Name) + ":" + CanonicalJson(property.Value))
+                .OrderBy(member => member, StringComparer.Ordinal)) + "}",
+        JsonValueKind.Array => "[" + string.Join(",", element.EnumerateArray().Select(CanonicalJson)) + "]",
+        JsonValueKind.String => JsonSerializer.Serialize(element.GetString()),
+        _ => element.GetRawText(),
+    };
 
     /// <summary>
     /// Insere a receipt com ON CONFLICT DO NOTHING: inserida ⇒ lote novo; conflito

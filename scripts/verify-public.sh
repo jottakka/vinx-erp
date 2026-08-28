@@ -25,3 +25,9 @@ done < <(git ls-files 'tests/public/**/*.csproj' | sort)
 # runner); sem isto a suíte compila no `dotnet build` e nunca roda no CI.
 dotnet test tests/tools/Vinx.Erp.LegacyImport.IntegrationTests/Vinx.Erp.LegacyImport.IntegrationTests.csproj \
   --no-build --filter 'Category!=SupabaseStorage'
+
+# Contrato executável dos scripts de captura legada: roda o snapshot.sh REAL
+# com bins falsos e mock local da Storage API (python3) — sem Docker, sem rede;
+# bash -n/shellcheck não cobrem status de processo, hierarquia da API nem
+# corridas de publicação concorrente.
+tools/legacy-snapshot/tests/run-tests.sh
