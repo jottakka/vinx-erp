@@ -29,10 +29,10 @@ describe("EntityDialog", () => {
     expect(headings[0].tagName).toBe("H2");
 
     const describedBy = dialog.getAttribute("aria-describedby");
-    expect(describedBy).toBeTruthy();
-    expect(document.getElementById(describedBy!)).toHaveTextContent(
-      "Preencha os campos abaixo.",
-    );
+    const description = describedBy
+      ? document.getElementById(describedBy)
+      : null;
+    expect(description).toHaveTextContent("Preencha os campos abaixo.");
   });
 
   it("keeps focus trapping and closes through the accessible close button", async () => {

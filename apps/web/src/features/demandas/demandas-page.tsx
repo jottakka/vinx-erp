@@ -210,16 +210,9 @@ export function DemandasPage() {
     window.history.replaceState(null, "", demandasDetailPath(detailId));
   }, [detailId, companyId]);
 
-  function replaceCard(updated?: DemandBoardCard) {
-    if (!updated) return void loadBoard({ silent: true });
-    setCards((current) =>
-      current.map((card) => (card.id === updated.id ? updated : card)),
-    );
-  }
-
   async function act(
     card: DemandBoardCard,
-    action: () => Promise<CommandResult<DemandBoardCard>>,
+    action: () => Promise<CommandResult>,
   ) {
     const result = await action();
     if (!result.ok) {

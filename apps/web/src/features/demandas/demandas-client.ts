@@ -142,18 +142,17 @@ const demandBoardPageSchema = z
 
 const demandDetailSchema = z
   .object({
-    checklist: z
-      .array(
-        z
-          .object({
-            doneAt: z.string().nullable(),
-            id: z.string().uuid(),
-            isDone: z.boolean(),
-            position: z.number().int(),
-            text: z.string(),
-          })
-          .strict(),
-      ),
+    checklist: z.array(
+      z
+        .object({
+          doneAt: z.string().nullable(),
+          id: z.string().uuid(),
+          isDone: z.boolean(),
+          position: z.number().int(),
+          text: z.string(),
+        })
+        .strict(),
+    ),
     demand: z
       .object({
         automationPaused: z.boolean(),
@@ -179,30 +178,28 @@ const demandDetailSchema = z
         version: z.number().int().nonnegative(),
       })
       .strict(),
-    history: z
-      .array(
-        z
-          .object({
-            actorUserId: z.string().uuid().nullable(),
-            cycleCount: z.number().int(),
-            fromStage: z.string().nullable(),
-            id: z.string().uuid(),
-            kind: z.string(),
-            occurredAt: z.string(),
-            toStage: z.string().nullable(),
-          })
-          .strict(),
-      ),
-    participants: z
-      .array(
-        z
-          .object({
-            id: z.string().uuid(),
-            role: z.string(),
-            userId: z.string().uuid(),
-          })
-          .strict(),
-      ),
+    history: z.array(
+      z
+        .object({
+          actorUserId: z.string().uuid().nullable(),
+          cycleCount: z.number().int(),
+          fromStage: z.string().nullable(),
+          id: z.string().uuid(),
+          kind: z.string(),
+          occurredAt: z.string(),
+          toStage: z.string().nullable(),
+        })
+        .strict(),
+    ),
+    participants: z.array(
+      z
+        .object({
+          id: z.string().uuid(),
+          role: z.string(),
+          userId: z.string().uuid(),
+        })
+        .strict(),
+    ),
   })
   .strict();
 

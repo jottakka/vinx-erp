@@ -37,7 +37,9 @@ function renderField(props: FieldHostProps) {
   return screen.getByLabelText("Comprovante: anexar arquivo");
 }
 
-function okUploader(fileIdFor: (attempt: number) => string): AttachmentUploader {
+function okUploader(
+  fileIdFor: (attempt: number) => string,
+): AttachmentUploader {
   let attempt = 0;
   return vi.fn(async (file: File) => ({
     ok: true as const,
@@ -51,11 +53,21 @@ function okUploader(fileIdFor: (attempt: number) => string): AttachmentUploader 
 describe("AttachmentField", () => {
   it("replaces the previous file when a new one is selected in singular mode", async () => {
     const user = userEvent.setup();
-    const input = renderField({ uploader: okUploader((attempt) => `file-${attempt}`) });
+    const input = renderField({
+      uploader: okUploader((attempt) => `file-${attempt}`),
+    });
 
-    await user.upload(input, new File(["a"], "fatura-a.pdf", { type: "application/pdf" }));
-    await waitFor(() => expect(screen.getByText("Anexado")).toBeInTheDocument());
-    await user.upload(input, new File(["b"], "fatura-b.pdf", { type: "application/pdf" }));
+    await user.upload(
+      input,
+      new File(["a"], "fatura-a.pdf", { type: "application/pdf" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Anexado")).toBeInTheDocument(),
+    );
+    await user.upload(
+      input,
+      new File(["b"], "fatura-b.pdf", { type: "application/pdf" }),
+    );
 
     await waitFor(() =>
       expect(screen.getByText("fatura-b.pdf")).toBeInTheDocument(),
@@ -72,9 +84,17 @@ describe("AttachmentField", () => {
       uploader: okUploader((attempt) => `file-${attempt}`),
     });
 
-    await user.upload(input, new File(["a"], "fatura-a.pdf", { type: "application/pdf" }));
-    await waitFor(() => expect(screen.getByText("Anexado")).toBeInTheDocument());
-    await user.upload(input, new File(["b"], "fatura-b.pdf", { type: "application/pdf" }));
+    await user.upload(
+      input,
+      new File(["a"], "fatura-a.pdf", { type: "application/pdf" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Anexado")).toBeInTheDocument(),
+    );
+    await user.upload(
+      input,
+      new File(["b"], "fatura-b.pdf", { type: "application/pdf" }),
+    );
 
     await waitFor(() =>
       expect(screen.getByText("fatura-b.pdf")).toBeInTheDocument(),
@@ -91,7 +111,10 @@ describe("AttachmentField", () => {
       uploader: okUploader(() => "file-canonical"),
     });
 
-    await user.upload(input, new File(["a"], "fatura.pdf", { type: "application/pdf" }));
+    await user.upload(
+      input,
+      new File(["a"], "fatura.pdf", { type: "application/pdf" }),
+    );
 
     await waitFor(() => {
       const latest = onChange.mock.calls.at(-1)?.[0] ?? [];

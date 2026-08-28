@@ -8,7 +8,11 @@ import { CompanyAccentScope } from "./company-accent-scope";
 function ModeFlipper() {
   const { setMode } = useColorScheme();
 
-  return <button onClick={() => setMode("dark")}>trocar tema</button>;
+  return (
+    <button type="button" onClick={() => setMode("dark")}>
+      trocar tema
+    </button>
+  );
 }
 
 describe("CompanyAccentScope", () => {
