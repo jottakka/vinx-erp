@@ -2,13 +2,14 @@
 
 ## Limite da evidência
 
-Esta fatia valida navegação autenticada, módulos em preparação, preferências
-visuais e ajuda. Não valida dados de módulos, ações operacionais, autorização
+Esta fatia valida navegação autenticada e preferências visuais. O histórico
+da fatia original (páginas em preparação) permanece no Git; hoje as rotas
+têm páginas de módulo reais. Não valida dados de módulos, ações operacionais, autorização
 de servidor, API ou persistência de sessão.
 
 | Classe BDD | Cenário | Vitest | Playwright | Status atual |
 | --- | --- | --- | --- | --- |
-| Happy | Usuário autorizado visita Paguai, Atendimento e Pessoas e volta ao Início | `app-shell.test.tsx`: links de módulos (Kanban ausente); `feature-preparation-page.test.tsx`: página e retorno | `app-shell-home.spec.ts`: cenário de destinos preparados | Coberto |
+| Happy | Usuário autorizado visita Paguai, Atendimento e Pessoas e volta ao Início | `app-shell.test.tsx`: links de módulos | `app-shell-home.spec.ts`: navegação dos módulos | Coberto |
 | Access | Visitante anônimo volta somente para um caminho seguro após entrar | `router.test.tsx`: deep links e rejeição de query | `visual-theme-login.spec.ts`: deep link protegido | Coberto |
 | State | Tema claro e escuro permanecem escolha explícita | `visual-preferences.test.tsx`: modo explícito; `appearance-menu.test.tsx`: seleção | `visual-theme-login.spec.ts`: tema claro após mudança do sistema | Coberto |
 | Repetição/concorrência | Alterações repetidas preservam seleção final e navegação mobile ocorre uma vez | `appearance-menu.test.tsx`: alterações repetidas; `app-shell.test.tsx`: uma transição | `app-shell-home.spec.ts`: drawer mobile | Coberto |
