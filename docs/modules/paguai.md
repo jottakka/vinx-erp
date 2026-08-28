@@ -98,15 +98,15 @@ Qualquer PR futuro de comportamento Paguai registra `docs/verification/issue-<nu
 
 A decisão de escopo, autorizada pelo responsável com fundamento na revisão
 independente Sol, é uma emenda única ao congelamento sem exceções deste corte.
-Incluindo este registro, o PR #357 totaliza 2.197 linhas manuais em 14 caminhos:
-856 de produção/documentação/migration e
+Incluindo este registro, o PR #357 totaliza 2.199 linhas manuais em 14 caminhos:
+858 de produção/documentação/migration e
 1.341 de testes públicos, além de 2.214 linhas EF geradas. O conteúdo comportamental
 revisado no commit `212858f2` era 2.184 (843 + 1.341); este registro acrescenta
-13 linhas manuais de documentação. A fatia CAS já separada na branch
+15 linhas manuais de documentação. A fatia CAS já separada na branch
 `codex/issue-345-proof-cas` totaliza 911 linhas manuais estritas, incluindo 75
 linhas SQL escritas manualmente; ela recebe a mesma exceção para compor a pilha.
 Isto não eleva o limiar reutilizável: o escopo create+read+link e CAS permanece
-congelado, sem comportamento, dependência, refatoração ou expansão documental.
+congelado, sem comportamento, dependência, refatoração ou expansão documental adicional.
 Qualquer correção executável exige nova contagem antes da prontidão de merge.
 
 ## MVP #345 — comprovante do rascunho (documentation-only)
