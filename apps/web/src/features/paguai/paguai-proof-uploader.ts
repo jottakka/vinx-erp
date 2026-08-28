@@ -66,17 +66,6 @@ export type PaguaiInvoiceUploadGateway = {
   upload(input: PaguaiInvoiceUploadInput): Promise<PaguaiInvoiceUploadResult>;
 };
 
-export type PaguaiProofUploadStage = PaguaiInvoiceUploadStage;
-export type PaguaiProofUploadFailure = PaguaiInvoiceUploadFailure;
-export type UploadedPaguaiProof = UploadedPaguaiInvoice;
-export type PaguaiProofUploadResult =
-  | { ok: true; proof: UploadedPaguaiProof }
-  | { ok: false; error: PaguaiProofUploadFailure };
-export type PaguaiProofUploadInput = PaguaiInvoiceUploadInput;
-export type PaguaiProofUploadGateway = {
-  upload(input: PaguaiProofUploadInput): Promise<PaguaiProofUploadResult>;
-};
-
 type UploaderOptions = {
   fetchImplementation?: typeof fetch;
   cryptoImplementation?: Pick<Crypto, "randomUUID"> & {
@@ -90,50 +79,11 @@ type UploaderOptions = {
  * da fundação de arquivos (mesmo fluxo dos anexos do agente). A URL temporária
  * de storage nunca sai desta função.
  */
-export function createPaguaiInvoiceUploader(
-  options: UploaderOptions = {},
-): PaguaiInvoiceUploadGateway {
-  const gateway = createClassifiedUploader("paguai_request_invoice", options);
-  return {
-    async upload(input) {
-      const result = await gateway.upload(input);
-      return result.ok
-        ? { ok: true, invoice: result.file }
-        : { ok: false, error: result.error };
-    },
-  };
-}
-
-/**
- * Envia um comprovante do Paguai pelo mesmo ciclo, classificado como
- * comprovante de solicitação (vínculo único por rascunho no servidor).
- */
-export function createPaguaiProofUploader(
-  options: UploaderOptions = {},
-): PaguaiProofUploadGateway {
-  const gateway = createClassifiedUploader("paguai_request_proof", options);
-  return {
-    async upload(input) {
-      const result = await gateway.upload(input);
-      return result.ok
-        ? { ok: true, proof: result.file }
-        : { ok: false, error: result.error };
-    },
-  };
-}
-
-type ClassifiedUploadResult =
-  | { ok: true; file: UploadedPaguaiInvoice }
-  | { ok: false; error: PaguaiInvoiceUploadFailure };
-
-function createClassifiedUploader(
-  classification: string,
-  {
-    fetchImplementation = globalThis.fetch,
-    cryptoImplementation = globalThis.crypto,
-    now = () => new Date(),
-  }: UploaderOptions = {},
-): { upload(input: PaguaiInvoiceUploadInput): Promise<ClassifiedUploadResult> } {
+export function createPaguaiInvoiceUploader({
+  fetchImplementation = globalThis.fetch,
+  cryptoImplementation = globalThis.crypto,
+  now = () => new Date(),
+}: UploaderOptions = {}): PaguaiInvoiceUploadGateway {
   async function requestBff(
     stage: PaguaiInvoiceUploadStage,
     path: string,
@@ -189,7 +139,7 @@ function createClassifiedUploader(
     companyId,
     file,
     signal,
-  }: PaguaiInvoiceUploadInput): Promise<ClassifiedUploadResult> {
+  }: PaguaiInvoiceUploadInput): Promise<PaguaiInvoiceUploadResult> {
     if (signal.aborted) return fail("validation", "aborted");
     if (
       !file.name.trim() ||
@@ -228,7 +178,7 @@ function createClassifiedUploader(
         mimeType: file.type,
         sizeBytes: file.size,
         checksum,
-        classification,
+        classification: "paguai_request_invoice",
         origin: "web-paguai-draft",
         retentionUntil: new Date(
           now().getTime() + retentionMilliseconds,
@@ -277,7 +227,7 @@ function createClassifiedUploader(
 
     return {
       ok: true,
-      file: {
+      invoice: {
         fileId: intent.fileId,
         fileName: file.name,
         mimeType: file.type,

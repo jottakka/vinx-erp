@@ -16,16 +16,7 @@ public sealed record CreateDraftCommand(
     string BeneficiaryDisplayName,
     string ProofRequirement,
     Guid? SourceInboundMessageId = null,
-    Guid? ProofFileId = null,
     Guid? InvoiceFileId = null
-);
-
-/// <summary>Troca versionada do comprovante: expectedVersion torna o rebind um compare-and-set.</summary>
-public sealed record ReplaceDraftProofCommand(
-    Guid CompanyId,
-    Guid DraftId,
-    Guid ProofFileId,
-    int ExpectedVersion
 );
 
 /// <summary>
@@ -55,11 +46,7 @@ public sealed record PaguaiDraft(
     Guid? InvoiceFileId,
     string State,
     int Version,
-    DateTimeOffset CreatedAt,
-    Guid? ProofFileId = null,
-    string? ProofFileName = null,
-    string? ProofFileMimeType = null,
-    long? ProofFileSizeBytes = null
+    DateTimeOffset CreatedAt
 );
 
 /// <summary>Transporta valores Paguai como texto decimal exato; número JSON é rejeitado.</summary>
@@ -138,10 +125,6 @@ public enum PaguaiDraftState
     NotFound,
     IdempotencyConflict,
     Unavailable,
-    ProofFileNotFound,
-    ProofFileNotReady,
-    ProofFileBound,
-    VersionConflict,
 }
 
 public sealed record PaguaiDraftResult(PaguaiDraftState State, PaguaiDraft? Draft = null)
@@ -156,15 +139,3 @@ public sealed record PaguaiDraftListResult(
 {
     public static PaguaiDraftListResult Of(PaguaiDraftState state) => new(state);
 }
-
-/// <summary>URL de curta duração emitida sob autorização fresca; nunca persistida em payload.</summary>
-public sealed record PaguaiProofLink(Uri Url, DateTimeOffset ExpiresAt);
-
-public sealed record PaguaiProofLinkResult(
-    PaguaiDraftState State,
-    PaguaiProofLink? Link = null
-)
-{
-    public static PaguaiProofLinkResult Of(PaguaiDraftState state) => new(state);
-}
-

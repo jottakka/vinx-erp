@@ -56,7 +56,6 @@ public sealed class PaguaiRequestConfiguration : IEntityTypeConfiguration<Paguai
             .HasColumnType("text")
             .HasMaxLength(10)
             .IsRequired();
-        builder.Property(request => request.ProofFileId).HasColumnName("proof_file_id");
         builder.Property(request => request.InvoiceFileId).HasColumnName("invoice_file_id");
         builder.HasIndex(request => new { request.CompanyId, request.InvoiceFileId });
         builder.HasOne<FileRecord>()

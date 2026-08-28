@@ -60,14 +60,12 @@ type PaguaiCreateDialogProps = {
     beneficiaryDisplayName: string;
     description: string;
     dueDate: string;
-    proofFileId: string | null;
     proofRequirement: "optional" | "required";
     invoiceFileId: string | null;
     title: string;
   }) => void;
   open: boolean;
   uploader?: AttachmentUploader;
-  proofUploader?: AttachmentUploader;
   errorMessage?: string | null;
   recoveryRequired?: boolean;
   submitting?: boolean;
@@ -80,7 +78,6 @@ export function PaguaiCreateDialog({
   onRetry,
   onSubmit,
   open,
-  proofUploader,
   recoveryRequired = false,
   submitting = false,
   uploader,
@@ -99,13 +96,9 @@ export function PaguaiCreateDialog({
   const [attachments, setAttachments] = useState<
     readonly AttachmentFieldValue[]
   >([]);
-  const [proofAttachments, setProofAttachments] = useState<
-    readonly AttachmentFieldValue[]
-  >([]);
   const [amountError, setAmountError] = useState<string | null>(null);
-  const allAttachments = [...attachments, ...proofAttachments];
-  const isUploading = allAttachments.some((item) => item.state === "uploading");
-  const hasFailedAttachment = allAttachments.some(
+  const isUploading = attachments.some((item) => item.state === "uploading");
+  const hasFailedAttachment = attachments.some(
     (item) => item.state === "failed",
   );
   const failedAttachmentMessage = hasFailedAttachment
@@ -117,7 +110,6 @@ export function PaguaiCreateDialog({
     if (locked) return;
     form.reset();
     setAttachments([]);
-    setProofAttachments([]);
     setAmountError(null);
     onClose();
   }
@@ -131,14 +123,12 @@ export function PaguaiCreateDialog({
     }
     setAmountError(null);
     const readyInvoice = attachments.find((item) => item.state === "ready");
-    const readyProof = proofAttachments.find((item) => item.state === "ready");
     onSubmit({
       amount,
       beneficiaryDisplayName: values.beneficiaryDisplayName,
       description: values.description,
       dueDate: values.dueDate,
       invoiceFileId: readyInvoice?.fileId ?? null,
-      proofFileId: readyProof?.fileId ?? null,
       proofRequirement: values.proofRequirement,
       title: values.title,
     });
@@ -243,7 +233,7 @@ export function PaguaiCreateDialog({
             )}
           />
           <AttachmentField
-            accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+            accept="application/pdf,image/jpeg,image/png"
             disabled={locked}
             label="Fatura ou documento da solicitação"
             onChange={setAttachments}
@@ -258,23 +248,6 @@ export function PaguaiCreateDialog({
               }))
             }
             value={attachments}
-          />
-          <AttachmentField
-            accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
-            disabled={locked}
-            label="Anexar comprovante"
-            onChange={setProofAttachments}
-            uploader={
-              proofUploader ??
-              (async () => ({
-                ok: false as const,
-                error: {
-                  kind: "validation" as const,
-                  message: "Anexo indisponível.",
-                },
-              }))
-            }
-            value={proofAttachments}
           />
           {failedAttachmentMessage ? (
             <Alert role="alert" severity="error">

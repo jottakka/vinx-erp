@@ -1670,9 +1670,6 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("date")
                         .HasColumnName("due_date");
 
-                    b.Property<Guid?>("ProofFileId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("proof_file_id");
                     b.Property<Guid?>("InvoiceFileId")
                         .HasColumnType("uuid")
                         .HasColumnName("invoice_file_id");

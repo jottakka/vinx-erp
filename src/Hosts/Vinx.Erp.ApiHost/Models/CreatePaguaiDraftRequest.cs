@@ -48,9 +48,6 @@ public sealed class CreatePaguaiDraftRequest
     public string ProofRequirement { get; init; } = string.Empty;
 
     [NonEmptyGuid]
-    public Guid? ProofFileId { get; init; }
-
-    [NonEmptyGuid]
     public Guid? InvoiceFileId { get; init; }
 
     public CreateDraftCommand ToCommand() =>
@@ -65,7 +62,6 @@ public sealed class CreatePaguaiDraftRequest
             BeneficiaryDisplayName: BeneficiaryDisplayName,
             ProofRequirement: ProofRequirement,
             SourceInboundMessageId: null,
-            ProofFileId: ProofFileId,
             InvoiceFileId: InvoiceFileId
         );
 }

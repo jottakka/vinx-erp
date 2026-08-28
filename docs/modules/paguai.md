@@ -90,31 +90,6 @@ converte centavos para reais em `numeric(18,2)` e preserva os valores já
 persistidos. Ela também converte o valor dos recibos de idempotência e mantém
 o hash legado aceito pelo replay durante a transição.
 
-## Comprovante vinculado (P1, faixa A)
-
-O `POST /paguai/requests` aceita `proofFileId` opcional e o PATCH
-`/paguai/requests/{id}/proof` troca o comprovante com verificação otimista
-(`expectedVersion` → `version + 1`). Antes de vincular, o serviço valida pela
-fronteira pública de arquivos Foundation (conjunto `FileRecord` do único
-`FoundationDbContext`, sem nova dependência): arquivo existente, mesma empresa,
-mesma membership autora do upload, estado `confirmed` (quarentena e scan
-antimalware concluídos) e ainda não vinculado a outro rascunho. Rejeições usam
-códigos tipados (`proof_file_not_found` 404 fail-closed para arquivo ausente,
-de outra empresa ou de outro autor — sem distinguir existência;
-`proof_file_not_ready`; `proof_file_bound`) e ganham auditoria de negação; a
-troca bem-sucedida audita `paguai.draft.replace_proof` no MESMO commit do
-rebind. Em storage, o índice parcial único
-`uq_paguai_requests_proof_file (proof_file_id) WHERE proof_file_id IS NOT NULL`
-e a FK composta para `foundation.files (company_id, id)` tornam duplo vínculo
-e referência cruzada de empresa impossíveis, inclusive em corrida.
-
-Leitura: lista/detalhe retornam apenas metadados (`proofFileId`,
-`proofFileName`, mimeType, tamanho). `GET /paguai/requests/{id}/proof-link`
-emite sob autorização fresca (`paguai.draft.read` + RLS por GUC) uma URL
-assinada de 5 minutos via `FileStorage`; URL durável nunca entra em payload.
-Sem comprovante no comando, o hash canônico permanece byte-idêntico ao corte
-anterior, preservando replay de recibos antigos.
-
 ## Notificações — primeiro produtor real (P1, faixa B)
 
 A criação do rascunho publica `PaguaiDraftCreated` pelo Wolverine
