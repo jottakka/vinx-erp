@@ -3,10 +3,10 @@
 Matriz BDD do contrato congelado (`/tmp/vinx-345-mvp-decision.md`, seção C) mapeada para os testes reais.
 Comprovante é documentação anexada a rascunho: nenhuma operação do corte cria estado financeiro, evento de pagamento ou notificação.
 
-Escopo deste PR (#357): criação com comprovante opcional, leitura segura e link assinado de curta duração.
-A troca versionada via `PATCH /paguai/requests/{id}/proof` (CAS em `expectedVersion`), o relaxamento
-`CHECK (version >= 1)` e o `GRANT UPDATE (version)` seguem no PR empilhado `codex/issue-345-proof-cas`,
-criado a partir deste; a matriz abaixo cobre apenas o que existe neste corte.
+Escopo deste PR (branch `codex/issue-345-proof-cas`, empilhada sobre o PR #357): a troca versionada via
+`PATCH /paguai/requests/{id}/proof` (CAS em `expectedVersion`), o relaxamento `CHECK (version >= 1)` e o
+`GRANT UPDATE (version)`. A matriz abaixo cobre a fatia de troca; as linhas de create+read+link continuam
+no manifesto do PR #357 e seguem válidas.
 
 | Cenário/BDD | Teste ou caminho | Intenção | Situação |
 |---|---|---|---|
@@ -27,7 +27,15 @@ criado a partir deste; a matriz abaixo cobre apenas o que existe neste corte.
 | Banco — Down fail-closed: prova vinculada | `PaguaiDraftMigrationTests.Proof_downgrade_fails_closed_while_a_proof_is_bound` | Downgrade recusa (`23514`) preservando coluna, índice, linha de migration e dados | coberto |
 | Banco — Down vazio: remove coluna, revoga grant | `PaguaiDraftMigrationTests.Empty_proof_downgrade_removes_column_and_keeps_the_fixed_version_check` | Coluna removida; grant de UPDATE revogado; `CHECK (version = 1)` segue intacto (insert com `version = 2` permanece impossível) | coberto |
 
-Fora deste corte (PR empilhado `codex/issue-345-proof-cas`): PATCH/troca CAS, `proof_version_conflict`,
-auditoria `paguai.draft.replace_proof`, `CHECK (version >= 1)`, `GRANT UPDATE (version)` e antiforgery de PATCH.
+| Sucesso — attach/replace: rascunho próprio versão N + prova válida não vinculada; PATCH com `expectedVersion = N` | `PaguaiProofEndpointTests.Patch_attaches_and_replaces_proof_with_version_bump_and_transactional_audit` | `200`; ponteiro muda, versão `N+1`, estado `rascunho`; exatamente uma auditoria de sucesso por troca (`proof_attached`/`proof_replaced`); arquivo anterior não é apagado; nenhum evento novo | coberto |
+| Validação — corpo do PATCH: `proofFileId`/empresa vazio, `expectedVersion < 1`, membro JSON desconhecido | `PaguaiProofEndpointTests.Invalid_patch_bodies_are_rejected_without_mutation_or_audit` | `400 invalid_request`; sem mutação, sem versão nova, sem auditoria de sucesso | coberto |
+| Validação — dependência: auditoria falha durante a troca | `PaguaiProofEndpointTests.Audit_failure_rolls_back_replacement_and_success_audit` | Mutação e auditoria de sucesso não se separam (`503 paguai_unavailable`); troca revertida | coberto |
+| Acesso — requerente/tenant: PATCH em rascunho alheio ou inexistente | `PaguaiProofEndpointTests.Foreign_requester_drafts_are_hidden_from_replace_read_and_link_with_durable_denial_audit`; `Browser_session_patch_requires_antiforgery_and_missing_draft_denials_are_audited` | `404 resource_not_found` externo com negação durable auditada (`resource_not_found`, sem id/metadados do comprovante); versão/ponteiro intactos | coberto |
+| Concorrência — CAS: duas trocas com a mesma `expectedVersion` | `PaguaiProofEndpointTests.Cas_race_resolves_single_winner_with_typed_loser_and_one_audit` | Exatamente um `200` avançando a versão; perdedor `409 proof_version_conflict`; uma única auditoria de sucesso | coberto |
+| Antiforgery: PATCH por sessão de cookie sem token; com token passa; endpoints declarados no OpenAPI | `PaguaiProofEndpointTests.Browser_session_patch_requires_antiforgery_and_missing_draft_denials_are_audited` | Sem CSRF `400`; com CSRF chega à autorização; `patch` e `proof-link` presentes no contrato OpenAPI | coberto |
+| Banco — grant coluna-nível: runtime atualiza só `proof_file_id`/`version` | `PaguaiDraftMigrationTests.Version_cas_grant_is_column_level_only_for_runtime` | `has_column_privilege` verdadeiro para as duas colunas da troca; falso para `amount`/`beneficiary_display_name` | coberto |
+| Banco — Down fail-closed: versão `<> 1` | `PaguaiDraftMigrationTests.Version_cas_downgrade_fails_closed_while_a_version_is_bumped` | Downgrade recusa (`23514`) preservando linha de migration, grant e dados | coberto |
+| Banco — Down vazio: revoga grant da versão, restaura `CHECK (version = 1)` | `PaguaiDraftMigrationTests.Empty_version_cas_downgrade_revokes_grant_and_restores_the_fixed_version_check` | Grant de `version` revogado (ponteiro preservado); insert com `version = 2` volta a ser impossível | coberto |
+| Banco — corrida de Down: bump commita após a leitura da guarda | `PaguaiDraftMigrationTests.Version_cas_downgrade_refuses_a_bump_committed_after_the_guard_would_have_read` | Trava ACCESS EXCLUSIVE antes da guarda; bump concorrente commitado ainda assim recusa (`23514`) | coberto |
 
 Regressão sem quebra: `PaguaiDraftCreatedTests`, `PaguaiProposalEndpointTests`, `PaguaiDraftMigrationTests` (cenários pré-existentes) e `PaguaiInboundDocumentDraftTests` seguem verdes com o contrato estendido (hash byte-idêntico sem comprovante).

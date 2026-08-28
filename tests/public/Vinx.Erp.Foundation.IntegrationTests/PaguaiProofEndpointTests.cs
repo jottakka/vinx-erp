@@ -523,7 +523,8 @@ public sealed class PaguaiProofEndpointTests
         var stored = await administrator2.PaguaiRequests.SingleAsync(request => request.Id == draftId);
         Assert.Equal(proof.Id, stored.ProofFileId);
         Assert.Equal(1, stored.Version);
-        Assert.NotNull(await administrator2.AuditEvents.SingleOrDefaultAsync(audit =>
+        // Uma negação durable por tentativa autenticada (criação e troca).
+        Assert.Equal(2, await administrator2.AuditEvents.CountAsync(audit =>
             audit.Action == "capability_denied" && audit.Outcome == AuditOutcome.Denied));
     }
 
