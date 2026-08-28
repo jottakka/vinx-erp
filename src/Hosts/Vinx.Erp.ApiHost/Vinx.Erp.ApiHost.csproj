@@ -14,6 +14,7 @@
     <ProjectReference Include="../../Modules/Vinx.Erp.AI/Vinx.Erp.AI.csproj" />
     <ProjectReference Include="../../Modules/Vinx.Erp.Paguai/Vinx.Erp.Paguai.csproj" />
     <ProjectReference Include="../../Modules/Vinx.Erp.Atendimento/Vinx.Erp.Atendimento.csproj" />
+    <ProjectReference Include="../../Modules/Vinx.Erp.Demandas/Vinx.Erp.Demandas.csproj" />
     <ProjectReference Include="../../Modules/Vinx.Erp.Notifications/Vinx.Erp.Notifications.csproj" />
   </ItemGroup>
 </Project>

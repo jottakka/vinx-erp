@@ -109,6 +109,45 @@ public sealed class WorkerHostSecurityContractTests
                     'vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled',
                     'DELETE'
                 ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation',
+                    'SELECT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation',
+                    'INSERT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation',
+                    'UPDATE'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation',
+                    'DELETE'
+                ),                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled',
+                    'SELECT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled',
+                    'INSERT'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled',
+                    'UPDATE'
+                ),
+                has_table_privilege(
+                    'vinx_worker',
+                    'vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled',
+                    'DELETE'
+                ),
                 has_schema_privilege('vinx_worker', 'vinx_wolverine_queues', 'CREATE'),
                 has_database_privilege('vinx_worker', current_database(), 'TEMPORARY'),
                 has_database_privilege('vinx_worker', current_database(), 'CREATE')
@@ -121,14 +160,16 @@ public sealed class WorkerHostSecurityContractTests
         Assert.False(reader.GetBoolean(1));
         Assert.False(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
-        for (var index = 4; index <= 11; index++)
+        // 23 expressões: telegrafa (4..11) e demandas automation + scheduled
+        // (12..19); 20..22 são CREATE schema / TEMPORARY / CREATE database.
+        for (var index = 4; index < 20; index++)
         {
-            Assert.True(reader.GetBoolean(index));
+            Assert.True(reader.GetBoolean(index), $"worker queue privilege {index} must be granted");
         }
 
-        Assert.False(reader.GetBoolean(12));
-        Assert.True(reader.GetBoolean(13));
-        Assert.False(reader.GetBoolean(14));
+        Assert.False(reader.GetBoolean(20));
+        Assert.True(reader.GetBoolean(21));
+        Assert.False(reader.GetBoolean(22));
     }
 
     [Fact]

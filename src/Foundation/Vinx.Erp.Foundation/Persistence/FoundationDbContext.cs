@@ -27,6 +27,12 @@ public sealed class FoundationDbContext(DbContextOptions<FoundationDbContext> op
     public DbSet<PaguaiRequest> PaguaiRequests => Set<PaguaiRequest>();
     public DbSet<PaguaiDraftProposal> PaguaiDraftProposals => Set<PaguaiDraftProposal>();
     public DbSet<AtendimentoCard> AtendimentoCards => Set<AtendimentoCard>();
+    public DbSet<Demand> Demands => Set<Demand>();
+    public DbSet<DemandRoutine> DemandRoutines => Set<DemandRoutine>();
+    public DbSet<DemandRoutineStage> DemandRoutineStages => Set<DemandRoutineStage>();
+    public DbSet<DemandParticipant> DemandParticipants => Set<DemandParticipant>();
+    public DbSet<DemandChecklistItem> DemandChecklistItems => Set<DemandChecklistItem>();
+    public DbSet<DemandEvent> DemandEvents => Set<DemandEvent>();
     public DbSet<AtendimentoCardCategory> AtendimentoCardCategories =>
         Set<AtendimentoCardCategory>();
     public DbSet<AtendimentoChannel> AtendimentoChannels => Set<AtendimentoChannel>();

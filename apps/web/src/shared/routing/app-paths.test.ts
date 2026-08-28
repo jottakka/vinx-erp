@@ -33,6 +33,12 @@ describe("app route catalog", () => {
       },
       {
         group: "modules",
+        label: "Demandas",
+        navigation: true,
+        path: "/demandas",
+      },
+      {
+        group: "modules",
         label: "Pessoas",
         navigation: true,
         path: "/pessoas",

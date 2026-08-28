@@ -139,9 +139,9 @@ public sealed class ApprovalsMigrationTests
                     FROM pg_indexes
                     WHERE schemaname = 'foundation'
                       AND tablename = 'approvals'
-                      AND indexname = 'ix_approvals_company_id_actor_user_id'
+                      AND indexname = 'ix_approvals_company_id_actor_user_id_resource_key'
                       AND regexp_replace(lower(indexdef), '\s+', ' ', 'g')
-                          LIKE '%create unique index ix_approvals_company_id_actor_user_id%'
+                          LIKE '%create unique index ix_approvals_company_id_actor_user_id_resource_key%'
                       AND regexp_replace(lower(indexdef), '\s+', ' ', 'g')
                           LIKE '%where ((consumed_at is null) and (deleted_at is null))%')
             """, administrator);
@@ -223,7 +223,7 @@ public sealed class ApprovalsMigrationTests
                 Guid.NewGuid()));
 
         Assert.Equal(PostgresErrorCodes.UniqueViolation, liveActorCollision.SqlState);
-        Assert.Equal("ix_approvals_company_id_actor_user_id", liveActorCollision.ConstraintName);
+        Assert.Equal("ix_approvals_company_id_actor_user_id_resource_key", liveActorCollision.ConstraintName);
 
         var confirmationRequestId = Guid.NewGuid();
         await InsertApprovalAsync(

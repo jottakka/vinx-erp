@@ -20,6 +20,7 @@ using Vinx.Erp.ApiHost.Models;
 using Vinx.Erp.ApiHost.OpenApi;
 using Vinx.Erp.ApiHost.Permissions;
 using Vinx.Erp.Atendimento;
+using Vinx.Erp.Demandas;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Configuration;
@@ -217,6 +218,9 @@ builder.Services.AddScoped<PaguaiDraftService>();
 builder.Services.AddScoped<PaguaiProposalService>();
 builder.Services.AddScoped<PaguaiProposalConfirmationService>();
 builder.Services.AddScoped<AtendimentoCardService>();
+builder.Services.AddScoped<DemandasNotificationComposer>();
+builder.Services.AddScoped<DemandasApprovalsService>();
+builder.Services.AddScoped<DemandasService>();
 // Superfície do agente: options validadas on-start, gates e provider decididos
 // na composição; sem provider configurado o runner falha fechado.
 builder.Services.AddAgentRunSurface(

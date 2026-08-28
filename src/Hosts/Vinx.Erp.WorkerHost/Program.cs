@@ -20,11 +20,12 @@ using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
-using Vinx.Erp.Paguai;
+using Vinx.Erp.Demandas;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Email;
 using Vinx.Erp.Notifications.Providers.Meta;
 using Vinx.Erp.Notifications.Providers.Telegram;
+using Vinx.Erp.Paguai;
 using Vinx.Erp.WorkerHost;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
@@ -216,7 +217,15 @@ builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
 builder.Services.AddScoped<INotificationProvider, EmailNotificationProvider>();
 builder.Services.AddScoped<INotificationProvider, TelegramProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
-builder.Services.AddScoped<NotificationIntentService>();
+// Worker enfileira intents de Demandas pela função worker-only estreita
+// (notifications.enqueue_demandas_notification_intent): a função genérica é
+// revogada do vinx_worker (20260827120000) — mesma assinatura, troca só no
+// nome. Mapeamento por TIPO (não factory): o codegen dos handlers Wolverine
+// rejeita factories opacas na cadeia de dependências.
+builder.Services.AddScoped<NotificationIntentService, DemandasWorkerNotificationIntentService>();
+builder.Services.AddScoped<DemandasNotificationComposer>();
+builder.Services.AddScoped<DemandasAutomationScanService>();
+builder.Services.AddScoped<DemandasSchedulerClaimStore>();
 builder.Services.AddScoped<InboundWhatsAppInteractionService>();
 builder.Services.AddScoped<InboundWhatsAppDocumentService>();
 builder.Services.AddScoped<InboundAttachmentMaterializer>();
@@ -374,6 +383,7 @@ builder.Services.AddSingleton<IDeadLetterInterceptor>(serviceProvider =>
     serviceProvider.GetRequiredService<WorkerDeadLetterRedactionInterceptor>()
 );
 builder.Services.AddSingleton<IHostedService, WorkerDatabasePreflight>();
+builder.Services.AddSingleton<IHostedService, DemandasScheduler>();
 builder.Host.UseWolverine(options =>
 {
     // Em processos de teste com múltiplos hosts Wolverine, o assembly é
@@ -392,6 +402,7 @@ builder.Host.UseWolverine(options =>
     options.Discovery.IncludeType<InboundWhatsAppDocumentReceivedHandler>();
     options.Discovery.IncludeType<InboundAgentRequestReceivedHandler>();
     options.Discovery.IncludeType<InboundTelegramTextReceivedHandler>();
+    options.Discovery.IncludeType<DemandasAutomationTickHandler>();
     options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
     options
         .PersistMessagesWithPostgresql(workerDataSource, schemaName: "vinx_wolverine_worker")
@@ -406,6 +417,13 @@ builder.Host.UseWolverine(options =>
     options.ListenToPostgresqlQueue("whatsapp-inbound").UseDurableInbox();
     options.ListenToPostgresqlQueue("whatsapp-inbound-documents").UseDurableInbox();
     options.ListenToPostgresqlQueue("telegram-inbound").UseDurableInbox();
+    options.ListenToPostgresqlQueue("demandas-automation").UseDurableInbox();
+    // O tick é produzido E consumido por este host: sem roteamento explícito o
+    // envelope cairia no endpoint local padrão e a fila durável dedicada (com
+    // grants próprios) ficaria órfã.
+    options
+        .PublishMessage<DemandasAutomationTick>()
+        .ToPostgresqlQueue("demandas-automation");
     options
         .PublishMessage<NotificationDeliveryRequested>()
         .ToPostgresqlQueue("notification-delivery")

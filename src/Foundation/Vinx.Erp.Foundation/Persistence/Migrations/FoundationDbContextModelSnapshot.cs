@@ -325,8 +325,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasDatabaseName("ix_atendimento_cards_company_id_attachment_file_id");
 
                     b.HasIndex("CompanyId", "CreatedAt", "Id")
-                        .HasDatabaseName("ix_atendimento_cards_company_id_created_at_id_live")
                         .IsDescending(false, true, true)
+                        .HasDatabaseName("ix_atendimento_cards_company_id_created_at_id_live")
                         .HasFilter("deleted_at IS NULL");
 
                     b.ToTable("atendimento_cards", "service_desk");
@@ -569,6 +569,474 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasDatabaseName("ix_companies_group_id");
 
                     b.ToTable("companies", "foundation");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Demand", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("AutomationPaused")
+                        .HasColumnType("boolean")
+                        .HasColumnName("automation_paused");
+
+                    b.Property<DateTimeOffset?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("closed_at");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by_user_id");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<long>("DemandNumber")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("demand_number");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("DemandNumber"));
+
+                    b.Property<string>("Departamento")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("departamento");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("description");
+
+                    b.Property<DateTimeOffset?>("ManualDueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("manual_due_at");
+
+                    b.Property<DateTimeOffset?>("OverdueSince")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("overdue_since");
+
+                    b.Property<Guid?>("PendingApprovalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pending_approval_id");
+
+                    b.Property<Guid?>("PendingProposalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("pending_proposal_id");
+
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .HasMaxLength(12)
+                        .HasColumnType("character varying(12)")
+                        .HasColumnName("priority");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<Guid>("RequesterUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("requester_user_id");
+
+                    b.Property<Guid>("ResponsibleMembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("responsible_membership_id");
+
+                    b.Property<Guid?>("RoutineId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("routine_id");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("row_version");
+
+                    b.Property<DateTimeOffset?>("SlaDueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sla_due_at");
+
+                    b.Property<string>("Stage")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("stage");
+
+                    b.Property<int>("StageCycleCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("stage_cycle_count");
+
+                    b.Property<DateTimeOffset?>("StageDueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("stage_due_at");
+
+                    b.Property<DateTimeOffset?>("StageStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("stage_started_at");
+
+                    b.Property<string>("Tipo")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("tipo");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("title");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_demands");
+
+                    b.HasIndex("CompanyId", "Id")
+                        .IsUnique()
+                        .HasDatabaseName("ix_demands_company_id_id");
+
+                    b.ToTable("demands", "demandas");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.DemandChecklistItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<Guid>("DemandId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("demand_id");
+
+                    b.Property<DateTimeOffset?>("DoneAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("done_at");
+
+                    b.Property<Guid?>("DoneByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("done_by_user_id");
+
+                    b.Property<bool>("IsDone")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_done");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer")
+                        .HasColumnName("position");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("text");
+
+                    b.HasKey("Id")
+                        .HasName("pk_demand_checklist_items");
+
+                    b.HasIndex("CompanyId", "DemandId", "Position")
+                        .HasDatabaseName("ix_demand_checklist_items_company_id_demand_id_position");
+
+                    b.ToTable("demand_checklist_items", "demandas");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.DemandEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<int>("CycleCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("cycle_count");
+
+                    b.Property<Guid>("DemandId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("demand_id");
+
+                    b.Property<string>("FromStage")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("from_stage");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("MetadataJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata_json");
+
+                    b.Property<DateTimeOffset>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("OccurrenceToken")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("occurrence_token");
+
+                    b.Property<string>("ToStage")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("to_stage");
+
+                    b.HasKey("Id")
+                        .HasName("pk_demand_events");
+
+                    b.HasIndex("CompanyId", "DemandId", "OccurredAt")
+                        .HasDatabaseName("ix_demand_events_company_id_demand_id_occurred_at");
+
+                    b.HasIndex("DemandId", "Kind", "OccurrenceToken")
+                        .IsUnique()
+                        .HasDatabaseName("ix_demand_events_demand_id_kind_occurrence_token");
+
+                    b.ToTable("demand_events", "demandas");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.DemandParticipant", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by_user_id");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<Guid>("DemandId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("demand_id");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("role");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_demand_participants");
+
+                    b.HasIndex("CompanyId", "DemandId", "UserId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_demand_participants_company_id_demand_id_user_id")
+                        .HasFilter("deleted_at IS NULL");
+
+                    b.ToTable("demand_participants", "demandas");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.DemandRoutine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("AutoAssigneeMembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("auto_assignee_membership_id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.PrimitiveCollection<string>("DefaultChecklistItems")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("default_checklist_items")
+                        .HasDefaultValueSql("'[]'::jsonb");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<Guid?>("DeletedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by_user_id");
+
+                    b.Property<string>("DeletedReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("deleted_reason");
+
+                    b.Property<string>("Departamento")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("departamento");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("description");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("name");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<int>("RoutingOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("routing_order");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("row_version");
+
+                    b.Property<string>("Tipo")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("tipo");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("UpdatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_demand_routines");
+
+                    b.HasIndex("CompanyId", "Id")
+                        .IsUnique()
+                        .HasDatabaseName("ix_demand_routines_company_id_id");
+
+                    b.ToTable("demand_routines", "demandas");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.DemandRoutineStage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<decimal?>("DeadlineHours")
+                        .HasColumnType("numeric")
+                        .HasColumnName("deadline_hours");
+
+                    b.Property<int>("OrderIndex")
+                        .HasColumnType("integer")
+                        .HasColumnName("order_index");
+
+                    b.Property<Guid>("RoutineId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("routine_id");
+
+                    b.Property<string>("Stage")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("stage");
+
+                    b.Property<decimal?>("TriggerHours")
+                        .HasColumnType("numeric")
+                        .HasColumnName("trigger_hours");
+
+                    b.Property<int>("TriggerKind")
+                        .HasColumnType("integer")
+                        .HasColumnName("trigger_kind");
+
+                    b.HasKey("Id")
+                        .HasName("pk_demand_routine_stages");
+
+                    b.HasIndex("CompanyId", "RoutineId", "OrderIndex")
+                        .IsUnique()
+                        .HasDatabaseName("ix_demand_routine_stages_company_id_routine_id_order_index");
+
+                    b.HasIndex("CompanyId", "RoutineId", "Stage")
+                        .IsUnique()
+                        .HasDatabaseName("ix_demand_routine_stages_company_id_routine_id_stage");
+
+                    b.ToTable("demand_routine_stages", "demandas");
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Employee", b =>
@@ -908,6 +1376,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("request_id");
 
+                    b.Property<string>("ResourceKey")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasDefaultValue("")
+                        .HasColumnName("resource_key");
+
                     b.Property<string>("ResultJson")
                         .HasColumnType("jsonb")
                         .HasColumnName("result_json");
@@ -945,9 +1421,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_approvals_proposal_id");
 
-                    b.HasIndex("CompanyId", "ActorUserId")
+                    b.HasIndex("CompanyId", "ActorUserId", "ResourceKey")
                         .IsUnique()
-                        .HasDatabaseName("ix_approvals_company_id_actor_user_id")
+                        .HasDatabaseName("ix_approvals_company_id_actor_user_id_resource_key")
                         .HasFilter("consumed_at IS NULL AND deleted_at IS NULL");
 
                     b.ToTable("approvals", "foundation", t =>

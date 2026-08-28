@@ -90,7 +90,36 @@ converte centavos para reais em `numeric(18,2)` e preserva os valores já
 persistidos. Ela também converte o valor dos recibos de idempotência e mantém
 o hash legado aceito pelo replay durante a transição.
 
-Qualquer PR futuro de comportamento Paguai registra `docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
+## Notificações — primeiro produtor real (P1, faixa B)
+
+A criação do rascunho publica `PaguaiDraftCreated` pelo Wolverine
+`IDbContextOutbox.Enroll/PublishAsync` dentro da MESMA transação do insert em
+`paguai.requests`, da auditoria e do recibo de idempotência: o envelope durável
+só existe se o commit do rascunho vencer, e sem outbox operante a criação falha
+fechado (`503 paguai_unavailable`). O worker consome a fila `paguai-events`,
+resolve destinatários SÓ NA ENTREGA via
+`paguai.list_draft_approver_user_ids(company_id, exclude_user_id)` — memberships
+ativas com `paguai.draft.approve`, deduplicadas por usuário, sempre excluindo o
+solicitante — e enfileira uma intenção in-app por destinatário com chave
+determinística `paguai.<draftId:N>.draft-created` (a unicidade por destinatário
+fica na restrição `(event_key, recipient_user_id, channel, template_key)` da
+própria tabela de intents; nenhum discriminador extra entra na chave). Falha de
+enfileiramento é WARNING best-effort: nudges não são estado de negócio.
+
+A capability `paguai.draft.approve`
+(`e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a`) segue o catálogo canônico UUIDv5,
+semeada somente por migration e concedida de forma EXPLÍCITA por papéis da
+empresa: administradores não ganham autoridade financeira implícita — a
+política de acesso do módulo (e o contrato de `ensure_company_default_roles`)
+não incluem `paguai.draft.approve` nos papéis padrão.
+
+Pré-requisito de implantação: enquanto o template in-app
+`paguai.draft_created.approver` não existir/aprovado na empresa, a intenção NÃO
+é registrada (o enfileiramento rejeita) e o evento segue consumido sem erro —
+o rascunho criado permanece válido.
+
+Qualquer PR futuro de comportamento Paguai registra
+`docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
 
 ## Proposta de documento do Agente (#335)
 

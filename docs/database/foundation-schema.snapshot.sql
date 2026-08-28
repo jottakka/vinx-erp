@@ -1815,6 +1815,7 @@ CREATE TABLE foundation.approvals (
     deleted_by_user_id uuid,
     deleted_reason character varying(500),
     row_version bigint DEFAULT 1 NOT NULL,
+    resource_key character varying(200) DEFAULT ''::character varying NOT NULL,
     CONSTRAINT ck_approvals_consumption_complete CHECK ((((consumed_at IS NULL) AND (confirmation_request_id IS NULL) AND (result_json IS NULL)) OR ((consumed_at IS NOT NULL) AND (confirmation_request_id IS NOT NULL) AND (result_json IS NOT NULL)))),
     CONSTRAINT ck_approvals_expires_after_creation CHECK ((expires_at > created_at)),
     CONSTRAINT ck_approvals_payload_hash_format CHECK (((payload_hash)::text ~ '^[0-9a-f]{64}$'::text)),
@@ -2437,9 +2438,9 @@ CREATE UNIQUE INDEX ix_agent_execution_ledger_company_id_actor_user_id_channel_r
 CREATE INDEX ix_approvals_actor_user_id ON foundation.approvals USING btree (actor_user_id);
 
 
--- Name: ix_approvals_company_id_actor_user_id; Type: INDEX; Schema: foundation; Owner: -
+-- Name: ix_approvals_company_id_actor_user_id_resource_key; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE UNIQUE INDEX ix_approvals_company_id_actor_user_id ON foundation.approvals USING btree (company_id, actor_user_id) WHERE ((consumed_at IS NULL) AND (deleted_at IS NULL));
+CREATE UNIQUE INDEX ix_approvals_company_id_actor_user_id_resource_key ON foundation.approvals USING btree (company_id, actor_user_id, resource_key) WHERE ((consumed_at IS NULL) AND (deleted_at IS NULL));
 
 
 -- Name: ix_approvals_confirmation_request_id; Type: INDEX; Schema: foundation; Owner: -
@@ -2817,12 +2818,17 @@ ALTER TABLE foundation.approvals ENABLE ROW LEVEL SECURITY;
 
 -- Name: approvals approvals_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
-CREATE POLICY approvals_company_isolation ON foundation.approvals USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid))) WITH CHECK (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)));
+CREATE POLICY approvals_company_isolation ON foundation.approvals USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND ((actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid) OR ((resource_key)::text <> ''::text)))) WITH CHECK (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND ((actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid) OR ((resource_key)::text <> ''::text))));
 
 
 -- Name: capabilities; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.capabilities ENABLE ROW LEVEL SECURITY;
+
+-- Name: capabilities capabilities_demandas_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_demandas_owner_read ON foundation.capabilities FOR SELECT TO vinx_provisioning_owner USING (((name)::text = ANY ((ARRAY['demandas.demand.read'::character varying, 'demandas.demand.create'::character varying, 'demandas.demand.advance'::character varying, 'demandas.demand.assign'::character varying, 'demandas.demand.participants.manage'::character varying, 'demandas.routine.manage'::character varying])::text[])));
+
 
 -- Name: capabilities capabilities_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
 
@@ -3011,6 +3017,11 @@ CREATE POLICY memberships_authorized_company_read ON foundation.memberships FOR 
 CREATE POLICY memberships_company_isolation ON foundation.memberships USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
 
 
+-- Name: memberships memberships_demandas_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY memberships_demandas_owner_read ON foundation.memberships FOR SELECT TO vinx_demandas_owner USING (true);
+
+
 -- Name: memberships memberships_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY memberships_employee_directory_owner_insert ON foundation.memberships FOR INSERT TO vinx_employee_directory_owner WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
@@ -3168,6 +3179,11 @@ CREATE POLICY role_capabilities_authorized_company_read ON foundation.role_capab
 -- Name: role_capabilities role_capabilities_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY role_capabilities_company_isolation ON foundation.role_capabilities USING ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid)) WITH CHECK ((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid));
+
+
+-- Name: role_capabilities role_capabilities_demandas_owner_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY role_capabilities_demandas_owner_read ON foundation.role_capabilities FOR SELECT TO vinx_provisioning_owner USING ((capability_id = ANY (ARRAY['6ff8b25a-1c37-58cc-894b-97221467c3d4'::uuid, 'd3c10860-a26c-5eac-b684-8e2faac9ad99'::uuid, '74403a29-bdae-55a9-b43b-774eca3f03b2'::uuid, '00b09e31-8693-5b62-b59a-cad5994f3378'::uuid, 'd207f7a5-7fdb-5a7d-a87c-2b4210f36712'::uuid, 'ec28a347-1ade-5586-bf33-e6f1cbd59620'::uuid])));
 
 
 -- Name: role_capabilities role_capabilities_employee_directory_owner_insert; Type: POLICY; Schema: foundation; Owner: -

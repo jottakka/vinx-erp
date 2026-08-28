@@ -25,14 +25,21 @@ public sealed class PrepareApprovalService(
     AuditAppender auditAppender,
     AuthorizationTelemetry telemetry,
     CapabilityEvaluator capabilityEvaluator,
-    ILogger<PrepareApprovalService> logger)
+    ILogger<PrepareApprovalService> logger,
+    ApprovalCapabilityPolicy? approvalPolicy = null)
 {
-    private const string CommandName = "ai.approvals.prepare";
-    private const string ExpireCommandName = "ai.approvals.expire";
     private const string Operation = "approval_preparation";
     private const string Module = "foundation";
-    private static readonly CapabilityRequirement RequiredCapability =
-        new(KnownCapabilities.AiWritesConfirm, CapabilityScope.Company);
+
+    // Costura aditiva: Legacy preserva o contrato do módulo AI byte a byte.
+    private readonly ApprovalCapabilityPolicy policy = approvalPolicy ?? ApprovalCapabilityPolicy.Legacy;
+
+    private CapabilityRequirement RequiredCapability =>
+        new(policy.CapabilityName, CapabilityScope.Company);
+
+    private string CommandName => policy.PrepareCommandName;
+
+    private string ExpireCommandName => policy.ExpireCommandName;
 
     public async Task<AuthorizationResult<PrepareApprovalResult>> PrepareAsync(
         ActorContext actor,
@@ -45,7 +52,8 @@ public sealed class PrepareApprovalService(
 
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
             var actorMembership = await database.Memberships.SingleOrDefaultAsync(membership =>
                 membership.CompanyId == command.CompanyId && membership.UserId == actor.UserId,
@@ -72,7 +80,7 @@ public sealed class PrepareApprovalService(
                     cancellationToken);
                 if (existing is not null)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     if (!string.Equals(existing.PayloadHash, idempotencyHash, StringComparison.Ordinal))
                     {
                         return await ReturnAuditedDenialAsync(
@@ -88,18 +96,21 @@ public sealed class PrepareApprovalService(
                         : AuthorizationResult<PrepareApprovalResult>.Success(replay);
                 }
 
-                await SweepExpiredApprovalsAsync(actor, command.CompanyId, cancellationToken);
+                await SweepExpiredApprovalsAsync(actor, command, cancellationToken);
 
                 // Substituição silenciosa é proibida: uma segunda preparação do
-                // mesmo ator/empresa com proposta viva é negada (fail-closed).
+                // mesmo ator/empresa/recurso com proposta viva é negada
+                // (fail-closed). O legado (recurso vazio) preserva o
+                // single-flight global por ator/empresa do módulo AI.
                 var liveProposalExists = await database.Approvals.AnyAsync(approval =>
                     approval.CompanyId == command.CompanyId
                     && approval.ActorUserId == actor.UserId
+                    && approval.ResourceKey == command.ResourceKey
                     && approval.ConsumedAt == null,
                     cancellationToken);
                 if (liveProposalExists)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
+                    await scope.RollbackAsync(cancellationToken);
                     return await ReturnConcurrentReplayAsync(
                         actor,
                         command,
@@ -127,7 +138,8 @@ public sealed class PrepareApprovalService(
                         proposalId,
                         clock.CreatedAt,
                         clock.ExpiresAt,
-                        command.RequestId));
+                        command.RequestId,
+                        command.ResourceKey));
                     database.IdempotencyRecords.Add(new IdempotencyRecord(
                         Guid.NewGuid(),
                         command.CompanyId,
@@ -140,7 +152,7 @@ public sealed class PrepareApprovalService(
                         actor.UserId,
                         AuditScope.Company,
                         command.CompanyId,
-                        AuditSource.Ai,
+                        policy.AuditSource,
                         CommandName,
                         "approval",
                         approvalId,
@@ -149,7 +161,7 @@ public sealed class PrepareApprovalService(
                         null,
                         "{}"), cancellationToken);
                     await database.SaveChangesAsync(cancellationToken);
-                    await transaction.CommitAsync(cancellationToken);
+                    await scope.CommitAsync(cancellationToken);
 #pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
                     logger.LogInformation(
                         "Preparação de aprovação {Operation} {Module} {Result} {Reason}",
@@ -162,7 +174,7 @@ public sealed class PrepareApprovalService(
                 }
             }
 
-            await transaction.RollbackAsync(cancellationToken);
+            await scope.RollbackAsync(cancellationToken);
         }
         catch (DbUpdateException exception)
         {
@@ -199,23 +211,26 @@ public sealed class PrepareApprovalService(
     }
 
     /// <summary>
-    /// Terminaliza logicamente propostas vivas vencidas do mesmo ator/empresa
-    /// usando exclusivamente o relógio do banco (<c>now()</c>), dentro da mesma
-    /// transação da preparação. A seleção trava as linhas (<c>FOR UPDATE</c>) e
-    /// o corte único é o início da transação: uma proposta que vence no meio da
-    /// transação não é varrida por ela. Falha de auditoria desfaz toda a
-    /// preparação (fail-closed).
+    /// Terminaliza logicamente propostas vivas vencidas do mesmo
+    /// ator/empresa/recurso usando exclusivamente o relógio do banco
+    /// (<c>now()</c>), dentro da mesma transação da preparação. A seleção trava
+    /// as linhas (<c>FOR UPDATE</c>) e o corte único é o início da transação:
+    /// uma proposta que vence no meio da transação não é varrida por ela.
+    /// Falha de auditoria desfaz toda a preparação (fail-closed).
     /// </summary>
     private async Task SweepExpiredApprovalsAsync(
         ActorContext actor,
-        Guid companyId,
+        PrepareApprovalCommand command,
         CancellationToken cancellationToken)
     {
+        var companyId = command.CompanyId;
+        var resourceKey = command.ResourceKey;
         var expiredIds = await database.Database.SqlQuery<Guid>($"""
             SELECT id AS "Value"
             FROM foundation.approvals
             WHERE company_id = {companyId}
               AND actor_user_id = {actor.UserId}
+              AND resource_key = {resourceKey}
               AND consumed_at IS NULL
               AND deleted_at IS NULL
               AND expires_at <= now()
@@ -243,7 +258,7 @@ public sealed class PrepareApprovalService(
                 actor.UserId,
                 AuditScope.Company,
                 companyId,
-                AuditSource.Ai,
+                policy.AuditSource,
                 ExpireCommandName,
                 "approval",
                 expiredId,
@@ -271,13 +286,14 @@ public sealed class PrepareApprovalService(
     {
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, companyId, cancellationToken);
             await auditAppender.AppendAsync(new AuditEventData(
                 actor.UserId,
                 AuditScope.Company,
                 companyId,
-                AuditSource.Ai,
+                policy.AuditSource,
                 denial.ToStableCode(),
                 "approval",
                 null,
@@ -285,7 +301,7 @@ public sealed class PrepareApprovalService(
                 new CorrelationContext(actor.CorrelationId).CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            await scope.CommitAsync(cancellationToken);
             return AuthorizationResult<PrepareApprovalResult>.Failure(denial);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -307,7 +323,8 @@ public sealed class PrepareApprovalService(
     {
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            await using IUnitOfWorkScope scope =
+                await AmbientScope.BeginAsync(database, cancellationToken);
             await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
             var record = await database.IdempotencyRecords.AsNoTracking().SingleOrDefaultAsync(candidate =>
                 candidate.CompanyId == command.CompanyId
@@ -315,7 +332,7 @@ public sealed class PrepareApprovalService(
                 && candidate.CommandName == CommandName
                 && candidate.RequestId == command.RequestId,
                 cancellationToken);
-            await transaction.RollbackAsync(cancellationToken);
+            await scope.RollbackAsync(cancellationToken);
             if (record is null)
             {
                 return await ReturnAuditedDenialAsync(

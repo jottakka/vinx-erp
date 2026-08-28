@@ -24,9 +24,11 @@ public sealed class FoundationApproval : SoftDeletableEntity, ICompanyScoped
         string policyVersion,
         Guid proposalId,
         DateTimeOffset expiresAt,
-        Guid requestId)
+        Guid requestId,
+        string resourceKey = "")
     {
         ValidateCore(id, companyId, actorUserId, action, payloadHash, policyVersion, proposalId, requestId);
+        ValidateResourceKey(resourceKey);
 
         CompanyId = companyId;
         ActorUserId = actorUserId;
@@ -34,6 +36,7 @@ public sealed class FoundationApproval : SoftDeletableEntity, ICompanyScoped
         PayloadHash = payloadHash;
         PolicyVersion = policyVersion;
         ProposalId = proposalId;
+        ResourceKey = resourceKey;
         ExpiresAt = expiresAt;
         InitializeLifecycle(id, actorUserId, requestId);
         if (ExpiresAt <= CreatedAt)
@@ -52,9 +55,11 @@ public sealed class FoundationApproval : SoftDeletableEntity, ICompanyScoped
         Guid proposalId,
         DateTimeOffset createdAt,
         DateTimeOffset expiresAt,
-        Guid requestId)
+        Guid requestId,
+        string resourceKey = "")
     {
         ValidateCore(id, companyId, actorUserId, action, payloadHash, policyVersion, proposalId, requestId);
+        ValidateResourceKey(resourceKey);
 
         CompanyId = companyId;
         ActorUserId = actorUserId;
@@ -62,11 +67,20 @@ public sealed class FoundationApproval : SoftDeletableEntity, ICompanyScoped
         PayloadHash = payloadHash;
         PolicyVersion = policyVersion;
         ProposalId = proposalId;
+        ResourceKey = resourceKey;
         ExpiresAt = expiresAt;
         InitializeLifecycle(id, actorUserId, requestId, createdAt);
         if (ExpiresAt <= CreatedAt)
         {
             throw new ArgumentException("The approval expiration must be after its creation.", nameof(expiresAt));
+        }
+    }
+
+    private static void ValidateResourceKey(string resourceKey)
+    {
+        if (resourceKey.Length > 200)
+        {
+            throw new ArgumentException("The approval resource key is out of bounds.", nameof(resourceKey));
         }
     }
 
@@ -96,6 +110,12 @@ public sealed class FoundationApproval : SoftDeletableEntity, ICompanyScoped
     public string PayloadHash { get; private set; } = null!;
     public string PolicyVersion { get; private set; } = null!;
     public Guid ProposalId { get; private set; }
+
+    /// <summary>
+    /// Chave do recurso da fronteira de proposta viva (vazio = single-flight
+    /// global por ator/empresa, o contrato legado do módulo AI).
+    /// </summary>
+    public string ResourceKey { get; private set; } = "";
 
     /// <summary>
     /// <c>RequestId</c> da confirmação vencedora (escopo CONFIRMATION), nulo

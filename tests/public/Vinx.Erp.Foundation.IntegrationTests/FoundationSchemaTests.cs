@@ -212,8 +212,17 @@ public sealed class FoundationSchemaTests
         try
         {
             var provisioningCatalog = await ReadCapabilityNamesAsync(provisioning);
+            // Catálogo do provisionador = união das policies de lista estática:
+            // as 4 foundation.* originais + as 6 demandas.* da lane P3
+            // (capabilities_demandas_owner_read em 20260826160000).
             Assert.Equal(
                 [
+                    "demandas.demand.advance",
+                    "demandas.demand.assign",
+                    "demandas.demand.create",
+                    "demandas.demand.participants.manage",
+                    "demandas.demand.read",
+                    "demandas.routine.manage",
                     "foundation.files.confirm",
                     "foundation.files.upload",
                     "foundation.memberships.revoke",
@@ -259,6 +268,55 @@ public sealed class FoundationSchemaTests
         }
 
         return [.. names];
+    }
+
+
+    [Fact]
+    public async Task Demandas_owner_role_is_provisioned_with_schema_table_and_function_visibility()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var connection = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new Npgsql.NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vinx_demandas_owner' AND NOT rolcanlogin),
+                has_schema_privilege('vinx_demandas_owner', 'demandas', 'USAGE'),
+                has_table_privilege('vinx_demandas_owner', 'demandas.demands', 'SELECT'),
+                has_function_privilege(
+                    'vinx_worker',
+                    'demandas.enumerate_automation_companies()',
+                    'EXECUTE'),
+                EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'demandas'
+                      AND tablename = 'demands'
+                      AND policyname = 'demands_demandas_owner_read'
+                      AND roles::text LIKE '%vinx_demandas_owner%'),
+                has_schema_privilege('vinx_demandas_owner', 'foundation', 'USAGE'),
+                has_table_privilege('vinx_demandas_owner', 'foundation.memberships', 'SELECT'),
+                has_table_privilege('vinx_runtime', 'demandas.demand_checklist_items', 'DELETE'),
+                EXISTS (
+                    SELECT 1 FROM pg_policies
+                    WHERE schemaname = 'foundation'
+                      AND tablename = 'capabilities'
+                      AND policyname = 'capabilities_provisioning_owner')
+            """,
+            connection
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0), "role vinx_demandas_owner must exist NOLOGIN");
+        Assert.True(reader.GetBoolean(1), "owner needs USAGE on schema demandas");
+        Assert.True(reader.GetBoolean(2), "owner needs SELECT on demandas.demands");
+        Assert.True(reader.GetBoolean(3), "worker must execute the enumeration function");
+        Assert.True(reader.GetBoolean(4), "permissive owner-read policy must be pinned");
+        Assert.True(reader.GetBoolean(5), "owner needs USAGE on foundation for the memberships join");
+        Assert.True(reader.GetBoolean(6), "owner needs SELECT on foundation.memberships");
+        Assert.True(reader.GetBoolean(7), "runtime needs DELETE on checklist items for re-initiation reset");
+        Assert.True(reader.GetBoolean(8), "pre-existing provisioning capabilities read must remain functional");
     }
 
     [Fact]

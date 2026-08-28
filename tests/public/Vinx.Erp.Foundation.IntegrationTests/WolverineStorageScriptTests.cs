@@ -22,7 +22,7 @@ public sealed class WolverineStorageScriptTests
         var root = WolverineStorageDeployment.FindRepositoryRoot();
         var process = new Process
         {
-            StartInfo = new ProcessStartInfo("bash")
+            StartInfo = new ProcessStartInfo(ResolveBashExecutable())
             {
                 WorkingDirectory = root,
                 RedirectStandardError = true,
@@ -129,5 +129,25 @@ public sealed class WolverineStorageScriptTests
         {
             Assert.True(reader.GetBoolean(index));
         }
+    }
+
+    /// <summary>
+    /// No Windows, CreateProcess pesquisa System32 antes do PATH: com WSL
+    /// instalado, "bash" resolve para o stub C:\Windows\System32\bash.exe, que
+    /// executa dentro do WSL e descarta o bloco de ambiente do processo — as
+    /// variáveis injetadas em <see cref="ProcessStartInfo.Environment"/> nunca
+    /// chegam ao script. O bash do Git (MSYS) herda o ambiente normalmente;
+    /// Linux e macOS continuam usando a resolução plain "bash".
+    /// </summary>
+    private static string ResolveBashExecutable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return "bash";
+        }
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var gitBash = Path.Combine(programFiles, "Git", "usr", "bin", "bash.exe");
+        return File.Exists(gitBash) ? gitBash : "bash";
     }
 }
