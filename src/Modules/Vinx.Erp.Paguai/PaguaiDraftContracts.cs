@@ -20,6 +20,14 @@ public sealed record CreateDraftCommand(
     Guid? ProofFileId = null
 );
 
+/// <summary>Troca versionada do comprovante: expectedVersion torna o rebind um compare-and-set.</summary>
+public sealed record ReplaceDraftProofCommand(
+    Guid CompanyId,
+    Guid DraftId,
+    Guid ProofFileId,
+    int ExpectedVersion
+);
+
 /// <summary>
 /// Comando de rascunho a partir de um documento inbound: title/description/proof
 /// são sempre explícitos porque a fatura não os garante.
@@ -133,6 +141,7 @@ public enum PaguaiDraftState
     ProofFileNotFound,
     ProofFileNotReady,
     ProofFileBound,
+    VersionConflict,
 }
 
 public sealed record PaguaiDraftResult(PaguaiDraftState State, PaguaiDraft? Draft = null)
