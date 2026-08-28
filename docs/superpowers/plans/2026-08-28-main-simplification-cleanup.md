@@ -136,8 +136,10 @@ contract check instead of an invented behavior test.
   simplicidade, overengineering, segurança e regressão.
 - [ ] Pedir a revisão final do GLM-5.3 não-Flash no nível máximo e permitir uma
   única correção TDD adicional se ele encontrar um blocker confirmado.
-- [ ] Congelar escopo e executar os testes finais proporcionais; executar o
-  gate público uma vez se necessário.
+- [ ] Congelar escopo e executar os testes finais proporcionais; executar
+  `./scripts/verify-public.sh` exatamente uma vez quando a lista adotada cruzar
+  projetos públicos, alterar banco/segurança/build compartilhado, ou quando o
+  CI estiver indisponível.
 - [ ] Verificar tamanho, `git diff --check`, branch/ancestry, push, PR head/base,
   checks, reviews e mergeability no remoto.
 - [ ] Criar uma única PR contra `main`; não fazer merge local nem tocar em

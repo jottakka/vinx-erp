@@ -51,8 +51,9 @@ serializada pelo Terra. O controlador não edita a correção diretamente.
 
 - Cada finding adotado aponta arquivo, símbolo, causa, risco, comportamento
   preservado e teste.
-- Cada mudança comportamental possui teste regressivo em ciclo RED/GREEN e
-  manifesto curto em `docs/verification/` quando aplicável.
+- Cada mudança comportamental possui teste regressivo em ciclo RED/GREEN e um
+  manifesto curto em `docs/verification/`; itens exclusivamente documentais
+  usam apenas `git diff --check` e a validação do contrato consumidor.
 - A PR permanece revisável: até 25 arquivos contados e aproximadamente 800
   linhas manuais, salvo a autorização explícita do pedido para uma única PR;
   nesse caso o excesso é medido e justificado no PR.
