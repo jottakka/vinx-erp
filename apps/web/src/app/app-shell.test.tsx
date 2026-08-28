@@ -8,6 +8,7 @@ import type {
   MockSessionGateway,
 } from "../features/auth/session-contract";
 import { SessionProvider } from "../features/auth/session-provider";
+import { FeedbackProvider } from "../shared/ui/feedback-provider";
 import { appRouteManifest } from "./app-route-manifest";
 import { AppShell } from "./app-shell";
 import { ProtectedRoute } from "./protected-route";
@@ -50,7 +51,9 @@ function renderShell(path: string, gateway: MockSessionGateway) {
   render(
     <VinxThemeProvider>
       <SessionProvider gateway={gateway}>
-        <RouterProvider router={router} />
+        <FeedbackProvider>
+          <RouterProvider router={router} />
+        </FeedbackProvider>
       </SessionProvider>
     </VinxThemeProvider>,
   );
