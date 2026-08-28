@@ -88,6 +88,7 @@ export function DemandasPage() {
     setHasMore(false);
     setNextCursor(null);
     setDetail(null);
+    setDetailId(null);
     setError(null);
     setCompanyId(nextCompanyId);
   }, []);

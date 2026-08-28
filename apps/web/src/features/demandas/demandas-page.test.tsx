@@ -347,6 +347,20 @@ describe("DemandasPage", () => {
     // A troca de empresa limpa cartões/detalhe ANTES de commitar o novo
     // companyId: nenhuma renderização intermediária mostra dados da empresa
     // anterior sob o contexto novo.
+    let resolveBeta: (page: {
+      items: DemandBoardCard[];
+      total: number;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }) => void = () => {};
+    const betaBoard = new Promise<{
+      items: DemandBoardCard[];
+      total: number;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }>((resolve) => {
+      resolveBeta = resolve;
+    });
     const boardSpy = vi
       .spyOn(demandasClient, "board")
       .mockResolvedValueOnce({
@@ -355,12 +369,7 @@ describe("DemandasPage", () => {
         hasMore: false,
         nextCursor: null,
       })
-      .mockResolvedValue({
-        items: [],
-        total: 0,
-        hasMore: false,
-        nextCursor: null,
-      });
+      .mockImplementationOnce(() => betaBoard);
 
     window.history.replaceState(null, "", "/demandas");
     const user = userEvent.setup();
@@ -370,9 +379,11 @@ describe("DemandasPage", () => {
     await user.click(await screen.findByLabelText("Empresa"));
     await user.click(await screen.findByRole("option", { name: "Beta" }));
 
-    // Sem esperar a resposta de Beta: o cartão de Alfa já saiu do DOM.
+    // ANTES de resolver a resposta de Beta: o cartão de Alfa já saiu do DOM.
     expect(screen.queryByText("Pagar fornecedor")).not.toBeInTheDocument();
     expect(boardSpy).toHaveBeenLastCalledWith(betaCompanyId, expect.anything());
+
+    resolveBeta({ items: [], total: 0, hasMore: false, nextCursor: null });
   });
 
   it("discards a late detail response from the previous company after a switch", async () => {
@@ -391,7 +402,11 @@ describe("DemandasPage", () => {
       .mockImplementationOnce(() => alfaDetail)
       .mockResolvedValue({
         ...initiationDetail,
-        demand: { ...initiationDetail.demand, title: "Detalhe da Beta" },
+        demand: {
+          ...initiationDetail.demand,
+          title: "Detalhe da Beta",
+          description: "Descrição da Beta",
+        },
       });
 
     window.history.replaceState(null, "", "/demandas");
@@ -404,12 +419,14 @@ describe("DemandasPage", () => {
     await user.click(await screen.findByLabelText("Empresa"));
     await user.click(await screen.findByRole("option", { name: "Beta" }));
 
-    // Detalhe anterior não pode voltar quando resolver: o diálogo permanece
-    // fechado e o id pendente da empresa anterior foi invalidado.
+    // Detalhe anterior não pode voltar quando resolver: conteúdo exclusivo
+    // do detalhe de Alfa jamais aparece (a resposta tardia foi descartada).
     resolveDetail(initiationDetail);
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(screen.queryByLabelText("detalhe")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Descrição da demanda"),
+    ).not.toBeInTheDocument();
     expect(detailSpy).toHaveBeenCalled();
   });
 });
