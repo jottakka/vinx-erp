@@ -30,7 +30,10 @@ export function useDirectoryOptions(companyId: string): {
   // Opções são vinculadas à empresa que as produziu: qualquer render com
   // companyId diferente da dona (troca ou esvaziamento) expõe lista vazia
   // fail-closed, sem esperar efeito.
-  const [owned, setOwned] = useState<{ companyId: string; options: PersonOption[] }>({
+  const [owned, setOwned] = useState<{
+    companyId: string;
+    options: PersonOption[];
+  }>({
     companyId: "",
     options: [],
   });

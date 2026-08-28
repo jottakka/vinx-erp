@@ -110,11 +110,15 @@ describe("PeoplePicker", () => {
     render(<SwitchHarness />);
     await screen.findByText("Ana Alfa");
 
-    await userEvent.click(screen.getByRole("button", { name: "Trocar empresa" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Trocar empresa" }),
+    );
 
-    const firstBetaRender = renders.find((entry) => entry.companyId === freshBeta);
+    const firstBetaRender = renders.find(
+      (entry) => entry.companyId === freshBeta,
+    );
     expect(firstBetaRender).toBeDefined();
-    expect(firstBetaRender!.options).toEqual([]);
+    expect(firstBetaRender?.options).toEqual([]);
     expect(screen.queryByText("Ana Alfa")).not.toBeInTheDocument();
   });
 
