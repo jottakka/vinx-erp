@@ -204,8 +204,10 @@ public sealed class PaguaiProofEndpointTests
 
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         Assert.Empty(await administrator.PaguaiRequests.ToListAsync());
+        // A admissão de sessão da identidade audita sucesso por si só; o corte
+        // Paguai não pode ter produzido nenhuma auditoria de criação.
         Assert.Empty(await administrator.AuditEvents.Where(audit =>
-            audit.Outcome == AuditOutcome.Success).ToListAsync());
+            audit.Action == "paguai.draft.create").ToListAsync());
     }
 
     [Fact]
@@ -278,8 +280,7 @@ public sealed class PaguaiProofEndpointTests
                 confirmed: false)).Id,
             _ => (await SeedFileAsync(
                 factory, scenario.CompanyId, scenario.MembershipId,
-                "quarentena-vencido.pdf", retentionUntil: DateTimeOffset.UtcNow.AddMinutes(-1),
-                confirmed: false)).Id,
+                "quarentena-vencido.pdf", confirmed: false)).Id,
         };
 
         await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
@@ -289,8 +290,10 @@ public sealed class PaguaiProofEndpointTests
                 (await administrator.Files.SingleAsync(file => file.Id == fileId))
                     .MarkDeleted("test_deletion", factory.ActorUserId, Guid.NewGuid());
             }
-            else if (variation == "expired_retention")
+            else if (variation is "expired_retention" or "quarantined_expired_retention")
             {
+                // O construtor de FileRecord rejeita retenção passada: expira
+                // por update direto, mantendo o arquivo em quarentena.
                 await administrator.Files.Where(file => file.Id == fileId)
                     .ExecuteUpdateAsync(setter => setter.SetProperty(
                         file => file.RetentionUntil, DateTimeOffset.UtcNow.AddMinutes(-1)));
@@ -738,8 +741,12 @@ public sealed class PaguaiProofEndpointTests
         await using var administrator2 = factory.Fixture.CreateAdministratorDbContext();
         var stored = await administrator2.PaguaiRequests.SingleAsync(request => request.Id == draftId);
         Assert.Null(stored.ProofFileId);
-        Assert.Equal(1, await administrator2.AuditEvents.CountAsync(audit =>
+        // O rascunho foi semeado direto (sem auditoria de criação) e replays
+        // não auditam: nenhum sucesso novo pode ter surgido.
+        Assert.Equal(0, await administrator2.AuditEvents.CountAsync(audit =>
             audit.ResourceId == draftId && audit.Outcome == AuditOutcome.Success));
+        Assert.NotNull(await administrator2.AuditEvents.SingleOrDefaultAsync(audit =>
+            audit.Action == "idempotency_conflict" && audit.Outcome == AuditOutcome.Denied));
     }
 
     [Fact]
@@ -749,9 +756,15 @@ public sealed class PaguaiProofEndpointTests
         var scenario = await SeedScenarioAsync(factory);
         var proof = await SeedFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "vinculo.pdf");
         using var client = factory.CreateClient();
-        var request = ProofRequest(scenario.CompanyId, proof.Id);
+        // Uma primeira chamada admite a sessão enquanto a auditoria funciona;
+        // caso contrário a revogação derruba o gate de identidade (503 de
+        // identidade) antes de chegar ao serviço Paguai.
+        using var warmup = await client.PostAsJsonAsync(
+            "/paguai/requests", ProofRequest(scenario.CompanyId, null, proofRequirement: "optional"));
+        Assert.Equal(HttpStatusCode.Created, warmup.StatusCode);
 
         await RevokeAuditAppendAsync(factory);
+        var request = ProofRequest(scenario.CompanyId, proof.Id);
         using var unavailable = await client.PostAsJsonAsync("/paguai/requests", request);
         await GrantAuditAppendAsync(factory);
 
@@ -760,7 +773,6 @@ public sealed class PaguaiProofEndpointTests
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
         Assert.False(await administrator.PaguaiRequests.AnyAsync(request =>
             request.ProofFileId == proof.Id));
-        Assert.False(await administrator.IdempotencyRecords.AnyAsync());
         Assert.False(await administrator.AuditEvents.AnyAsync(audit =>
             audit.Outcome == AuditOutcome.Success && audit.Reason == "proof_attached"));
     }

@@ -53,12 +53,19 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            // Reversão fail-closed: recusa enquanto houver comprovante vinculado,
-            // antes de tocar em qualquer objeto.
+            // Reversão fail-closed: o migrator é dono da tabela, mas FORCE RLS
+            // esconde toda linha sem contexto de empresa. A trava ACCESS
+            // EXCLUSIVE é tomada ANTES de ler o estado e vale até o fim da
+            // transação (revoke + drops), então um vínculo concorrente não pode
+            // commitar entre a leitura da guarda e a remoção dos objetos; a
+            // transação da migration reverte o NO FORCE em caso de recusa.
             migrationBuilder.Sql(
                 """
+                ALTER TABLE paguai.requests NO FORCE ROW LEVEL SECURITY;
+
                 DO $block$
                 BEGIN
+                    LOCK TABLE paguai.requests IN ACCESS EXCLUSIVE MODE;
                     IF EXISTS (
                         SELECT 1 FROM paguai.requests
                         WHERE proof_file_id IS NOT NULL)
@@ -68,6 +75,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     END IF;
                 END;
                 $block$;
+
+                ALTER TABLE paguai.requests FORCE ROW LEVEL SECURITY;
                 """);
 
             migrationBuilder.Sql(

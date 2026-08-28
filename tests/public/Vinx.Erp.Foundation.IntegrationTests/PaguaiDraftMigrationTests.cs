@@ -259,6 +259,86 @@ public sealed class PaguaiDraftMigrationTests
     }
 
     [Fact]
+    public async Task Proof_downgrade_refuses_a_bind_committed_after_the_guard_would_have_read()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(ProofFileMigration);
+        var seed = await SeedProofCompanyFileAsync(fixture);
+
+        // Vínculo em transação ABERTA: o downgrade concorrente precisa travar
+        // na ACCESS EXCLUSIVE antes da guarda e só ler o estado após o commit.
+        await using var binder = await fixture.OpenAdministratorConnectionAsync();
+        await using var binderTransaction = await binder.BeginTransactionAsync();
+        var draftId = Guid.NewGuid();
+        await using (var insert = new NpgsqlCommand(
+            """
+            INSERT INTO paguai.requests (
+                id, company_id, requester_user_id, request_id, title, description,
+                amount, currency, due_date, beneficiary_display_name, proof_requirement,
+                proof_file_id, state, version, created_at)
+            VALUES (@id, @company_id, @requester, @request_id, 't', 'd',
+                    1.00, 'BRL', '2026-09-01', 'Fornecedor Demo', 'required',
+                    @proof_file_id, 'rascunho', 1, clock_timestamp())
+            """,
+            binder))
+        {
+            SeedDraftParameters(insert, draftId, seed.CompanyId, seed.ActorId, Guid.NewGuid());
+            insert.Parameters.AddWithValue("proof_file_id", seed.ProofFileId);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        var downgrade = Task.Run(() => migrator.Database.MigrateAsync(BeforeProofFileMigration));
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await using (var probe = new NpgsqlCommand(
+                "SELECT count(*) FROM pg_locks WHERE NOT granted AND relation = 'paguai.requests'::regclass",
+                binder))
+            {
+                if ((long)(await probe.ExecuteScalarAsync())! > 0)
+                {
+                    break;
+                }
+            }
+
+            await Task.Delay(100);
+        }
+
+        // O vínculo commita DEPOIS do instante em que a guarda teria lido sob
+        // o código antigo; com a trava, a downgrade segue recusando.
+        await binderTransaction.CommitAsync();
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => downgrade);
+        Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var verify = new NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (
+                    SELECT 1 FROM "__EFMigrationsHistory"
+                    WHERE migration_id = @migration_id),
+                EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'paguai'
+                      AND table_name = 'requests'
+                      AND column_name = 'proof_file_id'),
+                (SELECT count(*) FROM paguai.requests WHERE id = @draft_id AND proof_file_id = @proof_file_id)
+            """,
+            administrator);
+        verify.Parameters.AddWithValue("migration_id", ProofFileMigration);
+        verify.Parameters.AddWithValue("draft_id", draftId);
+        verify.Parameters.AddWithValue("proof_file_id", seed.ProofFileId);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.Equal(1L, reader.GetInt64(2));
+    }
+
+    [Fact]
     public async Task Empty_proof_downgrade_removes_column_and_keeps_the_fixed_version_check()
     {
         await using var fixture = new FoundationPostgresFixture();
@@ -326,20 +406,20 @@ public sealed class PaguaiDraftMigrationTests
         command.Parameters.AddWithValue("request_id", requestId);
     }
 
+    private sealed record ProofSeed(Guid CompanyId, Guid ActorId, Guid ProofFileId);
+
     /// <summary>
-    /// Insere um rascunho no estado histórico da migration de prova: quando
-    /// <paramref name="bindProof"/> cria arquivo confirmado para satisfazer a
-    /// FK composta e o vincula.
+    /// Semeia (commitado) usuário, empresa, membership e arquivo confirmado de
+    /// comprovante para satisfazer a FK composta de `paguai.requests`.
     /// </summary>
-    private static async Task<Guid> SeedProofBoundDraftAsync(
-        FoundationPostgresFixture fixture, bool bindProof)
+    private static async Task<ProofSeed> SeedProofCompanyFileAsync(
+        FoundationPostgresFixture fixture)
     {
         await using var administrator = fixture.CreateAdministratorDbContext();
         var actor = new User(
             Guid.NewGuid(), "Ator da prova", $"paguai-proof-{Guid.NewGuid():N}@example.test");
         var requestId = Guid.NewGuid();
-        // Nomes únicos por chamada: o mesmo teste semeia dois rascunhos e
-        // groups.name/companies têm índice único.
+        // Nomes únicos por chamada: groups.name/companies têm índice único.
         var discriminator = Guid.NewGuid().ToString("N")[..8];
         var group = new Group(Guid.NewGuid(), $"Grupo da prova {discriminator}", actor.Id, requestId);
         var company = new Company(
@@ -364,7 +444,17 @@ public sealed class PaguaiDraftMigrationTests
         proof.MarkConfirmed(actor.Id, requestId);
         administrator.Files.Add(proof);
         await administrator.SaveChangesAsync();
+        return new ProofSeed(company.Id, actor.Id, proof.Id);
+    }
 
+    /// <summary>
+    /// Insere um rascunho (commitado) no estado histórico da migration de
+    /// prova: quando <paramref name="bindProof"/> vincula o comprovante.
+    /// </summary>
+    private static async Task<Guid> SeedProofBoundDraftAsync(
+        FoundationPostgresFixture fixture, bool bindProof)
+    {
+        var seed = await SeedProofCompanyFileAsync(fixture);
         var draftId = Guid.NewGuid();
         await using var connection = await fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
@@ -378,8 +468,9 @@ public sealed class PaguaiDraftMigrationTests
                     @proof_file_id, 'rascunho', 1, clock_timestamp())
             """,
             connection);
-        SeedDraftParameters(command, draftId, company.Id, actor.Id, Guid.NewGuid());
-        command.Parameters.AddWithValue("proof_file_id", bindProof ? proof.Id : (object)DBNull.Value);
+        SeedDraftParameters(command, draftId, seed.CompanyId, seed.ActorId, Guid.NewGuid());
+        command.Parameters.AddWithValue(
+            "proof_file_id", bindProof ? seed.ProofFileId : (object)DBNull.Value);
         await command.ExecuteNonQueryAsync();
         return draftId;
     }
