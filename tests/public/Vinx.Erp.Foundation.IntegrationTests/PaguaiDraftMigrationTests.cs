@@ -16,6 +16,8 @@ public sealed class PaguaiDraftMigrationTests
         "20260826153000_BindPaguaiInboundCandidateToCompanyContext";
     private const string BeforeProofFileMigration = "20260827121400_AddTelegramAgentAdapter";
     private const string ProofFileMigration = "20260828032135_AddPaguaiRequestProofFile";
+    private const string VersionCasMigration = "20260829060000_AllowPaguaiProofVersionCas";
+    private const string BeforeVersionCasMigration = "20260828032135_AddPaguaiRequestProofFile";
 
     [Fact]
     public async Task Empty_downgrade_removes_the_invoice_file_column_and_preserves_forced_rls()
@@ -339,6 +341,182 @@ public sealed class PaguaiDraftMigrationTests
     }
 
     [Fact]
+    public async Task Version_cas_grant_is_column_level_only_for_runtime()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(VersionCasMigration);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var verify = new NpgsqlCommand(
+            """
+            SELECT
+                has_column_privilege('vinx_runtime', 'paguai.requests', 'proof_file_id', 'UPDATE'),
+                has_column_privilege('vinx_runtime', 'paguai.requests', 'version', 'UPDATE'),
+                has_column_privilege('vinx_runtime', 'paguai.requests', 'amount', 'UPDATE'),
+                has_column_privilege('vinx_runtime', 'paguai.requests', 'beneficiary_display_name', 'UPDATE')
+            """,
+            administrator
+        );
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.False(reader.GetBoolean(2));
+        Assert.False(reader.GetBoolean(3));
+    }
+
+    [Fact]
+    public async Task Version_cas_downgrade_fails_closed_while_a_version_is_bumped()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(VersionCasMigration);
+        var bumped = await SeedProofBoundDraftAsync(fixture, bindProof: false, version: 2);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(async () =>
+            await migrator.Database.MigrateAsync(BeforeVersionCasMigration)
+        );
+
+        Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var verify = new NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (
+                    SELECT 1 FROM "__EFMigrationsHistory"
+                    WHERE migration_id = @migration_id),
+                has_column_privilege('vinx_runtime', 'paguai.requests', 'version', 'UPDATE'),
+                (SELECT count(*) FROM paguai.requests WHERE id = @draft_id AND version = 2)
+            """,
+            administrator
+        );
+        verify.Parameters.AddWithValue("migration_id", VersionCasMigration);
+        verify.Parameters.AddWithValue("draft_id", bumped);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.Equal(1L, reader.GetInt64(2));
+    }
+
+    [Fact]
+    public async Task Empty_version_cas_downgrade_revokes_grant_and_restores_the_fixed_version_check()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(VersionCasMigration);
+
+        await migrator.Database.MigrateAsync(BeforeVersionCasMigration);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var verify = new NpgsqlCommand(
+            """
+            SELECT
+                has_column_privilege('vinx_runtime', 'paguai.requests', 'version', 'UPDATE'),
+                has_column_privilege('vinx_runtime', 'paguai.requests', 'proof_file_id', 'UPDATE'),
+                pg_get_constraintdef(ck.oid)
+            FROM pg_constraint AS ck
+            INNER JOIN pg_class AS rel ON rel.oid = ck.conrelid
+            INNER JOIN pg_namespace AS nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'paguai' AND rel.relname = 'requests'
+              AND ck.conname = 'ck_paguai_requests_version'
+            """,
+            administrator
+        );
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.False(reader.GetBoolean(0));
+        // O grant do ponteiro (fatia create+link) permanece; apenas o CAS sai.
+        Assert.True(reader.GetBoolean(1));
+        Assert.Contains("version = 1", reader.GetString(2), StringComparison.Ordinal);
+        await reader.DisposeAsync();
+
+        await using var rejectBump = new NpgsqlCommand(
+            """
+            INSERT INTO paguai.requests (
+                id, company_id, requester_user_id, request_id, title, description,
+                amount, currency, due_date, beneficiary_display_name, proof_requirement,
+                state, version, created_at)
+            VALUES (@id, @company_id, @requester, @request_id, 't', 'd',
+                    1.00, 'BRL', '2026-09-01', 'Fornecedor Demo', 'required',
+                    'rascunho', 2, clock_timestamp())
+            """,
+            administrator);
+        SeedDraftParameters(rejectBump, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var refusal = await Record.ExceptionAsync(() => rejectBump.ExecuteNonQueryAsync());
+        Assert.IsType<PostgresException>(refusal);
+    }
+
+    [Fact]
+    public async Task Version_cas_downgrade_refuses_a_bump_committed_after_the_guard_would_have_read()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using var migrator = fixture.CreateMigratorDbContext();
+        await migrator.Database.MigrateAsync(VersionCasMigration);
+        var draftId = await SeedProofBoundDraftAsync(fixture, bindProof: false);
+
+        // Bump em transação ABERTA: a downgrade concorrente trava na ACCESS
+        // EXCLUSIVE antes da guarda e só lê o estado após o commit.
+        await using var bumper = await fixture.OpenAdministratorConnectionAsync();
+        await using var bumperTransaction = await bumper.BeginTransactionAsync();
+        await using (var bump = new NpgsqlCommand(
+            "UPDATE paguai.requests SET version = 2 WHERE id = @draft_id",
+            bumper))
+        {
+            bump.Parameters.AddWithValue("draft_id", draftId);
+            await bump.ExecuteNonQueryAsync();
+        }
+
+        var downgrade = Task.Run(() => migrator.Database.MigrateAsync(BeforeVersionCasMigration));
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            await using (var probe = new NpgsqlCommand(
+                "SELECT count(*) FROM pg_locks WHERE NOT granted AND relation = 'paguai.requests'::regclass",
+                bumper))
+            {
+                if ((long)(await probe.ExecuteScalarAsync())! > 0)
+                {
+                    break;
+                }
+            }
+
+            await Task.Delay(100);
+        }
+
+        // O bump commita DEPOIS do instante em que a guarda teria lido sob o
+        // código antigo; com a trava, a downgrade segue recusando.
+        await bumperTransaction.CommitAsync();
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => downgrade);
+        Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var verify = new NpgsqlCommand(
+            """
+            SELECT
+                EXISTS (
+                    SELECT 1 FROM "__EFMigrationsHistory"
+                    WHERE migration_id = @migration_id),
+                has_column_privilege('vinx_runtime', 'paguai.requests', 'version', 'UPDATE'),
+                (SELECT count(*) FROM paguai.requests WHERE id = @draft_id AND version = 2)
+            """,
+            administrator);
+        verify.Parameters.AddWithValue("migration_id", VersionCasMigration);
+        verify.Parameters.AddWithValue("draft_id", draftId);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.True(reader.GetBoolean(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.Equal(1L, reader.GetInt64(2));
+    }
+
+    [Fact]
     public async Task Empty_proof_downgrade_removes_column_and_keeps_the_fixed_version_check()
     {
         await using var fixture = new FoundationPostgresFixture();
@@ -452,7 +630,7 @@ public sealed class PaguaiDraftMigrationTests
     /// prova: quando <paramref name="bindProof"/> vincula o comprovante.
     /// </summary>
     private static async Task<Guid> SeedProofBoundDraftAsync(
-        FoundationPostgresFixture fixture, bool bindProof)
+        FoundationPostgresFixture fixture, bool bindProof, int version = 1)
     {
         var seed = await SeedProofCompanyFileAsync(fixture);
         var draftId = Guid.NewGuid();
@@ -465,12 +643,13 @@ public sealed class PaguaiDraftMigrationTests
                 proof_file_id, state, version, created_at)
             VALUES (@id, @company_id, @requester, @request_id, 't', 'd',
                     1.00, 'BRL', '2026-09-01', 'Fornecedor Demo', 'required',
-                    @proof_file_id, 'rascunho', 1, clock_timestamp())
+                    @proof_file_id, 'rascunho', @version, clock_timestamp())
             """,
             connection);
         SeedDraftParameters(command, draftId, seed.CompanyId, seed.ActorId, Guid.NewGuid());
         command.Parameters.AddWithValue(
             "proof_file_id", bindProof ? seed.ProofFileId : (object)DBNull.Value);
+        command.Parameters.AddWithValue("version", version);
         await command.ExecuteNonQueryAsync();
         return draftId;
     }
