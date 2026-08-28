@@ -5,16 +5,23 @@ using Wolverine;
 
 namespace Vinx.Erp.WorkerHost;
 
-/// <summary>Mensagem de tick da automação de demandas (fila durável local).</summary>
-public sealed record DemandasAutomationTick(DateTimeOffset ScheduledAt);
+/// <summary>
+/// Mensagem de tick da automação de demandas (fila durável local). A geração
+/// cerca o fence da identidade durável: apenas a cadeia portadora da geração
+/// vigente do claim renova o lease e perpetua o próximo tick.
+/// </summary>
+public sealed record DemandasAutomationTick(DateTimeOffset ScheduledAt, long Generation);
 
 /// <summary>
-/// Handler do tick: executa a varredura (avança DUE primeiro, depois overdue)
-/// e agenda o próximo tick. Classes públicas com inline-DI — handler
-/// interno/lambda é engolido silenciosamente como Handled pela cadeia Wolverine.
+/// Handler do tick: executa a varredura (avança DUE primeiro, depois overdue) e
+/// agenda o próximo tick SOMENTE se a renovação do claim durável confirmar que
+/// esta geração ainda é a dona da cadeia. Classes públicas com inline-DI —
+/// handler interno/lambda é engolido silenciosamente como Handled pela cadeia
+/// Wolverine.
 /// </summary>
 public sealed class DemandasAutomationTickHandler(
     DemandasAutomationScanService scan,
+    DemandasSchedulerClaimStore claims,
     IMessageBus messageBus,
     ILogger<DemandasAutomationTickHandler> logger
 )
@@ -54,54 +61,151 @@ public sealed class DemandasAutomationTickHandler(
             );
         }
 
+        var owner = $"{Environment.MachineName}:{Environment.ProcessId}";
+        var renewal = await claims.TryRenewAsync(message.Generation, owner, TimeSpan.FromTicks(3 * DemandasScheduler.Interval.Ticks), cancellationToken);
+        if (!renewal.Won)
+        {
+            // Geração superseded (restart/replica assumiu ou lease venceu): a
+            // cadeia antiga morre aqui — o novo dono semeia a sua própria.
+            logger.LogInformation(
+                "Demandas {Operation} {Module} {Result} {Reason} {Generation}",
+                Operation,
+                Module,
+                "superseded",
+                "chain_claim_lost",
+                message.Generation
+            );
+            return;
+        }
+
         await messageBus.ScheduleAsync(
-            new DemandasAutomationTick(DateTimeOffset.UtcNow),
+            new DemandasAutomationTick(DateTimeOffset.UtcNow, message.Generation),
             DateTimeOffset.UtcNow + DemandasScheduler.Interval
+        );
+        logger.LogInformation(
+            "Demandas {Operation} {Module} {Result} {Reason} {Generation}",
+            Operation,
+            Module,
+            "perpetuated",
+            "chain_successor_scheduled",
+            message.Generation
         );
     }
 }
 
-/// <summary>Semeadura do primeiro tick pós-boot (auto-perpetuante).</summary>
+/// <summary>
+/// Semeadura do primeiro tick pós-boot (auto-perpetuante) sob identidade
+/// durável: cada boot disputa o claim cluster-wide; só o vencedor semeia a
+/// cadeia da geração nova — restarts e réplicas nunca acumulam cadeias
+/// paralelas, e a retentativa periódica assume a cadeia se o dono morrer.
+/// </summary>
 public sealed class DemandasScheduler(
     IServiceScopeFactory scopeFactory,
     IHostApplicationLifetime lifetime,
     ILogger<DemandasScheduler> logger
-) : IHostedService
+) : IHostedService, IDisposable
 {
     public static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan Lease = TimeSpan.FromTicks(3 * Interval.Ticks);
+
+    private readonly string _owner = $"{Environment.MachineName}:{Environment.ProcessId}";
+    private CancellationTokenSource? _retryLoop;
+    private bool _disposed;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         // O runtime do Wolverine só ativa depois que TODOS os hosted services
         // subiram (ApplicationStarted): semear antes disso levanta
         // WolverineHasNotStartedException e derruba o boot do host inteiro.
-        lifetime.ApplicationStarted.Register(SeedFirstTick);
+        lifetime.ApplicationStarted.Register(() => _ = ClaimAndSeedAsync());
+        _retryLoop = new CancellationTokenSource();
+        _ = RetryClaimLoopAsync(_retryLoop.Token);
         return Task.CompletedTask;
     }
 
-    private void SeedFirstTick()
+    /// <summary>
+    /// Retentativa periódica de takeover: sem nova infra, apenas o mesmo CAS do
+    /// boot — cobre a morte do dono anterior (lease vence e outro host assume).
+    /// </summary>
+    private async Task RetryClaimLoopAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(Interval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await ClaimAndSeedAsync();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task ClaimAndSeedAsync()
     {
         try
         {
             // IMessageBus é scoped no Wolverine: o singleton resolve o barramento
             // dentro de um escopo criado na semeadura.
             using var scope = scopeFactory.CreateScope();
-            scope.ServiceProvider
+            var claims = scope.ServiceProvider.GetRequiredService<DemandasSchedulerClaimStore>();
+            var claim = await claims.TryClaimAsync(_owner, Lease);
+            if (!claim.Won)
+            {
+                return;
+            }
+
+            await scope.ServiceProvider
                 .GetRequiredService<IMessageBus>()
                 .ScheduleAsync(
-                    new DemandasAutomationTick(DateTimeOffset.UtcNow),
+                    new DemandasAutomationTick(DateTimeOffset.UtcNow, claim.Generation),
                     DateTimeOffset.UtcNow + Interval
-                )
-                .GetAwaiter()
-                .GetResult();
+                );
+            logger.LogInformation(
+                "Demandas scheduler chain_seeded {Generation}",
+                claim.Generation
+            );
         }
         catch (Exception exception)
         {
-            // Semeadura é best-effort: o boot nunca falha por causa dela — o
-            // próximo deploy semeia de novo e o handler perpetua a cadeia.
+            // Semeadura é best-effort: o boot nunca falha por causa dela — a
+            // retentativa periódica disputa o claim de novo.
             logger.LogError(exception, "Demandas scheduler seed_failed");
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        // Dispose pode preceder StopAsync na ordem de teardown do host: a
+        // retentativa periódica é best-effort e nunca derruba o shutdown.
+        try
+        {
+            _retryLoop?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        try
+        {
+            _retryLoop?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        _retryLoop?.Dispose();
+    }
 }

@@ -91,7 +91,7 @@ public sealed class PaguaiApproverAccessTests
         await using (var structure = new NpgsqlCommand(
             """
             SELECT pg_get_userbyid(function_row.proowner),
-                   function_row.prosrc LIKE '%set_config(''app.company_id'', p_company_id::text, true)%'
+                   function_row.prosrc LIKE '%set_config(''app.company_id'', $1::text, true)%'
             FROM pg_proc AS function_row
             WHERE function_row.oid =
                 'paguai.list_draft_approver_user_ids(uuid, uuid)'::regprocedure

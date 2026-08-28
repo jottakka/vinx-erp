@@ -12,6 +12,7 @@ import { type DemandBoardCard, demandasClient } from "./demandas-client";
 import { DemandasPage } from "./demandas-page";
 
 const alfaCompanyId = "11111111-1111-4111-8111-111111111111";
+const betaCompanyId = "22222222-2222-4222-8222-222222222222";
 
 const initiationCard: DemandBoardCard = {
   demandDisplayNumber: "DEM-000001",
@@ -67,6 +68,12 @@ function snapshot(
         companyId: alfaCompanyId,
         companyName: "Alfa",
         membershipId: "55555555-5555-4555-8555-555555555555",
+      },
+      {
+        capabilities,
+        companyId: betaCompanyId,
+        companyName: "Beta",
+        membershipId: "66666666-6666-4666-8666-666666666666",
       },
     ],
     flags: {},
@@ -251,5 +258,60 @@ describe("DemandasPage", () => {
     expect(await screen.findByText("Validar nota")).toBeVisible();
     expect(spy).toHaveBeenCalledWith(alfaCompanyId, initiationCard.id);
     expect(screen.getByTestId("demand-history")).toBeVisible();
+  });
+
+  it("discards late board responses from the previous company after a switch", async () => {
+    // Resposta da empresa Alfa fica pendurada e só resolve DEPOIS da troca
+    // para Beta: a geração de escopo descarta o resultado atrasado e o quadro
+    // da empresa nova nunca é sobrescrito pelo da anterior.
+    let resolveAlfa: (page: {
+      items: DemandBoardCard[];
+      total: number;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }) => void = () => {};
+    const alfaBoard = new Promise<{
+      items: DemandBoardCard[];
+      total: number;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }>((resolve) => {
+      resolveAlfa = resolve;
+    });
+    const boardSpy = vi
+      .spyOn(demandasClient, "board")
+      .mockImplementationOnce(() => alfaBoard)
+      .mockResolvedValue({
+        items: [{ ...initiationCard, title: "Demanda da Beta" }],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      });
+
+    window.history.replaceState(null, "", "/demandas");
+    const user = userEvent.setup();
+    renderPage();
+
+    // Empresa inicial Alfa: a busca fica pendurada (sem cartões renderizados).
+    await waitFor(() => expect(boardSpy).toHaveBeenCalledOnce());
+
+    // Troca para Beta: estado anterior é limpo e o quadro de Beta carrega.
+    await user.click(await screen.findByLabelText("Empresa"));
+    await user.click(await screen.findByRole("option", { name: "Beta" }));
+    expect(await screen.findByText("Demanda da Beta")).toBeVisible();
+    expect(boardSpy).toHaveBeenLastCalledWith(betaCompanyId, expect.anything());
+
+    // Resposta tardia de Alfa: descartada pela geração de escopo — o quadro
+    // de Beta permanece intacto.
+    resolveAlfa({
+      items: [initiationCard],
+      total: 1,
+      hasMore: false,
+      nextCursor: null,
+    });
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText("Pagar fornecedor")).not.toBeInTheDocument();
+    expect(screen.getByText("Demanda da Beta")).toBeVisible();
   });
 });

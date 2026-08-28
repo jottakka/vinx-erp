@@ -1815,6 +1815,7 @@ CREATE TABLE foundation.approvals (
     deleted_by_user_id uuid,
     deleted_reason character varying(500),
     row_version bigint DEFAULT 1 NOT NULL,
+    resource_key character varying(200) DEFAULT ''::character varying NOT NULL,
     CONSTRAINT ck_approvals_consumption_complete CHECK ((((consumed_at IS NULL) AND (confirmation_request_id IS NULL) AND (result_json IS NULL)) OR ((consumed_at IS NOT NULL) AND (confirmation_request_id IS NOT NULL) AND (result_json IS NOT NULL)))),
     CONSTRAINT ck_approvals_expires_after_creation CHECK ((expires_at > created_at)),
     CONSTRAINT ck_approvals_payload_hash_format CHECK (((payload_hash)::text ~ '^[0-9a-f]{64}$'::text)),
@@ -2437,9 +2438,9 @@ CREATE UNIQUE INDEX ix_agent_execution_ledger_company_id_actor_user_id_channel_r
 CREATE INDEX ix_approvals_actor_user_id ON foundation.approvals USING btree (actor_user_id);
 
 
--- Name: ix_approvals_company_id_actor_user_id; Type: INDEX; Schema: foundation; Owner: -
+-- Name: ix_approvals_company_id_actor_user_id_resource_key; Type: INDEX; Schema: foundation; Owner: -
 
-CREATE UNIQUE INDEX ix_approvals_company_id_actor_user_id ON foundation.approvals USING btree (company_id, actor_user_id) WHERE ((consumed_at IS NULL) AND (deleted_at IS NULL));
+CREATE UNIQUE INDEX ix_approvals_company_id_actor_user_id_resource_key ON foundation.approvals USING btree (company_id, actor_user_id, resource_key) WHERE ((consumed_at IS NULL) AND (deleted_at IS NULL));
 
 
 -- Name: ix_approvals_confirmation_request_id; Type: INDEX; Schema: foundation; Owner: -
@@ -2812,7 +2813,7 @@ ALTER TABLE foundation.approvals ENABLE ROW LEVEL SECURITY;
 
 -- Name: approvals approvals_company_isolation; Type: POLICY; Schema: foundation; Owner: -
 
-CREATE POLICY approvals_company_isolation ON foundation.approvals USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid))) WITH CHECK (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)));
+CREATE POLICY approvals_company_isolation ON foundation.approvals USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND ((actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid) OR ((resource_key)::text <> ''::text)))) WITH CHECK (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND ((actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid) OR ((resource_key)::text <> ''::text))));
 
 
 -- Name: capabilities; Type: ROW SECURITY; Schema: foundation; Owner: -

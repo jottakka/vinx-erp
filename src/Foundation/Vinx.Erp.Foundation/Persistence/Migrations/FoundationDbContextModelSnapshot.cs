@@ -316,8 +316,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasDatabaseName("ix_atendimento_cards_company_id_attachment_file_id");
 
                     b.HasIndex("CompanyId", "CreatedAt", "Id")
-                        .HasDatabaseName("ix_atendimento_cards_company_id_created_at_id_live")
                         .IsDescending(false, true, true)
+                        .HasDatabaseName("ix_atendimento_cards_company_id_created_at_id_live")
                         .HasFilter("deleted_at IS NULL");
 
                     b.ToTable("atendimento_cards", "service_desk");
@@ -1247,6 +1247,14 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("request_id");
 
+                    b.Property<string>("ResourceKey")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasDefaultValue("")
+                        .HasColumnName("resource_key");
+
                     b.Property<string>("ResultJson")
                         .HasColumnType("jsonb")
                         .HasColumnName("result_json");
@@ -1284,9 +1292,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_approvals_proposal_id");
 
-                    b.HasIndex("CompanyId", "ActorUserId")
+                    b.HasIndex("CompanyId", "ActorUserId", "ResourceKey")
                         .IsUnique()
-                        .HasDatabaseName("ix_approvals_company_id_actor_user_id")
+                        .HasDatabaseName("ix_approvals_company_id_actor_user_id_resource_key")
                         .HasFilter("consumed_at IS NULL AND deleted_at IS NULL");
 
                     b.ToTable("approvals", "foundation", t =>

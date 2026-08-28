@@ -111,7 +111,8 @@ public sealed class DemandasService(
             // Contrato honesto: limit é ajustável (1..200, padrão 100) — documentado.
             var pageSize = limit is < 1 or > MaximumBoardRows ? BoardPageSize : limit;
             // Total do conjunto FILTRADO (pré-cursor): a contagem não encolhe
-            // por página — hasMore e o envelope derivam dela.
+            // por página. hasMore deriva da busca de pageSize + 1: a última
+            // página não-vazia reporta false (a sobra só conta além do cursor).
             var total = await query.CountAsync(cancellationToken);
             if (!string.IsNullOrWhiteSpace(after))
             {
@@ -127,10 +128,14 @@ public sealed class DemandasService(
             var demands = await query
                 .OrderBy(demand => demand.CreatedAt)
                 .ThenBy(demand => demand.Id)
-                .Take(pageSize)
+                .Take(pageSize + 1)
                 .ToListAsync(cancellationToken);
+            var hasMore = demands.Count > pageSize;
+            if (hasMore)
+            {
+                demands.RemoveAt(demands.Count - 1);
+            }
             var cards = demands.Select(demand => ToBoardCard(demand, now)).ToArray();
-            var hasMore = total > cards.Length;
             string? nextCursor = hasMore && demands.Count > 0
                 ? BoardCursor.Encode(demands[^1].CreatedAt, demands[^1].Id)
                 : null;
@@ -297,6 +302,24 @@ public sealed class DemandasService(
 
             var now = DateTimeOffset.UtcNow;
             var slaHours = DemandasSlaPolicy.HoursFor(command.Priority.Trim());
+            // Fronteira de integridade (revisão item 5): responsável e
+            // solicitante devem ser memberships ATIVAS da MESMA empresa — a FK
+            // composta não cobre soft-delete e a FK de usuário é global (sem
+            // isto, um caller anexa usuário de outra empresa).
+            if (!await MembershipExistsAsync(command.CompanyId, command.ResponsibleMembershipId, cancellationToken))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await DeniedAsync(actor, command.CompanyId, "demandas.demand.create", DemandOperationState.Invalid, cancellationToken);
+            }
+
+            var requesterUserId = command.RequesterUserId ?? actor.UserId;
+            if (requesterUserId != actor.UserId
+                && !await UserHasMembershipAsync(command.CompanyId, requesterUserId, cancellationToken))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await DeniedAsync(actor, command.CompanyId, "demandas.demand.create", DemandOperationState.Invalid, cancellationToken);
+            }
+
             var demand = new Demand
             {
                 Id = Guid.NewGuid(),
@@ -307,7 +330,7 @@ public sealed class DemandasService(
                 Stage = DemandStages.Initiation,
                 RoutineId = routineEntity?.Id,
                 ResponsibleMembershipId = command.ResponsibleMembershipId,
-                RequesterUserId = command.RequesterUserId ?? actor.UserId,
+                RequesterUserId = requesterUserId,
                 Tipo = FirstNonEmpty(command.Tipo, routineEntity?.Tipo),
                 Departamento = FirstNonEmpty(command.Departamento, routineEntity?.Departamento),
                 ManualDueAt = command.ManualDueAt,
@@ -1410,6 +1433,16 @@ public sealed class DemandasService(
                 return await DeniedAsync(actor, command.CompanyId, "demandas.routine.create", invalid.Value, cancellationToken);
             }
 
+            // Auto-atribuição futura também é membership ATIVA da mesma empresa
+            // (fronteira de integridade da revisão item 5).
+            var autoAssignee = NullIfEmpty(command.AutoAssigneeMembershipId);
+            if (autoAssignee is { } assignee
+                && !await MembershipExistsAsync(command.CompanyId, assignee, cancellationToken))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await DeniedAsync(actor, command.CompanyId, "demandas.routine.create", DemandOperationState.RoutineInvalid, cancellationToken);
+            }
+
             var now = DateTimeOffset.UtcNow;
             var orderedStages = command.Stages.OrderBy(stage => stage.OrderIndex).ToArray();
             var routine = new DemandRoutine
@@ -1420,7 +1453,7 @@ public sealed class DemandasService(
                 Description = TrimOrNull(command.Description),
                 Tipo = TrimOrNull(command.Tipo),
                 Departamento = TrimOrNull(command.Departamento),
-                AutoAssigneeMembershipId = NullIfEmpty(command.AutoAssigneeMembershipId),
+                AutoAssigneeMembershipId = autoAssignee,
                 RoutingOrder = command.RoutingOrder,
                 DefaultChecklistItems = command.DefaultChecklistItems.Select(text => text.Trim()).ToList(),
                 IsActive = true,

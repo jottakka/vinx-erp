@@ -149,9 +149,11 @@ public sealed class DemandasCoreEndpointTests
     /// <summary>
     /// Prova mínima end-to-end do tick de automação (runbook P3 item 4) DENTRO
     /// das fixtures existentes: WorkerHost real (DI fornece scan/handler/bus),
-    /// fila durável demandas-automation materializada, varredura com identidade
-    /// do worker avançando DUE primeiro e marcando overdue depois, e o handler
-    /// auto-perpetuando o próximo tick na fila agendada.
+    /// fila durável demandas-automation materializada, identidade durável do
+    /// scheduler (claim por geração — restart/réplica não acumulam cadeias;
+    /// geração superseded não perpetua), varredura com identidade do worker
+    /// avançando DUE primeiro e marcando overdue depois, e o envelope real de
+    /// entrega de notificação no outbox consumido até delivered.
     /// </summary>
     [Fact]
     public async Task Automation_tick_flows_through_durable_demandas_queue_due_first_and_self_perpetuates()
@@ -194,15 +196,61 @@ public sealed class DemandasCoreEndpointTests
         // OVERDUE: sem rotina, prazo manual já vencido.
         var overdueDemand = await CreateDemandAsync(client, scenario, DateTimeOffset.UtcNow.AddHours(-1));
 
+        // Templates aprovados dos kinds de demandas: sem eles o enqueue worker
+        // falha fechado (best-effort Warning) e não há intent/envelope.
+        await administrator.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO notifications.notification_templates (company_id, channel, template_key, is_approved)
+            VALUES
+                ({scenario.CompanyId}, 'in_app', 'demanda.overdue', true),
+                ({scenario.CompanyId}, 'in_app', 'demanda.stage_advanced', true)
+            """);
+
+        // Identidade durável: o claim ANTERIOR ao boot (dono vivo) suprime a
+        // semeadura do scheduler do host que sobe — nenhuma cadeia paralela.
+        var workerOptions = new DbContextOptionsBuilder<FoundationDbContext>()
+            .UseNpgsql(factory.Fixture.WorkerConnectionString)
+            .UseSnakeCaseNamingConvention()
+            .AddInterceptors(new RowVersionInterceptor())
+            .Options;
+        await using var workerDatabase = new FoundationDbContext(workerOptions);
+        var claimStore = new DemandasSchedulerClaimStore(workerDatabase);
+        var firstClaim = await claimStore.TryClaimAsync("test-owner-a", TimeSpan.FromMinutes(15));
+        Assert.True(firstClaim.Won);
+
         await using var workerHost = new WorkerAutomationHostFactory(factory.Fixture.WorkerConnectionString);
         using var workerClient = workerHost.CreateClient();
+        await Task.Delay(1500);
+        await AssertScheduledTickCountAsync(administrator, 0);
 
-        // Tick imediato pela fila durável (o envelope semeado pelo scheduler só
-        // vence em +5min): o runtime do worker consome e executa o handler REAL.
+        // Dois hosts disputando: lease vivo faz o segundo claim perder.
+        await using var workerDatabaseTwo = new FoundationDbContext(workerOptions);
+        var rivalClaim = await new DemandasSchedulerClaimStore(workerDatabaseTwo)
+            .TryClaimAsync("test-owner-b", TimeSpan.FromMinutes(15));
+        Assert.False(rivalClaim.Won);
+
+        // Lease vencido: tick da geração antiga não renova e MORRE sem
+        // perpetuar sucessor (fence por geração).
+        await administrator.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE demandas.scheduler_claim SET lease_expires_at = now() - interval '1 second' WHERE name = {DemandasSchedulerClaimStore.ChainName}");
+        using (var staleBusScope = workerHost.Services.CreateScope())
+        {
+            await staleBusScope.ServiceProvider
+                .GetRequiredService<IMessageBus>()
+                .PublishAsync(new WorkerAutomation.DemandasAutomationTick(DateTimeOffset.UtcNow, firstClaim.Generation));
+        }
+        await Task.Delay(1500);
+        await AssertScheduledTickCountAsync(administrator, 0);
+
+        // Takeover: novo dono com geração nova semeia e a SUA cadeia perpetua
+        // exatamente UM sucessor por tick.
+        var takeover = await claimStore.TryClaimAsync("test-owner-b", TimeSpan.FromMinutes(15));
+        Assert.True(takeover.Won);
+        Assert.Equal(firstClaim.Generation + 1, takeover.Generation);
         using (var busScope = workerHost.Services.CreateScope())
         {
-            var bus = busScope.ServiceProvider.GetRequiredService<IMessageBus>();
-            await bus.PublishAsync(new WorkerAutomation.DemandasAutomationTick(DateTimeOffset.UtcNow));
+            await busScope.ServiceProvider
+                .GetRequiredService<IMessageBus>()
+                .PublishAsync(new WorkerAutomation.DemandasAutomationTick(DateTimeOffset.UtcNow, takeover.Generation));
         }
 
         var advanced = false;
@@ -220,15 +268,40 @@ public sealed class DemandasCoreEndpointTests
             .SingleAsync();
         Assert.True(overdueMarked);
 
-        // Fila durável drenada: o envelope do tick foi consumido pelo listener
-        // (o handler auto-perpetua agendando o próximo tick ao final de cada
-        // execução; encadeamentos concorrentes tornam a contagem da fila
-        // agendada intrinsecamente corrida, então ela não é pinada aqui).
-        await Task.Delay(1000);
-        var queuedTicks = await administrator.Database
-            .SqlQuery<int>($"""SELECT count(*) AS "Value" FROM vinx_wolverine_queues.wolverine_queue_demandas_automation""")
-            .SingleAsync();
-        Assert.True(queuedTicks == 0);
+        // Fila imediata drenada e exatamente UM sucessor agendado: cadeia
+        // única cluster-wide (cardinalidade por geração).
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            await Task.Delay(500);
+            if (await administrator.Database
+                .SqlQuery<int>($"""SELECT count(*) AS "Value" FROM vinx_wolverine_queues.wolverine_queue_demandas_automation""")
+                .SingleAsync() == 0)
+            {
+                break;
+            }
+        }
+        await AssertScheduledTickCountAsync(administrator, 1);
+
+        // Envelope real no outbox: o intent overdue criado pela função
+        // worker-only gera um NotificationDeliveryRequested durável consumido
+        // pelo host até o estado final delivered.
+        var overdueIntentKey = $"demanda.{overdueDemand.Id:N}.%";
+        var delivered = false;
+        for (var attempt = 0; attempt < 40 && !delivered; attempt++)
+        {
+            await Task.Delay(500);
+            delivered = await administrator.Database
+                .SqlQuery<bool>($"""
+                    SELECT (count(*) > 0) AS "Value"
+                    FROM notifications.notification_intents
+                    WHERE company_id = {scenario.CompanyId}
+                      AND event_key LIKE {overdueIntentKey}
+                      AND event_key LIKE '%.overdue'
+                      AND status = 'delivered'
+                    """)
+                .SingleAsync();
+        }
+        Assert.True(delivered);
 
         // DUE primeiro/overdue depois: provado com UMA varredura direta e
         // determinística do serviço real (identidade do worker), sem a
@@ -238,19 +311,12 @@ public sealed class DemandasCoreEndpointTests
             $"UPDATE demandas.demands SET stage_started_at = now() - interval '2 hours' WHERE id = {secondDue.Id}");
         var secondOverdue = await CreateDemandAsync(client, scenario, DateTimeOffset.UtcNow.AddHours(-1));
 
-        var workerOptions = new DbContextOptionsBuilder<FoundationDbContext>()
-            .UseNpgsql(factory.Fixture.WorkerConnectionString)
-            .UseSnakeCaseNamingConvention()
-            .AddInterceptors(new RowVersionInterceptor())
-            .Options;
-        await using var workerDatabase = new FoundationDbContext(workerOptions);
-        var scan = new DemandasAutomationScanService(
-            workerDatabase,
-            new DemandasNotificationComposer(
-                new NotificationIntentService(workerDatabase, null!, NullLogger<NotificationIntentService>.Instance),
-                NullLogger<DemandasNotificationComposer>.Instance),
-            NullLogger<DemandasAutomationScanService>.Instance);
-        await scan.ScanAsync(CancellationToken.None);
+        using (var scanScope = workerHost.Services.CreateScope())
+        {
+            await scanScope.ServiceProvider
+                .GetRequiredService<DemandasAutomationScanService>()
+                .ScanAsync(CancellationToken.None);
+        }
 
         var scanEvents = await administrator.Database
             .SqlQuery<string>(
@@ -261,6 +327,32 @@ public sealed class DemandasCoreEndpointTests
             [$"stage_advanced#{secondDue.Id.ToString()[..8]}", $"overdue#{secondOverdue.Id.ToString()[..8]}"],
             scanEvents.Select(row => row.Split('@')[0] + row[row.IndexOf('#')..]).ToList()
         );
+    }
+
+    /// <summary>
+    /// Cardinalidade da cadeia: os sucessores agendados do tick vivem no
+    /// message store durável (status Scheduled) — o commit do handler é
+    /// assíncrono ao teste, então a checagem sondeia em vez de janela fixa.
+    /// </summary>
+    private static async Task AssertScheduledTickCountAsync(FoundationDbContext administrator, int expected)
+    {
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            var scheduled = await administrator.Database
+                .SqlQuery<int>($"""SELECT count(*) AS "Value" FROM vinx_wolverine_worker.wolverine_incoming_envelopes WHERE status = 'Scheduled'""")
+                .SingleAsync();
+            if (scheduled == expected)
+            {
+                return;
+            }
+
+            await Task.Delay(500);
+        }
+
+        var final = await administrator.Database
+            .SqlQuery<int>($"""SELECT count(*) AS "Value" FROM vinx_wolverine_worker.wolverine_incoming_envelopes WHERE status = 'Scheduled'""")
+            .SingleAsync();
+        Assert.True(final == expected, $"scheduled={final} expected={expected}");
     }
 
     private sealed class WorkerAutomationHostFactory(string? connectionString)
@@ -294,6 +386,99 @@ public sealed class DemandasCoreEndpointTests
         using var response = await client.GetAsync($"/demandas/board?companyId={foreignCompany.Id}");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Final_non_empty_board_page_reports_has_more_false()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var scenario = await SeedScenarioAsync(factory, administrator);
+        using var client = factory.CreateClient();
+        await CreateDemandAsync(client, scenario);
+        await CreateDemandAsync(client, scenario);
+
+        using var first = await client.GetAsync($"/demandas/board?companyId={scenario.CompanyId}&limit=1");
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var firstPage = await first.Content.ReadFromJsonAsync<BoardPageContract>();
+        Assert.NotNull(firstPage);
+        Assert.Single(firstPage!.Items);
+        Assert.True(firstPage.HasMore);
+        Assert.NotNull(firstPage.NextCursor);
+
+        using var second = await client.GetAsync(
+            $"/demandas/board?companyId={scenario.CompanyId}&limit=1&after={firstPage.NextCursor}");
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        var secondPage = await second.Content.ReadFromJsonAsync<BoardPageContract>();
+        Assert.NotNull(secondPage);
+        // A última página NÃO-vazia reporta hasMore=false (pageSize+1).
+        Assert.Single(secondPage!.Items);
+        Assert.False(secondPage.HasMore);
+        Assert.Null(secondPage.NextCursor);
+    }
+
+    [Fact]
+    public async Task Cross_company_requester_is_rejected()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var scenario = await SeedScenarioAsync(factory, administrator);
+
+        // Usuário com membership APENAS em outra empresa: a FK global de
+        // usuário aceitaria, a fronteira de mesma empresa rejeita.
+        var requestId = Guid.NewGuid();
+        var foreignGroup = new Group(Guid.NewGuid(), "Grupo externo", factory.ActorUserId, requestId);
+        var foreignCompany = new Company(Guid.NewGuid(), foreignGroup.Id, "Empresa externa", factory.ActorUserId, requestId);
+        var foreignUser = new User(Guid.NewGuid(), "Fora", "cross-company@example.test");
+        var foreignMembership = new Membership(Guid.NewGuid(), foreignCompany.Id, foreignUser.Id, factory.ActorUserId, requestId);
+        administrator.AddRange(foreignGroup, foreignCompany, foreignUser, foreignMembership);
+        await administrator.SaveChangesAsync();
+
+        using var client = factory.CreateClient();
+        using var response = await client.PostAsJsonAsync("/demandas/demands", new
+        {
+            companyId = scenario.CompanyId,
+            requestId = Guid.NewGuid(),
+            title = "Solicitante de fora",
+            description = "Tentativa de anexar usuário de outra empresa.",
+            priority = "medium",
+            responsibleMembershipId = scenario.MembershipId,
+            requesterUserId = foreignUser.Id,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Soft_deleted_responsible_is_rejected()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var scenario = await SeedScenarioAsync(factory, administrator);
+
+        var requestId = Guid.NewGuid();
+        var leavingGroup = new Group(Guid.NewGuid(), "Grupo saída", factory.ActorUserId, requestId);
+        var leavingCompany = new Company(Guid.NewGuid(), leavingGroup.Id, "Empresa saída", factory.ActorUserId, requestId);
+        var leavingUser = new User(Guid.NewGuid(), "Saiu", "leaving@example.test");
+        var leavingMembership = new Membership(Guid.NewGuid(), leavingCompany.Id, leavingUser.Id, factory.ActorUserId, requestId);
+        administrator.AddRange(leavingGroup, leavingCompany, leavingUser, leavingMembership);
+        await administrator.SaveChangesAsync();
+        // Soft-delete: a FK composta aceitaria, a fronteira de membership ATIVA rejeita.
+        await administrator.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE foundation.memberships SET deleted_at = now(), deleted_by_user_id = {factory.ActorUserId} WHERE id = {leavingMembership.Id}");
+
+        using var client = factory.CreateClient();
+        using var response = await client.PostAsJsonAsync("/demandas/demands", new
+        {
+            companyId = scenario.CompanyId,
+            requestId = Guid.NewGuid(),
+            title = "Responsável removido",
+            description = "Tentativa de atribuir membership desativada.",
+            priority = "medium",
+            responsibleMembershipId = leavingMembership.Id,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     private static object CreatePayloadBody(Scenario scenario) =>

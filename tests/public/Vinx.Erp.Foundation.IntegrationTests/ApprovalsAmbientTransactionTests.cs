@@ -41,18 +41,19 @@ public sealed class ApprovalsAmbientTransactionTests
     public async Task Ambient_participation_rolls_back_with_the_outer_owner()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var (actor, companyId, scope) = await BuildScopeAsync(factory);
-        var database = scope.GetRequiredService<FoundationDbContext>();
+        var (actor, companyId, provider) = await BuildScopeAsync(factory);
+        using var ambientScope = provider.CreateScope();
+        var database = ambientScope.ServiceProvider.GetRequiredService<FoundationDbContext>();
 
         await using var outer = await database.Database.BeginTransactionAsync();
 
         // Mesmo contexto com transação ambiente: o preparo participa sem abrir a sua.
         var prepared = await new PrepareApprovalService(
             database,
-            scope.GetRequiredService<AuditAppender>(),
-            scope.GetRequiredService<AuthorizationTelemetry>(),
-            scope.GetRequiredService<CapabilityEvaluator>(),
-            scope.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PrepareApprovalService>>()
+            ambientScope.ServiceProvider.GetRequiredService<AuditAppender>(),
+            ambientScope.ServiceProvider.GetRequiredService<AuthorizationTelemetry>(),
+            ambientScope.ServiceProvider.GetRequiredService<CapabilityEvaluator>(),
+            ambientScope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PrepareApprovalService>>()
         ).PrepareAsync(actor, ToPrepareCommand(companyId, Guid.NewGuid()), default);
 
         Assert.True(prepared.IsSuccess, $"prepare denied: {prepared.ErrorCode}");
@@ -77,16 +78,19 @@ public sealed class ApprovalsAmbientTransactionTests
         IServiceProvider provider,
         ActorContext actor,
         Guid companyId,
-        Guid requestId) =>
-        (
+        Guid requestId)
+    {
+        using var scope = provider.CreateScope();
+        return (
             await new PrepareApprovalService(
-                provider.GetRequiredService<FoundationDbContext>(),
-                provider.GetRequiredService<AuditAppender>(),
-                provider.GetRequiredService<AuthorizationTelemetry>(),
-                provider.GetRequiredService<CapabilityEvaluator>(),
-                provider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PrepareApprovalService>>()
+                scope.ServiceProvider.GetRequiredService<FoundationDbContext>(),
+                scope.ServiceProvider.GetRequiredService<AuditAppender>(),
+                scope.ServiceProvider.GetRequiredService<AuthorizationTelemetry>(),
+                scope.ServiceProvider.GetRequiredService<CapabilityEvaluator>(),
+                scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PrepareApprovalService>>()
             ).PrepareAsync(actor, ToPrepareCommand(companyId, requestId), default)
         ).Value!;
+    }
 
     private static async Task<(ActorContext Actor, Guid CompanyId, IServiceProvider Scope)> BuildScopeAsync(
         FoundationApiFactory factory)

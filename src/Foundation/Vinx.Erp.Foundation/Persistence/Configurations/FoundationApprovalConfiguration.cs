@@ -34,15 +34,20 @@ public sealed class FoundationApprovalConfiguration : IEntityTypeConfiguration<F
         builder.Property(entity => entity.Action).HasMaxLength(200).IsRequired();
         builder.Property(entity => entity.PayloadHash).HasMaxLength(64).IsRequired();
         builder.Property(entity => entity.PolicyVersion).HasMaxLength(50).IsRequired();
+        builder.Property(entity => entity.ResourceKey).HasMaxLength(200).IsRequired().HasDefaultValue("");
         builder.Property(entity => entity.ResultJson).HasColumnType("jsonb");
         builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasDefaultValue(1L);
         builder.Property(entity => entity.DeletedReason).HasMaxLength(500);
         builder.HasQueryFilter(entity => entity.DeletedAt == null);
-        // Índice único parcial: no máximo uma proposta viva por ator/empresa.
-        // A preparação varre expiradas com o relógio do banco antes do INSERT;
-        // a violação concorrente vira ProposalConflict auditado (fail-closed).
-        builder.HasIndex(entity => new { entity.CompanyId, entity.ActorUserId })
+        // Índice único parcial: no máximo uma proposta viva por
+        // ator/empresa/recurso. Legado (resource_key = '') mantém o
+        // single-flight global por ator/empresa; módulos por recurso (demandas)
+        // delimitam por recurso. A preparação varre expiradas com o relógio do
+        // banco antes do INSERT; a violação concorrente vira ProposalConflict
+        // auditado (fail-closed).
+        builder.HasIndex(entity => new { entity.CompanyId, entity.ActorUserId, entity.ResourceKey })
             .IsUnique()
+            .HasDatabaseName("ix_approvals_company_id_actor_user_id_resource_key")
             .HasFilter("consumed_at IS NULL AND deleted_at IS NULL");
         builder.HasIndex(entity => entity.ProposalId)
             .IsUnique();

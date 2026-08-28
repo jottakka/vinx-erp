@@ -13,10 +13,13 @@ namespace Vinx.Erp.Demandas;
 
 /// <summary>
 /// Consumo do estágio awaiting_approval via serviços públicos do Foundation.
-/// Elegibilidade é resolvida SEMPRE no servidor (supervisor vigente, criador
-/// NÃO decide a própria entrega, ou portador de assign); o preparo acontece
-/// quando a demanda entra na etapa e guarda o vínculo da proposta na própria
-/// demanda — sem alçada clonada: a política vive no Foundation.
+/// Elegibilidade é resolvida SEMPRE no servidor, DEPOIS de travar a linha da
+/// demanda: exige a capability documentada de decisão
+/// (demandas.demand.advance, a MESMA do preparo e da confirmação Foundation) e
+/// o criador da entrega NUNCA decide a própria demanda; papéis nominais
+/// (supervisor) nem assign sozinhos decidem. O preparo acontece quando a
+/// demanda entra na etapa e guarda o vínculo da proposta na própria demanda —
+/// sem alçada clonada: a política vive no Foundation.
 /// </summary>
 public sealed class DemandasApprovalsService(
     FoundationDbContext database,
@@ -52,12 +55,16 @@ public sealed class DemandasApprovalsService(
         var payload = JsonSerializer.SerializeToElement(
             new { demandId = demand.Id, cycle = demand.StageCycleCount }
         );
+        // Fronteira por recurso: a proposta viva é única por (ator, empresa,
+        // demanda) — dois avanços do mesmo ator em demandas distintas podem
+        // aguardar aprovação simultaneamente; o legado AI mantém a chave vazia.
         var prepare = new PrepareApprovalCommand(
             demand.CompanyId,
             requestId,
             "demanda.aprovar-etapa",
             payload,
-            PolicyVersion
+            PolicyVersion,
+            resourceKey: $"demandas.demand:{demand.Id:N}:{demand.StageCycleCount}"
         );
         var service = NewPrepareService();
         var result = await service.PrepareAsync(actor, prepare, cancellationToken);
@@ -110,13 +117,9 @@ public sealed class DemandasApprovalsService(
                 return await DeniedAsync(actor, command.CompanyId, command.RequestId, DemandOperationState.MembershipRequired, cancellationToken);
             }
 
-            var eligibility = await EligibilityAsync(actor, command.CompanyId, demandId, membership.Id, cancellationToken);
-            if (eligibility is not null)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                return await DeniedAsync(actor, command.CompanyId, command.RequestId, eligibility.Value, cancellationToken);
-            }
-
+            // A trava da demanda vem ANTES da elegibilidade: remoção de
+            // supervisão ou revogação cometida antes da trava é observada pela
+            // reavaliação server-side abaixo, sem janela TOCTOU.
             var demand = await database.Demands.FromSqlInterpolated(
                     $"SELECT * FROM demandas.demands WHERE company_id = {command.CompanyId} AND id = {demandId} AND deleted_at IS NULL FOR UPDATE")
                 .SingleOrDefaultAsync(cancellationToken);
@@ -124,6 +127,13 @@ public sealed class DemandasApprovalsService(
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return await DeniedAsync(actor, command.CompanyId, command.RequestId, DemandOperationState.ResourceNotFound, cancellationToken);
+            }
+
+            var eligibility = await EligibilityAsync(actor, command.CompanyId, demand, membership.Id, cancellationToken);
+            if (eligibility is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await DeniedAsync(actor, command.CompanyId, command.RequestId, eligibility.Value, cancellationToken);
             }
 
             if (demand.RowVersion != command.ExpectedVersion || demand.Stage != DemandStages.AwaitingApproval)
@@ -292,37 +302,31 @@ public sealed class DemandasApprovalsService(
         updatedAtEntry.IsModified = true;
     }
 
-    /// <summary>Aprovação não pode ser decidida pelo autor da entrega; decidem
-    /// supervisor vigente ou portadores de assign.</summary>
+    /// <summary>
+    /// Decisão exige a MESMA capability documentada do preparo
+    /// (demandas.demand.advance, escopo company) — módulo e Foundation
+    /// alinhados — e o autor da entrega NUNCA decide a própria demanda.
+    /// Papéis nominais (supervisor) ou assign sozinhos não decidem.
+    /// </summary>
     private async Task<DemandOperationState?> EligibilityAsync(
         ActorContext actor,
         Guid companyId,
-        Guid demandId,
+        Demand demand,
         Guid membershipId,
         CancellationToken cancellationToken
     )
     {
-        var demandOwner = await database.Demands.AsNoTracking()
-            .Where(candidate => candidate.Id == demandId)
-            .Select(candidate => new { candidate.CreatedByUserId })
-            .SingleOrDefaultAsync(cancellationToken);
-        if (demandOwner is not null && demandOwner.CreatedByUserId == actor.UserId)
+        if (demand.CreatedByUserId == actor.UserId)
         {
             return DemandOperationState.CapabilityDenied;
         }
 
-        if (
-            await capabilityEvaluator.HasGrantAsync(companyId, membershipId, new CapabilityRequirement(KnownCapabilities.DemandasDemandAssign, CapabilityScope.Company), cancellationToken))
-        {
-            return null;
-        }
-
-        var supervised = await database.DemandParticipants.AsNoTracking().AnyAsync(participant =>
-            participant.DemandId == demandId
-            && participant.UserId == actor.UserId
-            && participant.Role == DemandParticipantRoles.Supervisor
-            && participant.DeletedAt == null, cancellationToken);
-        return supervised ? null : DemandOperationState.CapabilityDenied;
+        var canDecide = await capabilityEvaluator.HasGrantAsync(
+            companyId,
+            membershipId,
+            new CapabilityRequirement(KnownCapabilities.DemandasDemandAdvance, CapabilityScope.Company),
+            cancellationToken);
+        return canDecide ? null : DemandOperationState.CapabilityDenied;
     }
 
     private async Task<Guid[]> RecipientsForStageChangeAsync(Demand demand, Guid companyId, CancellationToken cancellationToken)

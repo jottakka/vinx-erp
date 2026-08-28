@@ -96,13 +96,16 @@ public sealed class PrepareApprovalService(
                         : AuthorizationResult<PrepareApprovalResult>.Success(replay);
                 }
 
-                await SweepExpiredApprovalsAsync(actor, command.CompanyId, cancellationToken);
+                await SweepExpiredApprovalsAsync(actor, command, cancellationToken);
 
                 // Substituição silenciosa é proibida: uma segunda preparação do
-                // mesmo ator/empresa com proposta viva é negada (fail-closed).
+                // mesmo ator/empresa/recurso com proposta viva é negada
+                // (fail-closed). O legado (recurso vazio) preserva o
+                // single-flight global por ator/empresa do módulo AI.
                 var liveProposalExists = await database.Approvals.AnyAsync(approval =>
                     approval.CompanyId == command.CompanyId
                     && approval.ActorUserId == actor.UserId
+                    && approval.ResourceKey == command.ResourceKey
                     && approval.ConsumedAt == null,
                     cancellationToken);
                 if (liveProposalExists)
@@ -135,7 +138,8 @@ public sealed class PrepareApprovalService(
                         proposalId,
                         clock.CreatedAt,
                         clock.ExpiresAt,
-                        command.RequestId));
+                        command.RequestId,
+                        command.ResourceKey));
                     database.IdempotencyRecords.Add(new IdempotencyRecord(
                         Guid.NewGuid(),
                         command.CompanyId,
@@ -207,23 +211,26 @@ public sealed class PrepareApprovalService(
     }
 
     /// <summary>
-    /// Terminaliza logicamente propostas vivas vencidas do mesmo ator/empresa
-    /// usando exclusivamente o relógio do banco (<c>now()</c>), dentro da mesma
-    /// transação da preparação. A seleção trava as linhas (<c>FOR UPDATE</c>) e
-    /// o corte único é o início da transação: uma proposta que vence no meio da
-    /// transação não é varrida por ela. Falha de auditoria desfaz toda a
-    /// preparação (fail-closed).
+    /// Terminaliza logicamente propostas vivas vencidas do mesmo
+    /// ator/empresa/recurso usando exclusivamente o relógio do banco
+    /// (<c>now()</c>), dentro da mesma transação da preparação. A seleção trava
+    /// as linhas (<c>FOR UPDATE</c>) e o corte único é o início da transação:
+    /// uma proposta que vence no meio da transação não é varrida por ela.
+    /// Falha de auditoria desfaz toda a preparação (fail-closed).
     /// </summary>
     private async Task SweepExpiredApprovalsAsync(
         ActorContext actor,
-        Guid companyId,
+        PrepareApprovalCommand command,
         CancellationToken cancellationToken)
     {
+        var companyId = command.CompanyId;
+        var resourceKey = command.ResourceKey;
         var expiredIds = await database.Database.SqlQuery<Guid>($"""
             SELECT id AS "Value"
             FROM foundation.approvals
             WHERE company_id = {companyId}
               AND actor_user_id = {actor.UserId}
+              AND resource_key = {resourceKey}
               AND consumed_at IS NULL
               AND deleted_at IS NULL
               AND expires_at <= now()

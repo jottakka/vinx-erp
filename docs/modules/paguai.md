@@ -106,13 +106,12 @@ fica na restrição `(event_key, recipient_user_id, channel, template_key)` da
 própria tabela de intents; nenhum discriminador extra entra na chave). Falha de
 enfileiramento é WARNING best-effort: nudges não são estado de negócio.
 
-A capability nova segue o catálogo canônico UUIDv5 e o padrão das irmãs:
-`paguai.draft.approve`
-(`e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a`) é concedida por padrão ao papel
-`admin` criado por `foundation.ensure_company_default_roles` — mesma escolha já
-estabelecida para ações privilegiadas de módulo como
-`foundation.files.confirm`; `member` não recebe. O backfill cobre empresas cujo
-admin já existia, idempotente por grant ativo.
+A capability `paguai.draft.approve`
+(`e3d8be82-1c79-59e7-9dd4-2f8b9c69c55a`) segue o catálogo canônico UUIDv5,
+semeada somente por migration e concedida de forma EXPLÍCITA por papéis da
+empresa: administradores não ganham autoridade financeira implícita — a
+política de acesso do módulo (e o contrato de `ensure_company_default_roles`)
+não incluem `paguai.draft.approve` nos papéis padrão.
 
 Pré-requisito de implantação: enquanto o template in-app
 `paguai.draft_created.approver` não existir/aprovado na empresa, a intenção NÃO

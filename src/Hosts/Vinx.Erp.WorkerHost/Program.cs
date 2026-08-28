@@ -217,9 +217,15 @@ builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
 builder.Services.AddScoped<INotificationProvider, EmailNotificationProvider>();
 builder.Services.AddScoped<INotificationProvider, TelegramProvider>();
 builder.Services.AddScoped<NotificationDeliveryWorkerService>();
-builder.Services.AddScoped<NotificationIntentService>();
+// Worker enfileira intents de Demandas pela função worker-only estreita
+// (notifications.enqueue_demandas_notification_intent): a função genérica é
+// revogada do vinx_worker (20260827120000) — mesma assinatura, troca só no
+// nome. Mapeamento por TIPO (não factory): o codegen dos handlers Wolverine
+// rejeita factories opacas na cadeia de dependências.
+builder.Services.AddScoped<NotificationIntentService, DemandasWorkerNotificationIntentService>();
 builder.Services.AddScoped<DemandasNotificationComposer>();
 builder.Services.AddScoped<DemandasAutomationScanService>();
+builder.Services.AddScoped<DemandasSchedulerClaimStore>();
 builder.Services.AddScoped<InboundWhatsAppInteractionService>();
 builder.Services.AddScoped<InboundWhatsAppDocumentService>();
 builder.Services.AddScoped<InboundAttachmentMaterializer>();

@@ -22,7 +22,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanySelect } from "../../shared/ui/company-select";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
@@ -103,6 +103,22 @@ export function DemandasPage() {
     }
   }, [companies, companyId]);
 
+  // Contexto ativo por empresa (contrato da baseline de arquitetura): a troca
+  // de empresa limpa SINCRONAMENTE cartões/detalhe/erro e invalida respostas
+  // tardias da empresa anterior via geração de escopo monotônica.
+  const scopeGeneration = useRef(0);
+  const boardRequest = useRef(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: companyId é o gatilho síncrono da troca de escopo (limpeza do estado da empresa anterior); não é lido no corpo de propósito.
+  useEffect(() => {
+    scopeGeneration.current += 1;
+    setCards([]);
+    setTotal(0);
+    setHasMore(false);
+    setNextCursor(null);
+    setDetail(null);
+    setError(null);
+  }, [companyId]);
+
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -114,7 +130,8 @@ export function DemandasPage() {
       after?: string;
     }) => {
       if (!companyId) return;
-      let active = true;
+      const generation = scopeGeneration.current;
+      const request = ++boardRequest.current;
       if (!options?.silent && !options?.append) setLoading(true);
       const result = await demandasClient.board(companyId, {
         priority,
@@ -122,7 +139,12 @@ export function DemandasPage() {
         search,
         after: options?.after ?? undefined,
       });
-      if (!active) return;
+      // Resposta tardia (troca de empresa ou busca mais nova): descartada.
+      if (
+        generation !== scopeGeneration.current ||
+        request !== boardRequest.current
+      )
+        return;
       if (result) {
         setTotal(result.total);
         setHasMore(result.hasMore);
@@ -142,18 +164,12 @@ export function DemandasPage() {
         setError("Não foi possível carregar o quadro. Tente novamente.");
       }
       setLoading(false);
-      return () => {
-        active = false;
-      };
     },
     [companyId, priority, responsible, search],
   );
 
   useEffect(() => {
-    const cleanup = loadBoard();
-    return () => {
-      void cleanup.then((dispose) => dispose?.());
-    };
+    void loadBoard();
   }, [loadBoard]);
 
   // Deep link /demandas?demand=<id>: abre o detalhe direto.
@@ -168,7 +184,12 @@ export function DemandasPage() {
       setDetail(null);
       return;
     }
-    void demandasClient.detail(companyId, detailId).then((result) => {
+    const generation = scopeGeneration.current;
+    const demandId = detailId;
+    void demandasClient.detail(companyId, demandId).then((result) => {
+      // Detalhe tardio de outra empresa (ou demanda já fechada): descartado.
+      if (generation !== scopeGeneration.current || detailId !== demandId)
+        return;
       if (result) setDetail(result);
     });
     window.history.replaceState(null, "", `/demandas?demand=${detailId}`);

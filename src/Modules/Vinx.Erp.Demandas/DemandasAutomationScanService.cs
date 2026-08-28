@@ -28,7 +28,10 @@ public sealed class DemandasAutomationScanService(
     private const string Operation = "demandas_automation_scan";
     private const int BatchSize = 200;
 
-    private sealed record PendingNotes(Guid DemandId, int Cycle, string Kind, IReadOnlyList<Guid> Recipients);
+    private sealed record PendingNotes(Guid DemandId, int Cycle, string Kind, Audience Recipients);
+
+    /// <summary>Destinatários e o solicitante da intenção (responsável vigente).</summary>
+    private sealed record Audience(Guid RequesterUserId, IReadOnlyList<Guid> Users);
 
     /// <summary>Ator sintético do worker (sem PII; só alimenta GUC/correlação).</summary>
     private static readonly ActorContext SystemActor = new(Guid.Empty, Guid.NewGuid());
@@ -149,7 +152,7 @@ public sealed class DemandasAutomationScanService(
             }
 
             MarkRowVersion(demand);
-            pending.Add(new(demand.Id, demand.StageCycleCount, DemandNotificationKinds.StageAdvanced, await RecipientsAsync(demand, cancellationToken)));
+            pending.Add(new(demand.Id, demand.StageCycleCount, DemandNotificationKinds.StageAdvanced, await CollectAudienceAsync(demand, cancellationToken)));
         }
 
         return pending;
@@ -190,7 +193,7 @@ public sealed class DemandasAutomationScanService(
             demand.OverdueSince = now;
             AppendSystemEvent(demand, "overdue", $"overdue:{demand.StageCycleCount}:{effective.Value.UtcTicks}", now);
             MarkRowVersion(demand);
-            pending.Add(new(demand.Id, demand.StageCycleCount, DemandNotificationKinds.Overdue, await RecipientsAsync(demand, cancellationToken)));
+            pending.Add(new(demand.Id, demand.StageCycleCount, DemandNotificationKinds.Overdue, await CollectAudienceAsync(demand, cancellationToken)));
         }
 
         return pending;
@@ -252,10 +255,14 @@ public sealed class DemandasAutomationScanService(
         return hours.HasValue ? from.AddHours((double)hours.Value) : null;
     }
 
-    private async Task<List<Guid>> RecipientsAsync(Demand demand, CancellationToken cancellationToken)
+    private async Task<Audience> CollectAudienceAsync(Demand demand, CancellationToken cancellationToken)
     {
-        // Responsável resolvido pela função do dono dedicada (memberships estão
-        // fora dos grants diretos do worker); observadores leem da própria tabela.
+        // Responsável resolvido pela função do dono dedicado (memberships estão
+        // fora dos grants diretos do worker); observadores leem da própria
+        // tabela. O responsável também é o solicitante da intenção: a função
+        // worker-only exige ator real (created_by_user_id NOT NULL) — sem
+        // responsável, os avisos caem no best-effort com ator sintético e
+        // falham fechado na função.
         var responsibleUser = (await database.Database
             .SqlQuery<Guid?>($"SELECT demand_responsible_user AS \"Value\" FROM demandas.demand_responsible_user({demand.Id})")
             .SingleOrDefaultAsync(cancellationToken)) ?? Guid.Empty;
@@ -270,7 +277,7 @@ public sealed class DemandasAutomationScanService(
             all.Add(responsibleUser);
         }
         all.AddRange(participantUsers);
-        return [.. all.Distinct()];
+        return new(responsibleUser, [.. all.Distinct()]);
     }
 
     private async Task SafeNotifyAsync(
@@ -278,13 +285,19 @@ public sealed class DemandasAutomationScanService(
         Guid demandId,
         int cycle,
         string kind,
-        IReadOnlyList<Guid> recipients,
+        Audience audience,
         CancellationToken cancellationToken
     )
     {
         try
         {
-            await notifications.ComposeAsync(SystemActor, companyId, demandId, cycle, kind, recipients, CancellationToken.None);
+            // Ator real (responsável vigente) sustenta o requisito de ator da
+            // função worker-only; sem responsável usa o sintético e o enqueue
+            // falha fechado (best-effort Warning, sem afetar a transição).
+            var actor = audience.RequesterUserId == Guid.Empty
+                ? SystemActor
+                : new ActorContext(audience.RequesterUserId, Guid.NewGuid());
+            await notifications.ComposeAsync(actor, companyId, demandId, cycle, kind, audience.Users, CancellationToken.None);
         }
         catch (Exception exception)
         {

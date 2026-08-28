@@ -174,10 +174,6 @@ builder.Host.UseWolverine(options =>
         .PublishMessage<InboundTelegramTextReceived>()
         .ToPostgresqlQueue("telegram-inbound")
         .UseDurableOutbox();
-    options
-        .PublishMessage<PaguaiDraftCreated>()
-        .ToPostgresqlQueue("paguai-events")
-        .UseDurableOutbox();
 });
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityMapService>();
