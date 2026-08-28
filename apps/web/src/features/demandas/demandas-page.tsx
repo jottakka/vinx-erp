@@ -73,6 +73,30 @@ export function DemandasPage() {
     [bootstrap],
   );
   const [companyId, setCompanyId] = useState("");
+
+  // Contexto ativo por empresa (contrato da baseline de arquitetura): a troca
+  // de empresa limpa SINCRONAMENTE cartões/detalhe/erro e invalida respostas
+  // tardias da empresa anterior via geração de escopo monotônica — tudo ANTES
+  // de commitar o novo companyId, nunca em efeito passivo.
+  const scopeGeneration = useRef(0);
+  const boardRequest = useRef(0);
+  const changeCompany = useCallback((nextCompanyId: string) => {
+    scopeGeneration.current += 1;
+    boardRequest.current += 1;
+    setCards([]);
+    setTotal(0);
+    setHasMore(false);
+    setNextCursor(null);
+    setDetail(null);
+    setError(null);
+    setCompanyId(nextCompanyId);
+  }, []);
+
+  useEffect(() => {
+    if (!companies.some((company) => company.companyId === companyId)) {
+      changeCompany(companies[0]?.companyId ?? "");
+    }
+  }, [companies, companyId, changeCompany]);
   const [cards, setCards] = useState<DemandBoardCard[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -97,27 +121,9 @@ export function DemandasPage() {
     [selectedCompany],
   );
 
-  useEffect(() => {
-    if (!companies.some((company) => company.companyId === companyId)) {
-      setCompanyId(companies[0]?.companyId ?? "");
-    }
-  }, [companies, companyId]);
 
-  // Contexto ativo por empresa (contrato da baseline de arquitetura): a troca
-  // de empresa limpa SINCRONAMENTE cartões/detalhe/erro e invalida respostas
-  // tardias da empresa anterior via geração de escopo monotônica.
-  const scopeGeneration = useRef(0);
-  const boardRequest = useRef(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: companyId é o gatilho síncrono da troca de escopo (limpeza do estado da empresa anterior); não é lido no corpo de propósito.
-  useEffect(() => {
-    scopeGeneration.current += 1;
-    setCards([]);
-    setTotal(0);
-    setHasMore(false);
-    setNextCursor(null);
-    setDetail(null);
-    setError(null);
-  }, [companyId]);
+
+
 
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -255,7 +261,7 @@ export function DemandasPage() {
         <CompanySelect
           companies={companies}
           label="Empresa"
-          onChange={setCompanyId}
+          onChange={changeCompany}
           value={companyId}
         />
         {!selectedCompany ? (

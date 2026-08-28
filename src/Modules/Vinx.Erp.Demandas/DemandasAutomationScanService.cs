@@ -320,4 +320,3 @@ public sealed class DemandasAutomationScanService(
 }
 
 public sealed record DemandasAutomationSummary(int CompaniesScanned, int StagesAdvanced, int DemandsMarkedOverdue);
-

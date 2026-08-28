@@ -8,7 +8,7 @@ import type {
   MockSessionGateway,
 } from "../auth/session-contract";
 import { SessionProvider } from "../auth/session-provider";
-import { type DemandBoardCard, demandasClient } from "./demandas-client";
+import { type DemandBoardCard, type DemandDetail, demandasClient } from "./demandas-client";
 import { DemandasPage } from "./demandas-page";
 
 const alfaCompanyId = "11111111-1111-4111-8111-111111111111";
@@ -27,6 +27,34 @@ const initiationCard: DemandBoardCard = {
   stageStartedAt: new Date().toISOString(),
   title: "Pagar fornecedor",
   version: 1,
+};
+
+const initiationDetail: DemandDetail = {
+  demand: {
+    companyId: alfaCompanyId,
+    cycleCount: 1,
+    departamento: null,
+    description: "Descrição da demanda",
+    demandDisplayNumber: "DEM-000001",
+    demandNumber: 1,
+    effectiveDeadline: null,
+    id: initiationCard.id,
+    isOverdue: false,
+    automationPaused: false,
+    manualDueAt: null,
+    priority: "high",
+    responsibleMembershipId: "55555555-5555-4555-8555-555555555555",
+    routineId: null,
+    slaDueAt: null,
+    stage: "initiation",
+    stageDueAt: null,
+    tipo: null,
+    title: "Pagar fornecedor",
+    version: 1,
+  },
+  checklist: [],
+  history: [],
+  participants: [],
 };
 
 const overdueCard: DemandBoardCard = {
@@ -313,5 +341,75 @@ describe("DemandasPage", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText("Pagar fornecedor")).not.toBeInTheDocument();
     expect(screen.getByText("Demanda da Beta")).toBeVisible();
+  });
+
+  it("clears the previous company board and detail synchronously on switch", async () => {
+    // A troca de empresa limpa cartões/detalhe ANTES de commitar o novo
+    // companyId: nenhuma renderização intermediária mostra dados da empresa
+    // anterior sob o contexto novo.
+    const boardSpy = vi
+      .spyOn(demandasClient, "board")
+      .mockResolvedValueOnce({
+        items: [initiationCard],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      })
+      .mockResolvedValue({
+        items: [],
+        total: 0,
+        hasMore: false,
+        nextCursor: null,
+      });
+
+    window.history.replaceState(null, "", "/demandas");
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText("Pagar fornecedor")).toBeVisible();
+
+    await user.click(await screen.findByLabelText("Empresa"));
+    await user.click(await screen.findByRole("option", { name: "Beta" }));
+
+    // Sem esperar a resposta de Beta: o cartão de Alfa já saiu do DOM.
+    expect(screen.queryByText("Pagar fornecedor")).not.toBeInTheDocument();
+    expect(boardSpy).toHaveBeenLastCalledWith(betaCompanyId, expect.anything());
+  });
+
+  it("discards a late detail response from the previous company after a switch", async () => {
+    let resolveDetail: (detail: DemandDetail) => void = () => {};
+    const alfaDetail = new Promise<DemandDetail>((resolve) => {
+      resolveDetail = resolve;
+    });
+    vi.spyOn(demandasClient, "board").mockResolvedValue({
+      items: [initiationCard],
+      total: 1,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const detailSpy = vi
+      .spyOn(demandasClient, "detail")
+      .mockImplementationOnce(() => alfaDetail)
+      .mockResolvedValue({
+        ...initiationDetail,
+        demand: { ...initiationDetail.demand, title: "Detalhe da Beta" },
+      });
+
+    window.history.replaceState(null, "", "/demandas");
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText("Pagar fornecedor")).toBeVisible();
+
+    // Abre o detalhe de Alfa (fica pendurado) e troca para Beta.
+    await user.click(await screen.findByRole("button", { name: "Detalhes" }));
+    await user.click(await screen.findByLabelText("Empresa"));
+    await user.click(await screen.findByRole("option", { name: "Beta" }));
+
+    // Detalhe anterior não pode voltar quando resolver: o diálogo permanece
+    // fechado e o id pendente da empresa anterior foi invalidado.
+    resolveDetail(initiationDetail);
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByLabelText("detalhe")).not.toBeInTheDocument();
+    expect(detailSpy).toHaveBeenCalled();
   });
 });
