@@ -36,6 +36,10 @@ const alfaCard: AtendimentoCard = {
   isOverdue: true,
   createdAt: "2026-08-26T12:00:00.000Z",
   updatedAt: "2026-08-26T13:00:00.000Z",
+  categoryRefId: null,
+  channelRefId: null,
+  requesterPersonRef: null,
+  watcherMembershipIds: null,
   title: "Cartão Alfa",
   version: 1,
 };
@@ -53,6 +57,10 @@ const betaCard: AtendimentoCard = {
   isOverdue: false,
   createdAt: "2026-08-26T11:00:00.000Z",
   updatedAt: "2026-08-26T11:30:00.000Z",
+  categoryRefId: null,
+  channelRefId: null,
+  requesterPersonRef: null,
+  watcherMembershipIds: null,
   title: "Cartão Beta",
   version: 1,
 };
@@ -143,7 +151,10 @@ function deferred<T>() {
   };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  window.history.replaceState(null, "", window.location.pathname);
+});
 beforeEach(() =>
   vi.spyOn(atendimentoClient, "assignmentOptions").mockResolvedValue([]),
 );
@@ -240,8 +251,12 @@ describe("AtendimentoPage", () => {
     expect(
       screen.getByRole("combobox", { name: "Filtrar empresas" }),
     ).toHaveTextContent("Todas as empresas autorizadas");
-    expect(atendimentoClient.list).toHaveBeenCalledWith(alfaCompanyId);
-    expect(atendimentoClient.list).toHaveBeenCalledWith(betaCompanyId);
+    expect(atendimentoClient.list).toHaveBeenCalledWith(alfaCompanyId, {
+      overdue: false,
+    });
+    expect(atendimentoClient.list).toHaveBeenCalledWith(betaCompanyId, {
+      overdue: false,
+    });
     expect(screen.getAllByText("Alfa").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Beta").length).toBeGreaterThan(0);
     for (const label of ["Novos", "Em andamento", "Concluídos", "Cancelados"]) {
@@ -263,7 +278,9 @@ describe("AtendimentoPage", () => {
     await user.click(screen.getByRole("option", { name: "Beta" }));
     await user.keyboard("{Escape}");
     await waitFor(() =>
-      expect(atendimentoClient.list).toHaveBeenLastCalledWith(betaCompanyId),
+      expect(atendimentoClient.list).toHaveBeenLastCalledWith(betaCompanyId, {
+        overdue: false,
+      }),
     );
     expect(await screen.findByText(betaCard.title)).toBeVisible();
     expect(screen.queryByText(alfaCard.title)).not.toBeInTheDocument();
@@ -280,9 +297,12 @@ describe("AtendimentoPage", () => {
 
     renderPage();
 
-    await waitFor(() =>
-      expect(atendimentoClient.list).toHaveBeenCalledTimes(2),
-    );
+    await waitFor(() => {
+      expect(atendimentoClient.list).toHaveBeenCalledTimes(2);
+      expect(atendimentoClient.list).toHaveBeenLastCalledWith(betaCompanyId, {
+        overdue: false,
+      });
+    });
     expect(
       screen.getByRole("button", { name: "Novo atendimento" }),
     ).toBeEnabled();
@@ -559,7 +579,9 @@ describe("AtendimentoPage", () => {
       name: "Novo atendimento",
     });
     expect(atendimentoClient.list).toHaveBeenCalledTimes(1);
-    expect(atendimentoClient.list).toHaveBeenCalledWith(alfaCompanyId);
+    expect(atendimentoClient.list).toHaveBeenCalledWith(alfaCompanyId, {
+      overdue: false,
+    });
     expect(
       screen.getByRole("combobox", { name: "Filtrar empresas" }),
     ).toHaveTextContent("Todas as empresas autorizadas");
@@ -1644,5 +1666,409 @@ describe("AtendimentoPage", () => {
       screen.getByRole("button", { name: "Confirmar cancelamento" }),
     ).toBeDisabled();
     expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the queue with server-side filters and reflects them in the URL", async () => {
+    const user = userEvent.setup();
+    const list = vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
+    vi.spyOn(atendimentoClient, "directoryOptions").mockResolvedValue([]);
+
+    renderPage();
+
+    await user.click(await screen.findByLabelText("Prioridade"));
+    await user.click(screen.getByRole("option", { name: "Alta" }));
+
+    await waitFor(() =>
+      expect(list).toHaveBeenLastCalledWith(betaCompanyId, {
+        overdue: false,
+        priority: "alta",
+      }),
+    );
+    expect(window.location.search).toBe("?priority=alta");
+  });
+
+  it("labels mentioned timeline events from the backend contract", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    vi.spyOn(atendimentoClient, "events").mockResolvedValue([
+      {
+        actionKind: "mentioned",
+        actorDisplayName: "Ana Souza",
+        actorMembershipId: "55555555-5555-4555-8555-555555555555",
+        eventSeq: 3,
+        id: "99999999-9999-4999-8999-999999999998",
+        occurredAt: "2026-08-27T12:00:00.000Z",
+      },
+    ]);
+
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Visualizar" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("tab", { name: "Timeline" }));
+
+    expect(await within(dialog).findByText("Mencionados")).toBeVisible();
+    expect(within(dialog).getByText(/por Ana Souza/)).toBeVisible();
+  });
+
+  it("removes cards of queried companies that no longer match the filter", async () => {
+    const user = userEvent.setup();
+    const altaCard = {
+      ...alfaCard,
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      priority: "alta" as const,
+      title: "Filtro alta",
+    };
+    const baixaCard = {
+      ...alfaCard,
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      priority: "baixa" as const,
+      title: "Filtro baixa",
+    };
+    let alfaReads = 0;
+    const list = vi
+      .spyOn(atendimentoClient, "list")
+      .mockImplementation((companyId) => {
+        if (companyId === betaCompanyId) return Promise.resolve([]);
+        alfaReads += 1;
+        return Promise.resolve(
+          alfaReads === 1 ? [altaCard, baixaCard] : [altaCard],
+        );
+      });
+    vi.spyOn(atendimentoClient, "directoryOptions").mockResolvedValue([]);
+
+    renderPage();
+    expect(await screen.findByText("Filtro alta")).toBeVisible();
+    expect(await screen.findByText("Filtro baixa")).toBeVisible();
+
+    await user.click(screen.getByLabelText("Prioridade"));
+    await user.click(await screen.findByRole("option", { name: "Alta" }));
+
+    // 1/2 = carga inicial (alfa, beta); 3 = releitura filtrada da alfa.
+    await waitFor(() =>
+      expect(list).toHaveBeenNthCalledWith(3, alfaCompanyId, {
+        overdue: false,
+        priority: "alta",
+      }),
+    );
+    // A resposta filtrada é a autoridade: o cartão que não combina sai do
+    // quadro em vez de ser reapensado do estado anterior.
+    await waitFor(() =>
+      expect(screen.queryByText("Filtro baixa")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Filtro alta")).toBeVisible();
+  });
+
+  it("shows the filter bar for read-only queue sessions", async () => {
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    vi.spyOn(atendimentoClient, "directoryOptions").mockResolvedValue([]);
+
+    renderPage(snapshot([readCapability]));
+
+    expect(await screen.findByText(alfaCard.title)).toBeVisible();
+    expect(screen.getByLabelText("Status")).toBeEnabled();
+    expect(screen.getByLabelText("Prioridade")).toBeEnabled();
+    expect(screen.getByLabelText("Busca")).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: /Atrasados/ })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Novo atendimento" }),
+    ).toBeDisabled();
+  });
+
+  it("renders a neutral priority chip when priority is null", async () => {
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([
+      { ...alfaCard, priority: null },
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByText(alfaCard.title)).toBeVisible();
+    expect(screen.getByText("—")).toBeVisible();
+    expect(screen.queryByText("Crítica")).not.toBeInTheDocument();
+  });
+
+  it("applies the 409 current snapshot when detail fields hit a conflict", async () => {
+    const user = userEvent.setup();
+    const current = {
+      ...alfaCard,
+      title: "Cartão atualizado",
+      version: 2,
+    };
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    const fields = vi
+      .spyOn(atendimentoClient, "fields")
+      .mockResolvedValue({ code: "integrity_conflict", current, ok: false });
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Visualizar" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("tab", { name: "Campos" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Salvar campos" }),
+    );
+
+    await waitFor(() => expect(fields).toHaveBeenCalledTimes(1));
+    expect(fields.mock.calls[0]?.[1]).toMatchObject({
+      id: alfaCard.id,
+      version: 1,
+    });
+    // O snapshot válido do 409 é publicado: detalhe e quadro mostram v2.
+    expect(await within(dialog).findByText("Cartão atualizado")).toBeVisible();
+    expect(within(dialog).getByText(/versão 2/)).toBeVisible();
+    expect(
+      await screen.findByText(
+        "O cartão foi atualizado enquanto você atuava. Verifique o estado atual da fila.",
+      ),
+    ).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Fechar" }));
+    expect(await screen.findByText("Cartão atualizado")).toBeVisible();
+  });
+
+  it("reads the card back when a detail fields outcome is ambiguous", async () => {
+    const user = userEvent.setup();
+    const readback = deferred<AtendimentoCard[] | null>();
+    let alfaReads = 0;
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) => {
+      if (companyId === betaCompanyId) return Promise.resolve([]);
+      alfaReads += 1;
+      if (alfaReads === 1) return Promise.resolve([alfaCard]);
+      return readback.promise;
+    });
+    vi.spyOn(atendimentoClient, "fields").mockResolvedValue({
+      code: "atendimento_unavailable",
+      mayHaveCommitted: true,
+      ok: false,
+    });
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Visualizar" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("tab", { name: "Campos" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Salvar campos" }),
+    );
+
+    await waitFor(() => expect(alfaReads).toBe(2));
+    readback.resolve([{ ...alfaCard, title: "Sincronizado", version: 2 }]);
+    expect(await within(dialog).findByText("Sincronizado")).toBeVisible();
+    expect(
+      await screen.findByText(
+        "Não foi possível confirmar o resultado da ação. O cartão foi sincronizado com o estado atual.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("blocks detail mutations while a board mutation is pending for the same card", async () => {
+    const user = userEvent.setup();
+    const moveResult =
+      deferred<Awaited<ReturnType<typeof atendimentoClient.move>>>();
+    vi.spyOn(atendimentoClient, "list").mockResolvedValue([alfaCard]);
+    const move = vi
+      .spyOn(atendimentoClient, "move")
+      .mockReturnValue(moveResult.promise);
+    const fields = vi.spyOn(atendimentoClient, "fields");
+
+    renderPage();
+    const card = (await screen.findByText(alfaCard.title)).closest(
+      ".MuiCard-root",
+    ) as HTMLElement;
+    const targetColumn = screen.getByRole("heading", {
+      name: "Em andamento",
+    }).parentElement as HTMLElement;
+    await user.click(within(card).getByRole("button", { name: "Visualizar" }));
+
+    // Move entra em voo pelo tabuleiro com o detalhe aberto: o lock por
+    // cartão compartilhado precisa segurar o fields do diálogo.
+    fireEvent.dragStart(card);
+    fireEvent.drop(targetColumn);
+    await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
+
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("tab", { name: "Campos" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Salvar campos" }),
+    );
+
+    expect(fields).not.toHaveBeenCalled();
+    expect(
+      await within(dialog).findByText(
+        "O salvamento não foi concluído. O estado atual foi sincronizado; tente novamente.",
+      ),
+    ).toBeVisible();
+
+    moveResult.resolve({
+      card: { ...alfaCard, column: "em_andamento", version: 2 },
+      ok: true,
+    } as Awaited<ReturnType<typeof atendimentoClient.move>>);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Salvar campos" }),
+    );
+    await waitFor(() => expect(fields).toHaveBeenCalledTimes(1));
+    expect(fields.mock.calls[0]?.[1]).toMatchObject({ version: 2 });
+  });
+
+  it("publishes an idempotent watcher add without version bump", async () => {
+    const user = userEvent.setup();
+    const watcherMembershipId = "88888888-8888-4888-8888-888888888888";
+    const watchedCard = {
+      ...betaCard,
+      title: "Cartão com observador",
+      watcherMembershipIds: null,
+    };
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) =>
+      companyId === betaCompanyId ? Promise.resolve([watchedCard]) : [],
+    );
+    vi.spyOn(atendimentoClient, "directoryOptions").mockImplementation(
+      async (companyId) =>
+        companyId === betaCompanyId
+          ? [
+              {
+                displayName: "Maria Silva",
+                employeeId: "99999999-9999-4999-8999-999999999997",
+                membershipId: watcherMembershipId,
+              },
+            ]
+          : [],
+    );
+    // NoChange idempotente: sucesso com o mesmo snapshot (mesma versão).
+    const addWatcher = vi
+      .spyOn(atendimentoClient, "addWatcher")
+      .mockResolvedValue({
+        card: {
+          ...watchedCard,
+          watcherMembershipIds: [watcherMembershipId],
+          version: 1,
+        },
+        ok: true,
+      } as Awaited<ReturnType<typeof atendimentoClient.addWatcher>>);
+
+    renderPage();
+    const betaCardElement = (
+      await screen.findByText(watchedCard.title)
+    ).closest(".MuiCard-root") as HTMLElement;
+    await user.click(
+      within(betaCardElement).getByRole("button", { name: "Visualizar" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("tab", { name: "Observadores" }));
+    await user.click(
+      within(dialog).getByRole("combobox", { name: "Adicionar observador" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: /Maria Silva/ }),
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Adicionar observador" }),
+    );
+
+    await waitFor(() => expect(addWatcher).toHaveBeenCalledTimes(1));
+    expect(await within(dialog).findByText("Maria Silva")).toBeVisible();
+    expect(within(dialog).getByText(/versão 1/)).toBeVisible();
+    expect(within(dialog).queryByText(/versão 2/)).not.toBeInTheDocument();
+  });
+
+  it("reconciles an ambiguous category create by reading lookups back", async () => {
+    const user = userEvent.setup();
+    const lookupAdminCapability = {
+      name: "service_desk.lookup.admin",
+      scopes: ["Company"],
+    } as const;
+    const lookups = vi
+      .spyOn(atendimentoClient, "lookups")
+      .mockResolvedValue({ categories: [], channels: [] });
+    const createCategory = vi
+      .spyOn(atendimentoClient, "createCategory")
+      .mockResolvedValue({
+        code: "atendimento_unavailable",
+        mayHaveCommitted: true,
+        ok: false,
+      });
+
+    renderPage(
+      snapshot([...allAtendimentoCapabilities, lookupAdminCapability]),
+    );
+
+    await user.type(await screen.findByLabelText("Nova categoria"), "Suporte");
+    await user.click(screen.getByRole("button", { name: "Criar categoria" }));
+
+    await waitFor(() => expect(createCategory).toHaveBeenCalledTimes(1));
+    // Readback: os lookups da empresa são relidos para reconciliar o commit
+    // ambíguo em vez de apenas reportar erro.
+    await waitFor(() => {
+      const alfaReads = lookups.mock.calls.filter(
+        ([companyId]) => companyId === alfaCompanyId,
+      ).length;
+      expect(alfaReads).toBe(2);
+    });
+    expect(
+      await screen.findByText(
+        "Não foi possível confirmar a ação. As categorias foram sincronizadas.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Nova categoria")).toHaveValue("");
+  });
+
+  it("ignores a non-UUID assigneeMembershipId from the URL", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}?assigneeMembershipId=no-uuid&priority=alta`,
+    );
+    const list = vi.spyOn(atendimentoClient, "list").mockResolvedValue([]);
+    vi.spyOn(atendimentoClient, "directoryOptions").mockResolvedValue([]);
+
+    renderPage();
+
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(list).toHaveBeenCalledWith(alfaCompanyId, {
+      overdue: false,
+      priority: "alta",
+    });
+    await user.click(screen.getByLabelText("Prioridade"));
+    await user.click(await screen.findByRole("option", { name: "Média" }));
+    // O id inválido não é aceito nem persistido na URL compartilhável.
+    expect(window.location.search).toBe("?priority=media");
+  });
+
+  it("disables the filter controls while the queue is loading", async () => {
+    const user = userEvent.setup();
+    const alfaQueue = deferred<AtendimentoCard[] | null>();
+    vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) =>
+      companyId === betaCompanyId ? Promise.resolve([]) : alfaQueue.promise,
+    );
+    vi.spyOn(atendimentoClient, "directoryOptions").mockResolvedValue([]);
+
+    renderPage();
+
+    // MUI Select expõe aria-disabled no gatilho; nativos ficam disabled.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Status")).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      ),
+    );
+    expect(screen.getByLabelText("Prioridade")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByLabelText("Busca")).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /Atrasados/ })).toBeDisabled();
+    expect(
+      screen.getByRole("combobox", { name: "Filtrar por responsável" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByLabelText("Busca").closest('[aria-busy="true"]'),
+    ).not.toBeNull();
+
+    alfaQueue.resolve([alfaCard]);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Status")).not.toHaveAttribute(
+        "aria-disabled",
+        "true",
+      ),
+    );
+    await user.click(screen.getByLabelText("Prioridade"));
+    expect(await screen.findByRole("option", { name: "Alta" })).toBeVisible();
   });
 });

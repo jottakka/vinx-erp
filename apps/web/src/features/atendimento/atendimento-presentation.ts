@@ -14,6 +14,23 @@ export const priorityPresentation = {
   { label: string; tone: "error" | "warning" | "info" | "default" }
 >;
 
+type PriorityPresentation = {
+  label: string;
+  tone: "error" | "warning" | "info" | "default";
+};
+
+/** Estado neutro da prioridade: nula é válida no contrato do backend. */
+export const unsetPriorityPresentation: PriorityPresentation = {
+  label: "—",
+  tone: "default",
+};
+
+export function priorityPresentationFor(
+  priority: AtendimentoPriority | null,
+): PriorityPresentation {
+  return priority ? priorityPresentation[priority] : unsetPriorityPresentation;
+}
+
 export const channelLabels = {
   whatsapp: "WhatsApp",
   email: "E-mail",
