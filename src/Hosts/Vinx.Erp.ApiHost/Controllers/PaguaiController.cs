@@ -280,9 +280,63 @@ public sealed class PaguaiController(
                 "invalid_request",
                 StatusCodes.Status400BadRequest
             ),
+            PaguaiDraftState.ProofFileNotFound => ApiControllerError.Error(
+                "proof_file_not_found",
+                StatusCodes.Status404NotFound
+            ),
+            PaguaiDraftState.ProofFileNotReady => ApiControllerError.Error(
+                "proof_file_not_ready",
+                StatusCodes.Status400BadRequest
+            ),
+            PaguaiDraftState.ProofFileBound => ApiControllerError.Error(
+                "proof_file_bound",
+                StatusCodes.Status409Conflict
+            ),
             PaguaiDraftState.IdempotencyConflict => ApiControllerError.Error(
                 "idempotency_conflict",
                 StatusCodes.Status409Conflict
+            ),
+            _ => ApiControllerError.Error(
+                "paguai_unavailable",
+                StatusCodes.Status503ServiceUnavailable
+            ),
+        };
+    }
+
+    /// <summary>
+    /// Link de leitura de curta duração para o comprovante, emitido sob
+    /// autorização e ciclo de vida frescos; nunca persistido nem embutido em
+    /// outro payload.
+    /// </summary>
+    [HttpGet("requests/{id:guid}/proof-link")]
+    [ProducesResponseType(typeof(PaguaiProofLink), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> ProofLink(
+        Guid id,
+        [FromQuery] Guid? companyId,
+        CancellationToken cancellationToken
+    )
+    {
+        var actor = HttpContext.GetRequiredActorContext();
+        var result = await service.OpenProofLinkAsync(
+            actor,
+            companyId ?? Guid.Empty,
+            id,
+            cancellationToken
+        );
+        return result.State switch
+        {
+            PaguaiDraftState.Created => Ok(result.Link),
+            PaguaiDraftState.NotFound or PaguaiDraftState.ProofFileNotFound => ApiControllerError.Error(
+                "resource_not_found",
+                StatusCodes.Status404NotFound
+            ),
+            PaguaiDraftState.ProofFileNotReady => ApiControllerError.Error(
+                "proof_file_not_ready",
+                StatusCodes.Status400BadRequest
             ),
             _ => ApiControllerError.Error(
                 "paguai_unavailable",

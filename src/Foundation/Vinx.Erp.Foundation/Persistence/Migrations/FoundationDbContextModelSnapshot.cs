@@ -1811,6 +1811,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("invoice_file_id");
 
+                    b.Property<Guid?>("ProofFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("proof_file_id");
+
                     b.Property<string>("ProofRequirement")
                         .IsRequired()
                         .HasMaxLength(10)
@@ -1854,6 +1858,11 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.HasAlternateKey("CompanyId", "Id")
                         .HasName("ak_requests_company_id_id");
 
+                    b.HasIndex("ProofFileId")
+                        .IsUnique()
+                        .HasDatabaseName("uq_paguai_requests_proof_file")
+                        .HasFilter("proof_file_id IS NOT NULL");
+
                     b.HasIndex("SourceProposalId")
                         .IsUnique()
                         .HasDatabaseName("uq_paguai_requests_source_proposal_id")
@@ -1861,6 +1870,9 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.HasIndex("CompanyId", "InvoiceFileId")
                         .HasDatabaseName("ix_requests_company_id_invoice_file_id");
+
+                    b.HasIndex("CompanyId", "ProofFileId")
+                        .HasDatabaseName("ix_requests_company_id_proof_file_id");
 
                     b.HasIndex("CompanyId", "SourceProposalId")
                         .HasDatabaseName("ix_requests_company_id_source_proposal_id");
@@ -2565,6 +2577,13 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasPrincipalKey("CompanyId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_requests_files_company_id_invoice_file_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.FileRecord", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "ProofFileId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_paguai_requests_proof_file");
 
                     b.HasOne("Vinx.Erp.Foundation.Domain.PaguaiDraftProposal", null)
                         .WithMany()

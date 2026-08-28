@@ -56,6 +56,19 @@ public sealed class PaguaiRequestConfiguration : IEntityTypeConfiguration<Paguai
             .HasColumnType("text")
             .HasMaxLength(10)
             .IsRequired();
+        builder.Property(request => request.ProofFileId).HasColumnName("proof_file_id");
+        // Um comprovante documenta no máximo um rascunho; o índice parcial único
+        // fecha a corrida de duplo vínculo direto no storage.
+        builder.HasIndex(request => request.ProofFileId)
+            .IsUnique()
+            .HasFilter("proof_file_id IS NOT NULL")
+            .HasDatabaseName("uq_paguai_requests_proof_file");
+        builder.HasOne<FileRecord>()
+            .WithMany()
+            .HasForeignKey(request => new { request.CompanyId, request.ProofFileId })
+            .HasPrincipalKey(file => new { file.CompanyId, file.Id })
+            .HasConstraintName("fk_paguai_requests_proof_file")
+            .OnDelete(DeleteBehavior.Restrict);
         builder.Property(request => request.InvoiceFileId).HasColumnName("invoice_file_id");
         builder.HasIndex(request => new { request.CompanyId, request.InvoiceFileId });
         builder.HasOne<FileRecord>()

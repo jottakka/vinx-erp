@@ -27,6 +27,9 @@ public sealed class PaguaiRequest
 
     public string ProofRequirement { get; set; } = string.Empty;
 
+    /// <summary>Comprovante de pagamento vinculado (documentation-only); um por rascunho, troca versionada.</summary>
+    public Guid? ProofFileId { get; set; }
+
     /// <summary>Fatura privada confirmada que fundamenta a solicitação, quando informada.</summary>
     public Guid? InvoiceFileId { get; set; }
 

@@ -778,4 +778,119 @@ public sealed class DocumentUploadService(
         public static ConfirmationPreparation Completed(DocumentUploadResult<DocumentUploadConfirmationResult> result) =>
             new(null, result);
     }
+
+    /// <summary>Metadados seguros expostos pela fronteira para módulos que vinculam arquivos.</summary>
+    public sealed record DocumentBindingMetadata(
+        Guid FileId,
+        Guid CompanyId,
+        Guid UploaderMembershipId,
+        string FileName,
+        string MimeType,
+        long SizeBytes,
+        string ProviderKey,
+        DateTimeOffset RetentionUntil);
+
+    /// <summary>
+    /// Fronteira pública de vínculo: valida, sob o MESMO contexto transacional do
+    /// chamador (e com trava de linha quando solicitado), existência + mesma
+    /// empresa + registro ativo (não removido) + classificação esperada +
+    /// retenção viva (<c>retention_until &gt; clock_timestamp()</c>) + autoria do
+    /// ator, e SÓ ENTÃO o estado confirmado pós-quarentena/scan — assim
+    /// <c>file_not_ready</c> fica reservado ao único caso "classe/autoria/vida
+    /// corretas, ainda em processamento" sem revelar UUIDs inválidos.
+    /// Retorna apenas metadados; bytes e chaves internas nunca atravessam o
+    /// módulo consumidor.
+    /// </summary>
+    public async Task<DocumentUploadResult<DocumentBindingMetadata>> ValidateActiveForBindAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid fileId,
+        string? requiredClassification = null,
+        bool lockRowForBinding = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (companyId == Guid.Empty || fileId == Guid.Empty)
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_found", 404);
+        }
+
+        var membershipId = await database.Memberships
+            .AsNoTracking()
+            .Where(membership =>
+                membership.CompanyId == companyId && membership.UserId == actor.UserId)
+            .Select(membership => (Guid?)membership.Id)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (membershipId is null)
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_denied", 403);
+        }
+
+        var query = database.Files.AsNoTracking().Where(file => file.Id == fileId);
+        if (lockRowForBinding)
+        {
+            // Trava compartilhada serializa remoção lógica concorrente atrás da
+            // transação do chamador, fechando a janela TOCTOU do bind.
+            query = database.Files
+                .FromSqlInterpolated($"SELECT * FROM foundation.files WHERE id = {fileId} FOR SHARE")
+                .Where(file => file.Id == fileId);
+        }
+
+        var file = await query.SingleOrDefaultAsync(cancellationToken);
+        if (file is null || file.CompanyId != companyId)
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_found", 404);
+        }
+
+        if (file.DeletedAt is not null)
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_deleted", 404);
+        }
+
+        if (requiredClassification is { } expected
+            && !string.Equals(file.Classification, expected, StringComparison.Ordinal))
+        {
+            // Classificação errada é caso oculto/permanente inválido: fail-closed
+            // 404, sem distinguir de arquivo inexistente (anti-enumeração) —
+            // avaliada ANTES do estado de processamento para não revelar que um
+            // UUID errado existe e aguarda confirmação.
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_found", 404);
+        }
+
+        // Relógio autoritativo do banco: a retenção é o teto de acesso do arquivo
+        // e é revalidada em cada vínculo, troca e assinatura de link.
+        if (file.RetentionUntil.UtcDateTime <= await ReadServerClockAsync(cancellationToken))
+        {
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_expired", 404);
+        }
+
+        if (file.UploaderMembershipId != membershipId.Value)
+        {
+            // Autoria divergente é oculta antes do estado de processamento:
+            // arquivo de outro uploader nunca revela se existe ou aguarda quarentena.
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_denied", 403);
+        }
+
+        if (!string.Equals(file.ProcessingState, FileRecord.ConfirmedState, StringComparison.Ordinal))
+        {
+            // A ÚNICA família "não pronto": classe correta, autoria correta,
+            // registro vivo e retenção viva, ainda em quarentena/scan.
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_ready", 409);
+        }
+
+        return DocumentUploadResult<DocumentBindingMetadata>.Success(new DocumentBindingMetadata(
+            file.Id,
+            file.CompanyId,
+            file.UploaderMembershipId,
+            file.OriginalFileName,
+            file.MimeType,
+            file.SizeBytes,
+            file.ProviderKey,
+            file.RetentionUntil));
+    }
+
+    /// <summary>Leitura única do relógio do PostgreSQL (autoritativo para retenção e TTL de link).</summary>
+    public async Task<DateTime> ReadServerClockAsync(CancellationToken cancellationToken = default) =>
+        await database.Database.SqlQuery<DateTime>(
+                $"SELECT clock_timestamp() AS \"Value\"")
+            .SingleAsync(cancellationToken);
 }

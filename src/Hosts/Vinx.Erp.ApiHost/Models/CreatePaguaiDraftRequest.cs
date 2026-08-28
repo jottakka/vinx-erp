@@ -50,6 +50,10 @@ public sealed class CreatePaguaiDraftRequest
     [NonEmptyGuid]
     public Guid? InvoiceFileId { get; init; }
 
+    /// <summary>Comprovante opcional classificado paguai_request_proof; documentação, não confirmação de pagamento.</summary>
+    [NonEmptyGuid]
+    public Guid? ProofFileId { get; init; }
+
     public CreateDraftCommand ToCommand() =>
         new(
             CompanyId: CompanyId,
@@ -62,6 +66,7 @@ public sealed class CreatePaguaiDraftRequest
             BeneficiaryDisplayName: BeneficiaryDisplayName,
             ProofRequirement: ProofRequirement,
             SourceInboundMessageId: null,
-            InvoiceFileId: InvoiceFileId
+            InvoiceFileId: InvoiceFileId,
+            ProofFileId: ProofFileId
         );
 }
