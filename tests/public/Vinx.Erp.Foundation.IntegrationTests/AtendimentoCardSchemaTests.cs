@@ -36,12 +36,14 @@ public sealed class AtendimentoCardSchemaTests
         );
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        Assert.Equal("'media'::character varying", reader.GetString(0));
+        // P6 (20260827000000): priority passa a ser opcional sem default
+        // (null-means-unset no update de campos); canal mantém o default.
+        Assert.Null(reader.IsDBNull(0) ? null : reader.GetString(0));
         Assert.Equal("'manual'::character varying", reader.GetString(1));
         Assert.Equal(["alta", "baixa", "critica", "media"], AllowedValues(reader.GetString(2)));
         Assert.Equal(["email", "manual", "web", "whatsapp"], AllowedValues(reader.GetString(3)));
         Assert.Equal("timestamp with time zone:YES", reader.GetString(4));
-        Assert.Equal("10:NO", reader.GetString(5));
+        Assert.Equal("20:YES", reader.GetString(5));
         Assert.Equal("12:NO", reader.GetString(6));
         Assert.Contains("(company_id, created_at DESC, id DESC)", reader.GetString(7));
         Assert.Contains("WHERE (deleted_at IS NULL)", reader.GetString(7));
