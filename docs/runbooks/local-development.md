@@ -307,8 +307,9 @@ capabilities e queries antes de atualizar a tela.
 ```
 
 Os dois primeiros comandos usam PostgreSQL descartável e não requerem a
-credencial de runtime. O último inicia e encerra a stack local, verifica o
-bucket privado `vinx-foundation-private` e não imprime credenciais.
+credencial de runtime. O último exige não haver stack Supabase ativa no início:
+ele inicia e encerra somente a stack que criou, verifica o bucket privado
+`vinx-foundation-private` e não imprime credenciais.
 
 Selecione testes e gates pela matriz de
 [`public-verification.md`](public-verification.md). O CI é o gate completo normal

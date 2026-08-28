@@ -102,7 +102,7 @@ describe("demandas client", () => {
     let calls = 0;
     const fetchSpy = antiforgeryAware(() => {
       calls += 1;
-      return new Response(JSON.stringify({ demand: commandDemand }), {
+      return new Response(JSON.stringify(commandDemand), {
         status: 200,
       });
     });
@@ -122,6 +122,23 @@ describe("demandas client", () => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.expectedVersion).toBe(1);
     expect(typeof body.requestId).toBe("string");
+  });
+
+  it("rejects the legacy command envelope as a malformed 2xx payload", async () => {
+    const fetchSpy = antiforgeryAware(
+      () =>
+        new Response(JSON.stringify({ demand: commandDemand }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await demandasClient.advance(companyId, card);
+
+    expect(result).toEqual({
+      code: "demandas_unavailable",
+      ok: false,
+    });
   });
 
   it("surfaces integrity conflicts with the current version for recovery", async () => {
@@ -201,10 +218,9 @@ describe("demandas client", () => {
   it("rejects a malformed command payload without exposing raw data", async () => {
     const fetchSpy = antiforgeryAware(
       () =>
-        new Response(
-          JSON.stringify({ demand: { ...commandDemand, version: "1" } }),
-          { status: 200 },
-        ),
+        new Response(JSON.stringify({ ...commandDemand, version: "1" }), {
+          status: 200,
+        }),
     );
     vi.stubGlobal("fetch", fetchSpy);
 

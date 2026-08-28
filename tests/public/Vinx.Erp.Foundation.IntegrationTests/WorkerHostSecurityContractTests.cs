@@ -71,6 +71,20 @@ public sealed class WorkerHostSecurityContractTests
         // Dono legítimo continua classificado como entrega de owner.
         var ownerException = await interceptor.BeforeStoreAsync(ownerEnvelope, null, CancellationToken.None);
         Assert.IsType<WorkerHostTypes.WorkerOwnerInvitationDeadLetterException>(ownerException);
+
+        // Convite de membro preserva a classificação operacional, mesmo quando
+        // a exceção recebida contém detalhes não persistíveis.
+        var memberException = await interceptor.BeforeStoreAsync(
+            memberEnvelope,
+            new WorkerHostTypes.WorkerMemberInvitationDeadLetterException(
+                WorkerHostTypes.WorkerMemberInvitationDeadLetterException.RetryExhaustedExceptionType,
+                "sensitive retry detail"),
+            CancellationToken.None);
+        var redactedMemberException = Assert.IsType<WorkerHostTypes.WorkerMemberInvitationDeadLetterException>(memberException);
+        Assert.Equal(
+            WorkerHostTypes.WorkerMemberInvitationDeadLetterException.RetryExhaustedExceptionType,
+            redactedMemberException.ExceptionType);
+        Assert.DoesNotContain("sensitive retry detail", redactedMemberException.ExceptionMessage, StringComparison.Ordinal);
     }
 
     private sealed record UnknownWorkerProbe(string Payload);

@@ -200,11 +200,13 @@ builder.Services.AddScoped<RevokeMembershipService>();
 builder
     .Services.AddOptions<MalwareScannerOptions>()
     .Bind(builder.Configuration.GetSection("MalwareScanner"))
-    .Validate(options =>
-    {
-        options.Validate();
-        return true;
-    })
+    .Validate(
+        options => options.Timeout > TimeSpan.Zero
+            && options.MaxScanBytes > 0
+            && (string.IsNullOrWhiteSpace(options.ClamAvEndpoint)
+                || MalwareScannerOptions.TryParseEndpoint(options.ClamAvEndpoint, out _, out _)),
+        "Malware scanner options must define a positive timeout and byte limit, plus a 'host:port' ClamAV endpoint when set."
+    )
     .ValidateOnStart();
 builder.Services.AddSingleton<IMalwareScanner>(serviceProvider =>
     MalwareScannerComposition.SelectScanner(

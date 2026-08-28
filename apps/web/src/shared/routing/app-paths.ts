@@ -103,6 +103,8 @@ export function isDemandasDeepLink(value: string): boolean {
 
 /** Accepts only the canonical demand identifier from Demandas' query. */
 export function readDemandasDemandId(search: string): string | null {
-  const value = new URLSearchParams(search).get("demand");
-  return value && canonicalUuidPattern.test(value) ? value : null;
+  const href = `/demandas${search}`;
+  return isDemandasDeepLink(href)
+    ? href.slice("/demandas?demand=".length)
+    : null;
 }

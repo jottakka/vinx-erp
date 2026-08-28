@@ -49,6 +49,11 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
             return ValueTask.FromResult<Exception?>(RedactPaguaiException(paguaiException));
         }
 
+        if (exception is WorkerMemberInvitationDeadLetterException memberInvitationException)
+        {
+            return ValueTask.FromResult<Exception?>(RedactMemberInvitationException(memberInvitationException));
+        }
+
         if (envelope.Message is PaguaiDraftCreated)
         {
             return ValueTask.FromResult<Exception?>(
@@ -72,7 +77,8 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
         if (envelope.Message is MemberInvitationDeliveryRequested)
         {
             return ValueTask.FromResult<Exception?>(
-                new WorkerRedactedUnknownDeadLetterException(
+                new WorkerMemberInvitationDeadLetterException(
+                    WorkerMemberInvitationDeadLetterException.UnexpectedExceptionType,
                     "Worker member invitation delivery failed unexpectedly."
                 )
             );
@@ -128,6 +134,29 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
             _ => new(
                 WorkerPaguaiDraftCreatedDeadLetterException.UnexpectedExceptionType,
                 "Paguai draft notification failed unexpectedly."
+            ),
+        };
+
+    private static WorkerMemberInvitationDeadLetterException RedactMemberInvitationException(
+        WorkerMemberInvitationDeadLetterException exception
+    ) =>
+        exception.ExceptionType switch
+        {
+            WorkerMemberInvitationDeadLetterException.InvalidExceptionType => new(
+                WorkerMemberInvitationDeadLetterException.InvalidExceptionType,
+                "Worker member invitation delivery rejected the envelope."
+            ),
+            WorkerMemberInvitationDeadLetterException.RetryExhaustedExceptionType => new(
+                WorkerMemberInvitationDeadLetterException.RetryExhaustedExceptionType,
+                "Worker member invitation delivery exhausted transient retries."
+            ),
+            WorkerMemberInvitationDeadLetterException.UnexpectedExceptionType => new(
+                WorkerMemberInvitationDeadLetterException.UnexpectedExceptionType,
+                "Worker member invitation delivery failed unexpectedly."
+            ),
+            _ => new(
+                WorkerMemberInvitationDeadLetterException.UnexpectedExceptionType,
+                "Worker member invitation delivery failed unexpectedly."
             ),
         };
 

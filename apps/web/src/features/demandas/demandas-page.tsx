@@ -28,7 +28,6 @@ import {
 } from "../../shared/routing/app-paths";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanySelect } from "../../shared/ui/company-select";
-import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
 import {
   hasCompanyCapability,
@@ -210,16 +209,9 @@ export function DemandasPage() {
     window.history.replaceState(null, "", demandasDetailPath(detailId));
   }, [detailId, companyId]);
 
-  function replaceCard(updated?: DemandBoardCard) {
-    if (!updated) return void loadBoard({ silent: true });
-    setCards((current) =>
-      current.map((card) => (card.id === updated.id ? updated : card)),
-    );
-  }
-
   async function act(
     card: DemandBoardCard,
-    action: () => Promise<CommandResult<DemandBoardCard>>,
+    action: () => Promise<CommandResult>,
   ) {
     const result = await action();
     if (!result.ok) {
@@ -233,32 +225,7 @@ export function DemandasPage() {
         );
       return;
     }
-    if (result.demand) {
-      // A resposta do comando é a DemandResponse completa (sem stageStartedAt):
-      // atualiza o card in place preservando o que o board já conhece.
-      const updated = result.demand;
-      setCards((items) => {
-        const current = items.find((item) => item.id === updated.id);
-        if (!current) return items;
-        return items.map((item) =>
-          item.id === updated.id
-            ? {
-                ...current,
-                automationPaused: updated.automationPaused,
-                demandDisplayNumber: updated.demandDisplayNumber,
-                demandNumber: updated.demandNumber,
-                effectiveDeadline: updated.effectiveDeadline,
-                isOverdue: updated.isOverdue,
-                priority: updated.priority,
-                responsibleMembershipId: updated.responsibleMembershipId,
-                stage: updated.stage,
-                title: updated.title,
-                version: updated.version,
-              }
-            : item,
-        );
-      });
-    } else void loadBoard({ silent: true });
+    void loadBoard({ silent: true });
   }
 
   const visibleCards = onlyOverdue
@@ -605,7 +572,3 @@ export function DemandDetailDialog({
     </Dialog>
   );
 }
-
-// EntityDialog importado para manter a padronização visual de diálogos futuros
-// (criação/edição completa entram na fatia de web de rotinas).
-void EntityDialog;

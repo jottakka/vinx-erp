@@ -15,6 +15,29 @@ describe("app route catalog", () => {
     ).toBeNull();
   });
 
+  it("accepts only the canonical Demandas deep link in both routing checks", () => {
+    const demandId = "11111111-1111-4111-8111-111111111111";
+    const canonical = `/demandas?demand=${demandId}`;
+
+    expect(routing.isDemandasDeepLink(canonical)).toBe(true);
+    expect(routing.readDemandasDemandId(`?demand=${demandId}`)).toBe(demandId);
+    expect(routing.isDemandasDeepLink(`${canonical}&view=history`)).toBe(false);
+    expect(
+      routing.readDemandasDemandId(`?demand=${demandId}&view=history`),
+    ).toBeNull();
+    expect(
+      routing.readDemandasDemandId(`?demand=${demandId}&demand=${demandId}`),
+    ).toBeNull();
+    expect(
+      routing.readDemandasDemandId(
+        "?demand=11111111-1111-4111-8111-11111111111A",
+      ),
+    ).toBeNull();
+    expect(
+      routing.readDemandasDemandId("?demand=11111111111141118111111111111111"),
+    ).toBeNull();
+  });
+
   it("defines safe paths and navigation metadata without app-layer dependencies", () => {
     expect((routing as Record<string, unknown>).appRouteCatalog).toEqual([
       { group: "workspace", label: "Início", navigation: true, path: "/" },

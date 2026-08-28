@@ -277,11 +277,13 @@ builder.Services.AddScoped<Vinx.Erp.Foundation.Files.FileStorage, WorkerFileStor
 builder
     .Services.AddOptions<Vinx.Erp.Foundation.Files.MalwareScannerOptions>()
     .Bind(builder.Configuration.GetSection("MalwareScanner"))
-    .Validate(options =>
-    {
-        options.Validate();
-        return true;
-    })
+    .Validate(
+        options => options.Timeout > TimeSpan.Zero
+            && options.MaxScanBytes > 0
+            && (string.IsNullOrWhiteSpace(options.ClamAvEndpoint)
+                || Vinx.Erp.Foundation.Files.MalwareScannerOptions.TryParseEndpoint(options.ClamAvEndpoint, out _, out _)),
+        "Malware scanner options must define a positive timeout and byte limit, plus a 'host:port' ClamAV endpoint when set."
+    )
     .ValidateOnStart();
 builder.Services.AddSingleton<Vinx.Erp.Foundation.Files.IMalwareScanner, WorkerMalwareScanner>();
 builder

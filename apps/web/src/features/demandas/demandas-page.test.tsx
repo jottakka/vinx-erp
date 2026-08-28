@@ -10,6 +10,7 @@ import type {
 import { SessionProvider } from "../auth/session-provider";
 import {
   type DemandBoardCard,
+  type DemandCommandDemand,
   type DemandDetail,
   demandasClient,
 } from "./demandas-client";
@@ -59,6 +60,29 @@ const initiationDetail: DemandDetail = {
   checklist: [],
   history: [],
   participants: [],
+};
+
+const commandDemand: DemandCommandDemand = {
+  automationPaused: false,
+  companyId: alfaCompanyId,
+  cycleCount: 1,
+  departamento: null,
+  demandDisplayNumber: "DEM-000001",
+  demandNumber: 1,
+  description: "Descrição da demanda",
+  effectiveDeadline: null,
+  id: initiationCard.id,
+  isOverdue: false,
+  manualDueAt: null,
+  priority: "high",
+  responsibleMembershipId: initiationCard.responsibleMembershipId,
+  routineId: null,
+  slaDueAt: null,
+  stage: "execution",
+  stageDueAt: null,
+  title: initiationCard.title,
+  tipo: null,
+  version: 2,
 };
 
 const overdueCard: DemandBoardCard = {
@@ -143,7 +167,7 @@ describe("DemandasPage", () => {
   it("renders the honest stage columns and advances by explicit command only", async () => {
     const advanceSpy = vi.spyOn(demandasClient, "advance").mockResolvedValue({
       ok: true,
-      demand: { ...initiationCard, stage: "execution", version: 2 },
+      demand: commandDemand,
     });
     vi.spyOn(demandasClient, "board").mockResolvedValue({
       items: [initiationCard],
@@ -163,6 +187,45 @@ describe("DemandasPage", () => {
       await screen.findByTestId(`advance-${initiationCard.id}`),
     );
     await waitFor(() => expect(advanceSpy).toHaveBeenCalledOnce());
+  });
+
+  it("reloads the board after a successful advance to use its canonical stage timestamp", async () => {
+    vi.spyOn(demandasClient, "advance").mockResolvedValue({
+      demand: commandDemand,
+      ok: true,
+    });
+    const canonicalStageStartedAt = new Date(
+      Date.now() - 2 * 3_600_000,
+    ).toISOString();
+    const boardSpy = vi
+      .spyOn(demandasClient, "board")
+      .mockResolvedValueOnce({
+        items: [initiationCard],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            ...initiationCard,
+            stage: "execution",
+            stageStartedAt: canonicalStageStartedAt,
+          },
+        ],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      });
+
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByTestId(`advance-${initiationCard.id}`),
+    );
+
+    await waitFor(() => expect(boardSpy).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("2h na etapa")).toBeVisible();
   });
 
   it("hides advance actions from a company with read capability only", async () => {

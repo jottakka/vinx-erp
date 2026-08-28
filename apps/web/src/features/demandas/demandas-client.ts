@@ -96,7 +96,7 @@ export type DemandCommandDemand = {
 };
 
 export type CommandResult =
-  | { ok: true; demand?: DemandCommandDemand }
+  | { ok: true; demand: DemandCommandDemand }
   | { ok: false; code: string; current?: { version: number; stage: string } };
 
 const basePath = "/demandas";
@@ -233,10 +233,6 @@ const demandCommandDemandSchema = z
   })
   .strict();
 
-const commandSuccessSchema = z
-  .object({ demand: demandCommandDemandSchema.optional() })
-  .strict();
-
 const commandErrorSchema = z
   .object({
     code: z.string().min(1),
@@ -337,9 +333,11 @@ export const demandasClient = {
         method: "POST",
       });
       if (response.ok) {
-        const parsed = commandSuccessSchema.safeParse(await response.json());
+        const parsed = demandCommandDemandSchema.safeParse(
+          await response.json(),
+        );
         return parsed.success
-          ? { ok: true as const, demand: parsed.data.demand }
+          ? { ok: true as const, demand: parsed.data }
           : { code: "demandas_unavailable", ok: false as const };
       }
       const error = commandErrorSchema.safeParse(

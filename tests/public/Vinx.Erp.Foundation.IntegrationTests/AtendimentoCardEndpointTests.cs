@@ -1161,13 +1161,27 @@ public sealed class AtendimentoCardEndpointTests
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory);
         using var client = factory.CreateClient();
-        var created = await CreateCardAsync(client, scenario.CompanyId);
+        var request = new CreateCardRequest(
+            scenario.CompanyId,
+            Guid.NewGuid(),
+            "Cancelamento atrasado",
+            "O cartão começa vencido para provar a exclusão terminal."
+        )
+        {
+            SlaDueAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        };
+        using var create = await client.PostAsJsonAsync("/atendimento/cards", request);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var created = (await create.Content.ReadFromJsonAsync<CardResponse>())!;
+        Assert.True(created.IsOverdue);
 
         using var cancel = await client.PostAsJsonAsync(
             $"/atendimento/cards/{created.Id}/cancel",
             new CancelCardRequest(scenario.CompanyId, Guid.NewGuid(), created.Version, "Solicitação duplicada.")
         );
         Assert.Equal(HttpStatusCode.OK, cancel.StatusCode);
+        var cancelledCard = await cancel.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.False(cancelledCard?.IsOverdue);
 
         // O filtro aceita a coluna terminal cancelado em vez de rejeitá-la.
         using var filtered = await client.GetAsync(

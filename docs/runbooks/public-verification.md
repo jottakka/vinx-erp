@@ -120,7 +120,8 @@ o snapshot versionado e revisado antes dos testes. O guard negativo prova drift
 controlado e `BrokenMigration` ausente do histórico. Storage é job separado e
 chama somente
 `verify-supabase-storage.sh`: não imprime configuração, limpa variáveis e
-encerra Supabase no descarte. Respeita `DOCKER_CONTEXT` explícito e reporta
+encerra somente a stack Supabase que iniciou; execute-o sem uma stack ativa.
+Respeita `DOCKER_CONTEXT` explícito e reporta
 falha de inicialização sem expor saída da CLI. Para inspeção local use
 `DOCKER_CONTEXT=desktop-linux npx supabase status` sem mudar o contexto global.
 

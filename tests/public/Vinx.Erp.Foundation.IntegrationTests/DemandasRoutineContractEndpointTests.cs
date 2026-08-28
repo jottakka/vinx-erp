@@ -137,6 +137,39 @@ public sealed class DemandasRoutineContractEndpointTests
     }
 
     [Fact]
+    public async Task Concurrent_identical_routine_creates_replay_the_complete_stages()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var scenario = await SeedScenarioAsync(factory, administrator);
+        using var client = factory.CreateClient();
+        var requestId = Guid.NewGuid();
+
+        var responses = await Task.WhenAll(
+            CreateRoutineAsync(client, scenario, requestId),
+            CreateRoutineAsync(client, scenario, requestId));
+        var statuses = responses.Select(response => response.StatusCode).ToArray();
+        Assert.DoesNotContain(HttpStatusCode.ServiceUnavailable, statuses);
+        Assert.Contains(HttpStatusCode.Created, statuses);
+        Assert.Contains(HttpStatusCode.OK, statuses);
+
+        var first = await responses[0].Content.ReadFromJsonAsync<RoutineResponse>();
+        var second = await responses[1].Content.ReadFromJsonAsync<RoutineResponse>();
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal(first!.Id, second!.Id);
+        Assert.Equal(first.Stages.Select(stage => stage.Id), second.Stages.Select(stage => stage.Id));
+        Assert.Equal(2, first.Stages.Count);
+
+        Assert.Equal(1, await administrator.DemandRoutines.CountAsync(
+            routine => routine.CompanyId == scenario.CompanyId));
+        Assert.Equal(2, await administrator.DemandRoutineStages.CountAsync(
+            stage => stage.CompanyId == scenario.CompanyId));
+        Assert.Equal(1, await administrator.IdempotencyRecords.CountAsync(
+            record => record.RequestId == requestId));
+    }
+
+    [Fact]
     public async Task Divergent_replay_of_the_same_request_returns_conflict()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();

@@ -8,11 +8,12 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class DocumentCoreMigrationDowngradeTests
 {
     private const string BeforeDocumentCore = "20260810002901_AddInternalSessionState";
+    private const string DocumentCore = "20260810013145_AddDocumentCore";
 
     /// <summary>
     /// O schema legado só conhece o binário is_quarantined: estados liberados
-    /// (verified, confirmed) descem como acessíveis e apenas quarentena e falha
-    /// de verificação permanecem isolados. O re-up do legado normaliza todo
+    /// (verified, confirmed) descem como acessíveis; qualquer estado não
+    /// explicitamente liberado permanece isolado. O re-up do legado normaliza todo
     /// arquivo acessível para verified — limitação do schema antigo, que não
     /// distinguia confirmed.
     /// </summary>
@@ -21,10 +22,13 @@ public sealed class DocumentCoreMigrationDowngradeTests
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
-        await fixture.MigrateAsync();
+        await using (var initialMigrator = fixture.CreateMigratorDbContext())
+        {
+            await initialMigrator.Database.MigrateAsync(DocumentCore);
+        }
         var companyId = Guid.NewGuid();
         var membershipId = Guid.NewGuid();
-        var states = new[] { "quarantined", "verified", "confirmed", "verification_failed" };
+        var states = new[] { "quarantined", "verified", "confirmed", "verification_failed", "unknown_legacy_state" };
 
         await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
         {
@@ -93,14 +97,15 @@ public sealed class DocumentCoreMigrationDowngradeTests
                 legacyFlags[reader.GetString(0)] = reader.GetBoolean(1);
             }
 
-            Assert.Equal(4, legacyFlags.Count);
+            Assert.Equal(5, legacyFlags.Count);
             Assert.False(legacyFlags["sha256:verified"]);
             Assert.False(legacyFlags["sha256:confirmed"]);
             Assert.True(legacyFlags["sha256:quarantined"]);
             Assert.True(legacyFlags["sha256:verification_failed"]);
+            Assert.True(legacyFlags["sha256:unknown_legacy_state"]);
         }
 
-        await migrator.Database.MigrateAsync();
+        await migrator.Database.MigrateAsync(DocumentCore);
 
         await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
         {
@@ -118,9 +123,9 @@ public sealed class DocumentCoreMigrationDowngradeTests
             // todo isolado volta como quarantined (o legado não distinguia
             // verification_failed) — perda estrutural do schema antigo.
             Assert.Equal(2, recovered["verified"]);
-            Assert.Equal(2, recovered["quarantined"]);
+            Assert.Equal(3, recovered["quarantined"]);
             Assert.Equal(0, recovered.GetValueOrDefault("verification_failed"));
-            Assert.Equal(4, recovered.Values.Sum());
+            Assert.Equal(5, recovered.Values.Sum());
         }
     }
 }
