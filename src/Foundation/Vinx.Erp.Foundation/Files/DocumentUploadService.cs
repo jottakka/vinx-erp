@@ -793,10 +793,13 @@ public sealed class DocumentUploadService(
     /// <summary>
     /// Fronteira pública de vínculo: valida, sob o MESMO contexto transacional do
     /// chamador (e com trava de linha quando solicitado), existência + mesma
-    /// empresa + autoria do ator + estado confirmado pós-quarentena/scan +
-    /// registro ativo (não removido), classificação esperada e retenção viva
-    /// (<c>retention_until &gt; clock_timestamp()</c>). Retorna apenas metadados;
-    /// bytes e chaves internas nunca atravessam o módulo consumidor.
+    /// empresa + registro ativo (não removido) + classificação esperada +
+    /// retenção viva (<c>retention_until &gt; clock_timestamp()</c>) + autoria do
+    /// ator, e SÓ ENTÃO o estado confirmado pós-quarentena/scan — assim
+    /// <c>file_not_ready</c> fica reservado ao único caso "classe/autoria/vida
+    /// corretas, ainda em processamento" sem revelar UUIDs inválidos.
+    /// Retorna apenas metadados; bytes e chaves internas nunca atravessam o
+    /// módulo consumidor.
     /// </summary>
     public async Task<DocumentUploadResult<DocumentBindingMetadata>> ValidateActiveForBindAsync(
         ActorContext actor,
@@ -843,17 +846,13 @@ public sealed class DocumentUploadService(
             return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_deleted", 404);
         }
 
-        if (!string.Equals(file.ProcessingState, FileRecord.ConfirmedState, StringComparison.Ordinal))
-        {
-            // A única família "não pronto": classe correta ainda em quarentena.
-            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_ready", 409);
-        }
-
         if (requiredClassification is { } expected
             && !string.Equals(file.Classification, expected, StringComparison.Ordinal))
         {
             // Classificação errada é caso oculto/permanente inválido: fail-closed
-            // 404, sem distinguir de arquivo inexistente (anti-enumeração).
+            // 404, sem distinguir de arquivo inexistente (anti-enumeração) —
+            // avaliada ANTES do estado de processamento para não revelar que um
+            // UUID errado existe e aguarda confirmação.
             return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_found", 404);
         }
 
@@ -864,17 +863,29 @@ public sealed class DocumentUploadService(
             return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_expired", 404);
         }
 
-        return file.UploaderMembershipId == membershipId.Value
-            ? DocumentUploadResult<DocumentBindingMetadata>.Success(new DocumentBindingMetadata(
-                file.Id,
-                file.CompanyId,
-                file.UploaderMembershipId,
-                file.OriginalFileName,
-                file.MimeType,
-                file.SizeBytes,
-                file.ProviderKey,
-                file.RetentionUntil))
-            : DocumentUploadResult<DocumentBindingMetadata>.Failure("file_denied", 403);
+        if (file.UploaderMembershipId != membershipId.Value)
+        {
+            // Autoria divergente é oculta antes do estado de processamento:
+            // arquivo de outro uploader nunca revela se existe ou aguarda quarentena.
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_denied", 403);
+        }
+
+        if (!string.Equals(file.ProcessingState, FileRecord.ConfirmedState, StringComparison.Ordinal))
+        {
+            // A ÚNICA família "não pronto": classe correta, autoria correta,
+            // registro vivo e retenção viva, ainda em quarentena/scan.
+            return DocumentUploadResult<DocumentBindingMetadata>.Failure("file_not_ready", 409);
+        }
+
+        return DocumentUploadResult<DocumentBindingMetadata>.Success(new DocumentBindingMetadata(
+            file.Id,
+            file.CompanyId,
+            file.UploaderMembershipId,
+            file.OriginalFileName,
+            file.MimeType,
+            file.SizeBytes,
+            file.ProviderKey,
+            file.RetentionUntil));
     }
 
     /// <summary>Leitura única do relógio do PostgreSQL (autoritativo para retenção e TTL de link).</summary>

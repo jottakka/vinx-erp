@@ -216,6 +216,9 @@ public sealed class PaguaiProofEndpointTests
     [InlineData("deleted")]
     [InlineData("expired_retention")]
     [InlineData("quarantined")]
+    [InlineData("quarantined_other_uploader")]
+    [InlineData("quarantined_wrong_classification")]
+    [InlineData("quarantined_expired_retention")]
     public async Task Bind_lifecycle_failures_are_typed_and_audited_without_file_metadata(string variation)
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -234,8 +237,21 @@ public sealed class PaguaiProofEndpointTests
                 factory, scenario.CompanyId, scenario.MembershipId, "apagado.pdf")).Id,
             "expired_retention" => (await SeedFileAsync(
                 factory, scenario.CompanyId, scenario.MembershipId, "vencido.pdf")).Id,
-            _ => (await SeedFileAsync(
+            "quarantined" => (await SeedFileAsync(
                 factory, scenario.CompanyId, scenario.MembershipId, "quarentena.pdf", confirmed: false)).Id,
+            // Precedência: quarentena + defeito oculto permanece 404 — o
+            // "não pronto" só existe para classe/autoria/vida corretas.
+            "quarantined_other_uploader" => (await SeedFileAsync(
+                factory, scenario.CompanyId, scenario.OtherMembershipId,
+                "quarentena-alheio.pdf", confirmed: false)).Id,
+            "quarantined_wrong_classification" => (await SeedFileAsync(
+                factory, scenario.CompanyId, scenario.MembershipId,
+                "quarentena-fatura.pdf", classification: "paguai_request_invoice",
+                confirmed: false)).Id,
+            _ => (await SeedFileAsync(
+                factory, scenario.CompanyId, scenario.MembershipId,
+                "quarentena-vencido.pdf", retentionUntil: DateTimeOffset.UtcNow.AddMinutes(-1),
+                confirmed: false)).Id,
         };
 
         await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
