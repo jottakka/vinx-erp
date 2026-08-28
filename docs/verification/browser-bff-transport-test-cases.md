@@ -17,7 +17,7 @@ limite unitário do transporte.
 | estado/exceção | Dado CSRF falho, `204`, cancelamento ou rede indisponível, quando a operação termina, então não há parse/replay indevido | `browser-session-client.test.ts` — falha/abort/retry | nenhuma mutação após CSRF falho ou abort já solicitado; uma tentativa por chamada |
 | concorrência | Dados logins paralelos, quando tokens são emitidos, então cada mutação usa seu próprio token | `browser-session-client.test.ts` — concorrência | nenhum token ou resultado compartilhado |
 | transporte Atendimento | Dada mutação de cartão, quando há sessão BFF, então antiforgery antecede cada `POST` | `atendimento-client.test.ts` | token transitório em `X-CSRF-TOKEN`; falha do token não envia mutação |
-| proxy local | Dada configuração Vite, quando `VINX_API_ORIGIN` é loopback permitido, então `/foundation` e `/atendimento` recebem proxy de desenvolvimento | `vite-api-proxy.test.ts` | destino `127.0.0.1` exato; preview/produção sem proxy |
+| proxy local | Dada configuração Vite, quando `VINX_API_ORIGIN` é loopback permitido, então os subcaminhos BFF ativos de Agent, Atendimento, Demandas, Foundation, Notifications e Paguai recebem proxy de desenvolvimento | `vite-api-proxy.test.ts` | destino `127.0.0.1` exato; rotas SPA fora do proxy; preview/produção sem proxy |
 
 ## Limites mantidos
 

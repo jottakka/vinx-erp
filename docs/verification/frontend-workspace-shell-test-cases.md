@@ -8,7 +8,7 @@ de servidor, API ou persistência de sessão.
 
 | Classe BDD | Cenário | Vitest | Playwright | Status atual |
 | --- | --- | --- | --- | --- |
-| Happy | Usuário autorizado visita Paguai, Atendimento, Kanban e Pessoas e volta ao Início | `app-shell.test.tsx`: links de módulos; `feature-preparation-page.test.tsx`: página e retorno | `app-shell-home.spec.ts`: cenário de destinos preparados | Coberto |
+| Happy | Usuário autorizado visita Paguai, Atendimento e Pessoas e volta ao Início | `app-shell.test.tsx`: links de módulos (Kanban ausente); `feature-preparation-page.test.tsx`: página e retorno | `app-shell-home.spec.ts`: cenário de destinos preparados | Coberto |
 | Access | Visitante anônimo volta somente para um caminho seguro após entrar | `router.test.tsx`: deep links e rejeição de query | `visual-theme-login.spec.ts`: deep link protegido | Coberto |
 | State | Tema claro e escuro permanecem escolha explícita | `visual-preferences.test.tsx`: modo explícito; `appearance-menu.test.tsx`: seleção | `visual-theme-login.spec.ts`: tema claro após mudança do sistema | Coberto |
 | Repetição/concorrência | Alterações repetidas preservam seleção final e navegação mobile ocorre uma vez | `appearance-menu.test.tsx`: alterações repetidas; `app-shell.test.tsx`: uma transição | `app-shell-home.spec.ts`: drawer mobile | Coberto |

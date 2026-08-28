@@ -6,11 +6,23 @@ type VinxApiProxy = {
     changeOrigin: false;
     target: string;
   };
+  "^/agent/channel-company-selection(?:\\?.*)?$": {
+    changeOrigin: false;
+    target: string;
+  };
   "^/atendimento/cards(?:/|\\?|$)": {
     changeOrigin: false;
     target: string;
   };
   "^/atendimento/assignment-options(?:\\?|$)": {
+    changeOrigin: false;
+    target: string;
+  };
+  "^/atendimento/(?:lookups|categories)(?:\\?.*)?$": {
+    changeOrigin: false;
+    target: string;
+  };
+  "^/demandas/(?:board|demands|routines)(?:/|\\?|$)": {
     changeOrigin: false;
     target: string;
   };
@@ -62,11 +74,23 @@ export function resolveDevelopmentApiProxy(
         changeOrigin: false,
         target: target.origin,
       },
+      "^/agent/channel-company-selection(?:\\?.*)?$": {
+        changeOrigin: false,
+        target: target.origin,
+      },
       "^/atendimento/cards(?:/|\\?|$)": {
         changeOrigin: false,
         target: target.origin,
       },
       "^/atendimento/assignment-options(?:\\?|$)": {
+        changeOrigin: false,
+        target: target.origin,
+      },
+      "^/atendimento/(?:lookups|categories)(?:\\?.*)?$": {
+        changeOrigin: false,
+        target: target.origin,
+      },
+      "^/demandas/(?:board|demands|routines)(?:/|\\?|$)": {
         changeOrigin: false,
         target: target.origin,
       },

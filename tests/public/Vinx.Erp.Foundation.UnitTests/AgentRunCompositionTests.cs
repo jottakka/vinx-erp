@@ -169,6 +169,19 @@ public sealed class AgentRunCompositionTests
     }
 
     [Fact]
+    public void Https_loopback_endpoint_fails_the_composition()
+    {
+        var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "https://127.0.0.1/v1/"),
+            ("AgentRun:Model", "approved-model"),
+            ("AgentRun:ApprovedHosts:0", "127.0.0.1"));
+
+        Assert.Throws<InvalidOperationException>(
+            () => CreateBaseServices().AddAgentRunSurface(configuration, ReadDedicatedCredential));
+    }
+
+    [Fact]
     public void Complete_document_vision_configuration_registers_the_normalizer_as_scoped()
     {
         var configuration = CreateConfiguration(

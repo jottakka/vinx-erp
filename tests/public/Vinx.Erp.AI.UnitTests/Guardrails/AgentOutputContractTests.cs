@@ -71,4 +71,15 @@ public sealed class AgentOutputContractTests
         Assert.True(validation.IsValid);
         Assert.Equal("contract_valid", validation.ReasonCode);
     }
+
+    [Fact]
+    public void Duplicate_required_field_fails_closed()
+    {
+        var contract = new AgentOutputContract("resumo-diario", new HashSet<string> { "titulo" });
+
+        var validation = contract.Validate("""{ "titulo": "R1", "titulo": "R2" }""");
+
+        Assert.False(validation.IsValid);
+        Assert.Equal("structured_json_invalid", validation.ReasonCode);
+    }
 }

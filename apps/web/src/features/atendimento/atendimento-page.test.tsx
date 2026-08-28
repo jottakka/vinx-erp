@@ -1916,7 +1916,9 @@ describe("AtendimentoPage", () => {
       watcherMembershipIds: null,
     };
     vi.spyOn(atendimentoClient, "list").mockImplementation((companyId) =>
-      companyId === betaCompanyId ? Promise.resolve([watchedCard]) : [],
+      companyId === betaCompanyId
+        ? Promise.resolve([watchedCard])
+        : Promise.resolve([]),
     );
     vi.spyOn(atendimentoClient, "directoryOptions").mockImplementation(
       async (companyId) =>

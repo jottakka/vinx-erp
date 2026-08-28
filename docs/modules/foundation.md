@@ -568,9 +568,9 @@ A migration declara, com nomes estáveis:
 - constraints `ck_approvals_expires_after_creation`,
   `ck_approvals_payload_hash_format`, `ck_approvals_veto_complete`,
   `ck_approvals_consumption_complete` e `ck_approvals_terminal_exclusive`;
-- índice único parcial `ix_approvals_company_id_actor_user_id`, filtrado por
-  `consumed_at IS NULL AND deleted_at IS NULL`, garantindo uma proposta viva
-  por ator/empresa;
+- índice único parcial `ix_approvals_company_id_actor_user_id_resource_key`,
+  filtrado por `consumed_at IS NULL AND deleted_at IS NULL`, garantindo uma
+  proposta viva por ator/empresa/recurso;
 - índices `ix_approvals_actor_user_id`,
   `ix_approvals_confirmation_request_id` (único parcial, somente quando o
   valor não é nulo) e
@@ -579,7 +579,7 @@ A migration declara, com nomes estáveis:
   `ix_idempotency_records_company_id_actor_user_id_command_name_r`.
 
 `ApprovalUniqueViolationClassifier` só classifica os dois nomes pinados
-(`ix_approvals_company_id_actor_user_id` como `LiveProposal` e
+(`ix_approvals_company_id_actor_user_id_resource_key` como `LiveProposal` e
 `ix_idempotency_records_company_id_actor_user_id_command_name_r` como
 `Idempotency`); qualquer outro constraint é `Other` e não vira um conflito
 inventado.

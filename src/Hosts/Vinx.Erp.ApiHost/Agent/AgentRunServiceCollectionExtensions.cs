@@ -144,6 +144,14 @@ internal static class AgentRunServiceCollectionExtensions
             return false;
         }
 
+        if (!string.IsNullOrWhiteSpace(options.Provider)
+            && new OpenAiCompatibleOptions.Validator()
+                .ValidateForRuntimeCredential(null, ToProviderOptions(options))
+                .Failed)
+        {
+            return false;
+        }
+
         return allowCredentiallessTestModel
             || (string.IsNullOrWhiteSpace(options.Provider) && options.Vision is null)
             || OpenAiCompatibleChatClient.HasServerCredential(readEnvironment);

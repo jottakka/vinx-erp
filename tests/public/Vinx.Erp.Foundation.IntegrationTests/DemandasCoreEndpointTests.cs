@@ -519,7 +519,7 @@ public sealed class DemandasCoreEndpointTests
         return new DemandSeed(demand!.Id, demand.Version);
     }
 
-private static async Task<DemandSeed> CreateInRoutineAsync(HttpClient client, RoutineScenario scenario)
+    private static async Task<DemandSeed> CreateInRoutineAsync(HttpClient client, RoutineScenario scenario)
     {
         var requestId = Guid.NewGuid();
         using var response = await client.PostAsJsonAsync("/demandas/demands", new

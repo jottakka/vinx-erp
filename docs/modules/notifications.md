@@ -46,8 +46,10 @@ worker não listam nem são marcáveis.
   `NotificationProviderTransientException` transitiva e ausência de provider
   permanente), orquestração do worker (`NotificationDeliveryWorkerService`) e
   métricas `Vinx.Erp.Notifications.Delivery`.
-- O WorkerHost é o único host que referencia o módulo nesta fatia; o adapter
-  Meta (#28) será adicionado em `Providers/Meta`.
+- O ApiHost referencia contratos e adapters do módulo para inbox, webhook e
+  admissão inbound; o WorkerHost é o único host que orquestra delivery externo.
+- Os adapters Meta já vivem em `Providers/Meta` e seguem as fronteiras de
+  provider do módulo.
 
 ## Company scope
 
@@ -257,7 +259,9 @@ IA ou resposta. Replays não publicam novamente. Wolverine usa o outbox e seu
 agendamento durável existentes; documentos continuam em
 `whatsapp-inbound-documents`. Linhas não admitidas são somente evidência.
 
-## Inbound extração tipada de fatura (#272 PR3)Após a quarentena limpa, o mesmo processamento extrai o candidato tipado:
+## Inbound extração tipada de fatura (#272 PR3)
+
+Após a quarentena limpa, o mesmo processamento extrai o candidato tipado:
 PDF usa a camada de texto local (`DocumentTextExtractor`); sem camada =
 `no_text_layer`. Um turno único do perfil de texto (`InboundInvoiceExtractor`,
 contrato JSON estrito de 4 chaves, transcrição/legenda como dado rotulado)
