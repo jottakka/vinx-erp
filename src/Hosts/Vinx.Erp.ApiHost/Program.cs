@@ -148,6 +148,10 @@ builder.Host.UseWolverine(options =>
         .ToPostgresqlQueue("notification-delivery")
         .UseDurableOutbox();
     options
+        .PublishMessage<PaguaiDraftCreated>()
+        .ToPostgresqlQueue("paguai-events")
+        .UseDurableOutbox();
+    options
         .PublishMessage<InboundWhatsAppImageReceived>()
         .ToPostgresqlQueue("whatsapp-inbound")
         .UseDurableOutbox();

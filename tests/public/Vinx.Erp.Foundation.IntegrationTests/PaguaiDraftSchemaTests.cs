@@ -117,6 +117,73 @@ public sealed class PaguaiDraftSchemaTests
         Assert.Contains("NULLIF", reader.GetString(10));
     }
 
+    [Fact]
+    public async Task Invoice_file_schema_uses_a_nullable_same_company_restrict_foreign_key()
+    {
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await fixture.MigrateAsync();
+
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                column_info.is_nullable,
+                column_info.data_type,
+                referential_info.delete_rule,
+                array_agg(source_column.attname ORDER BY source_key.ordinality),
+                array_agg(target_column.attname ORDER BY target_key.ordinality),
+                target_schema.nspname,
+                target_table.relname
+            FROM information_schema.columns AS column_info
+            INNER JOIN information_schema.table_constraints AS constraint_info
+                ON constraint_info.constraint_schema = column_info.table_schema
+                AND constraint_info.table_name = column_info.table_name
+                AND constraint_info.constraint_type = 'FOREIGN KEY'
+            INNER JOIN information_schema.referential_constraints AS referential_info
+                ON referential_info.constraint_schema = constraint_info.constraint_schema
+                AND referential_info.constraint_name = constraint_info.constraint_name
+            INNER JOIN pg_constraint AS constraint_catalog
+                ON constraint_catalog.conname = constraint_info.constraint_name
+            INNER JOIN pg_class AS target_table ON target_table.oid = constraint_catalog.confrelid
+            INNER JOIN pg_namespace AS target_schema ON target_schema.oid = target_table.relnamespace
+            INNER JOIN unnest(constraint_catalog.conkey) WITH ORDINALITY AS source_key(attnum, ordinality)
+                ON true
+            INNER JOIN pg_attribute AS source_column
+                ON source_column.attrelid = constraint_catalog.conrelid AND source_column.attnum = source_key.attnum
+            INNER JOIN unnest(constraint_catalog.confkey) WITH ORDINALITY AS target_key(attnum, ordinality)
+                ON target_key.ordinality = source_key.ordinality
+            INNER JOIN pg_attribute AS target_column
+                ON target_column.attrelid = constraint_catalog.confrelid AND target_column.attnum = target_key.attnum
+            WHERE column_info.table_schema = 'paguai'
+                AND column_info.table_name = 'requests'
+                AND column_info.column_name = 'invoice_file_id'
+                AND constraint_catalog.conrelid = 'paguai.requests'::regclass
+            GROUP BY
+                column_info.is_nullable,
+                column_info.data_type,
+                referential_info.delete_rule,
+                target_schema.nspname,
+                target_table.relname,
+                constraint_catalog.oid
+            HAVING array_agg(source_column.attname ORDER BY source_key.ordinality)
+                = ARRAY['company_id', 'invoice_file_id']::name[]
+            """,
+            administrator
+        );
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("YES", reader.GetString(0));
+        Assert.Equal("uuid", reader.GetString(1));
+        Assert.Equal("RESTRICT", reader.GetString(2));
+        Assert.Equal(new[] { "company_id", "invoice_file_id" }, reader.GetFieldValue<string[]>(3));
+        Assert.Equal(new[] { "company_id", "id" }, reader.GetFieldValue<string[]>(4));
+        Assert.Equal("foundation", reader.GetString(5));
+        Assert.Equal("files", reader.GetString(6));
+        Assert.False(await reader.ReadAsync());
+    }
+
     private static async Task SetContextAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,

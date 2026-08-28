@@ -143,13 +143,11 @@ public static partial class NotificationInboxCursor
 /// seletores completos de deep-link mapeiam para rótulos e ações conhecidos;
 /// qualquer chave desconhecida vira source "Sistema" sem ecoar o valor bruto.
 /// </summary>
-public static class NotificationInboxPresentation
+public static partial class NotificationInboxPresentation
 {
     public const string DefaultSource = "Sistema";
-
-    /// <summary>Mapa de event_key completo para rótulo seguro; começa vazio e cresce por PR quando o produto registrar eventos reais.</summary>
-    public static readonly IReadOnlyDictionary<string, (string Source, string Event)> EventKeys =
-        new Dictionary<string, (string Source, string Event)>();
+    private const string PaguaiSource = "Pagaí";
+    private const string PaguaiDraftCreatedEvent = "Novo rascunho para aprovação";
 
     public static readonly IReadOnlyDictionary<string, (string Kind, string Href)> DeepLinks =
         new Dictionary<string, (string Kind, string Href)>
@@ -167,8 +165,8 @@ public static class NotificationInboxPresentation
         DateTimeOffset? readAt
     )
     {
-        var (source, eventName) = EventKeys.TryGetValue(eventKey, out var known)
-            ? known
+        var (source, eventName) = PaguaiDraftCreatedEventKeyRegex().IsMatch(eventKey)
+            ? (PaguaiSource, PaguaiDraftCreatedEvent)
             : (DefaultSource, null);
         var action =
             deepLinkSelector is not null
@@ -177,4 +175,7 @@ public static class NotificationInboxPresentation
                 : null;
         return new NotificationInboxItem(id, companyId, source, eventName, createdAt, readAt, action);
     }
+
+    [GeneratedRegex("^paguai\\.[0-9a-f]{32}\\.draft-created\\z")]
+    private static partial Regex PaguaiDraftCreatedEventKeyRegex();
 }

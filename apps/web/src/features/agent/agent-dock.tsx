@@ -12,14 +12,20 @@ import {
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import { agentPath } from "../../shared/routing/app-paths";
+import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { AgentConversation } from "./agent-conversation";
 import { useAgentConversation } from "./agent-conversation-provider";
 
 export const AGENT_DOCK_WIDTH = 380;
 
 function DockContent() {
-  const { access, closeDock, companyName, resetConversation } =
-    useAgentConversation();
+  const {
+    access,
+    closeDock,
+    companyName,
+    resetConversation,
+    selectedCompanyId,
+  } = useAgentConversation();
   const navigate = useNavigate();
 
   return (
@@ -35,10 +41,16 @@ function DockContent() {
           <Typography component="h2" variant="subtitle1">
             Agente
           </Typography>
+          {companyName ? (
+            <CompanyIdentity
+              companyId={selectedCompanyId}
+              companyName={companyName}
+            />
+          ) : null}
           <Typography color="text.secondary" variant="caption">
             {access.available
-              ? `${companyName} · Consultas independentes`
-              : `${companyName ?? "Sem empresa"} · Assistente indisponível`}
+              ? "Empresa selecionada"
+              : "Assistente indisponível"}
           </Typography>
         </Stack>
         <IconButton
@@ -48,7 +60,7 @@ function DockContent() {
           <RestartAltOutlinedIcon />
         </IconButton>
         <IconButton
-          aria-label="Abrir página dedicada do agente"
+          aria-label="Abrir agente em tela inteira"
           onClick={() => {
             closeDock();
             navigate(agentPath);

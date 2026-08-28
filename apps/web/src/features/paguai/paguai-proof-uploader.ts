@@ -33,37 +33,37 @@ const confirmationResponseSchema = z
   })
   .strict();
 
-export type PaguaiProofUploadStage =
+export type PaguaiInvoiceUploadStage =
   | "validation"
   | "intention"
   | "storage"
   | "confirmation";
 
-export type PaguaiProofUploadFailure = {
-  stage: PaguaiProofUploadStage;
+export type PaguaiInvoiceUploadFailure = {
+  stage: PaguaiInvoiceUploadStage;
   kind: "validation" | "aborted" | "network" | "protocol";
   status?: number;
 };
 
-export type UploadedPaguaiProof = {
+export type UploadedPaguaiInvoice = {
   fileId: string;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
 };
 
-export type PaguaiProofUploadResult =
-  | { ok: true; proof: UploadedPaguaiProof }
-  | { ok: false; error: PaguaiProofUploadFailure };
+export type PaguaiInvoiceUploadResult =
+  | { ok: true; invoice: UploadedPaguaiInvoice }
+  | { ok: false; error: PaguaiInvoiceUploadFailure };
 
-export type PaguaiProofUploadInput = {
+export type PaguaiInvoiceUploadInput = {
   companyId: string;
   file: File;
   signal: AbortSignal;
 };
 
-export type PaguaiProofUploadGateway = {
-  upload(input: PaguaiProofUploadInput): Promise<PaguaiProofUploadResult>;
+export type PaguaiInvoiceUploadGateway = {
+  upload(input: PaguaiInvoiceUploadInput): Promise<PaguaiInvoiceUploadResult>;
 };
 
 type UploaderOptions = {
@@ -75,20 +75,20 @@ type UploaderOptions = {
 };
 
 /**
- * Envia um comprovante do Paguai pelo ciclo intention → storage → confirmation
+ * Envia uma fatura do Paguai pelo ciclo intention → storage → confirmation
  * da fundação de arquivos (mesmo fluxo dos anexos do agente). A URL temporária
  * de storage nunca sai desta função.
  */
-export function createPaguaiProofUploader({
+export function createPaguaiInvoiceUploader({
   fetchImplementation = globalThis.fetch,
   cryptoImplementation = globalThis.crypto,
   now = () => new Date(),
-}: UploaderOptions = {}): PaguaiProofUploadGateway {
+}: UploaderOptions = {}): PaguaiInvoiceUploadGateway {
   async function requestBff(
-    stage: PaguaiProofUploadStage,
+    stage: PaguaiInvoiceUploadStage,
     path: string,
     init: SameOriginInit = {},
-  ): Promise<{ response: Response } | PaguaiProofUploadFailure> {
+  ): Promise<{ response: Response } | PaguaiInvoiceUploadFailure> {
     const result = await fetchSameOriginBff(
       fetchImplementation,
       path,
@@ -100,9 +100,9 @@ export function createPaguaiProofUploader({
   }
 
   async function readAntiforgeryToken(
-    stage: PaguaiProofUploadStage,
+    stage: PaguaiInvoiceUploadStage,
     signal: AbortSignal,
-  ): Promise<{ requestToken: string } | PaguaiProofUploadFailure> {
+  ): Promise<{ requestToken: string } | PaguaiInvoiceUploadFailure> {
     const token = await readAntiforgeryTokenBff(
       async (init) => requestBff(stage, antiforgeryPath, init),
       (kind, status) => failure(stage, kind, status),
@@ -118,7 +118,7 @@ export function createPaguaiProofUploader({
     path: string,
     body: string,
     signal: AbortSignal,
-  ): Promise<{ response: Response } | PaguaiProofUploadFailure> {
+  ): Promise<{ response: Response } | PaguaiInvoiceUploadFailure> {
     const token = await readAntiforgeryToken(stage, signal);
     if (signal.aborted) return failure(stage, "aborted");
     if (!("requestToken" in token)) return token;
@@ -139,7 +139,7 @@ export function createPaguaiProofUploader({
     companyId,
     file,
     signal,
-  }: PaguaiProofUploadInput): Promise<PaguaiProofUploadResult> {
+  }: PaguaiInvoiceUploadInput): Promise<PaguaiInvoiceUploadResult> {
     if (signal.aborted) return fail("validation", "aborted");
     if (
       !file.name.trim() ||
@@ -178,7 +178,7 @@ export function createPaguaiProofUploader({
         mimeType: file.type,
         sizeBytes: file.size,
         checksum,
-        classification: "paguai_request_proof",
+        classification: "paguai_request_invoice",
         origin: "web-paguai-draft",
         retentionUntil: new Date(
           now().getTime() + retentionMilliseconds,
@@ -227,7 +227,7 @@ export function createPaguaiProofUploader({
 
     return {
       ok: true,
-      proof: {
+      invoice: {
         fileId: intent.fileId,
         fileName: file.name,
         mimeType: file.type,
@@ -241,7 +241,7 @@ export function createPaguaiProofUploader({
     signal: AbortSignal,
   ): Promise<
     | { ok: true; fileId: string; uploadUrl: string }
-    | { ok: false; error: PaguaiProofUploadFailure }
+    | { ok: false; error: PaguaiInvoiceUploadFailure }
   > {
     if (signal.aborted) return fail("intention", "aborted");
     if (response.status !== 200)
@@ -264,7 +264,7 @@ export function createPaguaiProofUploader({
     mimeType: string,
     bytes: ArrayBuffer,
     signal: AbortSignal,
-  ): Promise<{ ok: true } | { ok: false; error: PaguaiProofUploadFailure }> {
+  ): Promise<{ ok: true } | { ok: false; error: PaguaiInvoiceUploadFailure }> {
     try {
       const response = await fetchImplementation(uploadUrl, {
         body: bytes,
@@ -287,7 +287,7 @@ export function createPaguaiProofUploader({
     response: Response,
     intendedFileId: string,
     signal: AbortSignal,
-  ): Promise<{ ok: true } | { ok: false; error: PaguaiProofUploadFailure }> {
+  ): Promise<{ ok: true } | { ok: false; error: PaguaiInvoiceUploadFailure }> {
     if (signal.aborted) return fail("confirmation", "aborted");
     if (response.status !== 200)
       return fail("confirmation", "protocol", response.status);
@@ -341,17 +341,17 @@ function toLowerHex(buffer: ArrayBuffer): string {
 }
 
 function failure(
-  stage: PaguaiProofUploadStage,
-  kind: PaguaiProofUploadFailure["kind"],
+  stage: PaguaiInvoiceUploadStage,
+  kind: PaguaiInvoiceUploadFailure["kind"],
   status?: number,
-): PaguaiProofUploadFailure {
+): PaguaiInvoiceUploadFailure {
   return status === undefined ? { stage, kind } : { stage, kind, status };
 }
 
 function fail(
-  stage: PaguaiProofUploadStage,
-  kind: PaguaiProofUploadFailure["kind"],
+  stage: PaguaiInvoiceUploadStage,
+  kind: PaguaiInvoiceUploadFailure["kind"],
   status?: number,
-): { ok: false; error: PaguaiProofUploadFailure } {
+): { ok: false; error: PaguaiInvoiceUploadFailure } {
   return { ok: false, error: failure(stage, kind, status) };
 }

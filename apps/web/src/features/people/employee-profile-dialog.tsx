@@ -1,9 +1,11 @@
 import { Stack, Typography } from "@mui/material";
+import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import type { EmployeeDirectoryItem } from "./employee-directory-client";
 
 type EmployeeProfileDialogProps = {
   companyName?: string;
+  companyId?: string;
   employee: EmployeeDirectoryItem | null;
   onClose: () => void;
   open: boolean;
@@ -15,6 +17,7 @@ type EmployeeProfileDialogProps = {
  */
 export function EmployeeProfileDialog({
   companyName,
+  companyId,
   employee,
   onClose,
   open,
@@ -33,21 +36,9 @@ export function EmployeeProfileDialog({
           <Typography component="p" variant="subtitle1">
             {employee.displayName}
           </Typography>
-          <Stack spacing={1}>
-            <Typography color="text.secondary" variant="body2">
-              Identificador do funcionário
-            </Typography>
-            <Typography variant="body2">{employee.employeeId}</Typography>
-          </Stack>
-          <Stack spacing={1}>
-            <Typography color="text.secondary" variant="body2">
-              Membro da empresa
-            </Typography>
-            <Typography variant="body2">{employee.membershipId}</Typography>
-          </Stack>
-          <Typography color="text.secondary" variant="caption">
-            O e-mail não é retornado pelo diretório nesta versão.
-          </Typography>
+          {companyId && companyName ? (
+            <CompanyIdentity companyId={companyId} companyName={companyName} />
+          ) : null}
         </Stack>
       ) : null}
     </EntityDialog>

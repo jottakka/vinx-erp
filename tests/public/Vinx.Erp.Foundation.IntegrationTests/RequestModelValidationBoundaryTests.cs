@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
+using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
@@ -133,6 +134,13 @@ public sealed class RequestModelValidationBoundaryTests
             },
             // description ausente.
             new { companyId = scenario.CompanyId, requestId, title = "Sem descrição" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", priority = "" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", priority = " alta" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", priority = "urgente" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", channel = " " },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", channel = "web " },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", channel = "telefone" },
+            new { companyId = scenario.CompanyId, requestId, title = "T", description = "D", slaDueAt = "not-a-timestamp" },
         };
 
         foreach (var payload in cases)
@@ -159,6 +167,65 @@ public sealed class RequestModelValidationBoundaryTests
                     $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_cards WHERE company_id = {scenario.CompanyId}"
                 )
                 .SingleAsync()
+        );
+        Assert.False(
+            await administrator.AuditEvents.AnyAsync(audit =>
+                audit.RequestedCompanyId == scenario.CompanyId
+                && audit.Action == "service_desk.ticket.create"
+                && audit.Outcome == AuditOutcome.Success
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Atendimento_card_create_rejects_empty_attachment_or_participant_ids_without_persisting_anything()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var requestIds = new[] { Guid.NewGuid(), Guid.NewGuid() };
+        var cases = new object[]
+        {
+            new
+            {
+                companyId = scenario.CompanyId,
+                requestId = requestIds[0],
+                title = "T",
+                description = "D",
+                attachmentFileId = Guid.Empty,
+            },
+            new
+            {
+                companyId = scenario.CompanyId,
+                requestId = requestIds[1],
+                title = "T",
+                description = "D",
+                participantMembershipIds = new[] { Guid.Empty },
+            },
+        };
+
+        foreach (var payload in cases)
+        {
+            using var response = await client.PostAsJsonAsync("/atendimento/cards", payload);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal(
+                "{\"code\":\"invalid_request\"}",
+                await response.Content.ReadAsStringAsync()
+            );
+        }
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.False(
+            await administrator.IdempotencyRecords.AnyAsync(record =>
+                record.CompanyId == scenario.CompanyId && requestIds.Contains(record.RequestId)
+            )
+        );
+        Assert.Equal(
+            0L,
+            await administrator.Database.SqlQuery<long>(
+                $"SELECT count(*) AS \"Value\" FROM service_desk.atendimento_cards WHERE company_id = {scenario.CompanyId}"
+            ).SingleAsync()
         );
     }
 
@@ -274,6 +341,116 @@ public sealed class RequestModelValidationBoundaryTests
         }
 
         await AssertCardUnchangedAndNoReceiptAsync(factory, client, scenario, created, requestIds);
+    }
+
+    [Fact]
+    public async Task Atendimento_cancel_rejects_invalid_or_untrimmed_models_without_changing_the_card()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var created = await CreateCardAsync(client, scenario.CompanyId);
+        var requestIds = new List<Guid>();
+        var cases = new List<Func<object>>
+        {
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = Guid.Empty,
+                expectedVersion = created.Version,
+                reason = "Cancelamento válido.",
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+                reason = string.Empty,
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = 0L,
+                reason = "Cancelamento válido.",
+            },
+            () => new
+            {
+                companyId = Guid.Empty,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+                reason = "Cancelamento válido.",
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+                reason = " Não aparado ",
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+                reason = (string?)null,
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                reason = "Cancelamento válido.",
+            },
+            () => new
+            {
+                companyId = scenario.CompanyId,
+                requestId = NextRequestId(requestIds),
+                expectedVersion = created.Version,
+                reason = new string('a', 501),
+            },
+        };
+
+        foreach (var payload in cases)
+        {
+            using var response = await client.PostAsJsonAsync(
+                $"/atendimento/cards/{created.Id}/cancel",
+                payload()
+            );
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal(
+                "{\"code\":\"invalid_request\"}",
+                await response.Content.ReadAsStringAsync()
+            );
+        }
+
+        await AssertCardUnchangedAndNoReceiptAsync(factory, client, scenario, created, requestIds);
+
+        var routedRequestId = Guid.NewGuid();
+        using var emptyRoute = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{Guid.Empty}/cancel",
+            new
+            {
+                companyId = scenario.CompanyId,
+                requestId = routedRequestId,
+                expectedVersion = created.Version,
+                reason = "Cancelamento válido.",
+            }
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, emptyRoute.StatusCode);
+        await AssertCardUnchangedAndNoReceiptAsync(
+            factory,
+            client,
+            scenario,
+            created,
+            [routedRequestId]
+        );
     }
 
     private static Guid NextRequestId(List<Guid> requestIds)

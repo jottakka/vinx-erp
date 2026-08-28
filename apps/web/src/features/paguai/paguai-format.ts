@@ -36,6 +36,19 @@ export function amountFromReais(value: string): string | null {
   return canonicalAmount(normalized);
 }
 
+/** Valida uma data civil sem aplicar conversão de fuso ou a regra 1900 do JS. */
+export function isValidDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
 /** Formata um valor canônico em reais para exibição. */
 export function formatAmount(amount: string): string {
   const [whole, fraction = ""] = amount.split(".");
@@ -44,7 +57,7 @@ export function formatAmount(amount: string): string {
   for (let i = whole.length - 1; i >= 0; i -= 1) {
     grouped = whole[i] + grouped;
     count += 1;
-    if (count % 3 === 0 && i > 0) grouped = "." + grouped;
+    if (count % 3 === 0 && i > 0) grouped = `.${grouped}`;
   }
   return `R$ ${grouped},${fraction.padEnd(2, "0")}`;
 }

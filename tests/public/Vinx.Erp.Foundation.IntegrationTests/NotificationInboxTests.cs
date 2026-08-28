@@ -13,6 +13,45 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class NotificationInboxTests
 {
     [Fact]
+    public void Paguai_draft_created_presentation_is_exact_and_rejects_lookalikes()
+    {
+        var id = Guid.NewGuid();
+        var companyId = Guid.NewGuid();
+        var validKey = "paguai.0123456789abcdef0123456789abcdef.draft-created";
+
+        var projected = NotificationInboxPresentation.Project(
+            id, companyId, validKey, "/paguai", DateTimeOffset.UtcNow, null
+        );
+
+        Assert.Equal("Pagaí", projected.Source);
+        Assert.Equal("Novo rascunho para aprovação", projected.Event);
+        Assert.Equal("paguai", projected.Action!.Kind);
+        Assert.Equal("/paguai", projected.Action.Href);
+
+        foreach (var lookalike in new[]
+        {
+            "paguai.0123456789ABCDEF0123456789ABCDEF.draft-created",
+            "paguai.01234567-89ab-cdef-0123-456789abcdef.draft-created",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created.extra",
+            "xpaguai.0123456789abcdef0123456789abcdef.draft-created",
+            "paguai.0123456789abcdef0123456789abcdeg.draft-created",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created\n",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created\r\n",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created ",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created\t",
+            "paguai.0123456789abcdef0123456789abcdef.draft-created\0",
+        })
+        {
+            var rejected = NotificationInboxPresentation.Project(
+                id, companyId, lookalike, "/untrusted", DateTimeOffset.UtcNow, null
+            );
+            Assert.Equal("Sistema", rejected.Source);
+            Assert.Null(rejected.Event);
+            Assert.Null(rejected.Action);
+        }
+    }
+
+    [Fact]
     public async Task Authorized_actor_lists_delivered_in_app_intents_with_company_of_origin()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();

@@ -25,12 +25,13 @@ const beta: FoundationBootstrapSnapshot["companies"][number] = {
 
 function snapshot(
   companies: FoundationBootstrapSnapshot["companies"],
+  user: FoundationBootstrapSnapshot["user"] = {
+    displayName: "Ana Ribeiro",
+    id: "11111111-1111-4111-8111-111111111111",
+  },
 ): FoundationBootstrapSnapshot {
   return {
-    user: {
-      id: "11111111-1111-4111-8111-111111111111",
-      displayName: "Ana Ribeiro",
-    },
+    user,
     companies,
     flags: { "release.dashboard": true },
     platform: { isPlatformOperator: false },
@@ -39,8 +40,12 @@ function snapshot(
 
 function authenticated(
   companies: FoundationBootstrapSnapshot["companies"],
+  user?: FoundationBootstrapSnapshot["user"],
 ): FoundationBootstrapLoadResult {
-  return { ok: true, snapshot: snapshot(companies) };
+  return {
+    ok: true,
+    snapshot: user ? snapshot(companies, user) : snapshot(companies),
+  };
 }
 
 function deferred<T>() {
@@ -55,7 +60,7 @@ function deferred<T>() {
 }
 
 function SessionProbe() {
-  const { bootstrap, refreshBootstrap, status } = useSession();
+  const { bootstrap, error, refreshBootstrap, status } = useSession();
 
   return (
     <>
@@ -63,6 +68,8 @@ function SessionProbe() {
       <p>
         {bootstrap?.companies.map((company) => company.companyName).join(",")}
       </p>
+      <p>{bootstrap?.user.displayName ?? "anonymous"}</p>
+      <p>{error ?? "no error"}</p>
       <button onClick={() => void refreshBootstrap()} type="button">
         Atualizar bootstrap
       </button>
@@ -126,7 +133,10 @@ describe("SessionProvider bootstrap refresh", () => {
       screen.getByRole("button", { name: "Atualizar bootstrap" }),
     );
 
-    expect(screen.getByText("pending")).toBeVisible();
+    // Enquanto o refresh está em voo não existe janela nula: o snapshot
+    // vigente permanece visível com status autenticado.
+    expect(screen.getByText("Alfa,Beta")).toBeVisible();
+    expect(screen.getByText("authenticated")).toBeVisible();
     expect(
       queryClient.getQueryData(["company", alfa.companyId]),
     ).toBeUndefined();
@@ -135,6 +145,58 @@ describe("SessionProvider bootstrap refresh", () => {
     });
     expect(await screen.findByText("Beta")).toBeVisible();
     expect(screen.queryByText("Alfa,Beta")).not.toBeInTheDocument();
+    expect(screen.getByText("authenticated")).toBeVisible();
+  });
+
+  it("keeps the authenticated snapshot when a refresh fails without 401", async () => {
+    const user = userEvent.setup();
+    const load = vi
+      .fn<(signal?: AbortSignal) => Promise<FoundationBootstrapLoadResult>>()
+      .mockResolvedValueOnce(authenticated([alfa, beta]))
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { kind: "unavailable", status: 503 },
+      });
+
+    renderProvider(load);
+
+    expect(await screen.findByText("Alfa,Beta")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Atualizar bootstrap" }),
+    );
+
+    expect(await screen.findByText(/Não foi possível validar/)).toBeVisible();
+    expect(screen.getByText("Alfa,Beta")).toBeVisible();
+    expect(screen.getByText("Ana Ribeiro")).toBeVisible();
+    expect(screen.getByText("authenticated")).toBeVisible();
+  });
+
+  it("commits an identity change atomically so scope keys follow content", async () => {
+    const user = userEvent.setup();
+    const refreshed = deferred<FoundationBootstrapLoadResult>();
+    const load = vi
+      .fn<(signal?: AbortSignal) => Promise<FoundationBootstrapLoadResult>>()
+      .mockResolvedValueOnce(authenticated([alfa]))
+      .mockReturnValueOnce(refreshed.promise);
+
+    renderProvider(load);
+
+    expect(await screen.findByText("Alfa")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Atualizar bootstrap" }),
+    );
+
+    expect(screen.getByText("Ana Ribeiro")).toBeVisible();
+    await act(async () => {
+      refreshed.resolve(
+        authenticated([alfa], {
+          displayName: "Bruno Souza",
+          id: "99999999-9999-4999-8999-999999999999",
+        }),
+      );
+    });
+    expect(await screen.findByText("Bruno Souza")).toBeVisible();
+    expect(screen.queryByText("Ana Ribeiro")).not.toBeInTheDocument();
     expect(screen.getByText("authenticated")).toBeVisible();
   });
 
@@ -188,7 +250,11 @@ describe("SessionProvider bootstrap refresh", () => {
       screen.getByRole("button", { name: "Atualizar bootstrap" }),
     );
 
-    await waitFor(() => expect(screen.getByText("anonymous")).toBeVisible());
+    // Status e fallback de nome exibem "anonymous" juntos no 401; o wait é
+    // só sincronização — a limpeza é verificada a seguir.
+    await waitFor(() =>
+      expect(screen.getAllByText("anonymous").length).toBeGreaterThan(0),
+    );
     expect(
       queryClient.getQueryData(["company", beta.companyId]),
     ).toBeUndefined();

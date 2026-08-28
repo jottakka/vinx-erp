@@ -147,6 +147,41 @@ describe("LoginPage", () => {
     expect(login).not.toHaveBeenCalled();
   });
 
+  it("enforces the browser credential limits with Portuguese validation", async () => {
+    const user = userEvent.setup();
+    const gateway = createMockSessionGateway();
+    const login = vi.spyOn(gateway, "login");
+    renderLogin(gateway);
+
+    const emailField = await screen.findByLabelText("E-mail");
+    const passwordField = screen.getByLabelText("Senha");
+    expect(emailField).toHaveAttribute("maxlength", "320");
+    expect(passwordField).toHaveAttribute("maxlength", "1024");
+
+    fireEvent.change(emailField, {
+      target: { value: `${"a".repeat(321)}@example.test` },
+    });
+    await user.type(passwordField, "senha");
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "O e-mail deve ter no máximo 320 caracteres.",
+    );
+    expect(login).not.toHaveBeenCalled();
+    expect(emailField).toHaveFocus();
+
+    await user.clear(emailField);
+    await user.type(emailField, "maria@example.test");
+    fireEvent.change(passwordField, { target: { value: "s".repeat(1025) } });
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A senha deve ter no máximo 1024 caracteres.",
+    );
+    expect(login).not.toHaveBeenCalled();
+    expect(passwordField).toHaveFocus();
+  });
+
   it("uses browser credential autocomplete and clears the password after an attempt", async () => {
     const user = userEvent.setup();
     const gateway = createMockSessionGateway();

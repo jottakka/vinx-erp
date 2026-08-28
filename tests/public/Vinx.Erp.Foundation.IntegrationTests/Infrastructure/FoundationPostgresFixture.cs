@@ -53,6 +53,8 @@ public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
     internal FoundationPostgresEndpoint Endpoint => _endpoint
         ?? throw new InvalidOperationException("The fixture has not been started.");
 
+    FoundationPostgresEndpoint IFoundationFixtureAccess.Endpoint => Endpoint;
+
     internal static async Task VerifyEndpointAsync(
         NpgsqlConnectionStringBuilder settings,
         FoundationPostgresEndpoint? expectedEndpoint,
@@ -161,6 +163,16 @@ public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
         return connection;
     }
 
+    internal FoundationPostgresFixtureLease CreateNonOwningLease()
+    {
+        if (!_started || _disposed)
+        {
+            throw new InvalidOperationException("The fixture must be started before it can be leased.");
+        }
+
+        return new FoundationPostgresFixtureLease(this);
+    }
+
     public async Task ReapplyBootstrapAsync()
     {
         await using var connection = await OpenAdministratorConnectionAsync();
@@ -263,15 +275,43 @@ public sealed class FoundationPostgresFixture : IFoundationFixtureLifecycle
 
 }
 
-internal interface IFoundationFixtureLifecycle : IAsyncDisposable
+internal interface IFoundationFixtureAccess
 {
     string RuntimeConnectionString { get; }
+
+    FoundationPostgresEndpoint Endpoint { get; }
+
+    Task<NpgsqlConnection> OpenAdministratorConnectionAsync();
+
+    FoundationDbContext CreateAdministratorDbContext();
+}
+
+internal interface IFoundationFixtureLifecycle : IFoundationFixtureAccess, IAsyncDisposable
+{
 
     Task StartAsync();
 
     Task MigrateAsync();
+}
 
-    FoundationDbContext CreateAdministratorDbContext();
+/// <summary>
+/// Encapsula somente o acesso de uma fixture já preparada para que uma factory não possa encerrar o owner.
+/// </summary>
+internal sealed class FoundationPostgresFixtureLease(IFoundationFixtureAccess fixtureAccess)
+    : IFoundationFixtureAccess
+{
+    private readonly IFoundationFixtureAccess _fixtureAccess = fixtureAccess
+        ?? throw new ArgumentNullException(nameof(fixtureAccess));
+
+    public string RuntimeConnectionString => _fixtureAccess.RuntimeConnectionString;
+
+    public FoundationPostgresEndpoint Endpoint => _fixtureAccess.Endpoint;
+
+    public Task<NpgsqlConnection> OpenAdministratorConnectionAsync() =>
+        _fixtureAccess.OpenAdministratorConnectionAsync();
+
+    public FoundationDbContext CreateAdministratorDbContext() =>
+        _fixtureAccess.CreateAdministratorDbContext();
 }
 
 internal static class FixtureCleanup

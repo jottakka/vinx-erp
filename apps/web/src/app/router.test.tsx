@@ -75,7 +75,6 @@ describe("application routes", () => {
   it.each([
     ["/paguai", "Paguai"],
     ["/atendimento", "Atendimento"],
-    ["/kanban", "Kanban"],
     ["/pessoas", "Pessoas"],
     ["/permissoes", "Permissões"],
   ])("protects and renders %s", async (path, heading) => {

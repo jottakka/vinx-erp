@@ -862,6 +862,25 @@ CREATE FUNCTION foundation.current_authorized_company_ids() RETURNS SETOF uuid
 $$;
 
 
+-- Name: current_company_membership_options(); Type: FUNCTION; Schema: foundation; Owner: -
+
+CREATE FUNCTION foundation.current_company_membership_options() RETURNS TABLE(membership_id uuid, display_name text)
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'foundation', 'pg_catalog'
+    AS $$
+    SELECT membership.id, user_record.display_name::text
+    FROM foundation.memberships AS membership
+    INNER JOIN foundation.users AS user_record ON user_record.id = membership.user_id
+    WHERE membership.company_id = NULLIF(current_setting('app.company_id', true), '')::uuid
+      AND membership.deleted_at IS NULL
+      AND EXISTS (
+          SELECT 1
+          FROM foundation.current_actor_memberships() AS actor_membership
+          WHERE actor_membership.company_id = membership.company_id)
+    ORDER BY user_record.display_name, membership.id;
+$$;
+
+
 -- Name: ensure_company_default_roles(uuid); Type: FUNCTION; Schema: foundation; Owner: -
 
 CREATE FUNCTION foundation.ensure_company_default_roles(p_company_id uuid) RETURNS void
@@ -2750,6 +2769,11 @@ ALTER TABLE foundation.capabilities ENABLE ROW LEVEL SECURITY;
 -- Name: capabilities capabilities_employee_directory_owner_select; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY capabilities_employee_directory_owner_select ON foundation.capabilities FOR SELECT TO vinx_employee_directory_owner USING (((name)::text = ANY ((ARRAY['foundation.roles.assign'::character varying, 'foundation.employees.create'::character varying])::text[])));
+
+
+-- Name: capabilities capabilities_notifications_owner_paguai_approve_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_notifications_owner_paguai_approve_read ON foundation.capabilities FOR SELECT TO vinx_notifications_owner USING (((name)::text = 'paguai.draft.approve'::text));
 
 
 -- Name: capabilities capabilities_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -

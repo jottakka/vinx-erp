@@ -84,16 +84,25 @@ public sealed class AddAtendimentoTicketing : Migration
 
             ALTER TABLE service_desk.atendimento_cards
                 ADD COLUMN requester_person_ref varchar(200) NULL,
-                ADD COLUMN priority varchar(20) NULL CHECK (priority IN ('critica', 'alta', 'media', 'baixa')),
                 ADD COLUMN category_ref_id uuid NULL,
                 ADD COLUMN channel_ref_id uuid NULL,
-                ADD COLUMN sla_due_at timestamp with time zone NULL,
                 ADD CONSTRAINT fk_atendimento_cards_category
                     FOREIGN KEY (company_id, category_ref_id)
                     REFERENCES service_desk.atendimento_categories(company_id, id),
                 ADD CONSTRAINT fk_atendimento_cards_channel
                     FOREIGN KEY (company_id, channel_ref_id)
                     REFERENCES service_desk.atendimento_channels(company_id, id);
+
+            -- priority/sla_due_at/channel já existem pelo 20260826225942 do main;
+            -- a fatia P6 alarga priority para varchar(20) e a torna nullável
+            -- (ausência = sem prioridade definida), sem default aplicado.
+            ALTER TABLE service_desk.atendimento_cards
+                DROP CONSTRAINT ck_atendimento_cards_priority,
+                ALTER COLUMN priority DROP NOT NULL,
+                ALTER COLUMN priority DROP DEFAULT,
+                ALTER COLUMN priority TYPE varchar(20),
+                ADD CONSTRAINT ck_atendimento_cards_priority
+                    CHECK (priority IN ('critica', 'alta', 'media', 'baixa'));
 
             -- Semeadura por empresa: existentes no backfill abaixo e novas pelo
             -- trigger. A função roda como dono das tabelas alvo; o runtime segue
@@ -156,10 +165,9 @@ public sealed class AddAtendimentoTicketing : Migration
             GRANT SELECT, INSERT, DELETE ON service_desk.atendimento_card_watchers TO vinx_runtime;
             GRANT SELECT, INSERT ON service_desk.atendimento_card_events TO vinx_runtime;
 
-            -- Timeline resolve o nome do ator no servidor com leitura de menor
-            -- privilégio (mesmo padrão dos grants por coluna em memberships do
-            -- dono de notificações).
-            GRANT SELECT (id, display_name) ON foundation.users TO vinx_runtime;
+            -- Timeline resolve o nome do ator com leitura de menor privilégio:
+            -- SELECT (id, display_name) em foundation.users já é concedido pelo
+            -- 20260825110000 do main, sem nova concessão aqui.
             """
         );
 
@@ -176,15 +184,25 @@ public sealed class AddAtendimentoTicketing : Migration
             ALTER TABLE service_desk.atendimento_cards
                 DROP CONSTRAINT fk_atendimento_cards_channel,
                 DROP CONSTRAINT fk_atendimento_cards_category,
-                DROP COLUMN sla_due_at,
                 DROP COLUMN channel_ref_id,
                 DROP COLUMN category_ref_id,
-                DROP COLUMN priority,
                 DROP COLUMN requester_person_ref;
+            -- Restaura o shape de priority do 20260826225942 (main): varchar(10)
+            -- NOT NULL com default 'media'. Linhas sem prioridade voltam a
+            -- 'media'; o NO FORCE segue o padrão de Down do próprio main.
+            ALTER TABLE service_desk.atendimento_cards NO FORCE ROW LEVEL SECURITY;
+            UPDATE service_desk.atendimento_cards SET priority = 'media' WHERE priority IS NULL;
+            ALTER TABLE service_desk.atendimento_cards FORCE ROW LEVEL SECURITY;
+            ALTER TABLE service_desk.atendimento_cards
+                DROP CONSTRAINT ck_atendimento_cards_priority,
+                ALTER COLUMN priority TYPE varchar(10),
+                ALTER COLUMN priority SET NOT NULL,
+                ALTER COLUMN priority SET DEFAULT 'media',
+                ADD CONSTRAINT ck_atendimento_cards_priority
+                    CHECK (priority IN ('critica', 'alta', 'media', 'baixa'));
             DROP TABLE service_desk.atendimento_categories;
             DROP TABLE service_desk.atendimento_channels;
             DROP FUNCTION service_desk.seed_company_lookup_defaults_trigger();
-            REVOKE SELECT (id, display_name) ON foundation.users FROM vinx_runtime;
             DO $block$
             BEGIN
                 DELETE FROM foundation.capabilities

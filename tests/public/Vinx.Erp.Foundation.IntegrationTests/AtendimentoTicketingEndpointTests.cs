@@ -76,7 +76,7 @@ public sealed class AtendimentoTicketingEndpointTests
         Assert.Equal(categoryId, card.CategoryRefId);
         Assert.Equal(channelId, card.ChannelRefId);
         Assert.NotNull(card.SlaDueAt);
-        Assert.False(card.Overdue);
+        Assert.False(card.IsOverdue);
         Assert.Equal("persona-123", card.RequesterPersonRef);
 
         using var queue = await client.GetAsync(
@@ -327,7 +327,7 @@ public sealed class AtendimentoTicketingEndpointTests
         overdueQueue.EnsureSuccessStatusCode();
         Assert.Contains(
             (await overdueQueue.Content.ReadFromJsonAsync<List<CardResponse>>())!,
-            card => card.Id == created.Id && card.Overdue
+            card => card.Id == created.Id && card.IsOverdue
         );
 
         using var moved = await client.PostAsJsonAsync(
@@ -877,7 +877,7 @@ public sealed class AtendimentoTicketingEndpointTests
         Guid? CategoryRefId,
         Guid? ChannelRefId,
         DateTimeOffset? SlaDueAt,
-        bool Overdue,
+        bool IsOverdue,
         string? RequesterPersonRef,
         IReadOnlyList<Guid>? WatcherMembershipIds
     );

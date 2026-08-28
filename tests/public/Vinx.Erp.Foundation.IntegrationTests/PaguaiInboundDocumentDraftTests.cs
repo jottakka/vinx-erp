@@ -6,6 +6,7 @@ using Npgsql;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Paguai;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
@@ -17,6 +18,27 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 /// </summary>
 public sealed class PaguaiInboundDocumentDraftTests
 {
+    [Fact]
+    public void Existing_positional_source_argument_remains_the_inbound_document()
+    {
+        var sourceInboundMessageId = Guid.NewGuid();
+        var command = new CreateDraftCommand(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "Aluguel setembro",
+            "Rascunho do recibo enviado por WhatsApp",
+            250.00m,
+            "BRL",
+            new DateOnly(2026, 9, 5),
+            "ACME LTDA",
+            "required",
+            sourceInboundMessageId
+        );
+
+        Assert.Null(command.InvoiceFileId);
+        Assert.Equal(sourceInboundMessageId, command.SourceInboundMessageId);
+    }
+
     [Fact]
     public async Task Valid_candidate_creates_one_idempotent_draft_linked_to_the_document()
     {
@@ -41,6 +63,7 @@ public sealed class PaguaiInboundDocumentDraftTests
         Assert.Equal("2026-09-05", root.GetProperty("dueDate").GetString());
         Assert.Equal("Aluguel setembro", root.GetProperty("title").GetString());
         Assert.Equal("required", root.GetProperty("proofRequirement").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("invoiceFileId").ValueKind);
 
         using var replay = await client.PostAsJsonAsync(
             "/paguai/requests/from-document",
@@ -52,11 +75,15 @@ public sealed class PaguaiInboundDocumentDraftTests
 
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
-            "SELECT source_inbound_message_id FROM paguai.requests WHERE id = @id",
+            "SELECT source_inbound_message_id, invoice_file_id FROM paguai.requests WHERE id = @id",
             administrator
         );
         command.Parameters.AddWithValue("id", draftId);
-        Assert.Equal(scenario.InboundMessageId, (Guid)(await command.ExecuteScalarAsync())!);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(scenario.InboundMessageId, reader.GetGuid(0));
+        Assert.True(reader.IsDBNull(1));
+        Assert.False(await reader.ReadAsync());
     }
 
     [Fact]
@@ -85,6 +112,228 @@ public sealed class PaguaiInboundDocumentDraftTests
             RequestBody(scenario)
         );
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Dual_company_actor_cannot_copy_a_candidate_from_the_other_member_company()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(
+            factory,
+            candidateState: "candidate",
+            actorAlsoMemberOfCandidateCompany: true
+        );
+        Assert.NotEqual(scenario.CompanyId, scenario.SecondCompanyId);
+
+        using var response = await factory.CreateClient().PostAsJsonAsync(
+            "/paguai/requests/from-document",
+            RequestBody(scenario)
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("{\"code\":\"invalid_request\"}", await response.Content.ReadAsStringAsync());
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.False(
+            await administrator.IdempotencyRecords.AnyAsync(record =>
+                record.CompanyId == scenario.CompanyId
+                && record.ActorUserId == factory.ActorUserId
+                && record.CommandName == "paguai.draft.create"
+                && record.RequestId == scenario.InboundMessageId
+            )
+        );
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM paguai.requests WHERE source_inbound_message_id = @inbound_id",
+            connection
+        );
+        command.Parameters.AddWithValue("inbound_id", scenario.InboundMessageId);
+        Assert.Equal(0L, await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task Second_create_for_the_same_document_conflicts_audited_instead_of_unavailable()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory, candidateState: "candidate");
+        using var client = factory.CreateClient();
+
+        using var first = await client.PostAsJsonAsync(
+            "/paguai/requests/from-document",
+            RequestBody(scenario)
+        );
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        using var firstDocument = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        var draftId = ReadGuid(firstDocument.RootElement, "id");
+
+        // Simula a corrida real de dois request ids distintos (outro ator da
+        // mesma empresa ou recibo perdido): o documento já tem dono.
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            await administrator
+                .IdempotencyRecords.Where(record =>
+                    record.CompanyId == scenario.CompanyId
+                    && record.RequestId == scenario.InboundMessageId
+                )
+                .ExecuteDeleteAsync();
+        }
+
+        using var second = await client.PostAsJsonAsync(
+            "/paguai/requests/from-document",
+            RequestBody(scenario)
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        Assert.Equal(
+            "{\"code\":\"idempotency_conflict\"}",
+            await second.Content.ReadAsStringAsync()
+        );
+        await using var audit = factory.Fixture.CreateAdministratorDbContext();
+        var denial = Assert.Single(
+            await audit.AuditEvents.Where(auditEvent =>
+                auditEvent.Action == "source_document_conflict"
+                && auditEvent.RequestedCompanyId == scenario.CompanyId
+            ).ToListAsync()
+        );
+        Assert.Equal(draftId, denial.ResourceId);
+        Assert.Equal("source_document_conflict", denial.Reason);
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM paguai.requests WHERE source_inbound_message_id = @inbound_id",
+            connection
+        );
+        command.Parameters.AddWithValue("inbound_id", scenario.InboundMessageId);
+        Assert.Equal(1L, await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task Second_actor_conflicting_on_a_foreign_draft_gets_no_occupant_data()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory, candidateState: "candidate");
+        using var client = factory.CreateClient();
+
+        using var first = await client.PostAsJsonAsync(
+            "/paguai/requests/from-document",
+            RequestBody(scenario)
+        );
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        using var firstDocument = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        var draftId = ReadGuid(firstDocument.RootElement, "id");
+
+        // Ocupante de outro ator: a política RLS paguai_requests_requester_isolation
+        // (requester_user_id = app.user_id) esconde o rascunho do ator atual.
+        // O recibo do ator é removido para a inserção alcançar a violação real
+        // de unicidade por documento, como na corrida de dois atores.
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            await administrator
+                .IdempotencyRecords.Where(record =>
+                    record.CompanyId == scenario.CompanyId
+                    && record.RequestId == scenario.InboundMessageId
+                )
+                .ExecuteDeleteAsync();
+        }
+        var otherUserId = Guid.NewGuid();
+        await using (var seedContext = factory.Fixture.CreateAdministratorDbContext())
+        {
+            seedContext.Users.Add(new User(otherUserId, "Outro ator", "outro-ator@example.test"));
+            await seedContext.SaveChangesAsync();
+        }
+        await using (var connection = await factory.Fixture.OpenAdministratorConnectionAsync())
+        await using (var transfer = new NpgsqlCommand(
+            "UPDATE paguai.requests SET requester_user_id = @other_user WHERE id = @draft_id",
+            connection
+        ))
+        {
+            transfer.Parameters.AddWithValue("other_user", otherUserId);
+            transfer.Parameters.AddWithValue("draft_id", draftId);
+            Assert.Equal(1, await transfer.ExecuteNonQueryAsync());
+        }
+
+        using var second = await client.PostAsJsonAsync(
+            "/paguai/requests/from-document",
+            RequestBody(scenario)
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        Assert.Equal(
+            "{\"code\":\"idempotency_conflict\"}",
+            await second.Content.ReadAsStringAsync()
+        );
+        await using var audit = factory.Fixture.CreateAdministratorDbContext();
+        var denial = Assert.Single(
+            await audit.AuditEvents.Where(auditEvent =>
+                auditEvent.Action == "source_document_conflict"
+                && auditEvent.RequestedCompanyId == scenario.CompanyId
+            ).ToListAsync()
+        );
+        // Ocupante invisível sob RLS: nenhum id ou dado do rascunho alheio.
+        Assert.Null(denial.ResourceId);
+        Assert.Equal("source_document_conflict", denial.Reason);
+        await using var verify = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(0L,
+            await verify.IdempotencyRecords.LongCountAsync(record =>
+                record.CompanyId == scenario.CompanyId
+                && record.RequestId == scenario.InboundMessageId
+            )
+        );
+        await using var ownership = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM paguai.requests WHERE source_inbound_message_id = @inbound_id",
+            ownership
+        );
+        command.Parameters.AddWithValue("inbound_id", scenario.InboundMessageId);
+        Assert.Equal(1L, await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task Read_function_requires_the_explicit_company_context()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory, candidateState: "candidate");
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var transaction = await administrator.BeginTransactionAsync();
+        try
+        {
+            await SetLocalContextAsync(administrator, "app.user_id", factory.ActorUserId.ToString());
+            await SetLocalContextAsync(administrator, "app.company_id", string.Empty);
+            Assert.Equal(0L, await CountReadableCandidatesAsync(administrator, scenario.InboundMessageId));
+
+            await SetLocalContextAsync(administrator, "app.company_id", scenario.CompanyId.ToString());
+            Assert.Equal(1L, await CountReadableCandidatesAsync(administrator, scenario.InboundMessageId));
+        }
+        finally
+        {
+            await transaction.RollbackAsync();
+        }
+
+        static async Task SetLocalContextAsync(
+            NpgsqlConnection connection,
+            string name,
+            string value
+        )
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT set_config(@name, @value, true)",
+                connection
+            );
+            command.Parameters.AddWithValue("name", name);
+            command.Parameters.AddWithValue("value", value);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        static async Task<long> CountReadableCandidatesAsync(
+            NpgsqlConnection connection,
+            Guid inboundMessageId
+        )
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT count(*) FROM notifications.read_inbound_whatsapp_invoice_candidate(@inbound_id)",
+                connection
+            );
+            command.Parameters.AddWithValue("inbound_id", inboundMessageId);
+            return (long)(await command.ExecuteScalarAsync())!;
+        }
     }
 
     [Fact]
@@ -148,13 +397,14 @@ public sealed class PaguaiInboundDocumentDraftTests
             proofRequirement = "required",
         };
 
-    private sealed record Scenario(Guid CompanyId, Guid InboundMessageId);
+    private sealed record Scenario(Guid CompanyId, Guid InboundMessageId, Guid? SecondCompanyId = null);
 
     private static async Task<Scenario> SeedScenarioAsync(
         FoundationApiFactory factory,
         string candidateState,
         bool withCapability = true,
-        Guid? candidateCompany = null
+        Guid? candidateCompany = null,
+        bool actorAlsoMemberOfCandidateCompany = false
     )
     {
         await using var administrator = factory.Fixture.CreateAdministratorDbContext();
@@ -177,6 +427,26 @@ public sealed class PaguaiInboundDocumentDraftTests
             requestId
         );
         administrator.AddRange(group, company, membership);
+        Guid? secondCompanyId = null;
+        if (actorAlsoMemberOfCandidateCompany)
+        {
+            var secondCompany = new Company(
+                Guid.NewGuid(),
+                group.Id,
+                "Vinx Segunda",
+                factory.ActorUserId,
+                requestId
+            );
+            var secondMembership = new Membership(
+                Guid.NewGuid(),
+                secondCompany.Id,
+                factory.ActorUserId,
+                factory.ActorUserId,
+                requestId
+            );
+            administrator.AddRange(secondCompany, secondMembership);
+            secondCompanyId = secondCompany.Id;
+        }
         if (withCapability)
         {
             var createCapability = await administrator.Capabilities.SingleOrDefaultAsync(
@@ -253,11 +523,14 @@ public sealed class PaguaiInboundDocumentDraftTests
         seed.Parameters.AddWithValue("user_id", factory.ActorUserId);
         seed.Parameters.AddWithValue("company_id", companyId);
         seed.Parameters.AddWithValue("membership_id", membership.Id);
-        seed.Parameters.AddWithValue("candidate_company", candidateCompany ?? companyId);
+        seed.Parameters.AddWithValue(
+            "candidate_company",
+            candidateCompany ?? secondCompanyId ?? companyId
+        );
         seed.Parameters.AddWithValue("state", candidateState);
         await seed.ExecuteNonQueryAsync();
 
-        return new Scenario(companyId, inboundId);
+        return new Scenario(companyId, inboundId, secondCompanyId);
     }
 
     private static Guid ReadGuid(JsonElement root, string name) =>
