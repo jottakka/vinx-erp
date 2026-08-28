@@ -17,12 +17,19 @@ row_counts, storage), `commands/auth-export.*` (executa o responsável) e
 `manifest.sha256` (payload ordenado). Metadados ficam em
 `bundle_metadata.json`, fora do hash.
 
-Saída recusada dentro do repositório; diretório criado 0700; qualquer falha
-descarta o bundle parcial (nada de capturas mistas).
+Saída recusada dentro da árvore do repositório (raiz resolvida a partir do
+diretório do script, não do cwd de quem chama); a construção ocorre em
+diretório irmão privado 0700 e a publicação é um único rename atômico — bundle
+parcial é estruturalmente invisível; erro, falha, INT/TERM/HUP descartam tudo.
+Inventário de Storage é parseado estruturalmente (JSON) e paginado por bucket
+(sem teto silencioso de objetos).
 
-Segredos nunca vão para argv: a connection string chega só por ambiente e vira
-um `pgpass` temporário 0600; chaves de serviço viram arquivos de cabeçalho 0600;
-ambos são removidos ao sair (`lib-db.sh`).
+Segredos nunca vão para argv: a connection string chega só por ambiente, vira
+um `pgpass` temporário 0600 e valores percent-codificados são decodificados
+por python3 lendo stdin; controles TLS explícitos (`sslmode`, `sslrootcert`)
+são preservados e repassados ao libpq via `PGSSLMODE`/`PGSSLROOTCERT`; chaves
+de serviço viram arquivos de cabeçalho 0600 registrados no shell pai para o
+teardown (`lib-db.sh`).
 
 ## profile-tables.sh — agregados para as ledgers
 

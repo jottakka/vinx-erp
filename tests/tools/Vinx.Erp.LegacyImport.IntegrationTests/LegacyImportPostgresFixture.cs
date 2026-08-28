@@ -75,7 +75,9 @@ internal static class SyntheticLegacy
             id uuid PRIMARY KEY,
             nome text NOT NULL
         );
-        CREATE TABLE legacy.cliente (
+        -- Tabela-fonte espelha o contrato pinado em docs/migration/ledgers/
+        -- classification-ledger.md: `clientes` (plural), nunca singular.
+        CREATE TABLE legacy.clientes (
             id uuid PRIMARY KEY,
             empresa_id uuid NOT NULL REFERENCES legacy.empresa(id),
             codigo text,
@@ -87,7 +89,7 @@ internal static class SyntheticLegacy
         INSERT INTO legacy.empresa (id, nome) VALUES
             ('11111111-aaaa-4111-8111-111111111111', 'Empresa Sintetica Um'),
             ('22222222-bbbb-4222-8222-222222222222', 'Empresa Sintetica Dois');
-        INSERT INTO legacy.cliente (id, empresa_id, codigo, nome, email, ativo, criado_em) VALUES
+        INSERT INTO legacy.clientes (id, empresa_id, codigo, nome, email, ativo, criado_em) VALUES
             ('c0000000-0000-4000-8000-000000000001', '11111111-aaaa-4111-8111-111111111111', 'CLI-0001', 'Cliente Sintetico Um', 'um@example.test', true, '2026-01-10T12:00:00Z'),
             ('c0000000-0000-4000-8000-000000000002', '11111111-aaaa-4111-8111-111111111111', 'CLI-0002', 'Cliente Sintetico Dois', NULL, true, '2026-01-11T09:30:00Z'),
             ('c0000000-0000-4000-8000-000000000003', '11111111-aaaa-4111-8111-111111111111', 'CLI-0003', 'Cliente Sintetico Tres', 'tres@example.test', false, '2026-01-12T08:15:00Z'),

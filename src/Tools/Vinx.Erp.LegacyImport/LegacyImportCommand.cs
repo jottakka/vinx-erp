@@ -72,14 +72,24 @@ public static class LegacyImportCommand
         try
         {
             var importer = new LegacyImporter();
+            var options = new LegacyImporter.Options(
+                connectionString!, mapping.SourceBatchId, mapping.Companies, mapping.SourceSchema);
             if (!apply)
             {
-                var validation = await importer.DryRunAsync(
-                    new LegacyImporter.Options(
-                        connectionString!, mapping.SourceBatchId, mapping.Companies, mapping.SourceSchema),
-                    CancellationToken.None);
+                var validation = await importer.DryRunAsync(options, CancellationToken.None);
                 WriteSummary(DryRunMode, validation.Problems.Count == 0, mapping.SourceBatchId, validation.Companies, validation.Problems);
                 return validation.Valid ? 0 : 1;
+            }
+
+            // Preflight fail-closed: a MESMA validação do dry-run (em transação
+            // READ ONLY imposta pelo banco) roda antes de qualquer DDL/escrita.
+            // Mapeamento incompleto aborta com staging nem criado — sem schema
+            // órfão e sem empresa legada silenciosamente ignorada.
+            var preflight = await importer.DryRunAsync(options, CancellationToken.None);
+            if (!preflight.Valid)
+            {
+                WriteSummary(ApplyMode, succeeded: false, mapping.SourceBatchId, preflight.Companies, preflight.Problems);
+                return 1;
             }
 
             // Escritas exigem staging existente conforme convenção DDL do tooling.
@@ -90,10 +100,7 @@ public static class LegacyImportCommand
                 await ddl.ExecuteNonQueryAsync();
             }
 
-            var result = await importer.ApplyAsync(
-                new LegacyImporter.Options(
-                    connectionString!, mapping.SourceBatchId, mapping.Companies, mapping.SourceSchema),
-                CancellationToken.None);
+            var result = await importer.ApplyAsync(options, CancellationToken.None);
             WriteSummary(ApplyMode, result.Succeeded, mapping.SourceBatchId, result.Companies, []);
             return result.Succeeded ? 0 : 1;
         }

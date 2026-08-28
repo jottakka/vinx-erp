@@ -3,12 +3,22 @@
 #
 # Contrato de segredos: a connection string chega APENAS pela variável de
 # ambiente LEGACY_SNAPSHOT_CONN e é convertida em um pgpass temporário 0600
-# (PGPASSFILE); psql/pg_dump recebem apenas -h/-p/-U/-d não secretos. Chaves
-# de serviço (Storage) são entregues ao curl por arquivo de cabeçalho 0600.
+# (PGPASSFILE); valores com codificação percentual são decodificados por
+# python3 LENDO STDIN — segredo nunca vira argv de processo (visível no ps).
+# psql/pg_dump recebem apenas -h/-p/-U/-d não secretos; controles TLS
+# explícitos (sslmode/sslrootcert) são preservados e repassados ao libpq via
+# PGSSLMODE/PGSSLROOTCERT. Chaves de serviço (Storage) são entregues ao curl
+# por arquivo de cabeçalho 0600 registrado no shell PAI para o teardown.
 # Falha fechada quando a string não pode ser interpretada com segurança.
 
 # Estado populado por db_setup:
-DB_HOST= DB_PORT=5432 DB_USER= DB_NAME= DB_PASS=
+DB_HOST=''
+DB_PORT=5432
+DB_USER=''
+DB_NAME=''
+DB_PASS=''
+DB_SSLMODE=''
+DB_SSLROOTCERT=''
 PGPASS_FILE=
 BEARER_FILES=()
 
@@ -17,7 +27,10 @@ db_fail() { echo "erro(lib-db): $*" >&2; exit 2; }
 db_percent_decode() {
   local value=$1
   if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.unquote(sys.argv[1]))' "$value"
+    # printf é builtin (sem argv) e o python3 lê o valor de stdin: a credencial
+    # nunca aparece na linha de comando de nenhum processo.
+    printf '%s' "$value" | python3 -c 'import sys, urllib.parse
+sys.stdout.write(urllib.parse.unquote(sys.stdin.read()))'
   elif [[ "$value" != *%* ]]; then
     printf '%s' "$value"
   else
@@ -34,11 +47,35 @@ db_kv_value() {
   return 1
 }
 
+db_apply_ssl_params() {
+  # sslmode/sslrootcert explícitos do operador são aplicados ao libpq, não
+  # descartados silenciosamente (verify-full precisa ser enforce).
+  local pair key value
+  for pair in ${1//&/ }; do
+    [[ -n "$pair" ]] || continue
+    key=${pair%%=*}
+    [[ "$key" == "$pair" ]] && db_fail "parâmetro de consulta sem '=' na URI: $pair"
+    value=${pair#*=}
+    case "$key" in
+      sslmode) DB_SSLMODE=$(db_percent_decode "$value") || exit 2 ;;
+      sslrootcert) DB_SSLROOTCERT=$(db_percent_decode "$value") || exit 2 ;;
+      connect_timeout|application_name) : ;; # inofensivos; padrão do libpq aplica
+      *) db_fail "parâmetro de consulta não suportado na URI: $key" ;;
+    esac
+  done
+}
+
 db_setup() {
   : "${LEGACY_SNAPSHOT_CONN:?LEGACY_SNAPSHOT_CONN é obrigatória}"
   # Reset defensivo: nenhuma credencial sobrevive de uma chamada anterior.
-  local conn rest userinfo hostport kv
-  DB_HOST= DB_PORT=5432 DB_USER= DB_NAME= DB_PASS=
+  local conn rest userinfo hostport kv query
+  DB_HOST=''
+  DB_PORT=5432
+  DB_USER=''
+  DB_NAME=''
+  DB_PASS=''
+  DB_SSLMODE=''
+  DB_SSLROOTCERT=''
   conn=$LEGACY_SNAPSHOT_CONN
 
   case "$conn" in
@@ -50,6 +87,10 @@ db_setup() {
       kv=${rest%%\?*}
       DB_NAME=$(db_percent_decode "$kv") || exit 2
       [[ -n "$DB_NAME" ]] || db_fail "banco vazio na connection string"
+      if [[ "$rest" == *\?* ]]; then
+        query=${rest#*\?}
+        db_apply_ssl_params "$query"
+      fi
       if [[ "$userinfo" == *@* ]]; then
         hostport=${userinfo##*@}
         DB_USER=${userinfo%%@*}
@@ -75,7 +116,7 @@ db_setup() {
       fi
       ;;
     *\ *)
-      local token acc="" benign="sslmode= sslrootcert= connect_timeout= application_name="
+      local token acc=""
       for token in $conn; do
         case "$token" in
           host=*) DB_HOST=${token#host=} ;;
@@ -83,12 +124,13 @@ db_setup() {
           user=*) DB_USER=${token#user=} ;;
           dbname=*|database=*) DB_NAME=${token#*=} ;;
           password=*) DB_PASS=${token#password=} ;;
-          sslmode=*|sslrootcert=*|connect_timeout=*|application_name=*) : ;; # inofensivos para pgpass; aplicados por padrão do libpq
+          sslmode=*) DB_SSLMODE=${token#sslmode=} ;;
+          sslrootcert=*) DB_SSLROOTCERT=${token#sslrootcert=} ;;
+          connect_timeout=*|application_name=*) : ;; # inofensivos; padrão do libpq aplica
           *) acc+=" $token" ;;
         esac
       done
       [[ "$acc" == *"="* ]] && db_fail "parâmetros não suportados na connection string:$acc"
-      unset benign
       ;;
     *)
       db_fail "formato de connection string não reconhecido (use postgres:// ou pares chave=valor)"
@@ -105,11 +147,23 @@ db_setup() {
   case "$DB_PASS$DB_USER$DB_NAME$DB_HOST" in
     *$forbidden*) db_fail "credenciais contêm caracteres proibidos (dois-pontos, barra invertida, nova linha)" ;;
   esac
+  if [[ "${DB_SSLMODE}${DB_SSLROOTCERT}" =~ [[:space:]\"\'] ]]; then
+    db_fail "parâmetros TLS contêm caracteres proibidos (espaço/aspa)"
+  fi
 
   PGPASS_FILE=$(mktemp "${TMPDIR:-/tmp}/vinx-pgpass.XXXXXX")
   chmod 600 "$PGPASS_FILE"
   printf '%s:%s:%s:%s:%s\n' "$DB_HOST" "$DB_PORT" "$DB_NAME" "$DB_USER" "$DB_PASS" > "$PGPASS_FILE"
   export PGPASSFILE="$PGPASS_FILE"
+
+  # libpq lê PGSSLMODE/PGSSLROOTCERT do ambiente: psql/pg_dump continuam sem
+  # qualquer valor secreto em argv e o TLS pedido pelo operador é aplicado.
+  if [[ -n "$DB_SSLMODE" ]]; then
+    export PGSSLMODE="$DB_SSLMODE"
+  fi
+  if [[ -n "$DB_SSLROOTCERT" ]]; then
+    export PGSSLROOTCERT="$DB_SSLROOTCERT"
+  fi
 }
 
 db_psql() {
@@ -120,13 +174,25 @@ db_pg_dump() {
   pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" "$@"
 }
 
-db_bearer_header_file() {
+# Cria o arquivo de cabeçalho 0600 com a chave de serviço e imprime o CAMINHO
+# (não o segredo). O registro para o teardown é função separada: chamadas via
+# substituição de comando (`$(...)`) rodam em subshell, onde um append em
+# BEARER_FILES morreria sem o shell pai nunca vê-lo.
+db_new_bearer_header_file() {
   local file
   file=$(mktemp "${TMPDIR:-/tmp}/vinx-hdr.XXXXXX")
   chmod 600 "$file"
   printf 'Authorization: Bearer %s\n' "$1" > "$file"
-  BEARER_FILES+=("$file")
   printf '%s' "$file"
+}
+
+# Deve ser chamada NO SHELL PAI para que o teardown remova o arquivo.
+db_track_bearer_file() {
+  local f
+  for f in ${BEARER_FILES[@]+"${BEARER_FILES[@]}"}; do
+    [[ "$f" == "$1" ]] && return 0
+  done
+  BEARER_FILES+=("$1")
 }
 
 db_teardown_secrets() {

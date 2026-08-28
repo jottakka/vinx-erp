@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Npgsql;
 
@@ -14,8 +12,10 @@ public sealed class LegacyImporter
 {
     private const string TableKey = "customers";
 
-    private static string ClientTable(string sourceSchema) => $"\"{sourceSchema}\".cliente";
-    private static readonly string[] ExpectedClienteColumns =
+    // Tabela-fonte pinada pela ledger de classificação (classification-ledger.md:
+    // `clientes`, criada em schema.sql). Singular/plural é contrato, não gosto.
+    private static string ClientTable(string sourceSchema) => $"\"{sourceSchema}\".clientes";
+    private static readonly string[] ExpectedClientesColumns =
         ["id", "empresa_id", "codigo", "nome", "email", "ativo"];
 
     public sealed record Options(
@@ -37,7 +37,8 @@ public sealed class LegacyImporter
         await connection.OpenAsync(cancellationToken);
         var results = new List<CompanyResult>();
         var succeeded = true;
-        var mappingVersion = options.MappingVersionHashOverride ?? LegacyImportMappingFile.MappingVersionHash();
+        var mappingVersion = options.MappingVersionHashOverride
+            ?? LegacyImportMappingFile.MappingVersionHash(options.Companies, options.SourceSchema);
 
         foreach (var mapping in Ordered(options.Companies))
         {
@@ -65,14 +66,25 @@ public sealed class LegacyImporter
 
     /// <summary>
     /// Valida colunas do legado e cobertura de mapeamento, calculando digests,
-    /// sem criar schema nem escrever qualquer linha. Problemas são retornados,
-    /// nunca lançados, para o resumo processável.
+    /// sem criar schema nem escrever qualquer linha. Toda a validação roda em
+    /// uma única transação READ ONLY imposta pelo banco — a mesma função serve
+    /// de preflight fail-closed do modo <c>--apply</c>. Problemas são
+    /// retornados, nunca lançados, para o resumo processável.
     /// </summary>
     public async Task<(bool Valid, IReadOnlyList<CompanyResult> Companies, IReadOnlyList<ImportValidationProblem> Problems)> DryRunAsync(
         Options options, CancellationToken cancellationToken)
     {
         await using var connection = new NpgsqlConnection(options.ConnectionString);
         await connection.OpenAsync(cancellationToken);
+
+        // READ ONLY imposto pelo servidor: nenhuma escrita escapa da validação,
+        // nem por acidente de SQL futuro.
+        await using var validationTransaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var enforceReadOnly = new NpgsqlCommand(
+            "SET TRANSACTION READ ONLY", connection, validationTransaction))
+        {
+            await enforceReadOnly.ExecuteNonQueryAsync(cancellationToken);
+        }
 
         var problems = new List<ImportValidationProblem>();
 
@@ -81,9 +93,9 @@ public sealed class LegacyImporter
             await using var command = new NpgsqlCommand(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = @source_schema AND table_name = 'cliente'
+                WHERE table_schema = @source_schema AND table_name = 'clientes'
                 """,
-                connection);
+                connection, validationTransaction);
             command.Parameters.AddWithValue("@source_schema", options.SourceSchema);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
@@ -92,12 +104,12 @@ public sealed class LegacyImporter
             }
         }
 
-        var missingColumns = ExpectedClienteColumns.Except(foundColumns).ToList();
+        var missingColumns = ExpectedClientesColumns.Except(foundColumns).ToList();
         if (missingColumns.Count > 0)
         {
             problems.Add(new ImportValidationProblem(
                 "missing_legacy_columns",
-                $"colunas ausentes em {options.SourceSchema}.cliente: {string.Join(", ", missingColumns)}"));
+                $"colunas ausentes em {options.SourceSchema}.clientes: {string.Join(", ", missingColumns)}"));
         }
 
         // Empresas presentes no legado sem linha no mapa bloqueiam a importação.
@@ -106,7 +118,7 @@ public sealed class LegacyImporter
         {
             await using var command = new NpgsqlCommand(
                 $"SELECT DISTINCT empresa_id::text FROM {ClientTable(options.SourceSchema)} ORDER BY 1",
-                connection);
+                connection, validationTransaction);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -125,12 +137,12 @@ public sealed class LegacyImporter
         foreach (var mapping in Ordered(options.Companies))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            // Sem transação de escrita: apenas leitura das linhas para validar presença.
-            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-            var rowCount = await CountClientRowsAsync(connection, transaction, options.SourceSchema, mapping.LegacyEmpresaId, cancellationToken);
-            await transaction.RollbackAsync(cancellationToken);
+            var rowCount = await CountClientRowsAsync(
+                connection, validationTransaction, options.SourceSchema, mapping.LegacyEmpresaId, cancellationToken);
             results.Add(new CompanyResult(mapping.CompanyKey, CompanyImportOutcome.Validated, rowCount));
         }
+
+        await validationTransaction.RollbackAsync(cancellationToken);
 
         return (problems.Count == 0, results, problems);
     }
@@ -246,6 +258,37 @@ public sealed class LegacyImporter
         return (int)(long)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 
+    private sealed record StagedCustomer(
+        Guid TargetCompanyId, string CompanyKey, string Code, string LegalName, string? Email, bool Active);
+
+    private static async Task<StagedCustomer?> ReadStagedCustomerAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid legacyClienteId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT target_company_id, company_key, code, legal_name, email, active
+            FROM legacy_import.customers WHERE legacy_cliente_id = @legacy_cliente_id
+            """,
+            connection, transaction);
+        command.Parameters.AddWithValue("@legacy_cliente_id", legacyClienteId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new StagedCustomer(
+            reader.GetGuid(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetBoolean(5));
+    }
+
     private static async Task<int> StageCustomersAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -256,15 +299,34 @@ public sealed class LegacyImporter
         var staged = 0;
         foreach (var row in rows)
         {
+            var legacyClienteId = Guid.Parse(row.IdText);
+            var expected = new StagedCustomer(
+                mapping.TargetCompanyId, mapping.CompanyKey, row.Code ?? string.Empty, row.Name, row.Email, row.Active);
+
+            // Fail-closed em staging: linha preexistente é comparada campo a campo.
+            // Divergência (staging velho/torto sob receipt nova) é conflito, nunca
+            // ON CONFLICT DO NOTHING silencioso — falso imported_new não existe.
+            var existing = await ReadStagedCustomerAsync(
+                connection, transaction, legacyClienteId, cancellationToken);
+            if (existing is not null)
+            {
+                if (!existing.Equals(expected))
+                {
+                    throw new LegacyImportConflictException(
+                        $"staging divergente da fonte para a empresa {mapping.CompanyKey} (cliente legado {row.IdText})");
+                }
+
+                continue;
+            }
+
             await using var command = new NpgsqlCommand(
                 """
                 INSERT INTO legacy_import.customers
                     (legacy_cliente_id, target_company_id, company_key, code, legal_name, email, active, source_payload)
                 VALUES (@legacy_cliente_id, @target_company_id, @company_key, @code, @legal_name, @email, @active, @source_payload::jsonb)
-                ON CONFLICT (legacy_cliente_id) DO NOTHING
                 """,
                 connection, transaction);
-            command.Parameters.AddWithValue("@legacy_cliente_id", Guid.Parse(row.IdText));
+            command.Parameters.AddWithValue("@legacy_cliente_id", legacyClienteId);
             command.Parameters.AddWithValue("@target_company_id", mapping.TargetCompanyId);
             command.Parameters.AddWithValue("@company_key", mapping.CompanyKey);
             command.Parameters.AddWithValue("@code", row.Code ?? string.Empty);
@@ -364,19 +426,26 @@ public sealed class LegacyImporter
             $"lote mutado sob o mesmo batch para a empresa {companyKey}: hash/digest divergentes");
     }
 
+    /// <summary>
+    /// Digest do lote sobre serialização canônica tipada e com prefixo de
+    /// comprimento: ("a|b","c") e ("a","b|c") — e null vs "∅" — são bytes de
+    /// enquadramento distintos, logo SHA-256 diferente. A antiga junção por
+    /// "|" com sentinela "∅" colidia e era explorável para replay de lote mutado.
+    /// </summary>
     private static string ComputeDigest(IReadOnlyList<ClientRow> rows)
     {
-        var builder = new StringBuilder();
+        using var canonical = new CanonicalDigest.Builder("vinx-legacy-import/payload/v2");
+        canonical.WriteLong(rows.Count);
         foreach (var row in rows)
         {
-            builder.Append(row.IdText).Append('|')
-                .Append(row.Code ?? "\u2205").Append('|')
-                .Append(row.Name).Append('|')
-                .Append(row.Email ?? "\u2205").Append('|')
-                .Append(row.Active ? '1' : '0').Append('\n');
+            canonical.WriteNullableString(row.IdText)
+                .WriteNullableString(row.Code)
+                .WriteNullableString(row.Name)
+                .WriteNullableString(row.Email)
+                .WriteBool(row.Active);
         }
 
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
+        return canonical.ToSha256Hex();
     }
 
     private static IEnumerable<CompanyMapping> Ordered(IReadOnlyList<CompanyMapping> companies) =>

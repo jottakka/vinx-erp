@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -66,15 +64,30 @@ internal static class LegacyImportMappingFile
             : throw new FormatException($"mapping: {name} é obrigatório");
 
     /// <summary>
-    /// Hash determinístico da versão de mapeamento: SHA-256 sobre a definição
-    /// canônica da convenção (tabela, colunas e versão do DDL). Mudança aqui
-    /// força conflito fail-closed com receipts antigas.
+    /// Hash determinístico da versão de mapeamento: SHA-256 sobre a convenção
+    /// (tabela, colunas e versão do DDL de staging) E o mapeamento efetivo
+    /// completo — schema-fonte e cada par companyKey/legacyEmpresaId/
+    /// targetCompanyId — em serialização canônica tipada. Qualquer mudança
+    /// (trocar a empresa alvo sob o mesmo batch, por exemplo) muda o hash e
+    /// força conflito fail-closed com receipts antigas, conforme
+    /// docs/migration/ledgers/identity-mapping.md ("o hash cobre a ledger").
     /// </summary>
-    public static string MappingVersionHash()
+    public static string MappingVersionHash(IReadOnlyList<CompanyMapping> companies, string sourceSchema)
     {
-        const string definition =
-            "vinx-legacy-import/v1|table_key=customers"
+        const string convention =
+            "vinx-legacy-import/v2|table_key=customers|source_table=clientes"
             + "|staging_ddl=1|columns=legacy_cliente_id,target_company_id,company_key,code,legal_name,email,active";
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(definition)));
+        using var canonical = new CanonicalDigest.Builder("vinx-legacy-import/mapping-version/v2");
+        canonical.WriteNullableString(convention)
+            .WriteNullableString(sourceSchema)
+            .WriteLong(companies.Count);
+        foreach (var company in companies.OrderBy(c => c.CompanyKey, StringComparer.Ordinal))
+        {
+            canonical.WriteNullableString(company.CompanyKey)
+                .WriteNullableString(company.LegacyEmpresaId.ToString())
+                .WriteNullableString(company.TargetCompanyId.ToString());
+        }
+
+        return canonical.ToSha256Hex();
     }
 }

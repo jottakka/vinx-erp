@@ -25,10 +25,20 @@
 
 set -euo pipefail
 set -o errtrace
-# shellcheck source=lib-db.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib-db.sh"
 
-fail() { echo "erro: $*" >&2; exit 2; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=lib-db.sh disable=SC1091  # caminho resolvido em runtime
+source "$SCRIPT_DIR/lib-db.sh"
+
+# Falha fechada descartando saída parcial: fail() e sinais/erros cobertos.
+fail() {
+  echo "erro: $*" >&2
+  if [[ -d "${dest_abs:-}" && "${BUNDLE_OPENED:-0}" == 1 ]]; then
+    rm -rf "$dest_abs"
+    echo "erro: profiler interrompido; saída parcial descartada" >&2
+  fi
+  exit 2
+}
 validate_name() {
   [[ "$1" =~ ^[a-z_][a-z_0-9]*$ ]] || fail "nome fora do padrão seguro: $2"
 }
@@ -45,7 +55,9 @@ dest_parent=$(dirname "$2")
 dest_name=$(basename "$2")
 mkdir -p "$dest_parent"
 dest_abs="$(cd "$dest_parent" && pwd -P)/$dest_name"
-if repo_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+# Raiz do repositório resolvida a partir do DIRETÓRIO DO SCRIPT: o cwd de quem
+# chama não pode burlar a guarda (probe a partir de /tmp é detectado).
+if repo_root=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null); then
   repo_root_phys=$(cd "$repo_root" && pwd -P)
   case "$dest_abs" in
     "$repo_root_phys"|"$repo_root_phys"/*)
@@ -61,14 +73,15 @@ cleanup_all() {
   rm -rf "$TMP_DIR"
 }
 discard_partial_bundle() {
-  [[ -d "${dest_abs:-}" && "${BUNDLE_OPENED:-0}" == 1 ]] || return 0
-  rm -rf "$dest_abs"
-  fail "profiler interrompido; saída parcial descartada"
+  if [[ -d "${dest_abs:-}" && "${BUNDLE_OPENED:-0}" == 1 ]]; then
+    rm -rf "$dest_abs"
+    echo "erro: profiler interrompido; saída parcial descartada" >&2
+  fi
+  exit 2
 }
 trap cleanup_all EXIT
-trap discard_partial_bundle ERR
+trap discard_partial_bundle ERR INT TERM HUP
 
-TMPDIR_SET="${TMPDIR:-/tmp}"
 db_setup   # converte a connection string em pgpass 0600; nunca em argv
 psql_conn() { db_psql "$@"; }
 

@@ -14,24 +14,31 @@ public sealed class ImporterCommandTests
     private static string MappingPath =>
         Path.Combine(Path.GetTempPath(), $"legacy-import-mapping-{Guid.NewGuid():N}.json");
 
-    /// <summary>Mapeia as duas empresas sintéticas; alvo e legado são GUIDs inventados.</summary>
-    private static string MappingJson(string batchId = "rehearsal-1") => $$"""
+    private static string CompanyJson(string companyKey, string legacyEmpresaId, string targetCompanyId) => $$"""
         {
-          "sourceBatchId": "{{batchId}}",
-          "companies": [
-            {
-              "companyKey": "11111111-aaaa-4111-8111-111111111111",
-              "legacyEmpresaId": "11111111-aaaa-4111-8111-111111111111",
-              "targetCompanyId": "9a000000-0000-4000-8000-000000000001"
-            },
-            {
-              "companyKey": "22222222-bbbb-4222-8222-222222222222",
-              "legacyEmpresaId": "22222222-bbbb-4222-8222-222222222222",
-              "targetCompanyId": "9a000000-0000-4000-8000-000000000002"
-            }
-          ]
+          "companyKey": "{{companyKey}}",
+          "legacyEmpresaId": "{{legacyEmpresaId}}",
+          "targetCompanyId": "{{targetCompanyId}}"
         }
         """;
+
+    /// <summary>Mapeia as duas empresas sintéticas; alvo e legado são GUIDs inventados.</summary>
+    private static string MappingJson(string batchId = "rehearsal-1", string[]? companies = null)
+    {
+        companies ??=
+        [
+            CompanyJson("11111111-aaaa-4111-8111-111111111111", "11111111-aaaa-4111-8111-111111111111", "9a000000-0000-4000-8000-000000000001"),
+            CompanyJson("22222222-bbbb-4222-8222-222222222222", "22222222-bbbb-4222-8222-222222222222", "9a000000-0000-4000-8000-000000000002"),
+        ];
+        return $$"""
+            {
+              "sourceBatchId": "{{batchId}}",
+              "companies": [
+                {{string.Join(",", companies)}}
+              ]
+            }
+            """;
+    }
 
     [Fact]
     public async Task Idempotent_replay_skips_and_mutated_input_conflicts()
@@ -98,7 +105,7 @@ public sealed class ImporterCommandTests
 
             // Execução 3: mesmo batch, payload mutado — conflito fail-closed sem escrita parcial.
             await fx.ExecuteAsync(
-                "UPDATE legacy.cliente SET nome = 'Cliente Sintetico Um ALTERADO' WHERE codigo = 'CLI-0001'");
+                "UPDATE legacy.clientes SET nome = 'Cliente Sintetico Um ALTERADO' WHERE codigo = 'CLI-0001'");
             int run3;
             using (var io = Capture())
             {
@@ -143,6 +150,222 @@ public sealed class ImporterCommandTests
             File.Delete(mapping);
         }
     }
+
+    /// <summary>
+    /// Regressão da colisão de digest: a serialização antiga ("|" + sentinela
+    /// "∅") dava o MESMO SHA-256 para codigo="a|b",nome="c" e codigo="a",
+    /// nome="b|c". Agora o enquadramento canônico tipado os distingue: mesmo
+    /// batch conflita fail-closed e batches distintos gravam digests diferentes.
+    /// </summary>
+    [Fact]
+    public async Task Digest_collision_regression_pipe_joined_fields_now_diverge()
+    {
+        await using var fx = new LegacyImportPostgresFixture();
+        await fx.InitializeAsync();
+
+        const string collidingRow = "d0000000-0000-4000-8000-000000000001";
+        await fx.ExecuteAsync($"""
+            INSERT INTO legacy.clientes (id, empresa_id, codigo, nome, email, ativo, criado_em) VALUES
+                ('{collidingRow}', '11111111-aaaa-4111-8111-111111111111', 'a|b', 'c', NULL, true, '2026-02-01T00:00:00Z')
+            """);
+
+        var mapping = MappingPath;
+        await File.WriteAllTextAsync(mapping, MappingJson("digest-collision"));
+        var mappingNewBatch = MappingPath;
+        await File.WriteAllTextAsync(mappingNewBatch, MappingJson("digest-collision-2"));
+        try
+        {
+            // Carga com o primeiro estado: ("a|b", "c").
+            int run1;
+            string stdout1;
+            string stderr1;
+            using (var io = Capture())
+            {
+                run1 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
+                (stdout1, stderr1) = (io.Stdout, io.Stderr);
+            }
+            Assert.True(run1 == 0 && stdout1.Contains("imported_new"), $"exit={run1} stdout=[{stdout1}] stderr=[{stderr1}]");
+            var digest1 = await CompanyDigestAsync(fx, "11111111-aaaa-4111-8111-111111111111", "digest-collision");
+
+            // Mutação colidente: mesmos campos, mesmo tamanho, outro enquadramento.
+            await fx.ExecuteAsync(
+                $"UPDATE legacy.clientes SET codigo = 'a', nome = 'b|c' WHERE id = '{collidingRow}'");
+
+            // Mesmo batch ⇒ digest diferente ⇒ conflito fail-closed (antes: replayed_skip falso).
+            int run2;
+            string stdout2;
+            using (var io = Capture())
+            {
+                run2 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
+                stdout2 = io.Stdout;
+            }
+            Assert.NotEqual(0, run2);
+            Assert.Contains("conflicted_rollback", stdout2);
+
+            // Batch novo sobre staging zerado: o segundo estado colidente é
+            // importado e grava digest DISTINTO do primeiro estado.
+            await fx.ExecuteAsync("DROP SCHEMA legacy_import CASCADE");
+            int run3;
+            using (var io = Capture())
+            {
+                run3 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mappingNewBatch]);
+            }
+            Assert.Equal(0, run3);
+            var digest2 = await CompanyDigestAsync(fx, "11111111-aaaa-4111-8111-111111111111", "digest-collision-2");
+            Assert.NotEqual(digest1, digest2);
+        }
+        finally
+        {
+            File.Delete(mapping);
+            File.Delete(mappingNewBatch);
+        }
+    }
+
+    /// <summary>
+    /// Regressão do hash de mapeamento: ele agora cobre o mapeamento efetivo
+    /// completo (companyKey/legacyEmpresaId/targetCompanyId). Trocar a empresa
+    /// alvo sob o MESMO batch vira conflito fail-closed — antes era
+    /// replayed_skip silencioso com a receipt apontando para o alvo antigo.
+    /// </summary>
+    [Fact]
+    public async Task Changed_target_company_under_same_batch_conflicts()
+    {
+        await using var fx = new LegacyImportPostgresFixture();
+        await fx.InitializeAsync();
+
+        var mapping = MappingPath;
+        await File.WriteAllTextAsync(mapping, MappingJson("mapping-change"));
+        var retargeted = MappingPath;
+        await File.WriteAllTextAsync(retargeted, MappingJson("mapping-change",
+        [
+            CompanyJson("11111111-aaaa-4111-8111-111111111111", "11111111-aaaa-4111-8111-111111111111", "9b000000-0000-4000-8000-000000000009"),
+            CompanyJson("22222222-bbbb-4222-8222-222222222222", "22222222-bbbb-4222-8222-222222222222", "9a000000-0000-4000-8000-000000000002"),
+        ]));
+        try
+        {
+            int run1;
+            using (var io = Capture())
+            {
+                run1 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
+            }
+            Assert.Equal(0, run1);
+            var receiptsAfterRun1 = await ReceiptFingerprint(fx);
+
+            int run2;
+            string stdout2;
+            using (var io = Capture())
+            {
+                run2 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", retargeted]);
+                stdout2 = io.Stdout;
+            }
+            Assert.NotEqual(0, run2);
+            Assert.Contains("conflicted_rollback", stdout2);
+            Assert.Equal(receiptsAfterRun1, await ReceiptFingerprint(fx));
+        }
+        finally
+        {
+            File.Delete(mapping);
+            File.Delete(retargeted);
+        }
+    }
+
+    /// <summary>
+    /// Regressão de staging: linha preexistente divergente da fonte sob batch
+    /// NOVO é conflito fail-closed — antes o ON CONFLICT DO NOTHING ignorava a
+    /// divergência e a empresa reportava imported_new com staging torto.
+    /// </summary>
+    [Fact]
+    public async Task Divergent_staging_rows_fail_closed_under_new_batch()
+    {
+        await using var fx = new LegacyImportPostgresFixture();
+        await fx.InitializeAsync();
+
+        var mapping = MappingPath;
+        await File.WriteAllTextAsync(mapping, MappingJson("staging-divergence-1"));
+        var mappingNewBatch = MappingPath;
+        await File.WriteAllTextAsync(mappingNewBatch, MappingJson("staging-divergence-2"));
+        try
+        {
+            int run1;
+            using (var io = Capture())
+            {
+                run1 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
+            }
+            Assert.Equal(0, run1);
+
+            await fx.ExecuteAsync(
+                "UPDATE legacy_import.customers SET legal_name = 'DIVERGIDO' WHERE code = 'CLI-0001'");
+
+            int run2;
+            string stdout2;
+            using (var io = Capture())
+            {
+                run2 = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mappingNewBatch]);
+                stdout2 = io.Stdout;
+            }
+            Assert.NotEqual(0, run2);
+            Assert.Contains("conflicted_rollback", stdout2);
+
+            // A empresa divergente não ganhou receipt do batch novo e a linha
+            // divergente permanece como estava (rollback da transação dela).
+            Assert.Equal(0, await fx.ExecuteCountAsync("""
+                SELECT count(*) FROM legacy_import.import_receipts
+                WHERE source_batch_id = 'staging-divergence-2'
+                  AND company_key = '11111111-aaaa-4111-8111-111111111111'
+                """));
+            Assert.Equal(1, await fx.ExecuteCountAsync(
+                "SELECT count(*) FROM legacy_import.customers WHERE legal_name = 'DIVERGIDO'"));
+        }
+        finally
+        {
+            File.Delete(mapping);
+            File.Delete(mappingNewBatch);
+        }
+    }
+
+    /// <summary>
+    /// Regressão do preflight do --apply: mapeamento incompleto (empresa
+    /// legada sem linha no mapa) aborta com a MESMA validação do dry-run ANTES
+    /// de qualquer DDL — nem schema de staging é criado. Antes o --apply
+    /// commitava as empresas listadas e ignorava as ausentes com exit 0.
+    /// </summary>
+    [Fact]
+    public async Task Apply_preflight_blocks_incomplete_mapping_before_any_ddl()
+    {
+        await using var fx = new LegacyImportPostgresFixture();
+        await fx.InitializeAsync();
+
+        var mapping = MappingPath;
+        await File.WriteAllTextAsync(mapping, MappingJson("incomplete",
+        [
+            CompanyJson("11111111-aaaa-4111-8111-111111111111", "11111111-aaaa-4111-8111-111111111111", "9a000000-0000-4000-8000-000000000001"),
+        ]));
+        try
+        {
+            int exit;
+            string stdout;
+            using (var io = Capture())
+            {
+                exit = await LegacyImportCommand.RunAsync(["--apply", "--mapping", mapping]);
+                stdout = io.Stdout;
+            }
+
+            Assert.NotEqual(0, exit);
+            Assert.Contains("unmapped_legacy_empresa", stdout);
+            // Prova da ordem de execução: abort aconteceu antes do EnsureStaging.
+            Assert.True(await fx.StagingMissingAsync());
+        }
+        finally
+        {
+            File.Delete(mapping);
+        }
+    }
+
+    private static Task<string> CompanyDigestAsync(LegacyImportPostgresFixture fx, string companyKey, string batchId) =>
+        fx.ExecuteScalarAsync<string>($"""
+            SELECT payload_sha256 FROM legacy_import.import_receipts
+            WHERE company_key = '{companyKey}' AND table_key = 'customers' AND source_batch_id = '{batchId}'
+            """);
 
     /// <summary>Estado estável do staging para comparações entre execuções.</summary>
     private static Task<string> StagedFingerprint(LegacyImportPostgresFixture fx) =>

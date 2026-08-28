@@ -20,3 +20,8 @@ dotnet build --no-restore
 while IFS= read -r public_test_project; do
   dotnet test "$public_test_project" --no-build --filter 'Category!=SupabaseStorage'
 done < <(git ls-files 'tests/public/**/*.csproj' | sort)
+
+# Tooling de migração legada é gate público do PR (Testcontainers/Docker no
+# runner); sem isto a suíte compila no `dotnet build` e nunca roda no CI.
+dotnet test tests/tools/Vinx.Erp.LegacyImport.IntegrationTests/Vinx.Erp.LegacyImport.IntegrationTests.csproj \
+  --no-build --filter 'Category!=SupabaseStorage'
