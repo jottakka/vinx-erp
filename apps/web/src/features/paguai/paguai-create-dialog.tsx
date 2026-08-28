@@ -1,7 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Alert,
-  Box,
   Button,
   Dialog,
   DialogActions,
@@ -113,10 +112,6 @@ export function PaguaiCreateDialog({
     ? "O anexo selecionado não foi enviado. Remova-o e selecione o arquivo novamente antes de criar a solicitação."
     : null;
   const locked = submitting || recoveryRequired;
-  const proofRequirement = form.watch("proofRequirement");
-  const hasReadyProof = proofAttachments.some((item) => item.state === "ready");
-  const missingRequiredProof =
-    !locked && proofRequirement === "required" && !hasReadyProof;
 
   function close() {
     if (locked) return;
@@ -248,7 +243,7 @@ export function PaguaiCreateDialog({
             )}
           />
           <AttachmentField
-            accept="application/pdf,image/jpeg,image/png"
+            accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
             disabled={locked}
             label="Fatura ou documento da solicitação"
             onChange={setAttachments}
@@ -265,7 +260,7 @@ export function PaguaiCreateDialog({
             value={attachments}
           />
           <AttachmentField
-            accept="application/pdf,image/jpeg,image/png"
+            accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
             disabled={locked}
             label="Anexar comprovante"
             onChange={setProofAttachments}
@@ -332,14 +327,6 @@ export function PaguaiCreateDialog({
           </Button>
         )}
       </DialogActions>
-      {missingRequiredProof ? (
-        <Box sx={{ px: 3, pb: 2 }}>
-          <Alert severity="warning">
-            O comprovante é obrigatório neste rascunho. Anexe um arquivo antes
-            de criar.
-          </Alert>
-        </Box>
-      ) : null}
     </Dialog>
   );
 }

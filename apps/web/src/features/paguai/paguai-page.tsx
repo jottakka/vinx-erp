@@ -11,8 +11,8 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AuthorizedCompanyFilter } from "../../shared/ui/authorized-company-filter";
 import type { AttachmentUploader } from "../../shared/ui/attachment-field";
+import { AuthorizedCompanyFilter } from "../../shared/ui/authorized-company-filter";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
@@ -350,7 +350,8 @@ export function PaguaiPage({
       return;
     setStatus("idle");
     if (!result.ok) {
-      setError(result.error);
+      // A falha do create superficia só no alerta do próprio dialog;
+      // replicá-la no alerta da página renderizaria a mensagem em dobro.
       if (result.error === "network") {
         setCreateError(null);
         setCreateRecoveryRequired(true);
