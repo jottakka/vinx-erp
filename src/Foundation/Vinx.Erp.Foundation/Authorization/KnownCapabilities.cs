@@ -77,6 +77,32 @@ public static class KnownCapabilities
         "db9f6a71-6da5-5933-8204-6b16cad2af8a"
     );
 
+    // Fatia de usabilidade P6: campos de ticket (prioridade/categoria/canal/
+    // SLA/solicitante). UUID canônico UUIDv5 por nome, mesmo padrão acima.
+    public const string ServiceDeskTicketFields = "service_desk.ticket.fields";
+    public static readonly Guid ServiceDeskTicketFieldsId = Guid.Parse(
+        "0e772f6e-97e9-5e8b-82ba-f254691b5d22"
+    );
+
+    public const string ServiceDeskTicketWatchers = "service_desk.ticket.watchers";
+    public static readonly Guid ServiceDeskTicketWatchersId = Guid.Parse(
+        "3886e350-3784-5f75-9289-8cb5b0a138f6"
+    );
+
+    public const string ServiceDeskLookupAdmin = "service_desk.lookup.admin";
+    public static readonly Guid ServiceDeskLookupAdminId = Guid.Parse(
+        "84899de4-b2ff-56bd-8720-264e61d11148"
+    );
+
+    /// <summary>
+    /// Leitura de diretório para pickers (menor privilégio): deliberadamente
+    /// distinta de EmployeesCreate, que autoriza criação de funcionário.
+    /// </summary>
+    public const string DirectoryRead = "directory.read";
+    public static readonly Guid DirectoryReadId = Guid.Parse(
+        "128d103b-1449-5962-98ac-1a7d8edd1063"
+    );
+
     // Cancelamento é terminal e irreversível, com ação de auditoria própria:
     // capability dedicada em vez de reutilizar move (menor privilégio). UUID
     // canônico por nome (UUIDv5 de https://vinx.erp/capabilities/service_desk.ticket.cancel).

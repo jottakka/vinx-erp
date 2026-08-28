@@ -20,11 +20,6 @@ public sealed class AtendimentoCardConfiguration : IEntityTypeConfiguration<Aten
         builder.Property(card => card.Description).HasColumnName("description").HasMaxLength(4000);
         builder.Property(card => card.Column).HasColumnName("column_name").HasMaxLength(30);
         builder
-            .Property(card => card.Priority)
-            .HasColumnName("priority")
-            .HasMaxLength(10)
-            .HasDefaultValue("media");
-        builder
             .Property(card => card.Channel)
             .HasColumnName("channel")
             .HasMaxLength(12)
@@ -33,6 +28,15 @@ public sealed class AtendimentoCardConfiguration : IEntityTypeConfiguration<Aten
         builder
             .Property(card => card.AssigneeMembershipId)
             .HasColumnName("assignee_membership_id");
+        builder
+            .Property(card => card.RequesterPersonRef)
+            .HasColumnName("requester_person_ref")
+            .HasMaxLength(200);
+        builder.Property(card => card.Priority).HasColumnName("priority").HasMaxLength(20);
+        builder
+            .Property(card => card.CategoryRefId)
+            .HasColumnName("category_ref_id");
+        builder.Property(card => card.ChannelRefId).HasColumnName("channel_ref_id");
         builder.Property(card => card.AttachmentFileId).HasColumnName("attachment_file_id");
         builder.Property(card => card.CancelledAt).HasColumnName("cancelled_at");
         builder.Property(card => card.CancelledByUserId).HasColumnName("cancelled_by_user_id");
