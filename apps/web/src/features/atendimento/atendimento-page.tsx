@@ -121,11 +121,7 @@ export function AtendimentoPage({
   const companies = useMemo(
     () =>
       sessionCompanies.filter((company) =>
-        company.capabilities.some(
-          (capability) =>
-            capability.name === readCapability &&
-            capability.scopes.includes("Company"),
-        ),
+        hasCompanyCapability(company, readCapability),
       ),
     [sessionCompanies],
   );
@@ -225,12 +221,9 @@ export function AtendimentoPage({
   );
 
   function hasCapability(name: string) {
-    return (
-      selectedCompany?.capabilities.some(
-        (capability) =>
-          capability.name === name && capability.scopes.includes("Company"),
-      ) ?? false
-    );
+    return selectedCompany
+      ? hasCompanyCapability(selectedCompany, name)
+      : false;
   }
 
   useEffect(() => {
@@ -728,27 +721,21 @@ export function AtendimentoPage({
   }
 
   function canAssignCard(card: AtendimentoCard) {
-    return (
-      companies
-        .find((company) => company.companyId === card.companyId)
-        ?.capabilities.some(
-          (capability) =>
-            capability.name === assignCapability &&
-            capability.scopes.includes("Company"),
-        ) ?? false
+    const cardCompany = companies.find(
+      (company) => company.companyId === card.companyId,
     );
+    return cardCompany
+      ? hasCompanyCapability(cardCompany, assignCapability)
+      : false;
   }
 
   function canCancelCard(card: AtendimentoCard) {
-    return (
-      companies
-        .find((company) => company.companyId === card.companyId)
-        ?.capabilities.some(
-          (capability) =>
-            capability.name === cancelCapability &&
-            capability.scopes.includes("Company"),
-        ) ?? false
+    const cardCompany = companies.find(
+      (company) => company.companyId === card.companyId,
     );
+    return cardCompany
+      ? hasCompanyCapability(cardCompany, cancelCapability)
+      : false;
   }
 
   const viewingCompanyLookups = viewingCard

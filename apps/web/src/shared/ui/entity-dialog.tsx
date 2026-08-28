@@ -19,8 +19,9 @@ type EntityDialogProps = {
 
 /**
  * Modal padrão para criar ou visualizar uma entidade, substituindo formulários
- * inline. O MUI Dialog gerencia foco e aria-modal; o cabeçalho traz título,
- * descrição opcional e botão de fechar acessível.
+ * inline. O MUI Dialog gerencia foco e aria-modal; o cabeçalho traz um único
+ * heading de título (rotulando o diálogo), descrição opcional e botão de
+ * fechar acessível.
  */
 export function EntityDialog({
   children,
@@ -30,6 +31,7 @@ export function EntityDialog({
   title,
 }: EntityDialogProps) {
   const descriptionId = useId();
+  const titleId = useId();
   return (
     <Dialog
       aria-describedby={description ? descriptionId : undefined}
@@ -38,13 +40,16 @@ export function EntityDialog({
       onClose={onClose}
       open={open}
       slotProps={{
-        paper: { sx: { borderRadius: { sm: 4, xs: 0 } } },
+        paper: {
+          "aria-labelledby": titleId,
+          sx: { borderRadius: { sm: 4, xs: 0 } },
+        },
       }}
     >
       <DialogTitle sx={{ pb: 0 }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
           <Stack spacing={0.5} sx={{ flex: 1, minWidth: 0 }}>
-            <Typography component="h2" variant="h5">
+            <Typography component="h2" id={titleId} variant="h5">
               {title}
             </Typography>
             {description ? (

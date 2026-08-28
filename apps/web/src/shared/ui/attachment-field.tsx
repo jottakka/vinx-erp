@@ -102,17 +102,24 @@ export function AttachmentField({
       sizeBytes: file.size,
       state: "uploading" as const,
     }));
-    emit([
-      ...valueRef.current.filter((item) => item.state !== "uploading"),
-      ...pending.map((item) => ({
-        fileId: item.fileId,
-        fileName: item.fileName,
-        localKey: item.localKey,
-        mimeType: item.mimeType,
-        sizeBytes: item.sizeBytes,
-        state: item.state as AttachmentFieldState,
-      })),
-    ]);
+    const pendingValues = pending.map((item) => ({
+      fileId: item.fileId,
+      fileName: item.fileName,
+      localKey: item.localKey,
+      mimeType: item.mimeType,
+      sizeBytes: item.sizeBytes,
+      state: item.state as AttachmentFieldState,
+    }));
+    // Modo singular substitui: o novo lote é o único valor do campo, então o
+    // submit nunca envia um anexo anterior que tenha ficado pronto.
+    emit(
+      multiple
+        ? [
+            ...valueRef.current.filter((item) => item.state !== "uploading"),
+            ...pendingValues,
+          ]
+        : pendingValues,
+    );
 
     const results = await Promise.all(
       pending.map(async (entry) => {

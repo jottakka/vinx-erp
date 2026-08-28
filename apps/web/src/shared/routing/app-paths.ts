@@ -84,3 +84,25 @@ export function readPaguaiProposalId(search: string): string | null {
   const value = new URLSearchParams(search).get("proposal");
   return value && canonicalUuidPattern.test(value) ? value : null;
 }
+
+/** Builds the only supported Demandas detail deep link (canonical UUID). */
+export function demandasDetailPath(demandId: string): string {
+  return `/demandas?demand=${demandId}`;
+}
+
+/**
+ * Allowlist fechada do deep link de Demandas: apenas
+ * "/demandas?demand=<uuid canônico hifenizado>" — sem query extra, duplicada,
+ * fragmento ou origem absoluta. Usado pela inbox e pela página de Demandas.
+ */
+export function isDemandasDeepLink(value: string): boolean {
+  return /^\/demandas\?demand=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+    value,
+  );
+}
+
+/** Accepts only the canonical demand identifier from Demandas' query. */
+export function readDemandasDemandId(search: string): string | null {
+  const value = new URLSearchParams(search).get("demand");
+  return value && canonicalUuidPattern.test(value) ? value : null;
+}

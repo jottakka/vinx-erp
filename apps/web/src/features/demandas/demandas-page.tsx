@@ -22,11 +22,18 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  demandasDetailPath,
+  readDemandasDemandId,
+} from "../../shared/routing/app-paths";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanySelect } from "../../shared/ui/company-select";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
-import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
+import {
+  hasCompanyCapability,
+  resolveCompanyEntityPermissions,
+} from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
   type CommandResult,
@@ -62,11 +69,7 @@ export function DemandasPage() {
   const companies = useMemo(
     () =>
       (bootstrap?.companies ?? []).filter((company) =>
-        company.capabilities.some(
-          (capability) =>
-            capability.name === readCapability &&
-            capability.scopes.includes("Company"),
-        ),
+        hasCompanyCapability(company, readCapability),
       ),
     [bootstrap],
   );
@@ -184,10 +187,10 @@ export function DemandasPage() {
     void loadBoard();
   }, [loadBoard]);
 
-  // Deep link /demandas?demand=<id>: abre o detalhe direto.
+  // Deep link /demandas?demand=<id canônico>: abre o detalhe direto; seletor
+  // inválido (UUID não canônico, query extra) é ignorado, não chamado.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const target = params.get("demand");
+    const target = readDemandasDemandId(window.location.search);
     if (target && companyId) setDetailId(target);
   }, [companyId]);
 
@@ -204,7 +207,7 @@ export function DemandasPage() {
         return;
       if (result) setDetail(result);
     });
-    window.history.replaceState(null, "", `/demandas?demand=${detailId}`);
+    window.history.replaceState(null, "", demandasDetailPath(detailId));
   }, [detailId, companyId]);
 
   function replaceCard(updated?: DemandBoardCard) {
@@ -230,8 +233,32 @@ export function DemandasPage() {
         );
       return;
     }
-    if (result.demand) replaceCard(result.demand);
-    else void loadBoard({ silent: true });
+    if (result.demand) {
+      // A resposta do comando é a DemandResponse completa (sem stageStartedAt):
+      // atualiza o card in place preservando o que o board já conhece.
+      const updated = result.demand;
+      setCards((items) => {
+        const current = items.find((item) => item.id === updated.id);
+        if (!current) return items;
+        return items.map((item) =>
+          item.id === updated.id
+            ? {
+                ...current,
+                automationPaused: updated.automationPaused,
+                demandDisplayNumber: updated.demandDisplayNumber,
+                demandNumber: updated.demandNumber,
+                effectiveDeadline: updated.effectiveDeadline,
+                isOverdue: updated.isOverdue,
+                priority: updated.priority,
+                responsibleMembershipId: updated.responsibleMembershipId,
+                stage: updated.stage,
+                title: updated.title,
+                version: updated.version,
+              }
+            : item,
+        );
+      });
+    } else void loadBoard({ silent: true });
   }
 
   const visibleCards = onlyOverdue
