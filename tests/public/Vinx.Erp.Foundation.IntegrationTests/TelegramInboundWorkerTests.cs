@@ -1657,16 +1657,76 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
         await using var worker = new NotificationWorkerHostFactory(
             factory.Fixture.WorkerConnectionString
         );
-        await using var scope = worker.Services.CreateAsyncScope();
-        var database = scope.ServiceProvider.GetRequiredService<FoundationDbContext>();
+
+        // Fase A (controle): com outbox íntegro, o adapter produz intent + envelope.
+        await using (var scope = worker.Services.CreateAsyncScope())
+        {
+            await CreateAgentReplyAdapter(scope.ServiceProvider, seed.CompanyId).ProcessAsync(
+                new InboundAgentRequestReceived(controlId, AgentChannelKind.Telegram),
+                CancellationToken.None);
+        }
+
+        Assert.Equal(1L, await CountAgentReplyIntentsAsync(factory, controlId));
+        Assert.Equal("agent_completed", await ReadAgentStatusAsync(factory, controlId));
+        Assert.Equal(1L, await CountAgentReplyEnvelopesAsync(factory, controlId));
+
+        await SetTelegramWorkerOutboxInsertAsync(factory, granted: false);
+        try
+        {
+            await using (var scope = worker.Services.CreateAsyncScope())
+            {
+                await Assert.ThrowsAnyAsync<Exception>(() =>
+                    CreateAgentReplyAdapter(scope.ServiceProvider, seed.CompanyId).ProcessAsync(
+                        new InboundAgentRequestReceived(denialId, AgentChannelKind.Telegram),
+                        CancellationToken.None
+                    )
+                );
+            }
+
+            Assert.Equal(0L, await CountAgentReplyIntentsAsync(factory, denialId));
+            Assert.Equal("agent_in_flight", await ReadAgentStatusAsync(factory, denialId));
+            Assert.Equal(0L, await CountAgentReplyEnvelopesAsync(factory, denialId));
+        }
+        finally
+        {
+            await SetTelegramWorkerOutboxInsertAsync(factory, granted: true);
+        }
+
+        await ExecuteScalarOnWorkerAsync(
+            factory,
+            "SELECT notifications.release_inbound_telegram_agent(@id)",
+            ("id", denialId));
+        await using (var scope = worker.Services.CreateAsyncScope())
+        {
+            await CreateAgentReplyAdapter(scope.ServiceProvider, seed.CompanyId).ProcessAsync(
+                new InboundAgentRequestReceived(denialId, AgentChannelKind.Telegram),
+                CancellationToken.None);
+        }
+
+        Assert.Equal(1L, await CountAgentReplyIntentsAsync(factory, denialId));
+        Assert.Equal("agent_completed", await ReadAgentStatusAsync(factory, denialId));
+        Assert.Equal(1L, await CountAgentReplyEnvelopesAsync(factory, denialId));
+    }
+
+    /// <summary>
+    /// Cada tentativa usa um scope novo: o outbox scoped do Wolverine só
+    /// persiste o primeiro flush (MultiFlushMode.OnlyOnce), então reusar a
+    /// mesma instância esconderia um flush de recultura silenciosamente
+    /// ignorado.
+    /// </summary>
+    private static InboundAgentChannelAdapter CreateAgentReplyAdapter(
+        IServiceProvider services,
+        Guid companyId)
+    {
+        var database = services.GetRequiredService<FoundationDbContext>();
         var audit = new AuditAppender(database);
-        var adapter = new InboundAgentChannelAdapter(
+        return new InboundAgentChannelAdapter(
             database,
             new AgentExecutionService(
                 database,
                 audit,
                 new AgentRunner(
-                    new ResolvedCompanyContextResolver(seed.CompanyId),
+                    new ResolvedCompanyContextResolver(companyId),
                     new DeterministicE2eAgentModel(),
                     NullLogger<AgentRunner>.Instance,
                     profileId => profileId == AgentTaskProfileCatalog.ReadOnlySummarizeProfileId
@@ -1696,46 +1756,7 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             new MetaWhatsAppOptions(),
             new TelegramOptions(),
             NullLogger<InboundAgentChannelAdapter>.Instance,
-            scope.ServiceProvider.GetRequiredService<IDbContextOutbox>());
-
-        // Fase A (controle): com outbox íntegro, o adapter produz intent + envelope.
-        await adapter.ProcessAsync(
-            new InboundAgentRequestReceived(controlId, AgentChannelKind.Telegram),
-            CancellationToken.None);
-        Assert.Equal(1L, await CountAgentReplyIntentsAsync(factory, controlId));
-        Assert.Equal("agent_completed", await ReadAgentStatusAsync(factory, controlId));
-        var envelopesBefore = await CountWorkerOutgoingEnvelopesAsync(factory);
-
-        await SetTelegramWorkerOutboxInsertAsync(factory, granted: false);
-        try
-        {
-            await Assert.ThrowsAnyAsync<Exception>(() =>
-                adapter.ProcessAsync(
-                    new InboundAgentRequestReceived(denialId, AgentChannelKind.Telegram),
-                    CancellationToken.None
-                )
-            );
-
-            Assert.Equal(0L, await CountAgentReplyIntentsAsync(factory, denialId));
-            Assert.Equal("agent_in_flight", await ReadAgentStatusAsync(factory, denialId));
-            Assert.Equal(envelopesBefore, await CountWorkerOutgoingEnvelopesAsync(factory));
-        }
-        finally
-        {
-            await SetTelegramWorkerOutboxInsertAsync(factory, granted: true);
-        }
-
-        await ExecuteScalarOnWorkerAsync(
-            factory,
-            "SELECT notifications.release_inbound_telegram_agent(@id)",
-            ("id", denialId));
-        await adapter.ProcessAsync(
-            new InboundAgentRequestReceived(denialId, AgentChannelKind.Telegram),
-            CancellationToken.None
-        );
-
-        Assert.Equal(1L, await CountAgentReplyIntentsAsync(factory, denialId));
-        Assert.Equal("agent_completed", await ReadAgentStatusAsync(factory, denialId));
+            services.GetRequiredService<IDbContextOutbox>());
     }
 
     private static async Task<object?> ExecuteScalarOnWorkerAsync(
@@ -1764,6 +1785,44 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             connection);
         command.Parameters.AddWithValue("event_key", $"telegram-agent:{inboundId}:result");
         return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    /// <summary>
+    /// Conta o envelope durável do reply do agente pelo correlation id
+    /// (= inbound id). O flush do outbox insere diretamente na fila local
+    /// durável notification-delivery, então o registro de transporte pode
+    /// estar na fila ou, brevemente, na tabela de saída.
+    /// </summary>
+    private static async Task<long> CountAgentReplyEnvelopesAsync(
+        FoundationApiFactory factory,
+        Guid inboundId)
+    {
+        var correlationId = inboundId.ToString("D");
+        var count = 0L;
+        foreach (var table in new[]
+        {
+            "vinx_wolverine_worker.wolverine_outgoing_envelopes",
+            "vinx_wolverine_queues.wolverine_queue_notification_delivery",
+        })
+        {
+            await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+            await using var command = new NpgsqlCommand(
+                $"SELECT body FROM {table} WHERE body IS NOT NULL",
+                connection);
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                if (
+                    EnvelopeSerializer.Deserialize(reader.GetFieldValue<byte[]>(0)).CorrelationId
+                    == correlationId
+                )
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
     }
 
     private static async Task<string> ReadAgentStatusAsync(
