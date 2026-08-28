@@ -68,7 +68,9 @@ As capabilities de escopo `Company` são `paguai.draft.read`
 migration. A tabela `paguai.requests` tem RLS forçado: runtime só enxerga ou
 insere a própria solicitação quando `app.user_id` e `app.company_id` explícitos
 correspondem; sem contexto, o acesso falha fechado. Runtime recebe somente
-`USAGE` no schema e `SELECT`/`INSERT` na tabela; `PUBLIC` não recebe acesso.
+`USAGE` no schema e `SELECT`/`INSERT` na tabela; desde o #345, também
+somente `UPDATE (proof_file_id, version)` — nunca a tabela inteira; `PUBLIC`
+não recebe acesso.
 
 A criação valida a estrutura antes da auditoria, abre uma transação, aplica o
 contexto RLS, exige membership ativo e capability, e só então consulta a
@@ -91,6 +93,74 @@ persistidos. Ela também converte o valor dos recibos de idempotência e mantém
 o hash legado aceito pelo replay durante a transição.
 
 Qualquer PR futuro de comportamento Paguai registra `docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
+
+## MVP #345 — comprovante do rascunho (documentation-only)
+
+O comprovante é documentação anexada a um rascunho pelo próprio requerente:
+vincular, trocar ou abrir NÃO confirma pagamento, não cria fato financeiro,
+evento, lançamento, notificação, aprovação ou transição de estado. O estado
+continua exatamente `rascunho` em toda operação do corte; nenhum selo de
+"pago" existe. `proof_file_id uuid NULL` é a única coluna nova (migration
+`20260828032135_AddPaguaiRequestProofFile`); não há tabela própria, histórico
+nem ciclo de vida independente — o histórico é a auditoria append-only.
+
+Três conceitos independentes: `invoiceFileId` (fatura fundadora),
+`proofFileId` (evidência documental de pagamento) e `proofRequirement`
+(declaração sobre o que a futura confirmação de pagamento exigirá).
+`required` sem comprovante e `optional` com comprovante são ambos válidos; o
+MVP não aplica a regra.
+
+**Ator autorizado.** Somente o requerente do rascunho, com membership ativo e
+`paguai.draft.create`, pode vincular/trocar; o arquivo deve ter sido enviado
+pelo mesmo membership. Admin, aprovador ou rótulo Financeiro não adicionam
+nada; rascunho alheio permanece oculto pela RLS requester. Leitura e link
+exigem posse mais `paguai.draft.read`, revalidados a cada chamada.
+
+**Validação na fronteira Files.** O comprovante deve ser não removido, da
+mesma empresa e do mesmo uploader, classificado exatamente
+`paguai_request_proof`, `confirmed` (pós-quarentena/scan) e com
+`retention_until > clock_timestamp()` — regra aplicada no vínculo inicial, na
+troca e imediatamente antes de cada link assinado. Arquivo oculto/permanente
+inválido no vínculo responde `404 proof_file_not_found`; classe correta ainda
+em quarentena responde `400 proof_file_not_ready`; já vinculado em outro
+rascunho responde `409 proof_file_bound` (índice parcial único
+`uq_paguai_requests_proof_file` — o único 23505 assim classificado).
+
+**Endpoints.** `POST /paguai/requests` aceita `proofFileId` opcional e
+atômico com o rascunho (`201` cria; replay idêntico `200`; mesmo `requestId`
+com comprovante distinto `409 idempotency_conflict`; o hash canônico permanece
+byte-idêntico quando o campo está ausente). `PATCH /paguai/requests/{id}/proof`
+com `{ companyId, proofFileId, expectedVersion }` anexa (`proof_attached`) ou
+substitui (`proof_replaced`) via CAS: sucesso faz `version =
+expectedVersion + 1`; versão defasada responde `409 proof_version_conflict`;
+substituir não apaga o arquivo anterior nem altera sua retenção; sessão de
+cookie mantém antiforgery. `GET /paguai/requests[/{id}]` expõe apenas o
+ponteiro e, no detalhe, nome/MIME/tamanho — nunca chave do provedor,
+checksum, retenção ou URL. `GET /paguai/requests/{id}/proof-link?companyId=`
+devolve `{ url, expiresAt }` sob autorização fresca, `private, no-store`, com
+TTL `min(5 min, retenção restante)`; a URL nunca é persistida.
+
+**Auditoria.** Sucesso: `paguai.draft.create` com razão `proof_attached`
+(criação com comprovante) e `paguai.draft.replace_proof` com razão
+`proof_attached`/`proof_replaced` (troca), sempre no mesmo commit da mutação
+— falha de auditoria reverte a troca. Negações usam razões controladas
+(`proof_file_not_found`, `proof_file_not_ready`, `proof_file_bound`,
+`proof_version_conflict`, `capability_denied`); nenhum UUID, nome de arquivo,
+conteúdo ou metadado entra em auditoria/logs. Falha transacional/storage
+responde `503 paguai_unavailable` sem mutação parcial.
+
+**Privilégio mínimo.** O runtime recebe apenas `GRANT UPDATE (proof_file_id,
+version)` em `paguai.requests`: o SQL de runtime não pode alterar valor,
+beneficiário, estado, requerente ou fatura. O Down da migration revoga o
+grant e recusa (fail-closed) enquanto houver comprovante vinculado ou versão
+`<> 1`, restaurando `CHECK (version = 1)`.
+
+Fora do corte: confirmação de pagamento, execução bancária/PIX, estados
+além de `rascunho`, desvinculação/remoção, navegador de comprovantes
+substituídos, prorrogação de retenção, upload no próprio Paguai (o upload
+segue a fronteira Foundation com classificação exata), enforcement de
+`proofRequirement` (pertence à futura confirmação de pagamento) e qualquer
+notificação disparada por comprovante.
 
 ## Proposta de documento do Agente (#335)
 
