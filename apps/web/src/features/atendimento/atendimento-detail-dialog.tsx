@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
 import {
   type AtendimentoCard,
+  type AtendimentoCommandResult,
   type AtendimentoPriority,
   atendimentoClient,
   type LookupChannel,
@@ -41,9 +42,22 @@ const priorities: readonly AtendimentoPriority[] = [
   "baixa",
 ];
 
+/** Estado neutro para referências de diretório não resolvidas. */
+const unresolvedLabel = "Não resolvido";
+
+/**
+ * Executor de mutações fornecido pela página: lock por cartão, publicação
+ * monotônica do snapshot e recuperação (409 current / readback ambíguo).
+ * Retorna o snapshot publicado, ou null quando a ação não foi concluída.
+ */
+export type CardMutationExecutor = (
+  card: AtendimentoCard,
+  run: (card: AtendimentoCard) => Promise<AtendimentoCommandResult>,
+) => Promise<AtendimentoCard | null>;
+
 /**
  * Detalhe do cartão com abas: resumo + timeline (leitura), edição de campos
- * de ticket e observadores. Todo o estado de escrita usa versão otimista.
+ * de ticket e observadores. Toda escrita passa pelo executor da página.
  */
 export function AtendimentoDetailDialog({
   canAssign,
@@ -52,7 +66,7 @@ export function AtendimentoDetailDialog({
   categories,
   channels,
   onClose,
-  onUpdated,
+  onMutate,
 }: {
   canAssign?: boolean;
   card: AtendimentoCard | null;
@@ -60,7 +74,7 @@ export function AtendimentoDetailDialog({
   channels: LookupChannel[];
   companyId: string;
   onClose: () => void;
-  onUpdated: (card: AtendimentoCard) => void;
+  onMutate: CardMutationExecutor;
 }) {
   const [tab, setTab] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -71,10 +85,6 @@ export function AtendimentoDetailDialog({
     setResetForId(card.id);
     setTab(0);
     setError(null);
-  }
-
-  function replaced(next: AtendimentoCard) {
-    onUpdated(next);
   }
 
   if (!card) {
@@ -114,7 +124,7 @@ export function AtendimentoDetailDialog({
             canAssign={canAssign}
             card={card}
             companyId={companyId}
-            onSaved={replaced}
+            onMutate={onMutate}
           />
         ) : null}
         {tab === 1 ? <TimelineTab card={card} companyId={companyId} /> : null}
@@ -125,11 +135,11 @@ export function AtendimentoDetailDialog({
             channels={channels.filter((channel) => channel.isActive)}
             companyId={companyId}
             onError={setError}
-            onSaved={replaced}
+            onMutate={onMutate}
           />
         ) : null}
         {tab === 3 ? (
-          <WatchersTab card={card} companyId={companyId} onSaved={replaced} />
+          <WatchersTab card={card} companyId={companyId} onMutate={onMutate} />
         ) : null}
       </Stack>
     </EntityDialog>
@@ -140,35 +150,37 @@ function SummaryTab({
   canAssign,
   card,
   companyId,
-  onSaved,
+  onMutate,
 }: {
   canAssign?: boolean;
   card: AtendimentoCard;
   companyId: string;
-  onSaved: (card: AtendimentoCard) => void;
+  onMutate: CardMutationExecutor;
 }) {
   const [assigneeMembershipId, setAssigneeMembershipId] = useState<
     string | null
   >(card.assigneeMembershipId);
   const [assignError, setAssignError] = useState<string | null>(null);
+  const [assigning, setAssigning] = useState(false);
 
   async function save() {
-    if (!assigneeMembershipId) return;
-    const result = await atendimentoClient.assign(
-      companyId,
-      card,
-      assigneeMembershipId,
-    );
-    if (!result.ok) {
-      setAssignError(
-        result.code === "resource_not_found"
-          ? "Responsável inexistente ou inativo nesta empresa."
-          : "Não foi possível atribuir agora. Tente novamente.",
-      );
-      return;
-    }
+    if (!assigneeMembershipId || assigning) return;
+    setAssigning(true);
     setAssignError(null);
-    onSaved(result.card);
+    try {
+      // Atribuição pelo executor da página: lock por cartão, snapshot 409 e
+      // readback de resultado ambíguo vêm de lá; falhas publicam na fila.
+      const updated = await onMutate(card, (current) =>
+        atendimentoClient.assign(companyId, current, assigneeMembershipId),
+      );
+      if (!updated) {
+        setAssignError(
+          "A atribuição não foi concluída. O estado atual foi sincronizado; tente novamente.",
+        );
+      }
+    } finally {
+      setAssigning(false);
+    }
   }
 
   return (
@@ -181,6 +193,7 @@ function SummaryTab({
       >
         <PeoplePicker
           companyId={companyId}
+          disabled={assigning}
           helperText="O cartão guarda apenas o membership-id internamente."
           label="Responsável"
           onChange={setAssigneeMembershipId}
@@ -188,7 +201,7 @@ function SummaryTab({
         />
         {canAssign ? (
           <Button
-            disabled={!assigneeMembershipId}
+            disabled={!assigneeMembershipId || assigning}
             onClick={() => void save()}
             startIcon={<PersonAddAltOutlinedIcon />}
             variant="outlined"
@@ -233,7 +246,7 @@ function SummaryTab({
         ) : null}
         {card.requesterPersonRef ? (
           <Chip
-            label={`Solicitante: ${card.requesterPersonRef}`}
+            label={`Solicitante: ${unresolvedLabel}`}
             size="small"
             variant="outlined"
           />
@@ -304,14 +317,14 @@ function FieldsTab({
   channels,
   companyId,
   onError,
-  onSaved,
+  onMutate,
 }: {
   card: AtendimentoCard;
   categories: { id: string; name: string }[];
   channels: LookupChannel[];
   companyId: string;
   onError: (message: string | null) => void;
-  onSaved: (card: AtendimentoCard) => void;
+  onMutate: CardMutationExecutor;
 }) {
   const [priority, setPriority] = useState<AtendimentoPriority | "">(
     card.priority ?? "",
@@ -330,24 +343,36 @@ function FieldsTab({
   const [saving, setSaving] = useState(false);
 
   async function save() {
+    if (saving) return;
     setSaving(true);
     onError(null);
-    const slaIso = slaLocal ? new Date(slaLocal).toISOString() : undefined;
-    const result = await atendimentoClient.fields(companyId, card, {
-      categoryRefId: categoryRefId || undefined,
-      channelRefId: channelRefId || undefined,
-      mentionedMembershipIds:
-        mentioned.length > 0
-          ? mentioned.map((option) => option.membershipId)
-          : undefined,
-      priority: priority ? priority : undefined,
-      requesterPersonRef:
-        requesterMembershipId ?? requesterPersonRef ?? undefined,
-      slaDueAt: slaIso,
-    });
-    setSaving(false);
-    if (!result.ok) return onError(messageForCode(result.code));
-    onSaved(result.card);
+    try {
+      const slaIso = slaLocal ? new Date(slaLocal).toISOString() : undefined;
+      // Escrita pelo executor da página: 409 current aplica o snapshot,
+      // resultado ambíguo reconcilia por readback e o lock por cartão impede
+      // mutação concorrente enquanto o fields está pendente.
+      const updated = await onMutate(card, (current) =>
+        atendimentoClient.fields(companyId, current, {
+          categoryRefId: categoryRefId || undefined,
+          channelRefId: channelRefId || undefined,
+          mentionedMembershipIds:
+            mentioned.length > 0
+              ? mentioned.map((option) => option.membershipId)
+              : undefined,
+          priority: priority ? priority : undefined,
+          requesterPersonRef:
+            requesterMembershipId ?? requesterPersonRef ?? undefined,
+          slaDueAt: slaIso,
+        }),
+      );
+      if (!updated) {
+        onError(
+          "O salvamento não foi concluído. O estado atual foi sincronizado; tente novamente.",
+        );
+      }
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -444,69 +469,82 @@ function FieldsTab({
 function WatchersTab({
   card,
   companyId,
-  onSaved,
+  onMutate,
 }: {
   card: AtendimentoCard;
   companyId: string;
-  onSaved: (card: AtendimentoCard) => void;
+  onMutate: CardMutationExecutor;
 }) {
-  const [watchers, setWatchers] = useState<PersonOption[]>(
-    (card.watcherMembershipIds ?? []).map((membershipId) => ({
-      displayName: membershipId,
-      employeeId: membershipId,
-      membershipId,
-    })),
+  // Observadores são membership-ids do servidor; nomes vêm só do diretório da
+  // empresa (fail-closed: referência não resolvida nunca vira rótulo).
+  const [watcherIds, setWatcherIds] = useState<string[]>(
+    card.watcherMembershipIds ?? [],
   );
   const [selected, setSelected] = useState<string | null>(null);
   const { options: names } = useDirectoryOptions(companyId);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  function resolvedName(membershipId: string): string | null {
+    return (
+      names.find((option) => option.membershipId === membershipId)
+        ?.displayName ?? null
+    );
+  }
 
   async function add() {
-    if (!selected) return;
-    const result = await atendimentoClient.addWatcher(
-      companyId,
-      card,
-      selected,
-    );
-    if (!result.ok) return setError(messageForCode(result.code));
-    setWatchers((current) =>
-      current.some((watcher) => watcher.membershipId === selected)
-        ? current
-        : [
-            ...current,
-            names.find((option) => option.membershipId === selected) ?? {
-              displayName: selected,
-              employeeId: selected,
-              membershipId: selected,
-            },
-          ],
-    );
-    onSaved(result.card);
+    if (!selected || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await onMutate(card, (current) =>
+        atendimentoClient.addWatcher(companyId, current, selected),
+      );
+      if (!updated) {
+        setError(
+          "A ação não foi concluída. O estado atual foi sincronizado; tente novamente.",
+        );
+        return;
+      }
+      // NoChange idempotente devolve o mesmo snapshot: a versão não sobe.
+      setWatcherIds(updated.watcherMembershipIds ?? []);
+      setSelected(null);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function remove(membershipId: string) {
-    const result = await atendimentoClient.removeWatcher(
-      companyId,
-      card,
-      membershipId,
-    );
-    if (!result.ok) return setError(messageForCode(result.code));
-    setWatchers((current) =>
-      current.filter((watcher) => watcher.membershipId !== membershipId),
-    );
-    onSaved(result.card);
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await onMutate(card, (current) =>
+        atendimentoClient.removeWatcher(companyId, current, membershipId),
+      );
+      if (!updated) {
+        setError(
+          "A ação não foi concluída. O estado atual foi sincronizado; tente novamente.",
+        );
+        return;
+      }
+      setWatcherIds(updated.watcherMembershipIds ?? []);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <Stack spacing={1.5}>
       <PeoplePicker
         companyId={companyId}
+        disabled={saving}
         label="Adicionar observador"
         onChange={setSelected}
         value={selected}
       />
       <Button
-        disabled={!selected}
+        disabled={!selected || saving}
         onClick={() => void add()}
         variant="outlined"
       >
@@ -523,29 +561,24 @@ function WatchersTab({
         sx={{ flexWrap: "wrap" }}
         useFlexGap
       >
-        {(names.length > 0
-          ? watchers.map(
-              (watcher) =>
-                names.find(
-                  (option) => option.membershipId === watcher.membershipId,
-                ) ?? watcher,
-            )
-          : watchers
-        ).map((watcher) => (
-          <Chip
-            avatar={
-              <Avatar sx={{ fontSize: 12 }}>
-                {initialsFor(watcher.displayName)}
-              </Avatar>
-            }
-            key={watcher.membershipId}
-            label={watcher.displayName}
-            onDelete={() => void remove(watcher.membershipId)}
-            size="small"
-          />
-        ))}
+        {watcherIds.map((membershipId) => {
+          const displayName = resolvedName(membershipId);
+          return (
+            <Chip
+              avatar={
+                <Avatar sx={{ fontSize: 12 }}>
+                  {displayName ? initialsFor(displayName) : "?"}
+                </Avatar>
+              }
+              key={membershipId}
+              label={displayName ?? unresolvedLabel}
+              onDelete={() => void remove(membershipId)}
+              size="small"
+            />
+          );
+        })}
       </Stack>
-      {watchers.length === 0 ? (
+      {watcherIds.length === 0 ? (
         <Typography color="text.secondary" variant="body2">
           Nenhum observador. Observadores avisados são apenas os adicionados por
           aqui.
@@ -553,16 +586,6 @@ function WatchersTab({
       ) : null}
     </Stack>
   );
-}
-
-function messageForCode(code: string): string {
-  if (code === "integrity_conflict")
-    return "O cartão mudou no servidor. Reabra o detalhe para recarregar.";
-  if (code === "resource_not_found")
-    return "Referência inexistente ou inativa.";
-  if (code === "capability_denied" || code === "membership_required")
-    return "Sua sessão não tem permissão para esta ação nesta empresa.";
-  return "Não foi possível concluir a ação. Tente novamente.";
 }
 
 function toLocalInputValue(date: Date): string {

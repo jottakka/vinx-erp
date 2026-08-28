@@ -27,18 +27,13 @@ export function PeoplePicker({
   const { failed, options } = useDirectoryOptions(companyId);
   const loading = !failed && companyId.length > 0 && options.length === 0;
 
+  // Só o diretório resolve nomes: valor sem opção correspondente fica em
+  // estado neutro "Não resolvido" — nunca sintetiza rótulo do UUID bruto.
   const selected = useMemo(
-    () =>
-      options.find((option) => option.membershipId === value) ??
-      (value && options.length === 0
-        ? ({
-            displayName: value,
-            employeeId: value,
-            membershipId: value,
-          } as PersonOption)
-        : null),
+    () => options.find((option) => option.membershipId === value) ?? null,
     [options, value],
   );
+  const unresolved = Boolean(value) && !selected;
 
   return (
     <Autocomplete<PersonOption, false, false, false>
@@ -66,7 +61,9 @@ export function PeoplePicker({
           helperText={
             failed
               ? "Sem acesso ao diretório desta empresa ou falha temporária."
-              : helperText
+              : unresolved
+                ? "Não resolvido"
+                : helperText
           }
           label={label}
         />

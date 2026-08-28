@@ -39,6 +39,7 @@ import {
   type AtendimentoCard,
   type AtendimentoChannel,
   type AtendimentoColumn,
+  type AtendimentoCommandResult,
   type AtendimentoPriority,
   atendimentoClient,
   type LookupsResponse,
@@ -59,7 +60,7 @@ import {
   channelLabels,
   formatAtendimentoDate,
   isAtendimentoOverdue,
-  priorityPresentation,
+  priorityPresentationFor,
 } from "./atendimento-presentation";
 
 const columns: readonly {
@@ -199,6 +200,14 @@ export function AtendimentoPage({
       ? companies.filter((company) => selected.includes(company.companyId))
       : companies;
   }, [companies, selectedCompanyIds]);
+  // Contexto de empresa dos filtros desacoplado do create: a barra serve
+  // qualquer sessão com leitura de fila, não só quem pode criar.
+  const filterCompanyId = useMemo(() => {
+    const requestedIds = requestedCompanies.map((company) => company.companyId);
+    return requestedIds.includes(companyId)
+      ? companyId
+      : (requestedIds[0] ?? "");
+  }, [companyId, requestedCompanies]);
   const visibleCards = useMemo(() => {
     const requestedCompanyIds = new Set(
       requestedCompanies.map((company) => company.companyId),
@@ -266,12 +275,17 @@ export function AtendimentoPage({
             ) ?? [],
         );
         // Hidratação monotônica na ordem canônica da resposta: para cada
-        // companyId:cardId vale o snapshot de maior versão (um fila atrasada
-        // nunca rebaixa), a ordem vem de loadedCards (createdAt DESC, id DESC)
-        // e IDs ausentes da resposta são anexados depois. Sem o clear
-        // intermediário, um sucesso de mutação publicado durante o loading
-        // também não é descartado.
+        // companyId:cardId vale o snapshot de maior versão (uma fila atrasada
+        // nunca rebaixa) e a ordem vem de loadedCards (createdAt DESC, id
+        // DESC). A resposta é a autoridade das empresas consultadas: cartões
+        // ausentes saem do quadro (não combinam com o filtro atual), enquanto
+        // snapshots de outras empresas não consultadas permanecem intactos.
+        // Sem o clear intermediário, um sucesso de mutação publicado durante
+        // o loading também não é descartado.
         setCards((current) => {
+          const queriedCompanyIds = new Set(
+            requestedCompanies.map((company) => company.companyId),
+          );
           const currentByKey = new Map(
             current.map((card) => [cardMutationKey(card), card]),
           );
@@ -285,8 +299,9 @@ export function AtendimentoPage({
             );
           }
           for (const card of current) {
-            const key = cardMutationKey(card);
-            if (!merged.has(key)) merged.set(key, card);
+            if (!queriedCompanyIds.has(card.companyId)) {
+              merged.set(cardMutationKey(card), card);
+            }
           }
           return [...merged.values()];
         });
@@ -533,6 +548,38 @@ export function AtendimentoPage({
     }
   }
 
+  // Executor único de mutações de cartão (campos, atribuição do resumo e
+  // observadores do diálogo de detalhe): herda o lock por companyId:cardId
+  // compartilhado com move/assign/cancel e a recuperação monotônica — 409 com
+  // `current` aplica o snapshot, `mayHaveCommitted` reconcilia por readback e
+  // NoChange publica sem bump. Retorna o snapshot publicado, ou null quando a
+  // ação não foi concluída (bloqueada por lock concorrente ou recuperada).
+  async function executeCardMutation(
+    card: AtendimentoCard,
+    run: (card: AtendimentoCard) => Promise<AtendimentoCommandResult>,
+  ): Promise<AtendimentoCard | null> {
+    if (isRecoveringCard(card)) return null;
+    const lease = beginCardMutation(card);
+    if (!lease) return null;
+    try {
+      const result = await run(card);
+      if (!result.ok) {
+        await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
+        return null;
+      }
+      applyCardSnapshot(result.card, lease);
+      return result.card;
+    } finally {
+      finishCardMutation(lease);
+    }
+  }
+
   function applyRecoveredCard(recovered: AtendimentoCard) {
     applyCardSnapshot(recovered);
   }
@@ -775,9 +822,9 @@ export function AtendimentoPage({
             Sua sessão não possui empresa com acesso à fila de {title}.
           </Alert>
         ) : null}
-        {companyId ? (
+        {filterCompanyId ? (
           <AtendimentoFilterBar
-            companyId={companyId}
+            companyId={filterCompanyId}
             disabled={loading}
             filter={filter}
             onChange={applyFilter}
@@ -886,6 +933,7 @@ export function AtendimentoPage({
                       card.column !== "cancelado" &&
                       !mutationPending &&
                       !cardRecovering;
+                    const priorityChip = priorityPresentationFor(card.priority);
                     return (
                       <Card
                         key={card.id}
@@ -956,8 +1004,8 @@ export function AtendimentoPage({
                               />
                             ) : null}
                             <StatusChip
-                              label={priorityPresentation[card.priority].label}
-                              tone={priorityPresentation[card.priority].tone}
+                              label={priorityChip.label}
+                              tone={priorityChip.tone}
                             />
                             <Chip
                               label={channelLabels[card.channel]}
@@ -1077,7 +1125,7 @@ export function AtendimentoPage({
         channels={viewingCompanyLookups?.channels ?? []}
         companyId={viewingCard?.companyId ?? companyId}
         onClose={() => setViewingCard(null)}
-        onUpdated={applyCardSnapshot}
+        onMutate={executeCardMutation}
       />
 
       <Menu

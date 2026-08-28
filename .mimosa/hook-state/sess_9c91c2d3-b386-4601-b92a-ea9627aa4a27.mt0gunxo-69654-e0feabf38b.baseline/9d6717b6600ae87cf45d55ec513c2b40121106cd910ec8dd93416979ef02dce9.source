@@ -1,0 +1,28 @@
+name: Private quality
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verifier-owned private suite
+    runs-on: ubuntu-latest
+    env:
+      VINX_QUALITY_VERIFIER: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore private test dependencies
+        run: dotnet restore quality/private/Vinx.Erp.PrivateQualityTests/Vinx.Erp.PrivateQualityTests.csproj --locked-mode
+
+      - name: Run private quality suite
+        run: ./scripts/verify-private.sh

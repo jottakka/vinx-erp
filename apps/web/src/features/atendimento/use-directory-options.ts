@@ -33,6 +33,10 @@ export function useDirectoryOptions(companyId: string): {
   useEffect(() => {
     if (!companyId) return;
     let active = true;
+    // Empresa nova começa sem rótulos da anterior (fail-closed): nomes são
+    // vinculados à empresa consultada e nunca atravessam a troca de contexto.
+    setOptions([]);
+    setFailed(false);
     void loadDirectoryOptions(companyId).then((result) => {
       if (!active) return;
       if (result) setOptions(result);

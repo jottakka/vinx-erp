@@ -1,0 +1,1256 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Vinx.Erp.Foundation.Audit;
+using Vinx.Erp.Foundation.Authorization;
+using Vinx.Erp.Foundation.Domain;
+using Vinx.Erp.Foundation.Files;
+using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Xunit;
+
+namespace Vinx.Erp.Foundation.IntegrationTests;
+
+public sealed class DocumentUploadEndpointTests
+{
+    private const string Checksum = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private static readonly byte[] SafePayload = Encoding.UTF8.GetBytes("safe document payload");
+    private static readonly byte[] EicarPayload = Encoding.ASCII.GetBytes(
+        "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*");
+
+    [Fact]
+    public async Task Valid_intent_creates_quarantined_metadata_before_returning_the_upload_url()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId);
+
+        var response = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<UploadIntentResponse>();
+        Assert.NotNull(result);
+        Assert.Equal("quarantined", result.ProcessingState);
+        Assert.NotNull(result.UploadUrl);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var file = await administrator.Files.SingleAsync(candidate => candidate.Id == result.FileId);
+        Assert.Equal(scenario.CompanyId, file.CompanyId);
+        Assert.Equal("quarantined", file.ProcessingState);
+        Assert.Equal(request.FileName, file.OriginalFileName);
+        Assert.Equal(request.Checksum, file.Checksum);
+        Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.intent").ToListAsync());
+    }
+
+    [Theory]
+    [InlineData("invoice.pdf", "image/png", 128L, Checksum, "mime_extension_mismatch")]
+    [InlineData("invoice.pdf", "application/pdf", 0L, Checksum, "empty_file")]
+    [InlineData("invoice.pdf", "application/pdf", 128L, "sha256:invalid", "checksum_invalid")]
+    public async Task Invalid_intent_metadata_is_rejected_without_creating_a_file(
+        string fileName,
+        string mimeType,
+        long sizeBytes,
+        string checksum,
+        string expectedCode)
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId) with
+        {
+            FileName = fileName,
+            MimeType = mimeType,
+            SizeBytes = sizeBytes,
+            Checksum = checksum
+        };
+
+        var response = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(expectedCode, (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.Files.ToListAsync());
+        var denial = await administrator.AuditEvents.SingleAsync(audit => audit.Action == expectedCode);
+        Assert.Equal(expectedCode, denial.Action);
+        Assert.Equal("{}", denial.MetadataJson);
+        Assert.DoesNotContain(fileName, denial.MetadataJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(checksum, denial.MetadataJson, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("", "file_name_required")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "file_name_too_long")]
+    public async Task Declaratively_invalid_file_name_is_audited_without_creating_a_file(
+        string fileName,
+        string expectedCode)
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId) with { FileName = fileName };
+
+        var response = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(expectedCode, (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.Files.ToListAsync());
+        var denial = await administrator.AuditEvents.SingleAsync(audit => audit.Action == expectedCode);
+        Assert.Equal(AuditOutcome.Denied, denial.Outcome);
+        Assert.Equal(expectedCode, denial.Action);
+        Assert.Equal(expectedCode, denial.Reason);
+    }
+
+    [Fact]
+    public async Task Valid_confirmation_rechecks_private_storage_and_confirms_the_file()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal("confirmed", (await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).ProcessingState);
+    }
+
+    [Fact]
+    public async Task Malware_scan_request_carries_a_content_opener()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage);
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        var request = scanner.LastRequest;
+        Assert.NotNull(request);
+        Assert.NotNull(request!.OpenContentAsync);
+        // O scanner não abre por conta própria: a abertura é lazy, no caller do delegate.
+        Assert.Equal(0, storage.OpenCount);
+        await using var content = await request.OpenContentAsync!(CancellationToken.None);
+        using var read = new MemoryStream();
+        await content.CopyToAsync(read);
+        Assert.Equal(SafePayload, read.ToArray());
+        Assert.Equal(1, storage.OpenCount);
+    }
+
+    [Fact]
+    public async Task Malware_detection_marks_the_file_failed_without_returning_a_read_url()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.MalwareDetected });
+        var scenario = await SeedScenarioAsync(factory);
+        var malwareIntent = NewIntent(scenario.CompanyId) with
+        {
+            SizeBytes = EicarPayload.Length,
+            Checksum = ComputeChecksum(EicarPayload)
+        };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", malwareIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, EicarPayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var failed = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("malware_detected", failed.FailureReason);
+        Assert.Null(typeof(ConfirmationResponse).GetProperty("DownloadUrl"));
+    }
+
+    [Fact]
+    public async Task Clean_confirmation_persists_scan_metadata()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var confirmed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("confirmed", confirmed.ProcessingState);
+        // O veredito durável chega inteiro: engine, versões e momento do scan.
+        Assert.Equal("vinx-test-engine", confirmed.ScanEngine);
+        Assert.Equal("1.0.0", confirmed.ScanEngineVersion);
+        Assert.Equal("1.2026.08", confirmed.ScanSignatureVersion);
+        Assert.NotNull(confirmed.ScannedAtUtc);
+    }
+
+    [Fact]
+    public async Task Malware_detected_persists_scan_metadata_and_stays_terminal()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.MalwareDetected });
+        var scenario = await SeedScenarioAsync(factory);
+        var malwareIntent = NewIntent(scenario.CompanyId) with
+        {
+            SizeBytes = EicarPayload.Length,
+            Checksum = ComputeChecksum(EicarPayload)
+        };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", malwareIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, EicarPayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var failed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("verification_failed", failed.ProcessingState);
+        Assert.Equal("malware_detected", failed.FailureReason);
+        Assert.Equal("vinx-test-engine", failed.ScanEngine);
+        Assert.Equal("1.0.0", failed.ScanEngineVersion);
+        Assert.Equal("1.2026.08", failed.ScanSignatureVersion);
+        Assert.NotNull(failed.ScannedAtUtc);
+    }
+
+    [Fact]
+    public async Task Detected_without_version_metadata_stays_terminal_with_empty_scan_metadata()
+    {
+        var storage = new ControlledFileStorage();
+        // Detecção com fetch de VERSION falho: o adapter real mantém o veredito Detectado sem
+        // versões. O terminal NÃO pode degradar para 503 — os metadados de scan apenas ficam NULL.
+        await using var factory = await CreateFactoryAsync(
+            storage,
+            new ControlledMalwareScanner(storage)
+            {
+                Status = MalwareScanStatus.MalwareDetected,
+                OmitVersionMetadata = true
+            });
+        var scenario = await SeedScenarioAsync(factory);
+        var malwareIntent = NewIntent(scenario.CompanyId) with
+        {
+            SizeBytes = EicarPayload.Length,
+            Checksum = ComputeChecksum(EicarPayload)
+        };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", malwareIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, EicarPayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var failed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("verification_failed", failed.ProcessingState);
+        Assert.Equal("malware_detected", failed.FailureReason);
+        AssertScanMetadataEmpty(failed);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var audit = await administrator.AuditEvents.SingleAsync(candidate =>
+            candidate.Action == "foundation.files.upload.confirm" && candidate.Outcome == AuditOutcome.Failure);
+        Assert.Equal("malware_detected", audit.Reason);
+    }
+
+    [Fact]
+    public async Task Transient_unavailable_keeps_scan_metadata_empty()
+    {
+        var storage = new ControlledFileStorage();
+        // Scanner fora do ar: veredito indisponível (scan_failed) é transitório —
+        // o documento permanece em quarentena e nenhum metadado de scan é gravado.
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { FailWith = new InvalidOperationException("engine offline") });
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        var quarantined = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("quarantined", quarantined.ProcessingState);
+        Assert.Null(quarantined.FailureReason);
+        AssertScanMetadataEmpty(quarantined);
+    }
+
+    [Fact]
+    public async Task Metadata_mismatch_terminal_keeps_scan_metadata_empty()
+    {
+        var storage = new ControlledFileStorage();
+        // Checksum declarado diverge do conteúdo armazenado: mismatch terminal sem
+        // veredito durável — os metadados de scan ficam NULL mesmo com scanner saudável.
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var mismatchedIntent = NewIntent(scenario.CompanyId) with { Checksum = ComputeChecksum(EicarPayload) };
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", mismatchedIntent);
+        intentResponse.EnsureSuccessStatusCode();
+        var intent = (await intentResponse.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("verification_failed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var failed = await GetFileAsync(factory, intent.FileId);
+        Assert.Equal("verification_failed", failed.ProcessingState);
+        Assert.Equal("checksum_mismatch", failed.FailureReason);
+        AssertScanMetadataEmpty(failed);
+    }
+
+    [Fact]
+    public async Task Unavailable_malware_scan_keeps_the_file_quarantined_and_records_a_failure_without_a_download_url()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.Unavailable });
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantined = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantined.ProcessingState);
+        Assert.Null(quarantined.FailureReason);
+        var audit = await administrator.AuditEvents.SingleAsync(candidate => candidate.Action == "foundation.files.upload.confirm");
+        Assert.Equal(AuditOutcome.Failure, audit.Outcome);
+        Assert.Equal("malware_scan_unavailable", audit.Reason);
+        Assert.Null(typeof(ConfirmationResponse).GetProperty("DownloadUrl"));
+        Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Blocked_scanner_keeps_document_quarantined_without_releasing_a_url()
+    {
+        // Caminho de produção: sem override, o DI registra BlockedMalwareScanner (fail-closed).
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantined = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantined.ProcessingState);
+        Assert.Null(quarantined.FailureReason);
+        var audit = await administrator.AuditEvents.SingleAsync(candidate => candidate.Action == "foundation.files.upload.confirm");
+        Assert.Equal(AuditOutcome.Failure, audit.Outcome);
+        Assert.Equal("malware_scan_unavailable", audit.Reason);
+        Assert.Null(typeof(ConfirmationResponse).GetProperty("DownloadUrl"));
+        Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Scanner_timeout_keeps_quarantine_with_a_safe_reason()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { Delay = TimeSpan.FromSeconds(30) };
+        await using var factory = await CreateFactoryAsync(
+            storage, scanner, malwareScanTimeout: TimeSpan.FromMilliseconds(50));
+        using var logs = new UploadLogProvider();
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logs);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantinedAfterTimeout = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterTimeout.ProcessingState);
+        Assert.Null(quarantinedAfterTimeout.FailureReason);
+        var warning = Assert.Single(logs.Entries, entry =>
+            entry.CategoryName == typeof(DocumentUploadService).FullName
+            && Equals(entry.Properties.GetValueOrDefault("Operation"), "foundation.files.upload.scan"));
+        Assert.Equal(LogLevel.Warning, warning.Level);
+        Assert.Null(warning.Exception);
+        Assert.Equal("unavailable", warning.Properties["Result"]);
+        Assert.Equal("scan_timeout", warning.Properties["Reason"]);
+        Assert.Equal(["ElapsedMs", "Module", "Operation", "Reason", "Result"], warning.Properties.Keys.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Scanner_failure_keeps_quarantine_with_a_safe_reason()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { FailWith = new InvalidOperationException("engine offline") };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        using var logs = new UploadLogProvider();
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logs);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantinedAfterFailure = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterFailure.ProcessingState);
+        Assert.Null(quarantinedAfterFailure.FailureReason);
+        var warning = Assert.Single(logs.Entries, entry =>
+            entry.CategoryName == typeof(DocumentUploadService).FullName
+            && Equals(entry.Properties.GetValueOrDefault("Operation"), "foundation.files.upload.scan"));
+        Assert.Equal(LogLevel.Warning, warning.Level);
+        Assert.IsType<InvalidOperationException>(warning.Exception);
+        Assert.Equal("scan_failed", warning.Properties["Reason"]);
+    }
+
+    [Fact]
+    public async Task Stale_clean_verdict_keeps_document_quarantined()
+    {
+        var storage = new ControlledFileStorage();
+        // Veredito Clean, porém vinculado ao checksum de outra versão do objeto.
+        var scanner = new ControlledMalwareScanner(storage) { OverrideContentChecksum = ComputeChecksum(EicarPayload) };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantinedAfterStaleVerdict = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterStaleVerdict.ProcessingState);
+        Assert.Null(quarantinedAfterStaleVerdict.FailureReason);
+        Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
+    }
+
+    [Fact]
+    public async Task External_cancellation_during_scan_propagates_without_releasing()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { Delay = TimeSpan.FromMinutes(2) };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        using var cancellation = new CancellationTokenSource();
+
+        var confirmationTask = factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId),
+            cancellation.Token);
+        await scanner.ScanStarted.WaitAsync(TimeSpan.FromSeconds(30));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => confirmationTask);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var fileAfterCancellation = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", fileAfterCancellation.ProcessingState);
+        Assert.Null(fileAfterCancellation.FailureReason);
+        Assert.Equal(1, scanner.ScanCount);
+    }
+
+    [Fact]
+    public async Task Retry_with_a_fresh_clean_verdict_succeeds_after_a_transient_confirmation_failure()
+    {
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { Delay = TimeSpan.FromMinutes(2) };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        using var cancellation = new CancellationTokenSource();
+
+        // 1ª confirmação abortada durante o scan: falha transitória mantém o documento em quarentena.
+        var abortedConfirmation = factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId),
+            cancellation.Token);
+        await scanner.ScanStarted.WaitAsync(TimeSpan.FromSeconds(30));
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => abortedConfirmation);
+
+        // 2ª confirmação exige um veredito NOVO do scanner; o scan abortado nunca é reaproveitado.
+        scanner.Delay = null;
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await response.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var confirmed = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("confirmed", confirmed.ProcessingState);
+        Assert.Null(confirmed.FailureReason);
+        Assert.Equal(2, scanner.ScanCount);
+        Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.confirm").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Unavailable_confirmation_keeps_quarantine_and_a_retry_with_a_fresh_clean_verdict_confirms()
+    {
+        // Caso 5 do brief, literal: a 1ª confirmação COMPLETA com veredito indisponível mantém o
+        // documento em quarentena (sem reabrir documento obsoleto); a 2ª, com veredito Clean novo,
+        // confirma — inclusive reutilizando o mesmo RequestId (nada ficou registrado na 1ª).
+        var storage = new ControlledFileStorage();
+        var scanner = new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.Unavailable };
+        await using var factory = await CreateFactoryAsync(storage, scanner);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var request = new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId);
+
+        var firstConfirmation = await factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, firstConfirmation.StatusCode);
+        Assert.Equal("malware_scan_unavailable", (await firstConfirmation.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var quarantinedAfterUnavailable = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+            Assert.Equal("quarantined", quarantinedAfterUnavailable.ProcessingState);
+            Assert.Null(quarantinedAfterUnavailable.FailureReason);
+            Assert.Empty(await administrator.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+        }
+
+        scanner.Status = MalwareScanStatus.Clean;
+        var retryConfirmation = await factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request);
+
+        retryConfirmation.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await retryConfirmation.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        await using var verification = factory.Fixture.CreateAdministratorDbContext();
+        var confirmedDocument = await verification.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("confirmed", confirmedDocument.ProcessingState);
+        Assert.Null(confirmedDocument.FailureReason);
+        Assert.Equal(2, scanner.ScanCount);
+        Assert.Single(await verification.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+        var confirmAudits = await verification.AuditEvents
+            .Where(audit => audit.Action == "foundation.files.upload.confirm")
+            .OrderBy(audit => audit.OccurredAt)
+            .ToListAsync();
+        Assert.Equal([AuditOutcome.Failure, AuditOutcome.Success], confirmAudits.Select(audit => audit.Outcome).ToList());
+        Assert.Equal("malware_scan_unavailable", confirmAudits[0].Reason);
+        Assert.Null(confirmAudits[1].Reason);
+    }
+
+    [Fact]
+    public async Task Storage_read_failure_keeps_the_file_quarantined_without_a_download_endpoint()
+    {
+        var storage = new ControlledFileStorage { FailReads = true };
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        using var logs = new UploadLogProvider();
+        factory.Services.GetRequiredService<ILoggerFactory>().AddProvider(logs);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("storage_read_failed", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var quarantinedAfterStorageFailure = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+        Assert.Equal("quarantined", quarantinedAfterStorageFailure.ProcessingState);
+        Assert.Null(quarantinedAfterStorageFailure.FailureReason);
+        Assert.Equal(HttpStatusCode.NotFound, (await factory.CreateClient().GetAsync($"/foundation/files/{intent.FileId}/download")).StatusCode);
+        var failure = Assert.Single(logs.Entries, entry =>
+            entry.CategoryName == typeof(DocumentUploadService).FullName
+            && Equals(entry.Properties.GetValueOrDefault("Operation"), "foundation.files.upload.inspect"));
+        Assert.Equal(LogLevel.Error, failure.Level);
+        Assert.IsType<InvalidOperationException>(failure.Exception);
+        Assert.Equal("storage_read_failed", failure.Properties["ErrorCode"]);
+        Assert.Equal(["ErrorCode", "Operation"], failure.Properties.Keys.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Intent_rejects_missing_membership_and_missing_upload_capability()
+    {
+        var storage = new ControlledFileStorage();
+        await using var membershipFactory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var companyWithoutMembership = await SeedCompanyAsync(membershipFactory);
+
+        var membershipResponse = await membershipFactory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/upload-intentions", NewIntent(companyWithoutMembership));
+
+        Assert.Equal(HttpStatusCode.Forbidden, membershipResponse.StatusCode);
+        Assert.Equal("membership_required", (await membershipResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using (var membershipAdministrator = membershipFactory.Fixture.CreateAdministratorDbContext())
+        {
+            var denial = await membershipAdministrator.AuditEvents.SingleAsync(
+                audit => audit.Action == "membership_required");
+            Assert.Equal("membership_required", denial.Action);
+            Assert.Equal("{}", denial.MetadataJson);
+        }
+
+        await using var capabilityFactory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenarioWithoutUpload = await SeedScenarioAsync(capabilityFactory, grantUpload: false);
+
+        var capabilityResponse = await capabilityFactory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/upload-intentions", NewIntent(scenarioWithoutUpload.CompanyId));
+
+        Assert.Equal(HttpStatusCode.Forbidden, capabilityResponse.StatusCode);
+        Assert.Equal("capability_denied", (await capabilityResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var capabilityAdministrator = capabilityFactory.Fixture.CreateAdministratorDbContext();
+        var capabilityDenial = await capabilityAdministrator.AuditEvents.SingleAsync(
+            audit => audit.Action == "capability_denied");
+        Assert.Equal("capability_denied", capabilityDenial.Action);
+        Assert.Equal("{}", capabilityDenial.MetadataJson);
+    }
+
+    [Fact]
+    public async Task Confirmation_rejects_missing_confirmation_capability()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, grantConfirmation: false);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("capability_denied", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Theory]
+    [InlineData(CapabilityScope.Self)]
+    [InlineData(CapabilityScope.Team)]
+    [InlineData(CapabilityScope.Unit)]
+    [InlineData(CapabilityScope.Group)]
+    public async Task Restricted_scopes_do_not_authorize_company_upload_commands(CapabilityScope scope)
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory, uploadScope: scope, confirmationScope: scope);
+
+        var intentResponse = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/upload-intentions", NewIntent(scenario.CompanyId));
+        var confirmationResponse = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), Guid.NewGuid()));
+
+        Assert.Equal(HttpStatusCode.Forbidden, intentResponse.StatusCode);
+        Assert.Equal("capability_denied", (await intentResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(HttpStatusCode.Forbidden, confirmationResponse.StatusCode);
+        Assert.Equal("capability_denied", (await confirmationResponse.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Empty(await administrator.Files.ToListAsync());
+        Assert.Empty(await administrator.IdempotencyRecords.ToListAsync());
+        Assert.Equal(2, await administrator.AuditEvents.CountAsync(audit =>
+            audit.Action == "capability_denied" && audit.Outcome == AuditOutcome.Denied));
+    }
+
+    [Fact]
+    public async Task Confirmation_hides_a_file_from_another_authorized_tenant()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var otherCompanyId = await SeedAdditionalCompanyAccessAsync(factory);
+
+        var response = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(otherCompanyId, Guid.NewGuid(), intent.FileId));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("resource_not_found", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Fact]
+    public async Task Reusing_an_intent_request_with_different_metadata_returns_idempotency_conflict()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId);
+
+        var first = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+        var conflict = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/upload-intentions",
+            request with { Classification = "restricted" });
+
+        first.EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        Assert.Equal("idempotency_conflict", (await conflict.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Single(await administrator.Files.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Delimiter_collision_in_intent_payload_returns_idempotency_conflict()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId) with { Classification = "financial|restricted", Origin = "user_upload" };
+
+        var first = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+        var collision = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/upload-intentions",
+            request with { Classification = "financial", Origin = "restricted|user_upload" });
+
+        first.EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Conflict, collision.StatusCode);
+        Assert.Equal("idempotency_conflict", (await collision.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Fact]
+    public async Task Repeated_intent_replays_metadata_but_generates_a_fresh_upload_url_without_a_second_audit()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId);
+
+        var first = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+        var replay = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        first.EnsureSuccessStatusCode();
+        replay.EnsureSuccessStatusCode();
+        var firstResult = (await first.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        var replayResult = (await replay.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+        Assert.Equal(firstResult.FileId, replayResult.FileId);
+        Assert.NotEqual(firstResult.UploadUrl, replayResult.UploadUrl);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.intent").ToListAsync());
+        Assert.Single(await administrator.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Intent_replay_after_confirmation_does_not_issue_an_upload_url()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId);
+        var intent = await PostIntentAsync(factory, request);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var confirmation = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+        confirmation.EnsureSuccessStatusCode();
+
+        var replay = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        Assert.Equal(HttpStatusCode.Conflict, replay.StatusCode);
+        Assert.Equal("integrity_conflict", (await replay.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Fact]
+    public async Task Intent_replay_after_verification_failure_does_not_issue_an_upload_url()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(
+            storage, new ControlledMalwareScanner(storage) { Status = MalwareScanStatus.MalwareDetected });
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId) with { SizeBytes = EicarPayload.Length, Checksum = ComputeChecksum(EicarPayload) };
+        var intent = await PostIntentAsync(factory, request);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, EicarPayload, file.MimeType);
+        var confirmation = await factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+        confirmation.EnsureSuccessStatusCode();
+
+        var replay = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        Assert.Equal(HttpStatusCode.Conflict, replay.StatusCode);
+        Assert.Equal("integrity_conflict", (await replay.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Fact]
+    public async Task Intent_replay_after_soft_delete_does_not_issue_an_upload_url()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var request = NewIntent(scenario.CompanyId);
+        var intent = await PostIntentAsync(factory, request);
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            var file = await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId);
+            file.MarkDeleted("test", factory.ActorUserId, Guid.NewGuid());
+            await administrator.SaveChangesAsync();
+        }
+
+        var replay = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+
+        Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
+        Assert.Equal("resource_not_found", (await replay.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+    }
+
+    [Fact]
+    public async Task Confirmation_reauthorizes_after_private_inspection_finishes()
+    {
+        var storage = new ControlledFileStorage { BlockInspection = true };
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+
+        var confirmationTask = factory.CreateClient().PostAsJsonAsync(
+            "/foundation/files/confirmations",
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId));
+        await storage.WaitForInspectionAsync();
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            administrator.RoleAssignments.Remove(await administrator.RoleAssignments.SingleAsync());
+            await administrator.SaveChangesAsync();
+        }
+        storage.ReleaseInspection();
+
+        var response = await confirmationTask;
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("capability_denied", (await response.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        await using var auditReader = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal("quarantined", (await auditReader.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).ProcessingState);
+    }
+
+    [Fact]
+    public async Task Repeated_confirmation_replays_confirmed_state_without_a_second_audit_or_exposure()
+    {
+        var storage = new ControlledFileStorage();
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var request = new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId);
+
+        var first = await factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request);
+        var replay = await factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request);
+
+        first.EnsureSuccessStatusCode();
+        replay.EnsureSuccessStatusCode();
+        Assert.Equal("confirmed", (await first.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        Assert.Equal("confirmed", (await replay.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.confirm").ToListAsync());
+        Assert.Single(await administrator.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Concurrent_confirmation_with_the_same_request_creates_one_confirmed_result()
+    {
+        var storage = new ControlledFileStorage
+        {
+            BlockInspection = true,
+            InspectionsToBlock = 1
+        };
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var request = new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId);
+
+        var responsesTask = Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
+            factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request)));
+        await storage.WaitForInspectionAsync();
+        storage.ReleaseInspection();
+        var responses = await responsesTask;
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        Assert.Equal(1, storage.InspectionCount);
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal("confirmed", (await administrator.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).ProcessingState);
+        Assert.Single(await administrator.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.confirm").ToListAsync());
+        Assert.Single(await administrator.IdempotencyRecords.Where(record => record.RequestId == request.RequestId).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Concurrent_confirmations_with_distinct_request_ids_inspect_once_and_replay_their_results()
+    {
+        var storage = new ControlledFileStorage
+        {
+            BlockInspection = true,
+            InspectionsToBlock = 1
+        };
+        await using var factory = await CreateFactoryAsync(storage, new ControlledMalwareScanner(storage));
+        var scenario = await SeedScenarioAsync(factory);
+        var intent = await CreateIntentAsync(factory, scenario.CompanyId);
+        var file = await GetFileAsync(factory, intent.FileId);
+        storage.Put(file.ProviderKey, SafePayload, file.MimeType);
+        var requests = new[]
+        {
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId),
+            new ConfirmUploadRequest(scenario.CompanyId, Guid.NewGuid(), intent.FileId)
+        };
+
+        var responsesTask = Task.WhenAll(requests.Select(request =>
+            factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request)));
+        await storage.WaitForInspectionAsync();
+        storage.ReleaseInspection();
+        var responses = await responsesTask;
+        var replays = await Task.WhenAll(requests.Select(request =>
+            factory.CreateClient().PostAsJsonAsync("/foundation/files/confirmations", request)));
+
+        var success = Assert.Single(responses, response => response.StatusCode == HttpStatusCode.OK);
+        Assert.Equal("confirmed", (await success.Content.ReadFromJsonAsync<ConfirmationResponse>())?.ProcessingState);
+        var conflict = Assert.Single(responses, response => response.StatusCode == HttpStatusCode.Conflict);
+        Assert.Equal("integrity_conflict", (await conflict.Content.ReadFromJsonAsync<ErrorResponse>())?.Code);
+        Assert.Equal(responses.Select(response => response.StatusCode), replays.Select(response => response.StatusCode));
+        Assert.Equal(1, storage.InspectionCount);
+
+        await using var verification = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal("confirmed", (await verification.Files.SingleAsync(candidate => candidate.Id == intent.FileId)).ProcessingState);
+        Assert.Single(await verification.IdempotencyRecords.Where(record =>
+            requests.Select(request => request.RequestId).Contains(record.RequestId)).ToListAsync());
+        Assert.Single(await verification.AuditEvents.Where(audit => audit.Action == "foundation.files.upload.confirm").ToListAsync());
+    }
+
+    private static UploadIntentRequest NewIntent(Guid companyId) => new(
+        companyId, Guid.NewGuid(), "invoice.pdf", "application/pdf", SafePayload.Length, ComputeChecksum(SafePayload),
+        "financial", "user_upload", DateTimeOffset.UtcNow.AddDays(30));
+
+    private static string ComputeChecksum(byte[] content) =>
+        $"sha256:{Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}";
+
+    // Sem veredito durável não há evidência de scan: as colunas ficam NULL.
+    private static void AssertScanMetadataEmpty(FileRecord file)
+    {
+        Assert.Null(file.ScanEngine);
+        Assert.Null(file.ScanEngineVersion);
+        Assert.Null(file.ScanSignatureVersion);
+        Assert.Null(file.ScannedAtUtc);
+    }
+
+    private static Task<FoundationApiFactory> CreateFactoryAsync(
+        ControlledFileStorage storage,
+        IMalwareScanner? scanner = null,
+        TimeSpan? malwareScanTimeout = null) =>
+        FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            fileStorage: storage,
+            malwareScanner: scanner,
+            malwareScanTimeout: malwareScanTimeout);
+
+    private static async Task<UploadIntentResponse> CreateIntentAsync(FoundationApiFactory factory, Guid companyId)
+    {
+        return await PostIntentAsync(factory, NewIntent(companyId));
+    }
+
+    private static async Task<UploadIntentResponse> PostIntentAsync(FoundationApiFactory factory, UploadIntentRequest request)
+    {
+        var response = await factory.CreateClient().PostAsJsonAsync("/foundation/files/upload-intentions", request);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<UploadIntentResponse>())!;
+    }
+
+    private static async Task<FileRecord> GetFileAsync(FoundationApiFactory factory, Guid fileId)
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        return await administrator.Files.SingleAsync(file => file.Id == fileId);
+    }
+
+    private static async Task<Guid> SeedCompanyAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var request = Guid.NewGuid();
+        var group = new Group(Guid.NewGuid(), "Vinx Group", factory.ActorUserId, request);
+        var company = new Company(Guid.NewGuid(), group.Id, "Vinx Company", factory.ActorUserId, request);
+        administrator.AddRange(group, company);
+        await administrator.SaveChangesAsync();
+        return company.Id;
+    }
+
+    private static async Task<Guid> SeedAdditionalCompanyAccessAsync(FoundationApiFactory factory)
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var request = Guid.NewGuid();
+        var group = new Group(Guid.NewGuid(), "Other Group", factory.ActorUserId, request);
+        var company = new Company(Guid.NewGuid(), group.Id, "Vinx Serviços", factory.ActorUserId, request);
+        var membership = new Membership(Guid.NewGuid(), company.Id, factory.ActorUserId, factory.ActorUserId, request);
+        var role = new Role(Guid.NewGuid(), company.Id, "Document confirmer", factory.ActorUserId, request);
+        var confirmationCapability = await administrator.Capabilities.SingleAsync(capability => capability.Name == "foundation.files.confirm");
+        var assignment = new RoleAssignment(Guid.NewGuid(), company.Id, role.Id, membership.Id, factory.ActorUserId, request);
+        var grant = new RoleCapability(
+            Guid.NewGuid(), company.Id, role.Id, confirmationCapability.Id, CapabilityScope.Company, factory.ActorUserId, request);
+        administrator.AddRange(group, company, membership, role, assignment, grant);
+        await administrator.SaveChangesAsync();
+        return company.Id;
+    }
+
+    private static async Task<UploadScenario> SeedScenarioAsync(
+        FoundationApiFactory factory,
+        bool grantUpload = true,
+        bool grantConfirmation = true,
+        CapabilityScope uploadScope = CapabilityScope.Company,
+        CapabilityScope confirmationScope = CapabilityScope.Company)
+    {
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var request = Guid.NewGuid();
+        var group = new Group(Guid.NewGuid(), "Vinx Group", factory.ActorUserId, request);
+        var company = new Company(Guid.NewGuid(), group.Id, "Vinx Obras", factory.ActorUserId, request);
+        var membership = new Membership(Guid.NewGuid(), company.Id, factory.ActorUserId, factory.ActorUserId, request);
+        var role = new Role(Guid.NewGuid(), company.Id, "Document operator", factory.ActorUserId, request);
+        var uploadCapability = await administrator.Capabilities.SingleAsync(capability =>
+            capability.Name == KnownCapabilities.FilesUpload);
+        var confirmCapability = await administrator.Capabilities.SingleAsync(capability =>
+            capability.Name == KnownCapabilities.FilesConfirm);
+        var assignment = new RoleAssignment(Guid.NewGuid(), company.Id, role.Id, membership.Id, factory.ActorUserId, request);
+        administrator.AddRange(group, company, membership, role, assignment);
+        if (grantUpload)
+        {
+            administrator.RoleCapabilities.Add(new RoleCapability(
+                Guid.NewGuid(), company.Id, role.Id, uploadCapability.Id, uploadScope, factory.ActorUserId, request));
+        }
+
+        if (grantConfirmation)
+        {
+            administrator.RoleCapabilities.Add(new RoleCapability(
+                Guid.NewGuid(), company.Id, role.Id, confirmCapability.Id, confirmationScope, factory.ActorUserId, request));
+        }
+
+        await administrator.SaveChangesAsync();
+        return new UploadScenario(company.Id);
+    }
+
+    private sealed record UploadScenario(Guid CompanyId);
+    private sealed record UploadIntentRequest(Guid CompanyId, Guid RequestId, string FileName, string MimeType, long SizeBytes, string Checksum, string Classification, string Origin, DateTimeOffset RetentionUntil);
+    private sealed record ConfirmUploadRequest(Guid CompanyId, Guid RequestId, Guid FileId);
+    private sealed record UploadIntentResponse(Guid FileId, string ProcessingState, Uri UploadUrl);
+    private sealed record ConfirmationResponse(Guid FileId, string ProcessingState);
+    private sealed record ErrorResponse(string Code);
+
+    private sealed class ControlledFileStorage : FileStorage
+    {
+        private readonly Dictionary<string, StoredObject> _objects = new(StringComparer.Ordinal);
+        private readonly TaskCompletionSource inspectionStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource inspectionRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _uploadUrlCount;
+        private int inspectionCount;
+        private int openCount;
+        public bool FailReads { get; init; }
+        public bool BlockInspection { get; init; }
+        public int InspectionsToBlock { get; init; } = 1;
+        public int InspectionCount => Volatile.Read(ref inspectionCount);
+        public int OpenCount => Volatile.Read(ref openCount);
+
+        public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(string providerKey, CancellationToken cancellationToken) =>
+            Task.FromResult(new SignedStorageUploadUrl(new Uri(
+                $"https://storage.test/upload/{providerKey}?attempt={Interlocked.Increment(ref _uploadUrlCount)}")));
+
+        public Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken)
+        {
+            if (FailReads)
+            {
+                throw new InvalidOperationException("storage_read_failed");
+            }
+
+            var stored = _objects[providerKey];
+            return Task.FromResult(new StorageObjectMetadata(
+                providerKey,
+                stored.Content.LongLength,
+                stored.ContentType,
+                GetChecksum(providerKey)));
+        }
+
+        public async Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken)
+        {
+            if (FailReads)
+            {
+                throw new InvalidOperationException("storage_read_failed");
+            }
+
+            if (BlockInspection)
+            {
+                if (Interlocked.Increment(ref inspectionCount) >= InspectionsToBlock)
+                {
+                    inspectionStarted.TrySetResult();
+                }
+
+                await inspectionRelease.Task.WaitAsync(cancellationToken);
+            }
+
+            var stored = _objects[providerKey];
+            var metadata = new StorageObjectMetadata(
+                providerKey,
+                stored.Content.LongLength,
+                stored.ContentType,
+                GetChecksum(providerKey));
+            // Inspeção determinística espelha o adapter real: nunca é o gate antimalware
+            // (o veredito server-side do scanner decide).
+            return new StorageObjectInspection(metadata, MalwareScanStatus.Unavailable);
+        }
+
+        public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(string providerKey, TimeSpan lifetime, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(string prefix, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<StorageObjectSummary>>([]);
+        public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken)
+        {
+            var stored = _objects[providerKey];
+            Interlocked.Increment(ref openCount);
+            return Task.FromResult<Stream>(new MemoryStream(stored.Content, writable: false));
+        }
+
+        public void Put(string providerKey, byte[] content, string contentType) =>
+            _objects[providerKey] = new StoredObject(content, contentType);
+
+        public string GetChecksum(string providerKey) => ComputeChecksum(_objects[providerKey].Content);
+
+        public Task WaitForInspectionAsync() => inspectionStarted.Task;
+
+        public void ReleaseInspection() => inspectionRelease.TrySetResult();
+
+        private sealed record StoredObject(byte[] Content, string ContentType);
+    }
+
+    private sealed class ControlledMalwareScanner(ControlledFileStorage storage) : IMalwareScanner
+    {
+        private readonly TaskCompletionSource scanStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int scanCount;
+        private MalwareScanRequest? lastRequest;
+
+        public MalwareScanStatus Status { get; set; } = MalwareScanStatus.Clean;
+        public string? OverrideContentChecksum { get; init; }
+        public bool OmitVersionMetadata { get; init; }
+        public TimeSpan? Delay { get; set; }
+        public Exception? FailWith { get; init; }
+        public int ScanCount => Volatile.Read(ref scanCount);
+        public Task ScanStarted => scanStarted.Task;
+        public MalwareScanRequest? LastRequest => lastRequest;
+
+        public async Task<MalwareScanVerdict> ScanAsync(MalwareScanRequest request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref scanCount);
+            lastRequest = request;
+            scanStarted.TrySetResult();
+            if (Delay is { } delay)
+            {
+                await Task.Delay(delay, cancellationToken);
+            }
+
+            if (FailWith is { } failure)
+            {
+                throw failure;
+            }
+
+            if (OmitVersionMetadata)
+            {
+                // Detecção sem versões: espelha o adapter real, que nunca rebaixa uma detecção
+                // quando o fetch de VERSION falha (engine/versões ficam incompletas).
+                return new MalwareScanVerdict(Status, "ClamAV", null, null, DateTimeOffset.UtcNow, null, null);
+            }
+
+            return new MalwareScanVerdict(
+                Status,
+                "vinx-test-engine",
+                "1.0.0",
+                "1.2026.08",
+                DateTimeOffset.UtcNow,
+                OverrideContentChecksum ?? storage.GetChecksum(request.ProviderKey),
+                null);
+        }
+    }
+
+    private sealed record CapturedUploadLog(
+        string CategoryName,
+        LogLevel Level,
+        Exception? Exception,
+        IReadOnlyDictionary<string, object?> Properties);
+
+    private sealed class UploadLogProvider : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<CapturedUploadLog> entries = new();
+
+        public IReadOnlyCollection<CapturedUploadLog> Entries => entries.ToArray();
+
+        public ILogger CreateLogger(string categoryName) => new UploadLogger(categoryName, entries);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class UploadLogger(
+            string categoryName,
+            ConcurrentQueue<CapturedUploadLog> entries) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                var properties = ((IEnumerable<KeyValuePair<string, object?>>)state!)
+                    .Where(pair => pair.Key != "{OriginalFormat}")
+                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                entries.Enqueue(new CapturedUploadLog(categoryName, logLevel, exception, properties));
+            }
+        }
+    }
+}

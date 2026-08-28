@@ -1,0 +1,38 @@
+name: Public quality
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify-public:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: ./scripts/verify-public.sh
+
+  verify-storage:
+    needs: verify-public
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: ./scripts/verify-supabase-storage.sh

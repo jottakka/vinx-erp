@@ -6,6 +6,7 @@ import {
   TextField,
 } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
+import { isCanonicalUuid } from "../../shared/http/bff-response";
 import {
   type AtendimentoColumn,
   type AtendimentoPriority,
@@ -32,8 +33,13 @@ export function filterFromSearchParams(search: string): QueueFilter {
   const params = new URLSearchParams(search);
   const status = params.get("status");
   const priority = params.get("priority");
+  const assigneeMembershipId = params.get("assigneeMembershipId");
   return {
-    assigneeMembershipId: params.get("assigneeMembershipId") ?? undefined,
+    // Fail-closed: só aceita (e reescreve na URL) membership-id UUID canônico.
+    assigneeMembershipId:
+      assigneeMembershipId && isCanonicalUuid(assigneeMembershipId)
+        ? assigneeMembershipId
+        : undefined,
     overdue: params.get("overdue") === "true",
     priority:
       priority && priorityChoices.includes(priority as AtendimentoPriority)
@@ -115,6 +121,7 @@ function SearchDebouncedInner({
 
   return (
     <Stack
+      aria-busy={disabled === true}
       direction="row"
       spacing={1.5}
       sx={{
@@ -125,6 +132,7 @@ function SearchDebouncedInner({
       useFlexGap
     >
       <TextField
+        disabled={disabled}
         label="Status"
         onChange={(event) =>
           onChange({
@@ -147,6 +155,7 @@ function SearchDebouncedInner({
         ))}
       </TextField>
       <TextField
+        disabled={disabled}
         label="Prioridade"
         onChange={(event) =>
           onChange({
@@ -170,6 +179,7 @@ function SearchDebouncedInner({
       </TextField>
       <PeoplePicker
         companyId={companyId}
+        disabled={disabled}
         label="Filtrar por responsável"
         onChange={(membershipId) =>
           onChange({
@@ -189,9 +199,11 @@ function SearchDebouncedInner({
             }
           />
         }
+        disabled={disabled}
         label="Atrasados"
       />
       <TextField
+        disabled={disabled}
         label="Busca"
         onChange={(event) => handleSearch(event.target.value)}
         placeholder="Título ou descrição"

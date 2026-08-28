@@ -23,27 +23,56 @@ export function CategoriesAdminSection({
 
   async function create() {
     const trimmed = name.trim();
-    if (!trimmed || !companyId) return;
+    if (!trimmed || !companyId || busy) return;
     setBusy(true);
     onError(null);
-    const result = await atendimentoClient.createCategory(companyId, trimmed);
-    setBusy(false);
-    if (!result.ok) return onError(messageFor(result.code ?? ""));
-    setName("");
-    onChanged();
+    try {
+      const result = await atendimentoClient.createCategory(companyId, trimmed);
+      if (!result.ok) {
+        if (result.mayHaveCommitted) {
+          // Commit ambíguo: reconcilia por readback dos lookups em vez de
+          // afirmar falha — a categoria pode existir no servidor.
+          setName("");
+          onChanged();
+          onError(
+            "Não foi possível confirmar a ação. As categorias foram sincronizadas.",
+          );
+          return;
+        }
+        onError(messageFor(result.code ?? ""));
+        return;
+      }
+      setName("");
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function deactivate(categoryId: string) {
-    if (!companyId) return;
+    if (!companyId || busy) return;
     setBusy(true);
     onError(null);
-    const result = await atendimentoClient.deactivateCategory(
-      companyId,
-      categoryId,
-    );
-    setBusy(false);
-    if (!result.ok) return onError(messageFor(result.code ?? ""));
-    onChanged();
+    try {
+      const result = await atendimentoClient.deactivateCategory(
+        companyId,
+        categoryId,
+      );
+      if (!result.ok) {
+        if (result.mayHaveCommitted) {
+          onChanged();
+          onError(
+            "Não foi possível confirmar a ação. As categorias foram sincronizadas.",
+          );
+          return;
+        }
+        onError(messageFor(result.code ?? ""));
+        return;
+      }
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

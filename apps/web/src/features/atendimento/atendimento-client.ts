@@ -22,7 +22,8 @@ export type AtendimentoCard = {
   assigneeMembershipId: string | null;
   attachmentFileId: string | null;
   participantMembershipIds: readonly string[];
-  priority: AtendimentoPriority;
+  /** Nula quando indefinida (contrato `AtendimentoCardResponse.Priority?`). */
+  priority: AtendimentoPriority | null;
   channel: AtendimentoChannel;
   slaDueAt: string | null;
   isOverdue: boolean;
@@ -111,7 +112,7 @@ const atendimentoCardSchema = z
     assigneeMembershipId: atendimentoIdSchema.nullable(),
     attachmentFileId: atendimentoIdSchema.nullable(),
     participantMembershipIds: z.array(atendimentoIdSchema),
-    priority: z.enum(["critica", "alta", "media", "baixa"]),
+    priority: z.enum(["critica", "alta", "media", "baixa"]).nullable(),
     channel: z.enum(["whatsapp", "email", "web", "manual"]),
     slaDueAt: z.string().datetime({ offset: true }).nullable(),
     isOverdue: z.boolean(),
@@ -130,7 +131,11 @@ function parseCard(value: unknown): AtendimentoCard | null {
   return parsed.success ? parsed.data : null;
 }
 
-type CommandResult =
+/**
+ * Resultado de um comando de cartão: sucesso com o snapshot publicado, ou
+ * falha tipada com `current` (409) e/ou `mayHaveCommitted` (POST ambíguo).
+ */
+export type AtendimentoCommandResult =
   | { ok: true; card: AtendimentoCard }
   | {
       ok: false;
@@ -151,6 +156,28 @@ const assignmentOptionsSchema = z.array(
     })
     .strict(),
 );
+
+const directoryOptionSchema = z
+  .object({
+    employeeId: atendimentoIdSchema,
+    membershipId: atendimentoIdSchema,
+    displayName: z.string().min(1),
+  })
+  .strict();
+const directoryOptionsSchema = z.array(directoryOptionSchema);
+
+const categoryResponseSchema = z
+  .object({
+    id: atendimentoIdSchema,
+    companyId: atendimentoIdSchema,
+    name: z.string().min(1),
+  })
+  .strict();
+
+/** Resultado de escrita de categoria: commit confirmado ou ambíguo. */
+export type CategoryMutationResult =
+  | { ok: true; category: { id: string; companyId: string; name: string } }
+  | { ok: false; code: string; mayHaveCommitted?: true };
 
 function request(path: string, init: RequestInit = {}) {
   return fetch(path, {
@@ -179,27 +206,27 @@ async function getAntiforgeryToken(): Promise<string | null> {
   }
 }
 
-function query(params: Record<string, string | undefined>) {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value) search.set(key, value);
-  }
-  const encoded = search.toString();
-  return encoded ? `?${encoded}` : "";
-}
-
-/** Filtros viram query params compartilháveis na própria rota do quadro. */
-export function queueFilterToQuery(filter: QueueFilter): string {
-  return query({
+/** Pares chave/valor dos filtros (sem companyId); fonte única da query string. */
+function queueFilterEntries(filter: QueueFilter): [string, string][] {
+  return Object.entries({
     assigneeMembershipId: filter.assigneeMembershipId,
     overdue: filter.overdue ? "true" : undefined,
     priority: filter.priority,
     search: filter.search?.trim() || undefined,
     status: filter.status,
-  });
+  }).filter((entry): entry is [string, string] => Boolean(entry[1]));
 }
 
-async function command(path: string, body: object): Promise<CommandResult> {
+/** Filtros viram query params compartilháveis na própria rota do quadro. */
+export function queueFilterToQuery(filter: QueueFilter): string {
+  const encoded = new URLSearchParams(queueFilterEntries(filter)).toString();
+  return encoded ? `?${encoded}` : "";
+}
+
+async function command(
+  path: string,
+  body: object,
+): Promise<AtendimentoCommandResult> {
   const requestToken = await getAntiforgeryToken();
   if (!requestToken) return { code: "atendimento_unavailable", ok: false };
 
@@ -255,15 +282,74 @@ async function command(path: string, body: object): Promise<CommandResult> {
   };
 }
 
+/**
+ * POST de categoria com a mesma disciplina ambígua dos comandos de cartão:
+ * token antiforgery antes, transporte via `fetchSameOriginBff` com
+ * `mayHaveCommittedOnAbort` e 2xx de corpo inválido tratado como commit
+ * possível — nunca como falha definitiva (o chamador reconcilia por readback).
+ */
+async function categoryCommand(
+  path: string,
+  body: object,
+): Promise<CategoryMutationResult> {
+  const requestToken = await getAntiforgeryToken();
+  if (!requestToken) return { code: "atendimento_unavailable", ok: false };
+  const outcome = await fetchSameOriginBff(
+    fetch,
+    path,
+    {
+      body: JSON.stringify(body),
+      headers: {
+        "Content-Type": "application/json",
+        [antiforgeryHeaderName]: requestToken,
+      },
+      mayHaveCommittedOnAbort: true,
+      method: "POST",
+    },
+    (kind, { mayHaveCommittedOnAbort }) => ({
+      kind,
+      mayHaveCommitted: mayHaveCommittedOnAbort,
+    }),
+  );
+  if (!("response" in outcome)) {
+    return {
+      code: "atendimento_unavailable",
+      ...(outcome.mayHaveCommitted ? { mayHaveCommitted: true } : {}),
+      ok: false,
+    };
+  }
+  const response = outcome.response;
+  if (response.ok) {
+    const parsed = categoryResponseSchema.safeParse(
+      await response.json().catch(() => null),
+    );
+    return parsed.success
+      ? { category: parsed.data, ok: true }
+      : {
+          code: "atendimento_unavailable",
+          mayHaveCommitted: true,
+          ok: false,
+        };
+  }
+  const error = (await response.json().catch(() => null)) as {
+    code?: string;
+  } | null;
+  return { code: error?.code ?? "atendimento_unavailable", ok: false };
+}
+
 export const atendimentoClient = {
   async list(
     companyId: string,
     filter: QueueFilter = {},
   ): Promise<AtendimentoCard[] | null> {
     try {
-      const response = await request(
-        `${basePath}?companyId=${encodeURIComponent(companyId)}${queueFilterToQuery(filter)}`,
-      );
+      // Uma única query string: companyId e filtros no mesmo URLSearchParams,
+      // nunca um '?' extra que corromperia o Guid companyId no servidor.
+      const search = new URLSearchParams({ companyId });
+      for (const [key, value] of queueFilterEntries(filter)) {
+        search.set(key, value);
+      }
+      const response = await request(`${basePath}?${search.toString()}`);
       if (!response.ok) return null;
       const parsed = atendimentoCardsSchema.safeParse(await response.json());
       return parsed.success ? parsed.data : null;
@@ -406,7 +492,9 @@ export const atendimentoClient = {
       const response = await request(
         `/foundation/companies/${encodeURIComponent(companyId)}/directory-options`,
       );
-      return response.ok ? ((await response.json()) as PersonOption[]) : null;
+      if (!response.ok) return null;
+      const parsed = directoryOptionsSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
@@ -414,60 +502,21 @@ export const atendimentoClient = {
   async createCategory(
     companyId: string,
     name: string,
-  ): Promise<{ ok: boolean; code?: string }> {
-    try {
-      const requestToken = await getAntiforgeryToken();
-      if (!requestToken) return { code: "atendimento_unavailable", ok: false };
-      const response = await request("/atendimento/categories", {
-        body: JSON.stringify({
-          companyId,
-          name: name.trim(),
-          requestId: crypto.randomUUID(),
-        }),
-        headers: {
-          "Content-Type": "application/json",
-          [antiforgeryHeaderName]: requestToken,
-        },
-        method: "POST",
-      });
-      if (response.ok) return { ok: true };
-      const error = (await response.json().catch(() => null)) as {
-        code?: string;
-      } | null;
-      return { code: error?.code ?? "atendimento_unavailable", ok: false };
-    } catch {
-      return { code: "atendimento_unavailable", ok: false };
-    }
+  ): Promise<CategoryMutationResult> {
+    return categoryCommand("/atendimento/categories", {
+      companyId,
+      name: name.trim(),
+      requestId: crypto.randomUUID(),
+    });
   },
   async deactivateCategory(
     companyId: string,
     categoryId: string,
-  ): Promise<{ ok: boolean; code?: string }> {
-    try {
-      const requestToken = await getAntiforgeryToken();
-      if (!requestToken) return { code: "atendimento_unavailable", ok: false };
-      const response = await request(
-        `/atendimento/categories/${categoryId}/deactivate`,
-        {
-          body: JSON.stringify({
-            companyId,
-            requestId: crypto.randomUUID(),
-          }),
-          headers: {
-            "Content-Type": "application/json",
-            [antiforgeryHeaderName]: requestToken,
-          },
-          method: "POST",
-        },
-      );
-      if (response.ok) return { ok: true };
-      const error = (await response.json().catch(() => null)) as {
-        code?: string;
-      } | null;
-      return { code: error?.code ?? "atendimento_unavailable", ok: false };
-    } catch {
-      return { code: "atendimento_unavailable", ok: false };
-    }
+  ): Promise<CategoryMutationResult> {
+    return categoryCommand(`/atendimento/categories/${categoryId}/deactivate`, {
+      companyId,
+      requestId: crypto.randomUUID(),
+    });
   },
   cancel(companyId: string, card: AtendimentoCard, reason: string) {
     return command(`${basePath}/${card.id}/cancel`, {
