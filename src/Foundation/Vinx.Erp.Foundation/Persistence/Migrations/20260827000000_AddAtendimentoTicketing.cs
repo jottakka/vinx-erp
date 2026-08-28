@@ -166,8 +166,9 @@ public sealed class AddAtendimentoTicketing : Migration
             GRANT SELECT, INSERT ON service_desk.atendimento_card_events TO vinx_runtime;
 
             -- Timeline resolve o nome do ator com leitura de menor privilégio:
-            -- SELECT (id, display_name) em foundation.users já é concedido pelo
-            -- 20260825110000 do main, sem nova concessão aqui.
+            -- o grant do 20260825110000 cobre somente vinx_permissions_owner,
+            -- então o runtime do atendimento precisa da mesma coluna mínima.
+            GRANT SELECT (id, display_name) ON foundation.users TO vinx_runtime;
             """
         );
 
@@ -179,6 +180,7 @@ public sealed class AddAtendimentoTicketing : Migration
                 service_desk.atendimento_card_watchers,
                 service_desk.atendimento_categories,
                 service_desk.atendimento_channels FROM vinx_runtime;
+            REVOKE SELECT (id, display_name) ON foundation.users FROM vinx_runtime;
             DROP TABLE service_desk.atendimento_card_events;
             DROP TABLE service_desk.atendimento_card_watchers;
             ALTER TABLE service_desk.atendimento_cards

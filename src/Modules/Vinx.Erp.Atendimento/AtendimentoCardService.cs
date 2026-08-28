@@ -2343,7 +2343,8 @@ public sealed class AtendimentoCardService(
     ) =>
         command with
         {
-            Priority = command.Priority ?? AtendimentoPriority.Medium,
+            // Prioridade permanece null-means-unset (P6); canal tem default
+            // NOT NULL no schema do main.
             Channel = command.Channel ?? AtendimentoChannel.Manual,
             SlaDueAt = command.SlaDueAt?.ToUniversalTime(),
             ParticipantMembershipIds =
@@ -2360,7 +2361,6 @@ public sealed class AtendimentoCardService(
     ) =>
         response with
         {
-            Priority = response.Priority ?? AtendimentoPriority.Medium,
             Channel = response.Channel ?? AtendimentoChannel.Manual,
             ParticipantMembershipIds = response.ParticipantMembershipIds ?? [],
             IsOverdue = IsOverdue(response.SlaDueAt, response.Column, now),
