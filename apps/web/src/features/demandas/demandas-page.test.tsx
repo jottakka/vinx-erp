@@ -8,7 +8,11 @@ import type {
   MockSessionGateway,
 } from "../auth/session-contract";
 import { SessionProvider } from "../auth/session-provider";
-import { type DemandBoardCard, type DemandDetail, demandasClient } from "./demandas-client";
+import {
+  type DemandBoardCard,
+  type DemandDetail,
+  demandasClient,
+} from "./demandas-client";
 import { DemandasPage } from "./demandas-page";
 
 const alfaCompanyId = "11111111-1111-4111-8111-111111111111";
@@ -391,12 +395,25 @@ describe("DemandasPage", () => {
     const alfaDetail = new Promise<DemandDetail>((resolve) => {
       resolveDetail = resolve;
     });
-    vi.spyOn(demandasClient, "board").mockResolvedValue({
-      items: [initiationCard],
-      total: 1,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.spyOn(demandasClient, "board")
+      .mockResolvedValueOnce({
+        items: [initiationCard],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      })
+      .mockResolvedValue({
+        items: [
+          {
+            ...initiationCard,
+            id: "88888888-8888-4888-8888-888888888888",
+            title: "Demanda exclusiva da Beta",
+          },
+        ],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      });
     const detailSpy = vi
       .spyOn(demandasClient, "detail")
       .mockImplementationOnce(() => alfaDetail)
@@ -418,15 +435,19 @@ describe("DemandasPage", () => {
     await user.click(await screen.findByRole("button", { name: "Detalhes" }));
     await user.click(await screen.findByLabelText("Empresa"));
     await user.click(await screen.findByRole("option", { name: "Beta" }));
+    expect(window.location.search).toBe("");
 
     // Detalhe anterior não pode voltar quando resolver: conteúdo exclusivo
     // do detalhe de Alfa jamais aparece (a resposta tardia foi descartada).
     resolveDetail(initiationDetail);
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(
-      screen.queryByText("Descrição da demanda"),
-    ).not.toBeInTheDocument();
-    expect(detailSpy).toHaveBeenCalled();
+    expect(screen.queryByText("Descrição da demanda")).not.toBeInTheDocument();
+    // O deep link da empresa anterior não restaura o detalhe: nenhuma
+    // segunda chamada de detail e nenhum diálogo reaberto sob a Beta.
+    expect(detailSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
   });
 });

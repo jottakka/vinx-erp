@@ -80,18 +80,30 @@ export function DemandasPage() {
   // de commitar o novo companyId, nunca em efeito passivo.
   const scopeGeneration = useRef(0);
   const boardRequest = useRef(0);
-  const changeCompany = useCallback((nextCompanyId: string) => {
-    scopeGeneration.current += 1;
-    boardRequest.current += 1;
-    setCards([]);
-    setTotal(0);
-    setHasMore(false);
-    setNextCursor(null);
-    setDetail(null);
-    setDetailId(null);
-    setError(null);
-    setCompanyId(nextCompanyId);
-  }, []);
+  const changeCompany = useCallback(
+    (nextCompanyId: string) => {
+      scopeGeneration.current += 1;
+      boardRequest.current += 1;
+      setCards([]);
+      setTotal(0);
+      setHasMore(false);
+      setNextCursor(null);
+      setDetail(null);
+      setDetailId(null);
+      setError(null);
+      // O deep link pertence ao contexto anterior (troca explícita): sem
+      // limpar ?demand=, o efeito restauraria o id da empresa anterior sob
+      // a nova. Na resolução inicial (sem empresa anterior) ele é preservado.
+      if (
+        companyId &&
+        new URLSearchParams(window.location.search).get("demand")
+      ) {
+        window.history.replaceState(null, "", "/demandas");
+      }
+      setCompanyId(nextCompanyId);
+    },
+    [companyId],
+  );
 
   useEffect(() => {
     if (!companies.some((company) => company.companyId === companyId)) {
@@ -121,10 +133,6 @@ export function DemandasPage() {
       }),
     [selectedCompany],
   );
-
-
-
-
 
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
