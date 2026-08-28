@@ -54,6 +54,11 @@ public sealed class EmployeeDirectoryService(
         CapabilityScope.Company
     );
 
+    private static readonly CapabilityRequirement ReadRequirement = new(
+        KnownCapabilities.DirectoryRead,
+        CapabilityScope.Company
+    );
+
     public async Task<EmployeeDirectoryWriteResult> CreateAsync(
         ActorContext actor,
         CreateEmployeeCommand command,
@@ -153,8 +158,46 @@ public sealed class EmployeeDirectoryService(
         );
     }
 
-    private async Task<bool> AuditDeniedAsync(
+    /// <summary>
+    /// Lista opções de pessoas da empresa para pickers (nome e IDs opacos),
+    /// autorizada pela capability de leitura <c>directory.read</c>; nunca
+    /// reutiliza a capability de criação de funcionário.
+    /// </summary>
+    public async Task<AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>> ListForPickerAsync(
         ActorContext actor,
+        Guid companyId,
+        CancellationToken cancellationToken
+    )
+    {
+        var authorization = await authorizedCompanies.ResolveAsync(
+            actor,
+            ReadRequirement,
+            cancellationToken
+        );
+        if (!authorization.IsSuccess)
+            return AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>.Failure(
+                authorization.ErrorCode!.Value
+            );
+        if (!authorization.Value!.CompanyIds.Contains(companyId))
+            return AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>.Failure(
+                AuthorizationErrorCode.CapabilityDenied
+            );
+        return await authorizedCompanies.ExecuteReadAsync(
+            actor,
+            ReadRequirement,
+            async (context, companyIds, token) =>
+                (IReadOnlyList<EmployeeDirectoryItem>)
+                    await context
+                        .Employees.AsNoTracking()
+                        .Where(x => x.CompanyId == companyId)
+                        .OrderBy(x => x.DisplayName)
+                        .Select(x => new EmployeeDirectoryItem(x.Id, x.MembershipId, x.DisplayName))
+                        .ToListAsync(token),
+            cancellationToken
+        );
+    }
+
+    private async Task<bool> AuditDeniedAsync(ActorContext actor,
         Guid companyId,
         CancellationToken cancellationToken
     )
