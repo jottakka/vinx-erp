@@ -248,12 +248,3 @@ public sealed record DemandRoutingCandidate(
 
 /// <summary>Estado mínimo de item de checklist para avaliar 100%.</summary>
 public sealed record DemandChecklistItemState(bool IsDone);
-
-public static partial class DemandRules
-{
-    public static string EncodeBoardCursor(DateTimeOffset occurredAt, Guid id) =>
-        BoardCursor.Encode(occurredAt, id);
-
-    public static bool TryDecodeBoardCursor(string? value, out (DateTimeOffset OccurredAt, Guid Id) decoded) =>
-        BoardCursor.TryDecode(value, out decoded);
-}

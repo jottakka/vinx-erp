@@ -30,9 +30,9 @@ public sealed class CreateDemandRequest
     [MaxLength(12)]
     public string Priority { get; init; } = string.Empty;
 
-    [Required]
-    [NonEmptyGuid]
-    public Guid ResponsibleMembershipId { get; init; }
+    /// <summary>Opcional: sem responsável explícito, a rotina roteada resolve
+    /// o auto-atribuído (membership ativa da mesma empresa, revalidada).</summary>
+    public Guid? ResponsibleMembershipId { get; init; }
 
     public Guid? RoutineId { get; init; }
 

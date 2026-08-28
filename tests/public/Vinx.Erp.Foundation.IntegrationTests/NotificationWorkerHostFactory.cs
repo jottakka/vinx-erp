@@ -76,6 +76,7 @@ internal sealed class FailFastTelegramBotHandler : DelegatingHandler
 internal sealed class NotificationWorkerHostFactory(
     string connectionString,
     bool useFakeWhatsAppProvider = false,
+    bool registerNoProviders = false,
     string? debugLogPath = null,
     HttpMessageHandler? metaGraphHandler = null,
     Vinx.Erp.Foundation.Files.FileStorage? testFileStorage = null,
@@ -231,6 +232,15 @@ internal sealed class NotificationWorkerHostFactory(
             builder.ConfigureLogging(logging =>
                 logging.AddProvider(new FileLoggerProvider(debugLogPath))
             );
+        }
+
+        if (registerNoProviders)
+        {
+            // Modo provider-missing: nenhum provider registrado — o resolver
+            // falha com NotificationProviderMissingException e a entrega vai
+            // para a DLQ redigida.
+            builder.ConfigureTestServices(services => services.RemoveAll<INotificationProvider>());
+            return;
         }
 
         if (!useFakeWhatsAppProvider)

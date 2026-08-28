@@ -356,7 +356,7 @@ public sealed class DemandasApprovalsService(
         string action,
         AuditOutcome outcome
     ) =>
-        new(actor.UserId, AuditScope.Company, command.CompanyId, AuditSource.Web, action, "demand", demandId, outcome, new CorrelationContext(actor.CorrelationId).CorrelationId, null, "{}");
+        new(actor.UserId, AuditScope.Company, command.CompanyId, AuditSource.Web, action, "demand", demandId, outcome, actor.CorrelationId, null, "{}");
 
     private PrepareApprovalService NewPrepareService() =>
         new(database, auditAppender, telemetry, capabilityEvaluator, prepareLogger, Policy);
@@ -398,7 +398,7 @@ public sealed class DemandasApprovalsService(
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
             await FoundationRlsContext.ApplyCommandAsync(database.Database, actor, companyId, cancellationToken);
-            await auditAppender.AppendAsync(new AuditEventData(actor.UserId, AuditScope.Company, companyId, AuditSource.Web, "demandas.approval.decision", "demand", null, AuditOutcome.Denied, new CorrelationContext(actor.CorrelationId).CorrelationId, ErrorCode(state), "{}"), cancellationToken);
+            await auditAppender.AppendAsync(new AuditEventData(actor.UserId, AuditScope.Company, companyId, AuditSource.Web, "demandas.approval.decision", "demand", null, AuditOutcome.Denied, actor.CorrelationId, ErrorCode(state), "{}"), cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

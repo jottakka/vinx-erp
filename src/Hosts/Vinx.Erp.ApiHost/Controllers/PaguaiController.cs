@@ -51,7 +51,7 @@ public sealed class PaguaiController(
     [HttpPost("draft-proposals/{id:guid}/confirm")]
     [Authorize(Policy = BrowserBffAuthenticationExtensions.BrowserSessionPolicyName)]
     [BrowserBffCookieOnlyEndpointMetadata]
-    [PaguaiAntiforgeryRequiredMetadata]
+    [BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true)]
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status200OK)]
@@ -89,7 +89,7 @@ public sealed class PaguaiController(
     [HttpPost("draft-proposals/{id:guid}/reject")]
     [Authorize(Policy = BrowserBffAuthenticationExtensions.BrowserSessionPolicyName)]
     [BrowserBffCookieOnlyEndpointMetadata]
-    [PaguaiAntiforgeryRequiredMetadata]
+    [BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true)]
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -180,7 +180,7 @@ public sealed class PaguaiController(
     }
 
     [HttpPost("requests/from-document")]
-    [PaguaiAntiforgeryRequiredMetadata]
+    [BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true)]
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status200OK)]
@@ -235,7 +235,7 @@ public sealed class PaguaiController(
     }
 
     [HttpPost("requests")]
-    [PaguaiAntiforgeryRequiredMetadata]
+    [BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true)]
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status200OK)]
@@ -305,7 +305,7 @@ public sealed class PaguaiController(
 
     /// <summary>Troca versionada (CAS) do comprovante do rascunho; auditoria no mesmo commit da mutação.</summary>
     [HttpPatch("requests/{id:guid}/proof")]
-    [PaguaiAntiforgeryRequiredMetadata]
+    [BrowserBffAntiforgeryRequiredMetadata(cookieAuthenticatedOnly: true)]
     [StrictJsonBody(ApiConstants.MaximumJsonBodyBytes)]
     [ProducesResponseType(typeof(PaguaiDraft), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

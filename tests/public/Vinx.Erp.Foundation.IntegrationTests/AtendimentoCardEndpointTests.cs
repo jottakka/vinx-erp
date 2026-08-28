@@ -1156,6 +1156,36 @@ public sealed class AtendimentoCardEndpointTests
     }
 
     [Fact]
+    public async Task Status_filter_accepts_the_terminal_cancelado_column_and_overdue_excludes_it()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        var created = await CreateCardAsync(client, scenario.CompanyId);
+
+        using var cancel = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/cancel",
+            new CancelCardRequest(scenario.CompanyId, Guid.NewGuid(), created.Version, "Solicitação duplicada.")
+        );
+        Assert.Equal(HttpStatusCode.OK, cancel.StatusCode);
+
+        // O filtro aceita a coluna terminal cancelado em vez de rejeitá-la.
+        using var filtered = await client.GetAsync(
+            $"/atendimento/cards?companyId={scenario.CompanyId}&status=cancelado");
+        Assert.Equal(HttpStatusCode.OK, filtered.StatusCode);
+        var cancelled = await filtered.Content.ReadFromJsonAsync<CardResponse[]>();
+        Assert.NotNull(cancelled);
+        Assert.Single(cancelled!, card => card.Id == created.Id);
+
+        // Overdue continua excluindo colunas terminais (inclusive cancelado).
+        using var overdue = await client.GetAsync(
+            $"/atendimento/cards?companyId={scenario.CompanyId}&overdue=true");
+        Assert.Equal(HttpStatusCode.OK, overdue.StatusCode);
+        var overdueCards = await overdue.Content.ReadFromJsonAsync<CardResponse[]>();
+        Assert.DoesNotContain(overdueCards ?? [], card => card.Id == created.Id);
+    }
+
+    [Fact]
     public async Task Cancelling_a_card_is_terminal_audited_and_replays_before_reading_the_current_state()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();

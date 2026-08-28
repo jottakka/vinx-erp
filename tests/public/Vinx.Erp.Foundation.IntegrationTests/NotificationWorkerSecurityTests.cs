@@ -1,5 +1,6 @@
 extern alias workerhost;
 
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -57,7 +58,7 @@ public sealed class NotificationWorkerSecurityTests
     }
 
     [Fact]
-    public async Task Missing_provider_channel_is_dead_lettered_redacted_without_claiming_the_delivery()
+    public async Task Delivery_target_missing_is_a_permanent_failure_without_dead_letter()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var seed = await NotificationIntentSeed.CreateCompanyWithRecipientAsync(
@@ -93,6 +94,63 @@ public sealed class NotificationWorkerSecurityTests
         );
         Assert.Equal("provider_failed", state.Status);
         Assert.False(await HasDeadLettersAsync(factory));
+    }
+
+    [Fact]
+    public async Task Missing_provider_channel_is_dead_lettered_redacted_without_claiming_the_delivery()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await NotificationIntentSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            whatsAppOptedIn: true
+        );
+        var enqueued = await NotificationIntentSeed.EnqueueAsync(
+            factory,
+            new NotificationIntentCommand(
+                seed.CompanyId,
+                seed.RecipientUserId,
+                NotificationIntentSeed.NewEventKey(),
+                seed.InAppTemplateKey,
+                WhatsAppTemplateKey: seed.WhatsAppTemplateKey
+            )
+        );
+        Assert.True(enqueued.WhatsApp!.Created);
+        var deliveryId = enqueued.WhatsApp!.DeliveryId!.Value;
+
+        // Canal sem provider registrado: o resolver falha com
+        // NotificationProviderMissingException e a entrega vai para a DLQ
+        // redigida — sem reivindicar sucesso nem chamar a rede.
+        await using var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString,
+            registerNoProviders: true
+        );
+        using var client = worker.CreateClient();
+
+        // A linha de entrega nunca é confirmada (fica aguardando provider) e o
+        // envelope vai para a DLQ redigida, sem o id da entrega.
+        var state = await NotificationIntentSeed.WaitUntilDeliveryAsync(
+            factory,
+            deliveryId,
+            "pending_provider",
+            TimeSpan.FromSeconds(30)
+        );
+        Assert.Equal("pending_provider", state.Status);
+        Assert.NotEqual("delivered", state.Status);
+        Assert.NotEqual("provider_failed", state.Status);
+
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        var bodies = await NotificationIntentSeed.ReadWorkerDeadLetterBodiesAsync(factory);
+        while (bodies.Count == 0 && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(500);
+            bodies = await NotificationIntentSeed.ReadWorkerDeadLetterBodiesAsync(factory);
+        }
+        Assert.NotEmpty(bodies);
+        var deliveryIdText = deliveryId.ToString("D");
+        Assert.DoesNotContain(
+            bodies,
+            body => Encoding.UTF8.GetString(body).Contains(deliveryIdText, StringComparison.Ordinal)
+        );
     }
 
     private static async Task<bool> HasDeadLettersAsync(FoundationApiFactory factory) =>

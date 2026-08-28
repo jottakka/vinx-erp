@@ -1738,7 +1738,6 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
                             new AgentModelSelection("test-provider", "test-model"),
                             TimeSpan.FromSeconds(30),
                             turnLimit: 1,
-                            maxTotalTokens: 8_000,
                             allowedTools: [])
                         : null),
                 new PaguaiProposalService(
@@ -1889,9 +1888,6 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             TimeSpan lifetime,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
-            string prefix,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

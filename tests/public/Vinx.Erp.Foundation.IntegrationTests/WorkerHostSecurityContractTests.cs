@@ -15,12 +15,66 @@ using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Serialization;
 using Xunit;
 using WorkerProgram = workerhost::Program;
+using WorkerHostTypes = workerhost::Vinx.Erp.WorkerHost;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
 
 /// <summary>RED contracts for the worker's trust boundary and durable failure handling.</summary>
 public sealed class WorkerHostSecurityContractTests
 {
+    [Fact]
+    public async Task Dead_letter_redaction_preserves_the_operational_type_and_never_fabricates_owner_invitations()
+    {
+        // Agente: preserva o tipo e o canal, zera o identificador sensível.
+        var originalAgentMessageId = Guid.NewGuid();
+        var agentEnvelope = new Wolverine.Envelope(
+            new Vinx.Erp.Notifications.InboundAgentRequestReceived(originalAgentMessageId, Vinx.Erp.Notifications.AgentChannelKind.WhatsApp));
+        WorkerHostTypes.WorkerDeadLetterRedactionInterceptor.RedactEnvelope(agentEnvelope);
+        var redactedAgent = Assert.IsType<Vinx.Erp.Notifications.InboundAgentRequestReceived>(agentEnvelope.Message);
+        Assert.Equal(Guid.Empty, redactedAgent.InboundMessageId);
+        Assert.Equal(Vinx.Erp.Notifications.AgentChannelKind.WhatsApp, redactedAgent.Channel);
+        Assert.Empty(agentEnvelope.Headers);
+        Assert.DoesNotContain(originalAgentMessageId.ToString("N"), Encoding.UTF8.GetString(agentEnvelope.Data ?? []), StringComparison.Ordinal);
+
+        // Tick de automação: tipo e campos operacionais preservados.
+        var tickAt = DateTimeOffset.UtcNow;
+        var tickEnvelope = new Wolverine.Envelope(new WorkerHostTypes.DemandasAutomationTick(tickAt, 7));
+        WorkerHostTypes.WorkerDeadLetterRedactionInterceptor.RedactEnvelope(tickEnvelope);
+        var redactedTick = Assert.IsType<WorkerHostTypes.DemandasAutomationTick>(tickEnvelope.Message);
+        Assert.Equal(tickAt, redactedTick.ScheduledAt);
+        Assert.Equal(7, redactedTick.Generation);
+
+        // Convite de owner: mantém o tipo com identificador zerado.
+        var ownerEnvelope = new Wolverine.Envelope(new OwnerInvitationDeliveryRequested(Guid.NewGuid()));
+        WorkerHostTypes.WorkerDeadLetterRedactionInterceptor.RedactEnvelope(ownerEnvelope);
+        var redactedOwner = Assert.IsType<OwnerInvitationDeliveryRequested>(ownerEnvelope.Message);
+        Assert.Equal(Guid.Empty, redactedOwner.InvitationId);
+
+        // Convite de membro: mantém o tipo com identificador zerado.
+        var memberEnvelope = new Wolverine.Envelope(
+            new Vinx.Erp.Foundation.Permissions.MemberInvitationDeliveryRequested(Guid.NewGuid()));
+        WorkerHostTypes.WorkerDeadLetterRedactionInterceptor.RedactEnvelope(memberEnvelope);
+        var redactedMember = Assert.IsType<Vinx.Erp.Foundation.Permissions.MemberInvitationDeliveryRequested>(memberEnvelope.Message);
+        Assert.Equal(Guid.Empty, redactedMember.InvitationId);
+
+        // Desconhecido: marcador opaco — nunca um envelope de convite de owner.
+        var unknownEnvelope = new Wolverine.Envelope(new UnknownWorkerProbe("conteúdo sensível"));
+        var interceptor = new WorkerHostTypes.WorkerDeadLetterRedactionInterceptor();
+        WorkerHostTypes.WorkerDeadLetterRedactionInterceptor.RedactEnvelope(unknownEnvelope);
+        Assert.IsType<WorkerHostTypes.RedactedUnknownWorkerMessage>(unknownEnvelope.Message);
+
+        var unknownException = await interceptor.BeforeStoreAsync(unknownEnvelope, null, CancellationToken.None);
+        var redactionException = Assert.IsType<WorkerHostTypes.WorkerRedactedUnknownDeadLetterException>(unknownException);
+        Assert.Equal(WorkerHostTypes.WorkerRedactedUnknownDeadLetterException.UnexpectedExceptionType, redactionException.ExceptionType);
+        Assert.DoesNotContain("conteúdo sensível", redactionException.Message, StringComparison.Ordinal);
+
+        // Dono legítimo continua classificado como entrega de owner.
+        var ownerException = await interceptor.BeforeStoreAsync(ownerEnvelope, null, CancellationToken.None);
+        Assert.IsType<WorkerHostTypes.WorkerOwnerInvitationDeadLetterException>(ownerException);
+    }
+
+    private sealed record UnknownWorkerProbe(string Payload);
+
     [Fact]
     public async Task Server_correlation_flows_through_envelope_to_worker_ingress_audit()
     {

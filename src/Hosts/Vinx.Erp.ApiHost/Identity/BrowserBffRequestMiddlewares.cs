@@ -22,6 +22,7 @@ internal sealed class BrowserBffNoStoreMiddleware(RequestDelegate next)
                     || context.Request.Path.StartsWithSegments("/foundation/identity/browser-session")
                     || context.Request.Path.StartsWithSegments("/paguai")
                     || context.Request.Path.StartsWithSegments("/atendimento")
+                    || context.Request.Path.StartsWithSegments("/demandas")
                     || context.Request.Path.StartsWithSegments("/notifications");
                 var endpointOptedIntoNoStore =
                     context.GetEndpoint()?.Metadata.GetMetadata<BrowserBffNoStoreEndpointMetadata>()
