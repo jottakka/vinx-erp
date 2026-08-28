@@ -18,6 +18,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { Link as RouterLink } from "react-router-dom";
+import { CompanySelect } from "../../shared/ui/company-select";
 import type { AgentMessage } from "./agent-contract";
 import { useAgentConversation } from "./agent-conversation-provider";
 
@@ -56,6 +58,11 @@ function MessageBubble({ message }: { message: AgentMessage }) {
           ))}
         </Stack>
       ) : null}
+      {message.proposalPath ? (
+        <Button component={RouterLink} size="small" to={message.proposalPath}>
+          Revisar proposta Paguai
+        </Button>
+      ) : null}
     </Stack>
   );
 }
@@ -90,8 +97,12 @@ export function AgentConversation() {
   const {
     access,
     attachments,
+    authorizedCompanies,
     attachmentSelectionAvailable,
     attachmentSelectionLimitReached,
+    companyName,
+    selectCompany,
+    selectedCompanyId,
     messages,
     removeAttachment,
     selectAttachments,
@@ -102,12 +113,13 @@ export function AgentConversation() {
   const attachmentInput = useRef<HTMLInputElement>(null);
   const thinking = status === "thinking";
   const emptyConversationNotice = access.available
-    ? "Cada envio é uma consulta independente ao agente da empresa ativa; turnos anteriores não são relembrados."
+    ? "Faça uma pergunta sobre a empresa selecionada."
     : access.message;
 
   function submitFromInput() {
-    sendMessage(draft);
-    setDraft("");
+    // Só descarta o rascunho quando o envio foi aceito; bloqueios (anexo em
+    // curso, envio em andamento, empresa ausente) preservam o texto digitado.
+    if (sendMessage(draft)) setDraft("");
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -139,6 +151,19 @@ export function AgentConversation() {
 
   return (
     <Stack sx={{ flexGrow: 1, minHeight: 0 }}>
+      <Stack spacing={1} sx={{ mb: 2 }}>
+        <CompanySelect
+          companies={authorizedCompanies}
+          label="Empresa do envio"
+          onChange={selectCompany}
+          value={selectedCompanyId}
+        />
+        {companyName ? (
+          <Typography color="text.secondary" variant="caption">
+            Uma empresa por envio.
+          </Typography>
+        ) : null}
+      </Stack>
       <Box
         aria-label="Mensagens do agente"
         role="log"
@@ -149,16 +174,16 @@ export function AgentConversation() {
           py: 0.5,
         }}
       >
-        {messages.length ? (
+        {!access.available ? (
+          <Alert id="agent-access-message" role="status" severity="warning">
+            {access.message}
+          </Alert>
+        ) : messages.length ? (
           messages.map((message) => (
             <MessageBubble key={message.id} message={message} />
           ))
         ) : (
-          <Alert
-            id={access.available ? undefined : "agent-access-message"}
-            role={access.available ? "note" : "status"}
-            severity={access.available ? "info" : "warning"}
-          >
+          <Alert role="note" severity="info">
             {emptyConversationNotice}
           </Alert>
         )}
@@ -220,6 +245,7 @@ export function AgentConversation() {
         ) : null}
         <Stack direction="row" spacing={1} sx={{ alignItems: "flex-end" }}>
           <TextField
+            disabled={!access.available || !selectedCompanyId || thinking}
             fullWidth
             label="Mensagem para o agente"
             maxRows={3}
@@ -228,7 +254,6 @@ export function AgentConversation() {
             onKeyDown={handleComposerKeyDown}
             size="small"
             value={draft}
-            disabled={!access.available}
           />
           <IconButton
             aria-label="Anexar arquivo"
@@ -256,6 +281,7 @@ export function AgentConversation() {
           <Button
             disabled={
               !access.available ||
+              !selectedCompanyId ||
               !draft.trim() ||
               thinking ||
               hasBlockingAttachment

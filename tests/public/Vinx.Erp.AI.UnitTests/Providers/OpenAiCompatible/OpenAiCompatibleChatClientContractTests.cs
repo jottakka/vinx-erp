@@ -250,21 +250,25 @@ public sealed class OpenAiCompatibleChatClientContractTests
     }
 
     [Fact]
-    public async Task Caller_cancellation_is_classified_as_cancelled_without_retry()
+    public async Task Caller_cancellation_is_propagated_without_retry_or_failure_log()
     {
+        var logger = new RecordingLogger();
         var handler = new TestProviderHandler(async (_, cancellation) =>
         {
             await Task.Delay(TimeSpan.FromSeconds(10), cancellation);
             return TestProviderHandler.JsonResponse("nunca");
         });
-        using var client = CreateClient(handler, Approved(o => o.Timeout = TimeSpan.FromSeconds(30)));
+        using var client = CreateClient(
+            handler,
+            Approved(o => o.Timeout = TimeSpan.FromSeconds(30)),
+            logger);
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
 
-        var exception = await Assert.ThrowsAsync<OpenAiCompatibleProviderException>(
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => client.GetResponseAsync([UserMessage("cancele")], options: null, cancellationToken: cancellation.Token));
 
-        Assert.Equal(OpenAiCompatibleFailureKind.Cancelled, exception.Kind);
         Assert.Equal(1, handler.CallCount);
+        Assert.DoesNotContain(" failed ", logger.Text, StringComparison.Ordinal);
     }
 
     [Fact]

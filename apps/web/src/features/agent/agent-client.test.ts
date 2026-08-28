@@ -34,6 +34,41 @@ function typedBody(overrides: Record<string, unknown> = {}) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("agent run client", () => {
+  it.each([
+    [undefined, true],
+    [null, true],
+    ["11111111-1111-4111-8111-111111111111", true],
+    ["not-a-uuid", false],
+    [42, false],
+  ])(
+    "accepts only an absent, null, or UUID Paguai proposal id: %s",
+    async (paguaiProposalId, accepted) => {
+      const body = typedBody({
+        status: "requires_confirmation",
+        text: null,
+        ...(paguaiProposalId === undefined ? {} : { paguaiProposalId }),
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(tokenResponse())
+          .mockResolvedValueOnce(runResponse(body)),
+      );
+
+      const result = await createAgentRunClient().send({ message: "revise" });
+
+      expect(result.ok).toBe(accepted);
+      if (accepted && result.ok) {
+        expect(result.run.paguaiProposalId).toBe(
+          paguaiProposalId === undefined ? null : paguaiProposalId,
+        );
+      } else if (!accepted && !result.ok) {
+        expect(result.failure.kind).toBe("protocol");
+      }
+    },
+  );
+
   it("posts the approved journey with a fresh requestId and the company when present", async () => {
     const fetchSpy = vi
       .fn()

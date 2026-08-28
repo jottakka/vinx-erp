@@ -104,6 +104,98 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AgentExecutionLedger", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("channel");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("InboundMessageId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("inbound_message_id");
+
+                    b.Property<string>("Journey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("journey");
+
+                    b.Property<string>("PayloadHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payload_hash");
+
+                    b.Property<string>("ReasonCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("reason_code");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("row_version");
+
+                    b.Property<string>("SafeResultJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("safe_result_json");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("state");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_agent_execution_ledger");
+
+                    b.HasAlternateKey("CompanyId", "Id")
+                        .HasName("ak_agent_execution_ledger_company_id_id");
+
+                    b.HasIndex("CompanyId", "ActorUserId", "Channel", "RequestId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_agent_execution_ledger_company_id_actor_user_id_channel_request_id");
+
+                    b.ToTable("agent_execution_ledger", "foundation", t =>
+                        {
+                            t.HasCheckConstraint("ck_agent_execution_ledger_channel_inbound_message", "(channel = 'web' AND inbound_message_id IS NULL) OR (channel IN ('whatsapp', 'telegram') AND inbound_message_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_agent_execution_ledger_payload_hash_format", "payload_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_agent_execution_ledger_state", "state IN ('claimed', 'vision_in_flight', 'model_in_flight', 'completed', 'failed_closed', 'ambiguous')");
+
+                            t.HasCheckConstraint("ck_agent_execution_ledger_terminal_data", "(state = 'completed' AND safe_result_json IS NOT NULL AND reason_code IS NULL) OR (state IN ('failed_closed', 'ambiguous') AND safe_result_json IS NULL AND reason_code IS NOT NULL) OR (state IN ('claimed', 'vision_in_flight', 'model_in_flight') AND safe_result_json IS NULL AND reason_code IS NULL)");
+                        });
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCard", b =>
                 {
                     b.Property<Guid>("Id")
@@ -114,9 +206,34 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("assignee_membership_id");
 
+                    b.Property<Guid?>("AttachmentFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("attachment_file_id");
+
+                    b.Property<string>("CancellationReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("cancellation_reason");
+
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<Guid?>("CancelledByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("cancelled_by_user_id");
+
                     b.Property<Guid?>("CategoryRefId")
                         .HasColumnType("uuid")
                         .HasColumnName("category_ref_id");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(12)
+                        .HasColumnType("character varying(12)")
+                        .HasDefaultValue("manual")
+                        .HasColumnName("channel");
 
                     b.Property<Guid?>("ChannelRefId")
                         .HasColumnType("uuid")
@@ -198,9 +315,19 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_atendimento_cards");
 
-                    b.HasIndex("CompanyId", "Id")
-                        .IsUnique()
-                        .HasDatabaseName("ix_atendimento_cards_company_id_id");
+                    b.HasAlternateKey("CompanyId", "Id")
+                        .HasName("uq_atendimento_cards_company_id_id");
+
+                    b.HasIndex("CancelledByUserId")
+                        .HasDatabaseName("ix_atendimento_cards_cancelled_by_user_id");
+
+                    b.HasIndex("CompanyId", "AttachmentFileId")
+                        .HasDatabaseName("ix_atendimento_cards_company_id_attachment_file_id");
+
+                    b.HasIndex("CompanyId", "CreatedAt", "Id")
+                        .HasDatabaseName("ix_atendimento_cards_company_id_created_at_id_live")
+                        .IsDescending(false, true, true)
+                        .HasFilter("deleted_at IS NULL");
 
                     b.ToTable("atendimento_cards", "service_desk");
                 });
@@ -253,6 +380,29 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasDatabaseName("ix_atendimento_categories_company_id_name");
 
                     b.ToTable("atendimento_categories", "service_desk");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCardParticipant", b =>
+                {
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<Guid>("CardId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("card_id");
+
+                    b.Property<Guid>("MembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("membership_id");
+
+                    b.HasKey("CompanyId", "CardId", "MembershipId")
+                        .HasName("pk_atendimento_card_participants");
+
+                    b.HasIndex("CompanyId", "MembershipId")
+                        .HasDatabaseName("ix_atendimento_card_participants_company_id_membership_id");
+
+                    b.ToTable("atendimento_card_participants", "service_desk");
                 });
 
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCardWatcher", b =>
@@ -995,6 +1145,151 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.ToTable("memberships", "foundation");
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiDraftProposal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("amount");
+
+                    b.Property<string>("BeneficiaryDisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("beneficiary_display_name");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("company_id");
+
+                    b.Property<double>("Confidence")
+                        .HasColumnType("double precision")
+                        .HasColumnName("confidence");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("currency");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("description");
+
+                    b.Property<DateOnly>("DueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("due_date");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<Guid>("FileRecordId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("file_record_id");
+
+                    b.Property<string>("PayloadHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payload_hash");
+
+                    b.Property<string>("PolicyVersion")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("policy_version");
+
+                    b.Property<string>("ProofRequirement")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("proof_requirement");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<Guid?>("ResolutionRequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resolution_request_id");
+
+                    b.Property<DateTimeOffset?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("resolved_at");
+
+                    b.Property<Guid?>("ResultDraftId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("result_draft_id");
+
+                    b.Property<long>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L)
+                        .HasColumnName("row_version");
+
+                    b.Property<string>("SourceReferences")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("source_references");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("title");
+
+                    b.HasKey("Id")
+                        .HasName("pk_draft_proposals");
+
+                    b.HasAlternateKey("CompanyId", "Id")
+                        .HasName("ak_draft_proposals_company_id_id");
+
+                    b.HasIndex("ActorUserId")
+                        .HasDatabaseName("ix_draft_proposals_actor_user_id");
+
+                    b.HasIndex("CompanyId", "FileRecordId")
+                        .HasDatabaseName("ix_draft_proposals_company_id_file_record_id");
+
+                    b.HasIndex("CompanyId", "ActorUserId", "RequestId")
+                        .IsUnique()
+                        .HasDatabaseName("uq_paguai_draft_proposals_live_request")
+                        .HasFilter("state = 'pending'");
+
+                    b.ToTable("draft_proposals", "paguai", t =>
+                        {
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_confidence", "confidence >= 0 AND confidence <= 1");
+
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_currency_brl", "currency = 'BRL'");
+
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_lifetime", "expires_at = created_at + interval '15 minutes'");
+
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_resolution", "(state = 'pending' AND resolved_at IS NULL AND resolution_request_id IS NULL AND result_draft_id IS NULL) OR (state = 'consumed' AND resolved_at IS NOT NULL AND resolution_request_id IS NOT NULL AND result_draft_id IS NOT NULL) OR (state IN ('rejected', 'invalidated') AND resolved_at IS NOT NULL AND resolution_request_id IS NOT NULL AND result_draft_id IS NULL)");
+
+                            t.HasCheckConstraint("ck_paguai_draft_proposals_state", "state IN ('pending', 'consumed', 'rejected', 'invalidated')");
+                        });
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiRequest", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1036,6 +1331,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("date")
                         .HasColumnName("due_date");
 
+                    b.Property<Guid?>("InvoiceFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invoice_file_id");
+
                     b.Property<string>("ProofRequirement")
                         .IsRequired()
                         .HasMaxLength(10)
@@ -1054,6 +1353,10 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("source_inbound_message_id");
 
+                    b.Property<Guid?>("SourceProposalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_proposal_id");
+
                     b.Property<string>("State")
                         .IsRequired()
                         .HasColumnType("text")
@@ -1071,6 +1374,20 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_requests");
+
+                    b.HasAlternateKey("CompanyId", "Id")
+                        .HasName("ak_requests_company_id_id");
+
+                    b.HasIndex("SourceProposalId")
+                        .IsUnique()
+                        .HasDatabaseName("uq_paguai_requests_source_proposal_id")
+                        .HasFilter("source_proposal_id IS NOT NULL");
+
+                    b.HasIndex("CompanyId", "InvoiceFileId")
+                        .HasDatabaseName("ix_requests_company_id_invoice_file_id");
+
+                    b.HasIndex("CompanyId", "SourceProposalId")
+                        .HasDatabaseName("ix_requests_company_id_source_proposal_id");
 
                     b.ToTable("requests", "paguai", t =>
                         {
@@ -1568,6 +1885,55 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AgentExecutionLedger", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.Company", "Company")
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_agent_execution_ledger_companies_company_id");
+
+                    b.Navigation("Company");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCard", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("CancelledByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_atendimento_cards_users_cancelled_by_user_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.FileRecord", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "AttachmentFileId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_atendimento_cards_files_company_id_attachment_file_id");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCardParticipant", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.AtendimentoCard", "Card")
+                        .WithMany("Participants")
+                        .HasForeignKey("CompanyId", "CardId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_atendimento_card_participants_atendimento_cards_company_id_");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.Membership", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "MembershipId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_atendimento_card_participants_memberships_company_id_member");
+
+                    b.Navigation("Card");
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Company", b =>
                 {
                     b.HasOne("Vinx.Erp.Foundation.Domain.Group", "Group")
@@ -1690,6 +2056,48 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiDraftProposal", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("ActorUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_draft_proposals_users_actor_user_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.Company", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_draft_proposals_companies_company_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.FileRecord", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "FileRecordId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_draft_proposals_files_company_id_file_record_id");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.PaguaiRequest", b =>
+                {
+                    b.HasOne("Vinx.Erp.Foundation.Domain.FileRecord", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "InvoiceFileId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_requests_files_company_id_invoice_file_id");
+
+                    b.HasOne("Vinx.Erp.Foundation.Domain.PaguaiDraftProposal", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId", "SourceProposalId")
+                        .HasPrincipalKey("CompanyId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_requests_draft_proposals_company_id_source_proposal_id");
+                });
+
             modelBuilder.Entity("Vinx.Erp.Foundation.Domain.Role", b =>
                 {
                     b.HasOne("Vinx.Erp.Foundation.Domain.Company", "Company")
@@ -1808,6 +2216,11 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     b.Navigation("RevokedByUser");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Vinx.Erp.Foundation.Domain.AtendimentoCard", b =>
+                {
+                    b.Navigation("Participants");
                 });
 #pragma warning restore 612, 618
         }

@@ -1,4 +1,14 @@
-export type AtendimentoColumn = "novo" | "em_andamento" | "concluido";
+import { z } from "zod";
+import {
+  fetchSameOriginBff,
+  isCanonicalUuid,
+} from "../../shared/http/bff-response";
+
+export type AtendimentoColumn =
+  | "novo"
+  | "em_andamento"
+  | "concluido"
+  | "cancelado";
 
 export type AtendimentoPriority = "critica" | "alta" | "media" | "baixa";
 
@@ -10,14 +20,19 @@ export type AtendimentoCard = {
   column: AtendimentoColumn;
   version: number;
   assigneeMembershipId: string | null;
-  /** Campos da fatia de usabilidade; ausentes em respostas antigas. */
-  priority?: AtendimentoPriority | null;
-  categoryRefId?: string | null;
-  channelRefId?: string | null;
-  slaDueAt?: string | null;
-  overdue?: boolean;
-  requesterPersonRef?: string | null;
-  watcherMembershipIds?: string[] | null;
+  attachmentFileId: string | null;
+  participantMembershipIds: readonly string[];
+  priority: AtendimentoPriority;
+  channel: AtendimentoChannel;
+  slaDueAt: string | null;
+  isOverdue: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+  /** Campos de ticket da fatia P6 (backend, PR 336); nulos quando indefinidos. */
+  categoryRefId: string | null;
+  channelRefId: string | null;
+  requesterPersonRef: string | null;
+  watcherMembershipIds: string[] | null;
 };
 
 export type QueueFilter = {
@@ -42,6 +57,7 @@ export type TimelineEvent = {
     | "assigned"
     | "moved"
     | "fields_updated"
+    | "mentioned"
     | "watcher_added"
     | "watcher_removed";
   actorMembershipId: string | null;
@@ -67,13 +83,74 @@ export type UpdateFieldsInput = {
   mentionedMembershipIds?: string[];
 };
 
+export type AtendimentoChannel = "whatsapp" | "email" | "web" | "manual";
+
+export type AtendimentoAssignmentOption = {
+  membershipId: string;
+  displayName: string;
+};
+
+export type AtendimentoCreateOptions = {
+  attachmentFileId?: string | null;
+  participantMembershipIds?: readonly string[];
+  priority?: AtendimentoPriority;
+  channel?: AtendimentoChannel;
+  slaDueAt?: string | null;
+};
+
+const atendimentoIdSchema = z.string().refine(isCanonicalUuid);
+
+const atendimentoCardSchema = z
+  .object({
+    id: atendimentoIdSchema,
+    companyId: atendimentoIdSchema,
+    title: z.string().min(1).max(200),
+    description: z.string().min(1).max(4000),
+    column: z.enum(["novo", "em_andamento", "concluido", "cancelado"]),
+    version: z.number().int().positive(),
+    assigneeMembershipId: atendimentoIdSchema.nullable(),
+    attachmentFileId: atendimentoIdSchema.nullable(),
+    participantMembershipIds: z.array(atendimentoIdSchema),
+    priority: z.enum(["critica", "alta", "media", "baixa"]),
+    channel: z.enum(["whatsapp", "email", "web", "manual"]),
+    slaDueAt: z.string().datetime({ offset: true }).nullable(),
+    isOverdue: z.boolean(),
+    createdAt: z.string().datetime({ offset: true }).nullable(),
+    updatedAt: z.string().datetime({ offset: true }).nullable(),
+    categoryRefId: atendimentoIdSchema.nullable(),
+    channelRefId: atendimentoIdSchema.nullable(),
+    requesterPersonRef: z.string().max(200).nullable(),
+    watcherMembershipIds: z.array(atendimentoIdSchema).nullable(),
+  })
+  .strict();
+const atendimentoCardsSchema = z.array(atendimentoCardSchema);
+
+function parseCard(value: unknown): AtendimentoCard | null {
+  const parsed = atendimentoCardSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 type CommandResult =
   | { ok: true; card: AtendimentoCard }
-  | { ok: false; code: string; current?: AtendimentoCard };
+  | {
+      ok: false;
+      code: string;
+      current?: AtendimentoCard;
+      mayHaveCommitted?: true;
+    };
 
 const basePath = "/atendimento/cards";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const antiforgeryHeaderName = "X-CSRF-TOKEN";
+
+const assignmentOptionsSchema = z.array(
+  z
+    .object({
+      membershipId: atendimentoIdSchema,
+      displayName: z.string().min(1),
+    })
+    .strict(),
+);
 
 function request(path: string, init: RequestInit = {}) {
   return fetch(path, {
@@ -123,32 +200,59 @@ export function queueFilterToQuery(filter: QueueFilter): string {
 }
 
 async function command(path: string, body: object): Promise<CommandResult> {
-  try {
-    const requestToken = await getAntiforgeryToken();
-    if (!requestToken) return { code: "atendimento_unavailable", ok: false };
+  const requestToken = await getAntiforgeryToken();
+  if (!requestToken) return { code: "atendimento_unavailable", ok: false };
 
-    const response = await request(path, {
+  // Falha de transporte após o disparo do POST e 2xx com corpo que não valida
+  // podem representar um commit no servidor: o resultado é ambíguo
+  // (mayHaveCommitted), nunca uma falha definitiva, e a página reconcilia por
+  // readback em vez de reenviar.
+  const outcome = await fetchSameOriginBff(
+    fetch,
+    path,
+    {
       body: JSON.stringify(body),
       headers: {
         "Content-Type": "application/json",
         [antiforgeryHeaderName]: requestToken,
       },
+      mayHaveCommittedOnAbort: true,
       method: "POST",
-    });
-    if (response.ok)
-      return { card: (await response.json()) as AtendimentoCard, ok: true };
-    const error = (await response.json().catch(() => null)) as {
-      code?: string;
-      current?: AtendimentoCard;
-    } | null;
+    },
+    (kind, { mayHaveCommittedOnAbort }) => ({
+      kind,
+      mayHaveCommitted: mayHaveCommittedOnAbort,
+    }),
+  );
+  if (!("response" in outcome)) {
     return {
-      code: error?.code ?? "atendimento_unavailable",
-      current: error?.current,
+      code: "atendimento_unavailable",
+      ...(outcome.mayHaveCommitted ? { mayHaveCommitted: true } : {}),
       ok: false,
     };
-  } catch {
-    return { code: "atendimento_unavailable", ok: false };
   }
+  const response = outcome.response;
+  if (response.ok) {
+    const card = parseCard(await response.json().catch(() => null));
+    return card
+      ? { card, ok: true }
+      : {
+          code: "atendimento_unavailable",
+          mayHaveCommitted: true,
+          ok: false,
+        };
+  }
+  const error = (await response.json().catch(() => null)) as {
+    code?: string;
+    current?: unknown;
+  } | null;
+  const current =
+    error?.current === undefined ? undefined : parseCard(error.current);
+  return {
+    code: error?.code ?? "atendimento_unavailable",
+    ...(current ? { current } : {}),
+    ok: false,
+  };
 }
 
 export const atendimentoClient = {
@@ -160,18 +264,51 @@ export const atendimentoClient = {
       const response = await request(
         `${basePath}?companyId=${encodeURIComponent(companyId)}${queueFilterToQuery(filter)}`,
       );
-      return response.ok
-        ? ((await response.json()) as AtendimentoCard[])
-        : null;
+      if (!response.ok) return null;
+      const parsed = atendimentoCardsSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
   },
-  create(companyId: string, title: string, description: string) {
+  async assignmentOptions(
+    companyId: string,
+    signal?: AbortSignal,
+  ): Promise<AtendimentoAssignmentOption[] | null> {
+    try {
+      const response = await request(
+        `/atendimento/assignment-options?companyId=${encodeURIComponent(companyId)}`,
+        { signal },
+      );
+      if (!response.ok) return null;
+      const parsed = assignmentOptionsSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  },
+  create(
+    companyId: string,
+    requestId: string,
+    title: string,
+    description: string,
+    {
+      attachmentFileId = null,
+      participantMembershipIds = [],
+      priority = "media",
+      channel = "web",
+      slaDueAt = null,
+    }: AtendimentoCreateOptions = {},
+  ) {
     return command(basePath, {
+      attachmentFileId,
+      channel,
       companyId,
       description,
-      requestId: crypto.randomUUID(),
+      participantMembershipIds: [...participantMembershipIds],
+      priority,
+      requestId,
+      slaDueAt,
       title,
     });
   },
@@ -331,5 +468,13 @@ export const atendimentoClient = {
     } catch {
       return { code: "atendimento_unavailable", ok: false };
     }
+  },
+  cancel(companyId: string, card: AtendimentoCard, reason: string) {
+    return command(`${basePath}/${card.id}/cancel`, {
+      companyId,
+      expectedVersion: card.version,
+      reason: reason.trim(),
+      requestId: crypto.randomUUID(),
+    });
   },
 };

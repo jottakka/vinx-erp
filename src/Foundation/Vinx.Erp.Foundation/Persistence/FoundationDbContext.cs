@@ -21,15 +21,18 @@ public sealed class FoundationDbContext(DbContextOptions<FoundationDbContext> op
     public DbSet<RoleAssignment> RoleAssignments => Set<RoleAssignment>();
     public DbSet<FileRecord> Files => Set<FileRecord>();
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
+    public DbSet<AgentExecutionLedger> AgentExecutionLedger => Set<AgentExecutionLedger>();
     public DbSet<FoundationApproval> Approvals => Set<FoundationApproval>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<PaguaiRequest> PaguaiRequests => Set<PaguaiRequest>();
+    public DbSet<PaguaiDraftProposal> PaguaiDraftProposals => Set<PaguaiDraftProposal>();
     public DbSet<AtendimentoCard> AtendimentoCards => Set<AtendimentoCard>();
     public DbSet<AtendimentoCardCategory> AtendimentoCardCategories =>
         Set<AtendimentoCardCategory>();
     public DbSet<AtendimentoChannel> AtendimentoChannels => Set<AtendimentoChannel>();
     public DbSet<AtendimentoCardWatcher> AtendimentoCardWatchers =>
         Set<AtendimentoCardWatcher>();
+    public DbSet<AtendimentoCardParticipant> AtendimentoCardParticipants => Set<AtendimentoCardParticipant>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

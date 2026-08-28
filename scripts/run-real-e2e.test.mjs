@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 import {
   parseLauncherArgs,
   parseReadyOrigin,
+  parseSharedReadiness,
+  parseSingleReadiness,
   runLauncher,
 } from "./run-real-e2e.mjs";
 
@@ -42,7 +44,13 @@ function builtE2eHostDll() {
 }
 
 function startDirectE2eHost(profile) {
-  const child = spawn("dotnet", [builtE2eHostDll(), "--profile", profile], {
+  const child = spawn("dotnet", [
+    builtE2eHostDll(),
+    "--profile",
+    profile,
+    "--agent-mode",
+    "deterministic",
+  ], {
     cwd: REPOSITORY_ROOT,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -65,6 +73,8 @@ function startDirectE2eHost(profile) {
     readySettled = true;
     operation();
   };
+  let readinessOrigin;
+  let readinessSentinelSeen = false;
   child.stdout.on("data", (chunk) => {
     standardOutput += chunk;
     let newlineIndex;
@@ -73,12 +83,18 @@ function startDirectE2eHost(profile) {
         .slice(parsedOutputLength, newlineIndex)
         .replace(/\r$/, "");
       parsedOutputLength = newlineIndex + 1;
-      if (!line.startsWith("E2E_API_ORIGIN=")) continue;
-      try {
-        const origin = parseReadyOrigin(line);
-        settleReady(() => resolveReady(origin));
-      } catch (error) {
-        settleReady(() => rejectReady(error));
+      if (line.startsWith("E2E_API_ORIGIN=")) {
+        try {
+          readinessOrigin = parseReadyOrigin(line);
+        } catch (error) {
+          settleReady(() => rejectReady(error));
+        }
+      } else if (line === "E2E_SINGLE_READY=1") {
+        readinessSentinelSeen = true;
+      }
+
+      if (readinessOrigin !== undefined && readinessSentinelSeen) {
+        settleReady(() => resolveReady(readinessOrigin));
       }
     }
   });
@@ -121,6 +137,7 @@ function createFakeChild(label, pid) {
   const child = new EventEmitter();
   child.label = label;
   child.pid = pid;
+  child.stderr = new PassThrough();
   child.stdout = new PassThrough();
   child.exitCode = null;
   child.signalCode = null;
@@ -128,10 +145,15 @@ function createFakeChild(label, pid) {
     if (child.exitCode !== null || child.signalCode !== null) return;
     child.exitCode = code;
     child.signalCode = signal;
+    child.stderr.end();
     child.stdout.end();
     child.emit("exit", code, signal);
   };
   return child;
+}
+
+function singleReadinessLines(origin = "http://127.0.0.1:54321") {
+  return `E2E_API_ORIGIN=${origin}\nE2E_SINGLE_READY=1\n`;
 }
 
 function createHarness(overrides = {}) {
@@ -147,31 +169,13 @@ function createHarness(overrides = {}) {
   const events = [];
   const spawns = [];
   const output = [];
-  let resolveShutdown;
-  const shutdown = new Promise((resolve) => {
-    resolveShutdown = resolve;
-  });
-  const signalWaiter = () => {
-    const onInterrupt = () => resolveShutdown("SIGINT");
-    const onTerminate = () => resolveShutdown("SIGTERM");
-    signalTarget.on("SIGINT", onInterrupt);
-    signalTarget.on("SIGTERM", onTerminate);
-    return {
-      dispose: () => {
-        signalTarget.off("SIGINT", onInterrupt);
-        signalTarget.off("SIGTERM", onTerminate);
-      },
-      promise: shutdown,
-    };
-  };
-  let outputLines = 0;
   const recordReady = (lines) => {
     output.push(...lines);
     setImmediate(onReady ?? (() => signalTarget.emit("SIGINT")));
   };
 
   const deps = {
-    args: ["--profile", "maria"],
+    args: ["--profile", "maria", "--agent-mode", "deterministic"],
     repositoryRoot: "/repo",
     platform: "darwin",
     processExecPath: "/opt/node/bin/node",
@@ -190,7 +194,7 @@ function createHarness(overrides = {}) {
         child.emit("spawn");
         if (child === host) {
           (onHostSpawn ?? (() =>
-            host.stdout.write("E2E_API_ORIGIN=http://127.0.0.1:54321\n")))();
+            host.stdout.write(singleReadinessLines())))();
         } else {
           onViteSpawn?.();
         }
@@ -202,12 +206,11 @@ function createHarness(overrides = {}) {
       events.push(`http:${url}`);
     },
     signalTarget,
-    waitForShutdownSignal: signalWaiter,
     killProcessGroup: (child, signal) => {
       events.push(`kill:${child.label}:${signal}`);
       setTimeout(() => {
         events.push(`exit:${child.label}`);
-        child.finish(null, signal);
+        child.finish(child === host ? 0 : null, child === host ? null : signal);
       }, 1);
     },
     publishReady: ({ browserUrl, profile }) =>
@@ -215,17 +218,97 @@ function createHarness(overrides = {}) {
         `E2E_BROWSER_URL=${browserUrl}`,
         `E2E_PROFILE=${profile}`,
       ]),
-    writeLine: (line) => {
-      output.push(line);
-      outputLines += 1;
-      if (outputLines === 2) {
-        setImmediate(onReady ?? (() => signalTarget.emit("SIGINT")));
-      }
-    },
     ...dependencyOverrides,
   };
 
   return { deps, events, host, output, signalTarget, spawns, vite };
+}
+
+function sharedReadinessLines() {
+  return [
+    "E2E_API_ORIGIN_MARIA=http://127.0.0.1:54321",
+    "E2E_API_ORIGIN_CLARA=http://127.0.0.1:54324",
+    "E2E_DB_HOST=127.0.0.1",
+    "E2E_DB_PORT=54323",
+    "E2E_DB_DATABASE=vinx_fixture_a1b2c3",
+    "E2E_DB_USER=postgres",
+    "E2E_DB_PASSWORD_FILE=/tmp/vinx-e2e-check/postgres-password",
+    "E2E_SHARED_READY=1",
+  ];
+}
+
+function createSharedHarness(overrides = {}) {
+  const { onHostSpawn, onReady, ...dependencyOverrides } = overrides;
+  const host = createFakeChild("host", 101);
+  const mariaVite = createFakeChild("vite-maria", 202);
+  const claraVite = createFakeChild("vite-clara", 303);
+  const signalTarget = new EventEmitter();
+  const events = [];
+  const spawns = [];
+  const output = [];
+  const children = [host, mariaVite, claraVite];
+  const deps = {
+    args: ["--profiles", "maria,clara", "--agent-mode", "deterministic"],
+    repositoryRoot: "/repo",
+    platform: "darwin",
+    processExecPath: "/opt/node/bin/node",
+    environment: { KEEP_ME: "yes" },
+    readinessTimeoutMs: 30,
+    shutdownTimeoutMs: 30,
+    checkWebPort: async (_host, port) => {
+      events.push(`port-checked:${port}`);
+    },
+    spawnProcess: (command, args, options) => {
+      const child = children[spawns.length];
+      spawns.push({ command, args, options });
+      events.push(`spawn:${child.label}`);
+      queueMicrotask(() => {
+        child.emit("spawn");
+        if (child === host) {
+          (onHostSpawn ?? (() =>
+            host.stdout.write(`${sharedReadinessLines().join("\n")}\n`)))();
+        }
+      });
+      return child;
+    },
+    waitForHttp: async (url) => {
+      events.push(`http:${url}`);
+    },
+    signalTarget,
+    killProcessGroup: (child, signal) => {
+      events.push(`kill:${child.label}:${signal}`);
+      setTimeout(() => {
+        events.push(`exit:${child.label}`);
+        child.finish(child === host ? 0 : null, child === host ? null : signal);
+      }, 1);
+    },
+    publishReady: (details) => {
+      output.push(
+        `E2E_BROWSER_URL_MARIA=${details.mariaBrowserUrl}`,
+        "E2E_PROFILE_MARIA=maria",
+        `E2E_BROWSER_URL_CLARA=${details.claraBrowserUrl}`,
+        "E2E_PROFILE_CLARA=clara",
+        `E2E_DB_HOST=${details.databaseHost}`,
+        `E2E_DB_PORT=${details.databasePort}`,
+        `E2E_DB_DATABASE=${details.databaseName}`,
+        `E2E_DB_USER=${details.databaseUser}`,
+        `E2E_DB_PASSWORD_FILE=${details.databasePasswordFilePath}`,
+      );
+      setImmediate(onReady ?? (() => signalTarget.emit("SIGINT")));
+    },
+    ...dependencyOverrides,
+  };
+
+  return {
+    claraVite,
+    deps,
+    events,
+    host,
+    mariaVite,
+    output,
+    signalTarget,
+    spawns,
+  };
 }
 
 function withTestTimeout(promise, milliseconds = 75) {
@@ -283,23 +366,86 @@ function isPortOpen(port) {
 
 test("parseLauncherArgs accepts each allow-listed profile", () => {
   for (const profile of ["maria", "beatriz", "joao", "clara"]) {
-    assert.deepEqual(parseLauncherArgs(["--profile", profile]), { profile });
+    assert.deepEqual(parseLauncherArgs(["--profile", profile, "--agent-mode", "deterministic"]), {
+      mode: "single",
+      profile,
+      agentMode: "deterministic",
+    });
   }
+});
+
+test("parseLauncherArgs accepts only the exact shared Maria and Clara request", () => {
+  assert.deepEqual(parseLauncherArgs(["--profiles", "maria,clara", "--agent-mode", "real"]), {
+    mode: "shared",
+    profiles: ["maria", "clara"],
+    agentMode: "real",
+  });
 });
 
 test("parseLauncherArgs rejects missing, extra, duplicate, and unknown arguments", () => {
   for (const args of [
     [],
     ["--profile"],
+    ["--profile", "maria"],
+    ["--profiles", "maria,clara"],
+    ["--profile", "maria", "--agent-mode"],
+    ["--profile", "maria", "--agent-mode", "unknown"],
     ["--profile", "maria", "extra"],
     ["--profile", "maria", "--profile", "clara"],
     ["--profile", "desconhecido"],
+    ["--profiles", "maria"],
+    ["--profiles", "clara,maria"],
+    ["--profiles", "maria, clara"],
+    ["--profiles", "maria,clara,joao"],
+    ["--profiles", "maria,clara", "--profile", "maria"],
   ]) {
     assert.throws(
       () => parseLauncherArgs(args),
       /E2E launcher failed: invalid_arguments/,
     );
   }
+});
+
+test("real mode rejects every Task 1-invalid provider key before checking ports or spawning the host", async () => {
+  for (const providerKey of [undefined, "", "  ", "invalid\nkey", "invalid\tkey", "invalid\u0001key"]) {
+    const harness = createSharedHarness({
+      args: ["--profiles", "maria,clara", "--agent-mode", "real"],
+      environment: { KEEP_ME: "yes", VINX_AGENT_PROVIDER_API_KEY: providerKey },
+    });
+
+    await assert.rejects(
+      runLauncher(harness.deps),
+      /E2E launcher failed: invalid_agent_provider_credential/,
+    );
+    assert.deepEqual(harness.events, []);
+    assert.deepEqual(harness.spawns, []);
+  }
+});
+
+test("deterministic mode strips the provider key from every child environment", async () => {
+  const harness = createSharedHarness({
+    environment: { KEEP_ME: "yes", VINX_AGENT_PROVIDER_API_KEY: "real-key" },
+  });
+
+  assert.equal(await runLauncher(harness.deps), 0);
+  assert.equal(harness.spawns.length, 3);
+  for (const child of harness.spawns) {
+    assert.equal(child.options.env.VINX_AGENT_PROVIDER_API_KEY, undefined);
+  }
+});
+
+test("real mode passes the provider key only to the E2E host and never publishes it", async () => {
+  const providerKey = "real-key";
+  const harness = createSharedHarness({
+    args: ["--profiles", "maria,clara", "--agent-mode", "real"],
+    environment: { KEEP_ME: "yes", VINX_AGENT_PROVIDER_API_KEY: providerKey },
+  });
+
+  assert.equal(await runLauncher(harness.deps), 0);
+  assert.equal(harness.spawns[0].options.env.VINX_AGENT_PROVIDER_API_KEY, providerKey);
+  assert.equal(harness.spawns[1].options.env.VINX_AGENT_PROVIDER_API_KEY, undefined);
+  assert.equal(harness.spawns[2].options.env.VINX_AGENT_PROVIDER_API_KEY, undefined);
+  assert.doesNotMatch(harness.output.join("\n"), /real-key|opencode\.ai|deepseek-v4-flash-vision-exp/);
 });
 
 test("direct E2E host rejects unknown arguments without output or readiness", () => {
@@ -343,6 +489,423 @@ test("parseReadyOrigin accepts only an exact loopback HTTP origin", () => {
   }
 });
 
+test("parseSharedReadiness accepts exactly one complete ordered shared block", () => {
+  assert.deepEqual(parseSharedReadiness(sharedReadinessLines()), {
+    mariaApiOrigin: "http://127.0.0.1:54321",
+    claraApiOrigin: "http://127.0.0.1:54324",
+    databaseHost: "127.0.0.1",
+    databasePort: 54323,
+    databaseName: "vinx_fixture_a1b2c3",
+    databaseUser: "postgres",
+    databasePasswordFilePath: "/tmp/vinx-e2e-check/postgres-password",
+  });
+});
+
+test("parseSingleReadiness accepts exactly the origin and terminal sentinel block", () => {
+  assert.equal(
+    parseSingleReadiness([
+      "E2E_API_ORIGIN=http://127.0.0.1:54321",
+      "E2E_SINGLE_READY=1",
+    ]),
+    "http://127.0.0.1:54321",
+  );
+});
+
+test("parseSingleReadiness rejects incomplete, out-of-order, and unsafe blocks", () => {
+  for (const lines of [
+    [],
+    ["E2E_API_ORIGIN=http://127.0.0.1:54321"],
+    ["E2E_API_ORIGIN=http://127.0.0.1:54321", "E2E_SINGLE_READY=1", "extra"],
+    ["E2E_API_ORIGIN=http://127.0.0.1:54321", "E2E_SINGLE_READY=0"],
+    ["E2E_API_ORIGIN=http://127.0.0.1:54321", "E2E_SHARED_READY=1"],
+    ["E2E_SINGLE_READY=1", "E2E_API_ORIGIN=http://127.0.0.1:54321"],
+    ["E2E_API_ORIGIN=http://example.test:54321", "E2E_SINGLE_READY=1"],
+    "E2E_API_ORIGIN=http://127.0.0.1:54321",
+  ]) {
+    assert.throws(
+      () => parseSingleReadiness(lines),
+      /E2E launcher failed: invalid_host_readiness/,
+    );
+  }
+});
+
+test("shared launcher ignores host build preamble before its contiguous readiness block", async () => {
+  const harness = createSharedHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.write("Determining projects to restore...\n");
+      harness.host.stdout.write("Build succeeded.\n");
+      harness.host.stdout.write(`${sharedReadinessLines().join("\n")}\n`);
+    },
+  });
+
+  assert.equal(await runLauncher(harness.deps), 0);
+  assert.equal(harness.spawns.length, 3);
+});
+
+test("single launcher ignores host build preamble before its contiguous readiness block", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.write("Determining projects to restore...\n");
+      harness.host.stdout.write("Build succeeded. 0 Error(s)\n");
+      harness.host.stdout.write(singleReadinessLines());
+    },
+  });
+
+  assert.equal(await runLauncher(harness.deps), 0);
+  assert.equal(harness.spawns.length, 2);
+});
+
+test("single launcher rejects an unexpected E2E line before its readiness block", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.write("E2E_DB_HOST=127.0.0.1\n");
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /E2E launcher failed: invalid_host_readiness/,
+  );
+  assert.equal(harness.spawns.length, 1);
+});
+
+test("single launcher rejects noise between the origin and the readiness sentinel", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.write("E2E_API_ORIGIN=http://127.0.0.1:54321\n");
+      harness.host.stdout.write("noise between readiness lines\n");
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /E2E launcher failed: invalid_host_readiness/,
+  );
+  assert.equal(harness.spawns.length, 1);
+});
+
+test("single launcher times out when the origin is not followed by the sentinel", async () => {
+  const harness = createHarness({
+    readinessTimeoutMs: 5,
+    onHostSpawn: () => {
+      harness.host.stdout.write("E2E_API_ORIGIN=http://127.0.0.1:54321\n");
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /E2E launcher failed: host_readiness_timeout/,
+  );
+  assert.equal(harness.spawns.length, 1);
+});
+
+test("launcher preserves a typed host failure while the process exits shortly after it", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stderr.write("E2E_HOST_FAILED=seed_failed\n");
+      setImmediate(() => harness.host.finish(1));
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_seed_failed$/,
+  );
+  assert.deepEqual(harness.output, []);
+  assert.equal(
+    harness.events.some((event) => event.startsWith("kill:host:")),
+    false,
+  );
+});
+
+test("launcher reconciles stdout closure before a typed host failure", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stdout.end();
+      setImmediate(() => {
+        harness.host.stderr.write("E2E_HOST_FAILED=seed_failed\n");
+        setImmediate(() => harness.host.finish(1));
+      });
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_seed_failed$/,
+  );
+  assert.equal(
+    harness.events.some((event) => event.startsWith("kill:host:")),
+    false,
+  );
+});
+
+test("launcher ignores arbitrary host stderr and retains a generic failure", async () => {
+  const harness = createHarness({
+    onHostSpawn: () => {
+      harness.host.stderr.write("sensitive host exception details\n");
+      harness.host.finish(1);
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_exit$/,
+  );
+  assert.deepEqual(harness.output, []);
+  assert.equal(
+    harness.events.some((event) => event.startsWith("kill:host:")),
+    false,
+  );
+});
+
+test("launcher reconciles a typed host failure after readiness", async () => {
+  const harness = createHarness({
+    onReady: () => {
+      harness.host.stderr.write("E2E_HOST_FAILED=seed_failed\n");
+      setImmediate(() => harness.host.finish(1));
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_seed_failed$/,
+  );
+  assert.equal(
+    harness.events.some((event) => event.startsWith("kill:host:")),
+    false,
+  );
+});
+
+test("parseSharedReadiness rejects duplicate, incomplete, out-of-order, and unsafe blocks", () => {
+  const complete = sharedReadinessLines();
+  const duplicate = [...complete];
+  duplicate.splice(1, 0, complete[0]);
+  const missingMarker = complete.slice(0, -1);
+  const markerTooEarly = [complete.at(-1), ...complete.slice(0, -1)];
+  const unsafe = [...complete];
+  unsafe[4] = "E2E_CONNECTION_STRING=must-not-be-accepted";
+
+  for (const lines of [duplicate, missingMarker, markerTooEarly, unsafe]) {
+    assert.throws(
+      () => parseSharedReadiness(lines),
+      /E2E launcher failed: invalid_host_readiness/,
+    );
+  }
+});
+
+test("shared launcher starts one host and two Vites on the fixed Maria and Clara ports", async () => {
+  const harness = createSharedHarness();
+
+  assert.equal(await runLauncher(harness.deps), 0);
+  assert.deepEqual(
+    harness.events.filter((event) => event.startsWith("port-checked:")),
+    ["port-checked:4174", "port-checked:4175"],
+  );
+  assert.equal(harness.spawns.length, 3);
+  assert.deepEqual(harness.spawns[0].args.slice(-4), [
+    "--profiles",
+    "maria,clara",
+    "--agent-mode",
+    "deterministic",
+  ]);
+  assert.deepEqual(harness.spawns[1].args.slice(-3), ["--port", "4174", "--strictPort"]);
+  assert.deepEqual(harness.spawns[2].args.slice(-3), ["--port", "4175", "--strictPort"]);
+  assert.equal(harness.spawns[1].options.env.VINX_API_ORIGIN, "http://127.0.0.1:54321");
+  assert.equal(harness.spawns[2].options.env.VINX_API_ORIGIN, "http://127.0.0.1:54324");
+  assert.deepEqual(harness.output, [
+    "E2E_BROWSER_URL_MARIA=http://127.0.0.1:4174",
+    "E2E_PROFILE_MARIA=maria",
+    "E2E_BROWSER_URL_CLARA=http://127.0.0.1:4175",
+    "E2E_PROFILE_CLARA=clara",
+    "E2E_DB_HOST=127.0.0.1",
+    "E2E_DB_PORT=54323",
+    "E2E_DB_DATABASE=vinx_fixture_a1b2c3",
+    "E2E_DB_USER=postgres",
+    "E2E_DB_PASSWORD_FILE=/tmp/vinx-e2e-check/postgres-password",
+  ]);
+  assert.deepEqual(
+    harness.events.filter((event) => event.startsWith("kill:")),
+    [
+      "kill:vite-clara:SIGINT",
+      "kill:vite-maria:SIGINT",
+      "kill:host:SIGINT",
+    ],
+  );
+});
+
+test("shared launcher withholds public readiness until both Vites answer HTTP", async () => {
+  const waiters = new Map();
+  const harness = createSharedHarness({
+    waitForHttp: (url) =>
+      new Promise((resolve) => {
+        waiters.set(url, resolve);
+      }),
+  });
+  const launcher = runLauncher(harness.deps);
+
+  assert.equal(
+    await pollUntil(() => waiters.has("http://127.0.0.1:4174"), 500),
+    true,
+  );
+  assert.deepEqual(harness.output, []);
+  waiters.get("http://127.0.0.1:4174")();
+  assert.equal(
+    await pollUntil(() => waiters.has("http://127.0.0.1:4175"), 500),
+    true,
+  );
+  assert.deepEqual(harness.output, []);
+  waiters.get("http://127.0.0.1:4175")();
+
+  assert.equal(await launcher, 0);
+  assert.equal(harness.output.length, 9);
+});
+
+test("shared host cleanup exit is reported as child_cleanup_failed", async () => {
+  const harness = createSharedHarness({
+    killProcessGroup: (child, signal) => {
+      harness.events.push(`kill:${child.label}:${signal}`);
+      setTimeout(() => {
+        harness.events.push(`exit:${child.label}`);
+        child.finish(child === harness.host ? 1 : null, child === harness.host ? null : signal);
+      }, 1);
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: child_cleanup_failed$/,
+  );
+});
+
+test("shared launcher preserves an already-exited host as the primary failure", async () => {
+  const harness = createSharedHarness({
+    onReady: () => harness.host.finish(0),
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_exit$/,
+  );
+});
+
+test("shared launcher accepts a zero-code or forwarded-signal host exit for SIGINT and SIGTERM", async () => {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    for (const hostExit of ["zero-code", "forwarded-signal"]) {
+      const harness = createSharedHarness({
+        onReady: () => harness.signalTarget.emit(signal),
+        killProcessGroup: (child, forwardedSignal) => {
+          harness.events.push(`kill:${child.label}:${forwardedSignal}`);
+          setTimeout(() => {
+            harness.events.push(`exit:${child.label}`);
+            child.finish(
+              child === harness.host && hostExit === "zero-code" ? 0 : null,
+              child === harness.host
+                ? (hostExit === "forwarded-signal" ? forwardedSignal : null)
+                : forwardedSignal,
+            );
+          }, 1);
+        },
+      });
+
+      assert.equal(await runLauncher(harness.deps), 0);
+      assert.ok(harness.events.includes(`kill:host:${signal}`));
+    }
+  }
+});
+
+test("shared launcher rejects a host exit by a signal other than the forwarded one", async () => {
+  const harness = createSharedHarness({
+    killProcessGroup: (child, forwardedSignal) => {
+      harness.events.push(`kill:${child.label}:${forwardedSignal}`);
+      setTimeout(() => {
+        harness.events.push(`exit:${child.label}`);
+        child.finish(
+          null,
+          child === harness.host ? "SIGHUP" : forwardedSignal,
+        );
+      }, 1);
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: child_cleanup_failed$/,
+  );
+});
+
+test("runLauncher accepts a host terminated by the forwarded shutdown signal", async () => {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    const harness = createHarness({
+      onReady: () => harness.signalTarget.emit(signal),
+      killProcessGroup: (child, forwardedSignal) => {
+        harness.events.push(`kill:${child.label}:${forwardedSignal}`);
+        setTimeout(() => {
+          harness.events.push(`exit:${child.label}`);
+          child.finish(null, forwardedSignal);
+        }, 1);
+      },
+    });
+
+    assert.equal(await withTestTimeout(runLauncher(harness.deps)), 0);
+    assert.ok(harness.events.includes(`kill:host:${signal}`));
+  }
+});
+
+test("runLauncher preserves the primary failure when the host group already vanished", async () => {
+  const harness = createHarness({
+    readinessTimeoutMs: 5,
+    spawnProcess: (command, args, options) => {
+      harness.spawns.push({ command, args, options });
+      queueMicrotask(() => harness.host.emit("spawn"));
+      return harness.host;
+    },
+    killProcessGroup: () => {
+      const error = new Error("process group does not exist");
+      error.code = "ESRCH";
+      throw error;
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /E2E launcher failed: host_readiness_timeout/,
+  );
+  assert.equal(harness.spawns.length, 1);
+});
+
+test("shared launcher rejects a SIGKILL host exit with no exit code", async () => {
+  const harness = createSharedHarness({
+    shutdownTimeoutMs: 5,
+    killProcessGroup: (child, signal) => {
+      harness.events.push(`kill:${child.label}:${signal}`);
+      if (child === harness.host && signal !== "SIGKILL") return;
+      setTimeout(() => {
+        harness.events.push(`exit:${child.label}`);
+        child.finish(
+          null,
+          child === harness.host ? "SIGKILL" : signal,
+        );
+      }, 1);
+    },
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: child_cleanup_failed$/,
+  );
+});
+
+test("shared launcher preserves a host exit that follows readiness", async () => {
+  const harness = createSharedHarness({
+    onReady: () => harness.host.finish(1),
+  });
+
+  await assert.rejects(
+    runLauncher(harness.deps),
+    /^Error: E2E launcher failed: host_exit$/,
+  );
+});
+
 test("runLauncher does not start Vite when the host exits before readiness", async () => {
   const harness = createHarness({
     spawnProcess: (command, args, options) => {
@@ -369,7 +932,7 @@ test("runLauncher rejects invalid host readiness before starting Vite", async ()
       queueMicrotask(() => {
         harness.host.emit("spawn");
         harness.host.stdout.write(
-          "E2E_API_ORIGIN=http://example.test:54321\n",
+          singleReadinessLines("http://example.test:54321"),
         );
       });
       return harness.host;
@@ -528,7 +1091,10 @@ test("runLauncher keeps signal handlers through cleanup and absorbs repeats", as
   const harness = createHarness({
     killProcessGroup: (child, signal) => {
       harness.events.push(`kill:${child.label}:${signal}`);
-      setTimeout(() => child.finish(null, signal), 10);
+      setTimeout(
+        () => child.finish(child === harness.host ? 0 : null, child === harness.host ? null : signal),
+        10,
+      );
     },
     onReady: () => {
       harness.signalTarget.emit("SIGINT");
@@ -542,7 +1108,6 @@ test("runLauncher keeps signal handlers through cleanup and absorbs repeats", as
       });
     },
   });
-  delete harness.deps.waitForShutdownSignal;
 
   await withTestTimeout(runLauncher(harness.deps), 100);
 
@@ -577,7 +1142,7 @@ test("runLauncher maps a Vite error before spawn without leaking details", async
       queueMicrotask(() => {
         if (child === harness.host) {
           child.emit("spawn");
-          child.stdout.write("E2E_API_ORIGIN=http://127.0.0.1:54321\n");
+          child.stdout.write(singleReadinessLines());
         } else {
           child.emit("error", new Error("/sensitive/vite/path"));
         }
@@ -598,7 +1163,9 @@ test("runLauncher escalates a child that ignores graceful shutdown", async () =>
     shutdownTimeoutMs: 5,
     killProcessGroup: (child, signal) => {
       harness.events.push(`kill:${child.label}:${signal}`);
-      if (child !== harness.vite || signal === "SIGKILL") {
+      if (child === harness.host) {
+        setTimeout(() => child.finish(0), 1);
+      } else if (signal === "SIGKILL") {
         setTimeout(() => child.finish(null, signal), 1);
       }
     },
@@ -632,12 +1199,14 @@ test("runLauncher starts exact child commands and shuts Vite down before host", 
       "--",
       "--profile",
       "maria",
+      "--agent-mode",
+      "deterministic",
     ],
     options: {
       cwd: "/repo",
       detached: true,
       env: { KEEP_ME: "yes" },
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     },
   });
   assert.deepEqual(harness.spawns[1], {
@@ -739,10 +1308,17 @@ test(
     }
 
     const output = direct.output();
-    assert.equal(output.standardOutput, `E2E_API_ORIGIN=${apiOrigin}\n`);
+    assert.equal(
+      output.standardOutput,
+      `E2E_API_ORIGIN=${apiOrigin}\nE2E_SINGLE_READY=1\n`,
+    );
     assert.equal(output.standardError, "");
     assert.equal(
       output.standardOutput.match(/E2E_API_ORIGIN=/g)?.length,
+      1,
+    );
+    assert.equal(
+      output.standardOutput.match(/E2E_SINGLE_READY=/g)?.length,
       1,
     );
     assert.equal(

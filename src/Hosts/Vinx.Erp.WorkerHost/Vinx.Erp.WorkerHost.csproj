@@ -1,8 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
+    <InternalsVisibleTo Include="Vinx.Erp.Foundation.IntegrationTests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="WolverineFx.Postgresql" />
     <PackageReference Include="WolverineFx.RuntimeCompilation" />
     <ProjectReference Include="../../Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
+    <ProjectReference Include="../../Modules/Vinx.Erp.AI/Vinx.Erp.AI.csproj" />
     <ProjectReference Include="../../Modules/Vinx.Erp.Notifications/Vinx.Erp.Notifications.csproj" />
+    <ProjectReference Include="../../Modules/Vinx.Erp.Paguai/Vinx.Erp.Paguai.csproj" />
   </ItemGroup>
 </Project>

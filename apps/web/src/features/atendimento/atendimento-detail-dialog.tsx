@@ -25,10 +25,12 @@ import {
 } from "./atendimento-client";
 import {
   channelLabel,
+  columnLabels,
   eventLabels,
   initialsFor,
   priorityLabel,
 } from "./atendimento-lookup";
+import { formatAtendimentoDate } from "./atendimento-presentation";
 import { PeoplePicker } from "./people-picker";
 import { useDirectoryOptions } from "./use-directory-options";
 
@@ -202,7 +204,11 @@ function SummaryTab({
       ) : null}
       <Typography color="text.secondary">{card.description}</Typography>
       <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap" }}>
-        <Chip label={card.column} size="small" variant="outlined" />
+        <Chip
+          label={columnLabels[card.column]}
+          size="small"
+          variant="outlined"
+        />
         {card.priority ? (
           <Chip
             label={priorityLabel(card.priority)}
@@ -210,12 +216,17 @@ function SummaryTab({
             variant="outlined"
           />
         ) : null}
-        {card.overdue ? (
-          <Chip color="error" label="Atrasado (SLA)" size="small" />
+        <Chip
+          label={channelLabel(card.channel)}
+          size="small"
+          variant="outlined"
+        />
+        {card.isOverdue ? (
+          <Chip color="error" label="Atrasado" size="small" />
         ) : null}
-        {card.slaDueAt ? (
+        {formatAtendimentoDate(card.slaDueAt) ? (
           <Chip
-            label={`SLA: ${new Date(card.slaDueAt).toLocaleString("pt-BR")}`}
+            label={`Prazo: ${formatAtendimentoDate(card.slaDueAt)}`}
             size="small"
             variant="outlined"
           />

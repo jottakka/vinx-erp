@@ -39,16 +39,22 @@ public sealed class InboundTelegramIngressService(
         await using var command = connection.CreateCommand();
         command.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
         command.CommandText =
-            "SELECT status, resolution_state "
-            + "FROM notifications.admit_inbound_telegram_text("
-            + "@inbound_id, @update_id, @chat_id, @message_id, @text_body)";
+            "SELECT status, resolution_state, delivery_id "
+            + "FROM notifications.admit_inbound_telegram_message("
+            + "@inbound_id, @update_id, @chat_id, @message_id, @message_type, "
+            + "@text_body, @media_id, @media_size, @media_mime_type)";
         AddParameter(command, "inbound_id", inboundId);
         AddParameter(command, "update_id", text.UpdateId);
         AddParameter(command, "chat_id", text.ChatId);
         AddParameter(command, "message_id", text.MessageId);
-        AddParameter(command, "text_body", text.Body);
+        AddParameter(command, "message_type", text.MessageType);
+        AddParameter(command, "text_body", (object?)text.Body ?? DBNull.Value);
+        AddParameter(command, "media_id", (object?)text.MediaId ?? DBNull.Value);
+        AddParameter(command, "media_size", (object?)text.MediaSize ?? DBNull.Value);
+        AddParameter(command, "media_mime_type", (object?)text.MediaType ?? DBNull.Value);
 
         string admission;
+        string resolution;
         bool admitted;
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
@@ -60,8 +66,9 @@ public sealed class InboundTelegramIngressService(
             }
 
             admission = reader.GetString(0);
+            resolution = reader.GetString(1);
             admitted = string.Equals(
-                reader.GetString(1),
+                resolution,
                 "admitted",
                 StringComparison.Ordinal
             );
@@ -86,12 +93,15 @@ public sealed class InboundTelegramIngressService(
             );
         }
 
-        if (created && admitted)
+        if (created
+            && (admitted
+                || string.Equals(resolution, "selection_required", StringComparison.Ordinal)))
         {
             outbox.Enroll(database);
+            var correlationId = Guid.NewGuid().ToString("D");
             await outbox.PublishAsync(
                 new InboundTelegramTextReceived(inboundId),
-                new DeliveryOptions { CorrelationId = Guid.NewGuid().ToString("D") }
+                new DeliveryOptions { CorrelationId = correlationId }
             );
             await outbox.SaveChangesAndFlushMessagesAsync(
                 MultiFlushMode.AllowMultiples,

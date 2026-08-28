@@ -33,6 +33,10 @@ public sealed class AgentOutputContract(string journey, IReadOnlySet<string> req
     /// <summary>Jornada à qual o contrato se aplica.</summary>
     public string Journey { get; } = journey ?? throw new ArgumentNullException(nameof(journey));
 
+    /// <summary>Indica a jornada cuja saída é um envelope financeiro fechado.</summary>
+    public bool RequiresPaguaiDocumentProposal =>
+        Journey == AgentTaskProfileCatalog.PaguaiFromDocumentProfileId;
+
     private readonly IReadOnlySet<string> requiredFields = requiredFields
         ?? throw new ArgumentNullException(nameof(requiredFields));
 

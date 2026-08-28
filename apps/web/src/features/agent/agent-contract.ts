@@ -6,6 +6,7 @@ export type AgentSource = {
 
 export type AgentMessage = {
   id: string;
+  proposalPath?: string;
   role: AgentMessageRole;
   sources?: readonly AgentSource[];
   text: string;

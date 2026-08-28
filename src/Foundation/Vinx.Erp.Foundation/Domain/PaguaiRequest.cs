@@ -27,8 +27,14 @@ public sealed class PaguaiRequest
 
     public string ProofRequirement { get; set; } = string.Empty;
 
+    /// <summary>Fatura privada confirmada que fundamenta a solicitação, quando informada.</summary>
+    public Guid? InvoiceFileId { get; set; }
+
     /// <summary>Documento inbound que originou o rascunho; único por documento.</summary>
     public Guid? SourceInboundMessageId { get; set; }
+
+    /// <summary>Proposta agentic confirmada que originou o rascunho; única por proposta.</summary>
+    public Guid? SourceProposalId { get; set; }
 
     public string State { get; set; } = "rascunho";
 

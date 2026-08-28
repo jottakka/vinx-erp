@@ -67,8 +67,8 @@ describe("AppShell", () => {
     ).toBeVisible();
     expect(screen.getByText("Olá, Maria")).toBeVisible();
     expect(screen.getByText("Todas as empresas autorizadas")).toBeVisible();
-    expect(screen.getByRole("group", { name: "Empresa Alfa" })).toBeVisible();
-    expect(screen.getByRole("group", { name: "Empresa Beta" })).toBeVisible();
+    expect(screen.getByText("Alfa", { exact: true })).toBeVisible();
+    expect(screen.getByText("Beta", { exact: true })).toBeVisible();
     expect(screen.queryByText("Gama", { exact: true })).not.toBeInTheDocument();
     expect(screen.queryByText("prototype.view")).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
@@ -89,9 +89,7 @@ describe("AppShell", () => {
         user: { id: "maria", displayName: "Maria" },
       }),
     );
-    expect(
-      await screen.findByRole("group", { name: "Empresa Delta" }),
-    ).toBeVisible();
+    expect(await screen.findByText("Delta", { exact: true })).toBeVisible();
     expect(futureCompanyRouter.state.location.pathname).toBe("/");
   });
 
@@ -160,7 +158,7 @@ describe("AppShell", () => {
     const router = renderShell("/", await signedInGateway());
     await screen.findByRole("heading", { name: "Início" });
     const moduleSection = screen
-      .getByRole("heading", { name: "Estrutura em evolução" })
+      .getByRole("heading", { name: "Áreas disponíveis" })
       .closest("section");
 
     expect(moduleSection).not.toBeNull();
@@ -170,15 +168,15 @@ describe("AppShell", () => {
 
     expect(
       await within(moduleSection).findByRole("link", {
-        name: "Paguai Módulo em preparação",
+        name: "Paguai Disponível",
       }),
     ).toBeVisible();
     expect(
       within(moduleSection).getByRole("link", { name: /Atendimento/ }),
     ).toBeVisible();
     expect(
-      within(moduleSection).getByRole("link", { name: /Kanban/ }),
-    ).toBeVisible();
+      within(moduleSection).queryByRole("link", { name: /Kanban/ }),
+    ).not.toBeInTheDocument();
     expect(
       within(moduleSection).getByRole("link", { name: /Pessoas/ }),
     ).toBeVisible();
@@ -188,7 +186,7 @@ describe("AppShell", () => {
 
     await user.click(
       within(moduleSection).getByRole("link", {
-        name: "Paguai Módulo em preparação",
+        name: "Paguai Disponível",
       }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/paguai"));
@@ -197,7 +195,7 @@ describe("AppShell", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Rascunhos de solicitações financeiras por empresa. O MVP não cria cobrança ou pagamento.",
+        "Acompanhe solicitações financeiras das empresas autorizadas.",
       ),
     ).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent(
@@ -215,7 +213,7 @@ describe("AppShell", () => {
 
     await screen.findByRole("heading", { name: "Início" });
     const moduleSection = screen
-      .getByRole("heading", { name: "Estrutura em evolução" })
+      .getByRole("heading", { name: "Áreas disponíveis" })
       .closest("section");
 
     expect(moduleSection).not.toBeNull();
@@ -224,7 +222,7 @@ describe("AppShell", () => {
     }
 
     const paguaiCard = within(moduleSection)
-      .getByRole("link", { name: "Paguai Módulo em preparação" })
+      .getByRole("link", { name: "Paguai Disponível" })
       .closest("li");
     expect(paguaiCard).not.toBeNull();
     if (!paguaiCard) {
@@ -233,18 +231,24 @@ describe("AppShell", () => {
 
     expect(
       within(paguaiCard).getByRole("link", {
-        name: "Paguai Módulo em preparação",
+        name: "Paguai Disponível",
       }),
     ).toHaveAttribute("href", "/paguai");
     expect(
       within(paguaiCard).getByRole("link", {
-        name: "Abrir protótipo Paguai",
+        name: "Abrir demonstração do protótipo Paguai",
       }),
     ).toHaveAttribute("href", "/prototipos/paguai");
 
-    for (const label of ["Kanban", "Atendimento", "Pessoas"]) {
+    expect(
+      within(moduleSection).queryByRole("link", {
+        name: /Kanban Disponível/,
+      }),
+    ).not.toBeInTheDocument();
+
+    for (const label of ["Atendimento", "Pessoas"]) {
       const card = within(moduleSection)
-        .getByRole("link", { name: `${label} Módulo em preparação` })
+        .getByRole("link", { name: `${label} Disponível` })
         .closest("li");
       expect(card).not.toBeNull();
       if (!card) {

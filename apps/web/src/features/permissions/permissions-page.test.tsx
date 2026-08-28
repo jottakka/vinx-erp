@@ -142,7 +142,7 @@ async function openManageDialog(
 ) {
   await user.click(
     await screen.findByRole("button", {
-      name: "Gerenciar acesso de " + memberName,
+      name: `Gerenciar acesso de ${memberName}`,
     }),
   );
 }

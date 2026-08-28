@@ -409,7 +409,7 @@ describe("InkBackground", () => {
     expect(requestFrame).not.toHaveBeenCalled();
     expect(
       gl.uniform3f.mock.calls.some(
-        (call) => Math.abs(call[1] - 0xcd / 255) < 0.002,
+        (call) => Math.abs(call[1] - 0x66 / 255) < 0.002,
       ),
     ).toBe(true);
   });
@@ -550,7 +550,7 @@ describe("InkBackground", () => {
     frameCallbacks.at(-1)?.(performance.now() + 32);
 
     const darkTone = gl.uniform3f.mock.calls.find(
-      (call) => Math.abs(call[1] - 0xcd / 255) < 0.002,
+      (call) => Math.abs(call[1] - 0x66 / 255) < 0.002,
     );
 
     expect(darkTone).toBeDefined();

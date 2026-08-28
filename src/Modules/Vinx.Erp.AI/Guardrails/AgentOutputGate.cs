@@ -23,7 +23,8 @@ public sealed record AgentOutputGateResult(
     string? Text,
     IReadOnlyList<AgentCitedSource> AuthorizedSources,
     string PolicyVersion,
-    bool HasToolProposal);
+    bool HasToolProposal,
+    PaguaiDocumentProposal? PaguaiProposal = null);
 
 /// <summary>
 /// Entrada do gate: contexto resolvido, resposta normalizada do modelo e
@@ -34,7 +35,8 @@ public sealed record AgentOutputGateRequest(
     AgentExecutionContext Context,
     AgentModelResponse Response,
     AgentOutputContract Contract,
-    bool SourcesRequired);
+    bool SourcesRequired,
+    PaguaiDocumentProposalParseRequest? PaguaiDocumentProposalRequest = null);
 
 /// <summary>
 /// Gate determinístico de saída com ordem fixa: primeiro o contrato
@@ -65,6 +67,11 @@ public sealed class AgentOutputGate(SourceAuthorizationGate sources)
     public AgentOutputGateResult Evaluate(AgentOutputGateRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        if (request.Contract.RequiresPaguaiDocumentProposal)
+        {
+            return EvaluatePaguaiDocumentProposal(request);
+        }
 
         var validation = request.Contract.Validate(request.Response.StructuredJson);
         if (!validation.IsValid)
@@ -105,6 +112,40 @@ public sealed class AgentOutputGate(SourceAuthorizationGate sources)
             authorization.AuthorizedSources,
             AgentPolicyVersion.Current,
             request.Response.HasToolProposal);
+    }
+
+    private static AgentOutputGateResult EvaluatePaguaiDocumentProposal(AgentOutputGateRequest request)
+    {
+        if (request.PaguaiDocumentProposalRequest is null)
+        {
+            return Withheld(request, AgentOutputGateStatus.ValidationError, SchemaInvalid);
+        }
+
+        var parsed = PaguaiDocumentProposalParser.Parse(request.PaguaiDocumentProposalRequest with
+        {
+            StructuredJson = request.Response.StructuredJson ?? string.Empty,
+        });
+
+        return parsed.Status switch
+        {
+            PaguaiProposalParseStatus.Proposal => new AgentOutputGateResult(
+                AgentOutputGateStatus.Result,
+                Ok,
+                Text: null,
+                AuthorizedSources: [],
+                AgentPolicyVersion.Current,
+                request.Response.HasToolProposal,
+                parsed.Proposal),
+            PaguaiProposalParseStatus.NeedsClarification => Withheld(
+                request,
+                AgentOutputGateStatus.NeedsClarification,
+                parsed.Reason ?? SchemaInvalid),
+            PaguaiProposalParseStatus.Invalid => Withheld(
+                request,
+                AgentOutputGateStatus.ValidationError,
+                SchemaInvalid),
+            _ => throw new ArgumentOutOfRangeException(nameof(parsed.Status), parsed.Status, "Unsupported Paguai proposal status."),
+        };
     }
 
     private static AgentOutputGateResult Withheld(

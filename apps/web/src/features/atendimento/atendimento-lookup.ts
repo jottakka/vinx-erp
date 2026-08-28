@@ -8,6 +8,7 @@ import type {
  * com tokens do tema — nunca hex cru nos componentes.
  */
 export const columnLabels: Record<AtendimentoColumn, string> = {
+  cancelado: "Cancelado",
   concluido: "Concluído",
   em_andamento: "Em andamento",
   novo: "Novo",
@@ -62,6 +63,8 @@ export function eventLabels(kind: string): string {
       return "Criado";
     case "fields_updated":
       return "Campos atualizados";
+    case "mentioned":
+      return "Mencionados";
     case "moved":
       return "Movido";
     case "watcher_added":

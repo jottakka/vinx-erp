@@ -14,6 +14,8 @@ public sealed class TelegramInboundAdmissionTests
 {
     private const string BeforeInboundTelegramTextAdmission =
         "20260826121000_AddTelegramOutboundTarget";
+    private const string InboundTelegramTextAdmissionMigration =
+        "20260826130000_AddInboundTelegramTextAdmission";
     private const long MaximumPrivateChatId = 4_503_599_627_370_495;
 
     [Fact]
@@ -165,7 +167,7 @@ public sealed class TelegramInboundAdmissionTests
 
         var rows = await TelegramNotificationSeed.ReadInboundMessagesAsync(factory);
         var row = Assert.Single(rows);
-        Assert.Equal(4096, row.TextBody.Length);
+        Assert.Equal(4096, Assert.IsType<string>(row.TextBody).Length);
         Assert.Equal("unbound", row.ResolutionState);
     }
 
@@ -316,7 +318,7 @@ public sealed class TelegramInboundAdmissionTests
         await migrator.Database.MigrateAsync(BeforeInboundTelegramTextAdmission);
         await AssertAdmissionContractExistsAsync(fixture, expected: false);
 
-        await migrator.Database.MigrateAsync();
+        await migrator.Database.MigrateAsync(InboundTelegramTextAdmissionMigration);
         await AssertAdmissionContractExistsAsync(fixture, expected: true);
 
         await migrator.Database.MigrateAsync(BeforeInboundTelegramTextAdmission);
@@ -328,7 +330,10 @@ public sealed class TelegramInboundAdmissionTests
     {
         await using var fixture = new FoundationPostgresFixture();
         await fixture.StartAsync();
-        await fixture.MigrateAsync();
+        await using (var migration = fixture.CreateMigratorDbContext())
+        {
+            await migration.Database.MigrateAsync(InboundTelegramTextAdmissionMigration);
+        }
         var request = AdmissionRequest.Create(870001, 13, 6001, "downgrade guard");
         Assert.Equal("created", await AdmitAsync(fixture.RuntimeConnectionString, request));
 
@@ -350,7 +355,7 @@ public sealed class TelegramInboundAdmissionTests
     }
 
     [Fact]
-    public async Task Runtime_has_only_the_two_secure_definer_functions_and_no_direct_inbound_table_access()
+    public async Task Runtime_and_worker_have_only_the_current_secure_definer_allowlist_and_no_direct_inbound_table_access()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
@@ -360,29 +365,14 @@ public sealed class TelegramInboundAdmissionTests
                 pg_get_userbyid(table_row.relowner),
                 table_row.relrowsecurity,
                 table_row.relforcerowsecurity,
-                has_table_privilege('vinx_runtime', table_row.oid, 'SELECT'),
-                has_table_privilege('vinx_runtime', table_row.oid, 'INSERT'),
-                has_table_privilege('vinx_runtime', table_row.oid, 'UPDATE'),
-                has_table_privilege('vinx_runtime', table_row.oid, 'DELETE'),
-                has_function_privilege(
-                    'vinx_runtime',
-                    'notifications.resolve_inbound_telegram_actor(bigint)',
-                    'EXECUTE'),
-                has_function_privilege(
-                    'vinx_runtime',
-                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)',
-                    'EXECUTE'),
-                has_function_privilege(
-                    'vinx_worker',
-                    'notifications.resolve_inbound_telegram_actor(bigint)',
-                    'EXECUTE'),
-                has_function_privilege(
-                    'vinx_worker',
-                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)',
-                    'EXECUTE'),
-                to_regprocedure(
-                    'notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text,text,uuid,uuid,uuid)') IS NULL,
-                to_regprocedure('notifications.complete_inbound_telegram_text(uuid)') IS NULL
+                has_table_privilege('vinx_runtime', table_row.oid, 'SELECT')
+                    OR has_table_privilege('vinx_runtime', table_row.oid, 'INSERT')
+                    OR has_table_privilege('vinx_runtime', table_row.oid, 'UPDATE')
+                    OR has_table_privilege('vinx_runtime', table_row.oid, 'DELETE'),
+                has_table_privilege('vinx_worker', table_row.oid, 'SELECT')
+                    OR has_table_privilege('vinx_worker', table_row.oid, 'INSERT')
+                    OR has_table_privilege('vinx_worker', table_row.oid, 'UPDATE')
+                    OR has_table_privilege('vinx_worker', table_row.oid, 'DELETE')
             FROM pg_class AS table_row
             WHERE table_row.oid = 'notifications.inbound_telegram_messages'::regclass
             """,
@@ -394,35 +384,72 @@ public sealed class TelegramInboundAdmissionTests
             Assert.Equal("vinx_notifications_owner", reader.GetString(0));
             Assert.True(reader.GetBoolean(1));
             Assert.True(reader.GetBoolean(2));
-            for (var index = 3; index <= 6; index++)
-            {
-                Assert.False(reader.GetBoolean(index));
-            }
-
-            Assert.True(reader.GetBoolean(7));
-            Assert.True(reader.GetBoolean(8));
-            Assert.False(reader.GetBoolean(9));
-            Assert.False(reader.GetBoolean(10));
-            Assert.True(reader.GetBoolean(11));
-            Assert.True(reader.GetBoolean(12));
+            Assert.False(reader.GetBoolean(3));
+            Assert.False(reader.GetBoolean(4));
             Assert.False(await reader.ReadAsync());
         }
 
-        await AssertFunctionContractAsync(
-            administrator,
-            "notifications.resolve_inbound_telegram_actor(bigint)",
-            "vinx_runtime"
-        );
-        await AssertFunctionContractAsync(
-            administrator,
-            "notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)",
-            "vinx_runtime"
-        );
+        var runtimeFunctions = new[]
+        {
+            ("notifications.resolve_inbound_telegram_actor(bigint)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+            ("notifications.admit_inbound_telegram_text(uuid,bigint,bigint,bigint,text)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+            ("notifications.admit_inbound_telegram_message(uuid,bigint,bigint,bigint,text,text,text,bigint,text)",
+                "search_path=pg_catalog, notifications, audit, pg_temp"),
+            ("notifications.select_agent_channel_company(uuid,uuid,uuid,uuid)",
+                "search_path=pg_catalog, notifications, audit, pg_temp"),
+        };
+        var workerFunctions = new[]
+        {
+            ("notifications.complete_inbound_telegram_text(uuid)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+            ("notifications.claim_inbound_telegram_agent(uuid)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+            ("notifications.record_inbound_telegram_agent_file(uuid,uuid)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+            ("notifications.release_inbound_telegram_agent(uuid)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+            ("notifications.enqueue_inbound_telegram_selection_reply(uuid)",
+                "search_path=pg_catalog, notifications, audit, pg_temp"),
+            ("notifications.enqueue_inbound_telegram_agent_reply(uuid,text,text,text)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+            ("notifications.finalize_inbound_telegram_agent(uuid,text,text)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+            ("notifications.get_inbound_telegram_agent_delivery(uuid)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+            ("notifications.get_telegram_notification_delivery_target(uuid,uuid)",
+                "search_path=pg_catalog, notifications, pg_temp"),
+        };
+        foreach (var (signature, searchPath) in runtimeFunctions)
+        {
+            await AssertFunctionContractAsync(
+                administrator,
+                signature,
+                searchPath,
+                "vinx_runtime");
+        }
+
+        foreach (var (signature, searchPath) in workerFunctions)
+        {
+            await AssertFunctionContractAsync(
+                administrator,
+                signature,
+                searchPath,
+                "vinx_worker");
+        }
 
         await using var runtime = new NpgsqlConnection(factory.Fixture.RuntimeConnectionString);
         await runtime.OpenAsync();
         var denied = await Assert.ThrowsAsync<PostgresException>(() =>
             ScalarAsync(runtime, "SELECT count(*) FROM notifications.inbound_telegram_messages")
+        );
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+
+        await using var worker = new NpgsqlConnection(factory.Fixture.WorkerConnectionString);
+        await worker.OpenAsync();
+        denied = await Assert.ThrowsAsync<PostgresException>(() =>
+            ScalarAsync(worker, "SELECT count(*) FROM notifications.inbound_telegram_messages")
         );
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
     }
@@ -583,6 +610,7 @@ public sealed class TelegramInboundAdmissionTests
     private static async Task AssertFunctionContractAsync(
         NpgsqlConnection connection,
         string signature,
+        string expectedSearchPath,
         params string[] executors
     )
     {
@@ -617,7 +645,7 @@ public sealed class TelegramInboundAdmissionTests
         Assert.Equal("vinx_notifications_owner", reader.GetString(0));
         Assert.True(reader.GetBoolean(1));
         Assert.Equal(
-            ["search_path=pg_catalog, notifications, pg_temp"],
+            [expectedSearchPath],
             reader.GetFieldValue<string[]>(2)
         );
         Assert.True(reader.GetBoolean(3));

@@ -170,8 +170,7 @@ function SearchDebouncedInner({
       </TextField>
       <PeoplePicker
         companyId={companyId}
-        helperText="Filtro por responsável"
-        label="Responsável"
+        label="Filtrar por responsável"
         onChange={(membershipId) =>
           onChange({
             ...filter,

@@ -138,8 +138,8 @@ padronizado. `ok=true` com `result.message_id` positivo confirma o provider;
 corpo 2xx acima do limite de 8192 bytes — com ou sem anúncio de comprimento — é
 ambíguo sem ser lido até o fim. `4xx` ordinário, exceto `408`/`429`, ou
 `ok=false` é rejeição; `408`, timeout, transporte incerto e 2xx malformado
-são ambíguos terminais; `429`/`5xx` são
-transitivos e usam somente o retry finito do worker. Não há retry no adapter,
+são ambíguos terminais; `429` é
+transitivo e usa somente o retry finito do worker; `5xx` é ambíguo terminal. Não há retry no adapter,
 webhook, inbound ou resposta automática nesta fatia. Runbook:
 `docs/runbooks/telegram-outbound.md`.
 
@@ -204,6 +204,20 @@ recibo. Envelope inválido, retry Npgsql ou cancelamento esgotado após
 `Guid.Empty`, headers removidos e sem UUID, conteúdo, IDs do provedor ou
 detalhe original da exceção; cancelamento da cadeia nunca usa requeue
 indefinido durante o desligamento.
+
+## Agente multicanal (#335)
+
+Após a admissão, WhatsApp e Telegram publicam para o Agente somente envelopes
+de canal e `InboundMessageId`. O handler compartilhado faz claim idempotente,
+relê o inbound autorizado e constrói o comando; ele não recebe telefone, chat
+ID, username, texto, documento, chave ou configuração de provider. Cada canal
+conserva seu recibo técnico e suas barreiras de entrega; confirmação externa
+incerta nunca recebe retry cego.
+
+No Telegram, empresa ambígua exige seleção autenticada limitada às memberships
+ativas do ator. A preferência só vale para mensagem nova; a mensagem que pediu
+seleção não inicia o Agente. Nenhum canal confirma proposta Pagaí: a resposta
+segura só aponta para a revisão Web autenticada.
 
 ## Inbound admissão e identidade (#272 PR1)
 

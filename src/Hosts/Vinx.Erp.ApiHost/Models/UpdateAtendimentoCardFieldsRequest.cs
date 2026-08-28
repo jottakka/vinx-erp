@@ -5,7 +5,7 @@ using Vinx.Erp.Atendimento;
 namespace Vinx.Erp.ApiHost.Models;
 
 /// <summary>Corpo do comando de campos de ticket; ausente significa inalterado.</summary>
-public sealed class UpdateAtendimentoCardFieldsRequest
+public sealed class UpdateAtendimentoCardFieldsRequest : IValidatableObject
 {
     [Required]
     [NonEmptyGuid]
@@ -29,6 +29,7 @@ public sealed class UpdateAtendimentoCardFieldsRequest
     /// <summary>ISO-8601; data no passado é rejeitada com 400.</summary>
     public DateTimeOffset? SlaDueAt { get; init; }
 
+    [MaxLength(UpdateAtendimentoCardFieldsCommand.MaxRequesterPersonRefLength)]
     public string? RequesterPersonRef { get; init; }
 
     /// <summary>Menções disparam intents determinísticas pós-commit.</summary>
@@ -46,4 +47,25 @@ public sealed class UpdateAtendimentoCardFieldsRequest
             RequesterPersonRef,
             MentionedMembershipIds
         );
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (MentionedMembershipIds?.Any(id => id == Guid.Empty) == true)
+        {
+            yield return new ValidationResult(
+                "Mentioned membership IDs must be non-empty UUIDs.",
+                [nameof(MentionedMembershipIds)]
+            );
+        }
+
+        if (
+            MentionedMembershipIds is { Count: > UpdateAtendimentoCardFieldsCommand.MaxMentionedMembershipIds }
+        )
+        {
+            yield return new ValidationResult(
+                $"Mentioned membership IDs must contain at most {UpdateAtendimentoCardFieldsCommand.MaxMentionedMembershipIds} entries.",
+                [nameof(MentionedMembershipIds)]
+            );
+        }
+    }
 }

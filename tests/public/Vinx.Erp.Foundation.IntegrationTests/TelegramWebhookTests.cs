@@ -59,6 +59,42 @@ public sealed class TelegramWebhookTests
         );
     }
 
+    [Theory]
+    [InlineData(
+        "{\"update_id\":101,\"message\":{\"message_id\":303,\"from\":{\"id\":202,\"is_bot\":false},\"chat\":{\"id\":202,\"type\":\"private\"},\"caption\":\"Analise\",\"photo\":[{\"file_id\":\"opaque_photo\",\"file_size\":120}]}}",
+        "photo",
+        "opaque_photo",
+        "image/jpeg")]
+    [InlineData(
+        "{\"update_id\":101,\"message\":{\"message_id\":303,\"from\":{\"id\":202,\"is_bot\":false},\"chat\":{\"id\":202,\"type\":\"private\"},\"document\":{\"file_id\":\"opaque_document\",\"file_size\":240,\"mime_type\":\"application/pdf\"}}}",
+        "document",
+        "opaque_document",
+        "application/pdf")]
+    public async Task Private_photo_and_document_map_only_bounded_media_metadata(
+        string payload,
+        string messageType,
+        string mediaId,
+        string mediaType)
+    {
+        InboundTelegramText? received = null;
+        await using var application = await CreateApplicationAsync(
+            (_, inbound, _) =>
+            {
+                received = inbound;
+                return Task.CompletedTask;
+            });
+        using var client = application.GetTestClient();
+
+        using var response = await PostAsync(client, payload);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(received);
+        Assert.Equal(messageType, received.MessageType);
+        Assert.Equal(mediaId, received.MediaId);
+        Assert.Equal(mediaType, received.MediaType);
+        Assert.InRange(received.MediaSize!.Value, 1, 25 * 1024 * 1024);
+    }
+
     [Fact]
     public async Task Invalid_or_multiple_secret_headers_are_rejected_before_malformed_json_is_parsed()
     {

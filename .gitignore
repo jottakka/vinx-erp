@@ -23,3 +23,7 @@ supabase/.temp/
 .projectmem/watch.pid
 .projectmem/watch.log
 .projectmem/structure.json
+
+# Capturas legadas: bundles confidenciais nunca entram no repositório
+legacy-snapshot-bundle*/
+legacy-profile-bundle*/

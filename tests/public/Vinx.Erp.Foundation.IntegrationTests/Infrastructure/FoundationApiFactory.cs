@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -24,7 +25,10 @@ using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using Vinx.Erp.AI;
+using Vinx.Erp.AI.DocumentContext;
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
 using Vinx.Erp.ApiHost.Agent;
+using Vinx.Erp.ApiHost.Identity;
 using Vinx.Erp.Foundation.Identity;
 using JsonClaimValueTypes = Microsoft.IdentityModel.JsonWebTokens.JsonClaimValueTypes;
 using Vinx.Erp.Foundation.Persistence;
@@ -45,7 +49,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     public const string TestAuthenticationScheme = "FoundationTest";
     public const string TelegramWebhookSecret = "telegram-integration-test-secret";
 
-    private readonly IFoundationFixtureLifecycle _fixture;
+    private readonly IFoundationFixtureAccess _fixtureAccess;
+    private readonly IFoundationFixtureLifecycle? _ownedFixture;
     private readonly TestPrincipalClaims _principalClaims;
     private readonly JwtTestAuthority? _jwtAuthority;
     private readonly CountingIdentityProvider? _countingIdentityProvider;
@@ -55,6 +60,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly TimeSpan? _testMalwareScanTimeout;
     private readonly IAgentModel? _testAgentModel;
     private readonly AgentRunOptions? _testAgentRunOptions;
+    private readonly DeterministicVisionHandler? _deterministicVisionHandler;
     private readonly IInterceptor? _testInterceptor;
     private readonly HttpMessageHandler? _browserSessionProviderHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
@@ -78,6 +84,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         AgentRunOptions? testAgentRunOptions = null,
         HttpMessageHandler? browserSessionProviderHandler = null,
         IFoundationFixtureLifecycle? fixture = null,
+        IFoundationFixtureAccess? preparedFixtureAccess = null,
         Func<ValueTask>? disposeHostAsync = null,
         Func<ValueTask>? disposeJwtAsync = null,
         bool provisionWolverineStorage = true,
@@ -96,9 +103,26 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         _testMalwareScanTimeout = testMalwareScanTimeout;
         _testAgentModel = testAgentModel;
         _testAgentRunOptions = testAgentRunOptions;
+        _deterministicVisionHandler = testAgentModel is not null && testAgentRunOptions?.Vision is not null
+            ? new DeterministicVisionHandler()
+            : null;
         _testInterceptor = testInterceptor;
         _browserSessionProviderHandler = browserSessionProviderHandler;
-        _fixture = fixture ?? new FoundationPostgresFixture();
+        if (fixture is not null && preparedFixtureAccess is not null)
+        {
+            throw new ArgumentException("A factory cannot receive both a fixture owner and a prepared fixture access.");
+        }
+
+        if (preparedFixtureAccess is not null)
+        {
+            _fixtureAccess = preparedFixtureAccess;
+            _ownedFixture = null;
+        }
+        else
+        {
+            _ownedFixture = fixture ?? new FoundationPostgresFixture();
+            _fixtureAccess = _ownedFixture;
+        }
         _disposeHostAsync = disposeHostAsync;
         _disposeJwtAsync = disposeJwtAsync;
         _useJwtBearer = jwtAuthority is not null;
@@ -109,11 +133,12 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     public Guid ActorUserId { get; }
     public Guid CorrelationId { get; }
-    public FoundationPostgresFixture Fixture => _fixture as FoundationPostgresFixture
+    public FoundationPostgresFixture Fixture => _ownedFixture as FoundationPostgresFixture
         ?? throw new InvalidOperationException("The factory is configured with a test lifecycle double.");
     public int IdentityProviderCallCount => _countingIdentityProvider?.CallCount
         ?? throw new InvalidOperationException("The factory is not configured with a counting identity provider.");
     public ClaimsPrincipal? AuthenticatedJwtPrincipal { get; private set; }
+    public int AgentVisionCallCount => _deterministicVisionHandler?.CallCount ?? 0;
 
     internal static string ResolveE2eContentRoot() => Path.Combine(
         WolverineStorageDeployment.FindRepositoryRoot(),
@@ -150,7 +175,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     public static async Task<E2eFixtureFactoryContext> CreateWithE2eProfileAsync(
         string profileName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IAgentModel? testAgentModel = null,
+        AgentRunOptions? testAgentRunOptions = null,
+        FileStorage? testFileStorage = null)
     {
         if (!E2eFixtureProfileCatalog.TryGet(profileName, out var profile) || profile is null)
         {
@@ -163,7 +191,10 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             profile.UserId,
             correlationId,
             CreateE2ePrincipalClaims(profile, correlationId),
-            provisionWolverineStorage: false,
+            testFileStorage: testFileStorage,
+            testAgentModel: testAgentModel,
+            testAgentRunOptions: testAgentRunOptions,
+            provisionWolverineStorage: true,
             disableWolverineForE2e: true);
 
         try
@@ -188,6 +219,34 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             var combinedFailure = await DisposeAfterFailureAsync(factory, primaryFailure);
             throw new E2eFixtureHostException(E2eFixtureHostFailurePhase.Seed, combinedFailure);
         }
+    }
+
+    internal static E2eFixtureFactoryContext CreateWithPreparedE2eProfile(
+        string profileName,
+        FoundationPostgresFixtureLease fixtureLease,
+        E2eDatasetReceipt receipt,
+        IAgentModel? testAgentModel = null,
+        AgentRunOptions? testAgentRunOptions = null,
+        FileStorage? testFileStorage = null)
+    {
+        ArgumentNullException.ThrowIfNull(fixtureLease);
+        if (!E2eFixtureProfileCatalog.TryGet(profileName, out var profile) || profile is null)
+        {
+            throw new ArgumentException("Unknown E2E fixture profile.", nameof(profileName));
+        }
+
+        var correlationId = Guid.NewGuid();
+        var factory = new FoundationApiFactory(
+            profile.UserId,
+            correlationId,
+            CreateE2ePrincipalClaims(profile, correlationId),
+            testFileStorage: testFileStorage,
+            testAgentModel: testAgentModel,
+            testAgentRunOptions: testAgentRunOptions,
+            preparedFixtureAccess: fixtureLease,
+            provisionWolverineStorage: false,
+            disableWolverineForE2e: true);
+        return new E2eFixtureFactoryContext(factory, profile, receipt);
     }
 
     private static async Task<FoundationApiFactory> CreateAsync(
@@ -298,6 +357,22 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         return await PrepareAsync(factory);
     }
 
+    internal static FoundationApiFactory CreateForPreparedLifecycleTest(
+        FoundationPostgresFixtureLease fixtureLease,
+        Func<ValueTask> disposeHostAsync,
+        Func<ValueTask> disposeJwtAsync)
+    {
+        return new FoundationApiFactory(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            CreateTestPrincipalClaims(null, null, null, null),
+            preparedFixtureAccess: fixtureLease,
+            disposeHostAsync: disposeHostAsync,
+            disposeJwtAsync: disposeJwtAsync,
+            provisionWolverineStorage: false,
+            disableWolverineForE2e: true);
+    }
+
     internal static async Task<FoundationApiFactory> CreateForSeedLifecycleTestAsync(
         IFoundationFixtureLifecycle fixture,
         Func<ValueTask> disposeHostAsync,
@@ -367,12 +442,17 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        if (_testAgentModel is not null)
+        {
+            builder.UseSetting("AgentRun:AllowCredentiallessTestModel", "true");
+        }
+
         if (_disableWolverineForE2e)
         {
             builder.UseContentRoot(ResolveE2eContentRoot());
         }
 
-        builder.UseSetting("FOUNDATION_RUNTIME_CONNECTION", _fixture.RuntimeConnectionString);
+        builder.UseSetting("FOUNDATION_RUNTIME_CONNECTION", _fixtureAccess.RuntimeConnectionString);
         builder.UseSetting("SUPABASE_STORAGE_URL", "http://127.0.0.1:54321");
         builder.UseSetting("SUPABASE_STORAGE_SERVICE_ROLE_KEY", "test-service-role-key");
         builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.co/auth/v1");
@@ -394,14 +474,16 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 builder.UseSetting("AgentRun:Endpoint", agentRunOptions.Endpoint.ToString());
             }
 
-            if (agentRunOptions.ApiKey is not null)
-            {
-                builder.UseSetting("AgentRun:ApiKey", agentRunOptions.ApiKey);
-            }
-
             if (agentRunOptions.Model is not null)
             {
                 builder.UseSetting("AgentRun:Model", agentRunOptions.Model);
+            }
+
+            for (var index = 0; index < agentRunOptions.ApprovedHosts.Count; index++)
+            {
+                builder.UseSetting(
+                    $"AgentRun:ApprovedHosts:{index}",
+                    agentRunOptions.ApprovedHosts[index]);
             }
 
             if (agentRunOptions.Timeout != default)
@@ -421,14 +503,16 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                     builder.UseSetting("AgentRun:Vision:Endpoint", vision.Endpoint.ToString());
                 }
 
-                if (vision.ApiKey is not null)
-                {
-                    builder.UseSetting("AgentRun:Vision:ApiKey", vision.ApiKey);
-                }
-
                 if (vision.Model is not null)
                 {
                     builder.UseSetting("AgentRun:Vision:Model", vision.Model);
+                }
+
+                for (var index = 0; index < vision.ApprovedHosts.Count; index++)
+                {
+                    builder.UseSetting(
+                        $"AgentRun:Vision:ApprovedHosts:{index}",
+                        vision.ApprovedHosts[index]);
                 }
 
                 if (vision.Timeout != default)
@@ -458,7 +542,6 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             if (_disableWolverineForE2e)
             {
                 services.DisableAllExternalWolverineTransports();
-                services.DisableAllWolverineMessagePersistence();
             }
 
             services.AddTransient<IStartupFilter, AllowAnonymousTestEndpointStartupFilter>();
@@ -466,7 +549,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             services.AddDbContext<FoundationDbContext>((_, options) =>
             {
                 options
-                    .UseNpgsql(_fixture.RuntimeConnectionString)
+                    .UseNpgsql(_fixtureAccess.RuntimeConnectionString)
                     .UseSnakeCaseNamingConvention()
                     .AddInterceptors(
                         new RowVersionInterceptor(),
@@ -497,6 +580,20 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 // (que exige provider configurado) sem tocar no runner.
                 services.RemoveAll<IAgentModel>();
                 services.AddSingleton(_testAgentModel);
+            }
+            if (_testAgentModel is not null && _testAgentRunOptions?.Vision is { } vision)
+            {
+                // A fonte autorizada permanece real; somente a fronteira de
+                // visão recebe uma resposta OCR fechada e contável, sem rede.
+                services.RemoveAll<DocumentContextNormalizer>();
+                services.AddScoped(serviceProvider => new DocumentContextNormalizer(
+                    serviceProvider.GetRequiredService<IAuthorizedDocumentSource>(),
+                    new DocumentVisionOcr(CreateDeterministicVisionClient(
+                        vision,
+                        _deterministicVisionHandler!)),
+                    DocumentContextLimits.FromVisionProfile(
+                        ToDeterministicVisionProfile(vision),
+                        new HashSet<string>(vision.AllowedClassifications, StringComparer.Ordinal))));
             }
             if (_useJwtBearer)
             {
@@ -545,6 +642,78 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         });
     }
 
+    private static IChatClient CreateDeterministicVisionClient(
+        AgentRunVisionOptions vision,
+        HttpMessageHandler handler)
+    {
+        var profile = ToDeterministicVisionProfile(vision);
+        profile.ApiKey = "test-only-deterministic-vision";
+        return new OpenAiCompatibleChatClient(
+            profile,
+            new HttpClient(handler, disposeHandler: false));
+    }
+
+    private static OpenAiCompatibleOptions ToDeterministicVisionProfile(AgentRunVisionOptions vision) => new()
+    {
+        Endpoint = vision.Endpoint,
+        Model = vision.Model ?? string.Empty,
+        Timeout = vision.Timeout,
+        ApprovedHosts = vision.ApprovedHosts,
+        AllowImageInputs = true,
+        ModuleTag = "ai/agent-document-vision",
+    };
+
+    private sealed class DeterministicVisionHandler : HttpMessageHandler
+    {
+        private int callCount;
+
+        public int CallCount => Volatile.Read(ref callCount);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref callCount);
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            if (!body.Contains("data:image/png;base64,", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The deterministic vision boundary requires one canonical PNG image.");
+            }
+
+            var ocr = JsonSerializer.Serialize(new
+            {
+                text = "Nota fiscal sintética E2E, valor 250,00 BRL, vencimento 10/09/2026, fornecedor E2E.",
+                confidence = 0.99,
+                language = "pt-BR",
+            });
+            var response = JsonSerializer.Serialize(new
+            {
+                id = "chatcmpl-e2e-vision",
+                @object = "chat.completion",
+                created = 1_755_000_000,
+                model = "test-agent-model",
+                choices = new[]
+                {
+                    new
+                    {
+                        index = 0,
+                        message = new { role = "assistant", content = ocr },
+                        finish_reason = "stop",
+                    },
+                },
+                usage = new { prompt_tokens = 10, completion_tokens = 5, total_tokens = 15 },
+            });
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    response,
+                    System.Text.Encoding.UTF8,
+                    "application/json"),
+            };
+        }
+    }
+
     public override ValueTask DisposeAsync() => DisposeResourcesAsync(primaryFailure: null);
 
     private ValueTask DisposeResourcesAsync(Exception? primaryFailure) =>
@@ -552,9 +721,11 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             primaryFailure,
             DisposeHostAsync,
             DisposeJwtAsync,
-            _fixture.DisposeAsync);
+            DisposeOwnedFixtureAsync);
 
     private ValueTask DisposeHostAsync() => _disposeHostAsync?.Invoke() ?? base.DisposeAsync();
+
+    private ValueTask DisposeOwnedFixtureAsync() => _ownedFixture?.DisposeAsync() ?? ValueTask.CompletedTask;
 
     private ValueTask DisposeJwtAsync()
     {
@@ -573,12 +744,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     {
         try
         {
-            await factory._fixture.StartAsync();
-            await factory._fixture.MigrateAsync();
+            var fixture = factory._ownedFixture
+                ?? throw new InvalidOperationException("A prepared factory cannot prepare the shared fixture.");
+            await fixture.StartAsync();
+            await fixture.MigrateAsync();
             if (factory._provisionWolverineStorage
-                && factory._fixture is FoundationPostgresFixture fixture)
+                && fixture is FoundationPostgresFixture postgresFixture)
             {
-                await WolverineStorageDeployment.ApplyAsync(fixture);
+                await WolverineStorageDeployment.ApplyAsync(postgresFixture);
             }
             await factory.ConfigureDatabaseFailureAsync();
             if (seedAuthenticatedActor)
@@ -597,7 +770,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
 
     private async Task SeedAuthenticatedActorAsync()
     {
-        await using var administrator = _fixture.CreateAdministratorDbContext();
+        await using var administrator = _fixtureAccess.CreateAdministratorDbContext();
         administrator.AddRange(
             new User(ActorUserId, "Ana", "same-address@example.test"),
             new ExternalIdentity(
@@ -611,7 +784,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private async Task ConfigureDatabaseFailureAsync()
     {
         if (_databaseFailurePoint != GateDatabaseFailurePoint.SelfSessionRevocation
-            || _fixture is not FoundationPostgresFixture fixture)
+            || _fixtureAccess is not FoundationPostgresFixture fixture)
         {
             return;
         }
@@ -666,7 +839,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             [
                 new AmrEntry("password", issuedAt - 10),
                 new AmrEntry("email", issuedAt - 20)
-            ]);
+            ],
+            AuthenticationType: BrowserBffAuthenticationExtensions.CookieScheme);
     }
 
     private static async Task<Exception> DisposeAfterFailureAsync(
@@ -872,7 +1046,8 @@ public sealed record TestPrincipalClaims(
     long IssuedAt,
     long ExpiresAt,
     IReadOnlyList<AmrEntry> Amr,
-    string? Aal = null);
+    string? Aal = null,
+    string AuthenticationType = FoundationApiFactory.TestAuthenticationScheme);
 
 public sealed record AmrEntry(string Method, long Timestamp);
 
@@ -919,7 +1094,7 @@ public sealed class TestAuthenticationHandler(
                 timestamp = entry.Timestamp
             }), JsonClaimValueTypes.Json)));
 
-        var identity = new ClaimsIdentity(identityClaims, Scheme.Name);
+        var identity = new ClaimsIdentity(identityClaims, claims.AuthenticationType);
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
         return Task.FromResult(AuthenticateResult.Success(ticket));

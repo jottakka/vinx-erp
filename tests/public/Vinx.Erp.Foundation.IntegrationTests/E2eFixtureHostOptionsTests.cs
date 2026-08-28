@@ -1,5 +1,11 @@
 using System.Globalization;
+using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Extensions.AI;
+using Vinx.Erp.AI;
+using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
 
@@ -13,19 +19,173 @@ public sealed class E2eFixtureHostOptionsTests
     [InlineData("beatriz")]
     [InlineData("joao")]
     [InlineData("clara")]
-    public void TryParse_accepts_only_an_exact_allowlisted_profile_pair(string profileName)
+    public void TryParse_accepts_an_exact_allowlisted_single_profile(string profileName)
     {
         Assert.True(
-            E2eFixtureHostOptions.TryParse(["--profile", profileName], out var profile));
-        Assert.Equal(profileName, profile);
+            E2eFixtureHostOptions.TryParse(
+                ["--profile", profileName, "--agent-mode", "deterministic"], out var request));
+        Assert.Equal(
+            new E2eFixtureHostRequest(
+                E2eFixtureHostMode.Single,
+                profileName,
+                E2eFixtureAgentMode.Deterministic),
+            request);
+    }
+
+    [Fact]
+    public void TryParse_accepts_only_the_literal_shared_maria_clara_pair()
+    {
+        Assert.True(
+            E2eFixtureHostOptions.TryParse(
+                ["--profiles", "maria,clara", "--agent-mode", "real"], out var request));
+        Assert.Equal(
+            new E2eFixtureHostRequest(E2eFixtureHostMode.Shared, null, E2eFixtureAgentMode.Real),
+            request);
+    }
+
+    [Fact]
+    public async Task Deterministic_model_returns_a_closed_paguai_proposal_only_for_the_synthetic_fixture_prompt()
+    {
+        var model = new DeterministicE2eAgentModel();
+        var selection = new AgentModelSelection(
+            AgentRunOptions.OpenAiCompatibleProvider,
+            "test-agent-model");
+        var attachmentId = E2eFixtureSeeder.MariaAlfaAgenticAttachmentId;
+
+        var response = await model.GetResponseAsync(
+            [new ChatMessage(
+                ChatRole.User,
+                $"{E2eFixtureAttachmentStorage.PaguaiPrompt}\n{attachmentId:N}:p1")],
+            selection,
+            CancellationToken.None);
+
+        var proposalJson = Assert.IsType<TextContent>(Assert.Single(response.Messages.Single().Contents)).Text;
+        Assert.Contains($"\"invoiceFileId\":\"{attachmentId:D}\"", proposalJson, StringComparison.Ordinal);
+        Assert.Equal(1, model.CallCount);
+
+        var normal = await model.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "resuma a empresa Alfa")],
+            selection,
+            CancellationToken.None);
+        Assert.Equal(DeterministicE2eAgentModel.ResponseText, normal.Text);
+    }
+
+    [Fact]
+    public void Deterministic_agent_configuration_fixes_main_and_vision_hosts()
+    {
+        var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Deterministic);
+
+        Assert.IsType<DeterministicE2eAgentModel>(configuration.Model);
+        Assert.Equal(new Uri("https://agent-provider.example/v1"), configuration.Options.Endpoint);
+        Assert.Equal(["agent-provider.example"], configuration.Options.ApprovedHosts);
+        var vision = Assert.IsType<AgentRunVisionOptions>(configuration.Options.Vision);
+        Assert.Equal(new Uri("https://agent-provider.example/v1"), vision.Endpoint);
+        Assert.Equal(["agent-provider.example"], vision.ApprovedHosts);
+    }
+
+    [Fact]
+    public void Synthetic_paguai_artifact_is_a_visible_metadata_free_invoice_image()
+    {
+        Assert.Equal(
+            ["VINX NOTA E2E", "FORNECEDOR E2E", "BRL 250.00", "2026-09-10"],
+            E2eFixtureAttachmentStorage.VisibleInvoiceLines);
+        var content = E2eFixtureAttachmentStorage.Content;
+        Assert.True(content.AsSpan(0, 8).SequenceEqual(
+            new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }));
+
+        var position = 8;
+        var idat = new MemoryStream();
+        var width = 0;
+        var height = 0;
+        var chunks = new List<string>();
+        while (position < content.Length)
+        {
+            var length = BinaryPrimitives.ReadInt32BigEndian(content.AsSpan(position, 4));
+            var type = Encoding.ASCII.GetString(content, position + 4, 4);
+            var data = content.AsSpan(position + 8, length);
+            chunks.Add(type);
+            if (type == "IHDR")
+            {
+                width = BinaryPrimitives.ReadInt32BigEndian(data[..4]);
+                height = BinaryPrimitives.ReadInt32BigEndian(data.Slice(4, 4));
+                Assert.Equal(8, data[8]);
+                Assert.Equal(0, data[9]);
+            }
+            else if (type == "IDAT")
+            {
+                idat.Write(data);
+            }
+
+            position += 12 + length;
+        }
+
+        Assert.Equal(["IHDR", "IDAT", "IEND"], chunks);
+        Assert.True(width >= 600);
+        Assert.True(height >= 240);
+        idat.Position = 0;
+        using var decompressor = new ZLibStream(idat, CompressionMode.Decompress);
+        using var raw = new MemoryStream();
+        decompressor.CopyTo(raw);
+        var scanlines = raw.ToArray();
+        Assert.Equal((width + 1) * height, scanlines.Length);
+        var darkPixels = 0;
+        for (var row = 0; row < height; row++)
+        {
+            Assert.Equal(0, scanlines[row * (width + 1)]);
+            foreach (var value in scanlines.AsSpan((row * (width + 1)) + 1, width))
+            {
+                if (value < 128)
+                {
+                    darkPixels++;
+                }
+            }
+        }
+
+        Assert.True(darkPixels > 10_000);
+    }
+
+    [Fact]
+    public async Task Deterministic_agent_configuration_composes_the_credentialless_ApiHost()
+    {
+        var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Deterministic);
+
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            fileStorage: configuration.Storage,
+            agentModel: configuration.Model,
+            agentRunOptions: configuration.Options);
+        using var response = await factory.CreateClient().GetAsync("/health");
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public void Real_agent_configuration_fixes_main_and_vision_profiles_without_a_bindable_key()
+    {
+        var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Real);
+
+        Assert.Null(configuration.Model);
+        Assert.Equal(new Uri("https://opencode.ai/zen/go/v1"), configuration.Options.Endpoint);
+        Assert.Equal("deepseek-v4-flash-vision-exp", configuration.Options.Model);
+        Assert.Equal(["opencode.ai"], configuration.Options.ApprovedHosts);
+        var vision = Assert.IsType<AgentRunVisionOptions>(configuration.Options.Vision);
+        Assert.Equal(new Uri("https://opencode.ai/zen/go/v1"), vision.Endpoint);
+        Assert.Equal("deepseek-v4-flash-vision-exp", vision.Model);
+        Assert.Equal(["opencode.ai"], vision.ApprovedHosts);
+        Assert.Equal(["agentic_attachment"], vision.AllowedClassifications);
+        Assert.DoesNotContain(
+            typeof(AgentRunOptions).GetProperties(),
+            property => string.Equals(property.Name, "ApiKey", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            typeof(AgentRunVisionOptions).GetProperties(),
+            property => string.Equals(property.Name, "ApiKey", StringComparison.Ordinal));
     }
 
     [Theory]
     [MemberData(nameof(InvalidArguments))]
     public void TryParse_rejects_missing_duplicate_extra_or_unknown_arguments(string[] arguments)
     {
-        Assert.False(E2eFixtureHostOptions.TryParse(arguments, out var profile));
-        Assert.Empty(profile);
+        Assert.False(E2eFixtureHostOptions.TryParse(arguments, out var request));
+        Assert.Null(request);
     }
 
     [Fact]
@@ -46,11 +206,167 @@ public sealed class E2eFixtureHostOptionsTests
         Assert.Empty(captured.StandardError);
     }
 
+    [Fact]
+    public async Task Shared_public_output_writes_only_the_complete_sanitized_readiness_block()
+    {
+        var captured = await CaptureAsync(async output =>
+        {
+            await output.WriteSharedReadinessAsync(new E2eSharedFixtureReadiness(
+                new Uri("http://127.0.0.1:43210"),
+                new Uri("http://127.0.0.1:43211"),
+                "127.0.0.1",
+                43212,
+                "vinx_fixture_a1b2c3",
+                "postgres",
+                "/tmp/vinx-e2e-check/postgres-password"));
+        });
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                [
+                    "E2E_API_ORIGIN_MARIA=http://127.0.0.1:43210",
+                    "E2E_API_ORIGIN_CLARA=http://127.0.0.1:43211",
+                    "E2E_DB_HOST=127.0.0.1",
+                    "E2E_DB_PORT=43212",
+                    "E2E_DB_DATABASE=vinx_fixture_a1b2c3",
+                    "E2E_DB_USER=postgres",
+                    "E2E_DB_PASSWORD_FILE=/tmp/vinx-e2e-check/postgres-password",
+                    "E2E_SHARED_READY=1",
+                    string.Empty,
+                ]),
+            captured.StandardOutput);
+        Assert.Empty(captured.StandardError);
+        Assert.DoesNotContain("Password=", captured.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("fixture-credential-value", captured.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Shared_public_output_rejects_a_database_name_without_a_hex_suffix()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => CaptureAsync(output =>
+            output.WriteSharedReadinessAsync(new E2eSharedFixtureReadiness(
+                new Uri("http://127.0.0.1:43210"),
+                new Uri("http://127.0.0.1:43211"),
+                "127.0.0.1",
+                43212,
+                "vinx_fixture_",
+                "postgres",
+                "/tmp/vinx-e2e-check/postgres-password"))));
+    }
+
+    [Fact]
+    public async Task Credential_file_is_private_regular_without_a_trailing_newline_and_is_removed()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var credentialFile = await E2eDatabaseCredentialFile.CreateAsync("fixture-credential-value");
+        var filePath = credentialFile.Path;
+        var directoryPath = Path.GetDirectoryName(filePath)
+            ?? throw new InvalidOperationException("The credential directory was missing.");
+
+        try
+        {
+            Assert.True(Path.IsPathFullyQualified(filePath));
+            Assert.Equal("fixture-credential-value", await File.ReadAllTextAsync(filePath));
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                File.GetUnixFileMode(filePath));
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                File.GetUnixFileMode(directoryPath));
+            Assert.Null(new FileInfo(filePath).LinkTarget);
+        }
+        finally
+        {
+            await credentialFile.DisposeAsync();
+        }
+
+        Assert.False(File.Exists(filePath));
+        Assert.False(Directory.Exists(directoryPath));
+    }
+
+    [Fact]
+    public async Task Credential_cleanup_retries_an_empty_owned_directory_after_file_deletion()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var credentialFile = await E2eDatabaseCredentialFile.CreateAsync("fixture-credential-value");
+        var filePath = credentialFile.Path;
+        var directoryPath = Path.GetDirectoryName(filePath)
+            ?? throw new InvalidOperationException("The credential directory was missing.");
+        var directoryDeletionAttempts = 0;
+
+        try
+        {
+            Assert.Throws<IOException>(() => E2eDatabaseCredentialFile.DeleteExactForTest(
+                directoryPath,
+                filePath,
+                _ =>
+                {
+                    directoryDeletionAttempts += 1;
+                    throw new IOException("directory-delete-failure");
+                }));
+            Assert.False(File.Exists(filePath));
+            Assert.True(Directory.Exists(directoryPath));
+
+            E2eDatabaseCredentialFile.DeleteExactForTest(
+                directoryPath,
+                filePath,
+                directory => Directory.Delete(directory, recursive: false));
+        }
+        finally
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+
+            if (Directory.Exists(directoryPath))
+            {
+                Directory.Delete(directoryPath, recursive: false);
+            }
+        }
+
+        Assert.Equal(1, directoryDeletionAttempts);
+        Assert.False(Directory.Exists(directoryPath));
+    }
+
+    [Fact]
+    public void Credential_partial_creation_cleanup_removes_an_empty_private_directory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("vinx-e2e-partial-");
+        File.SetUnixFileMode(
+            directory.FullName,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var filePath = Path.Combine(directory.FullName, "postgres-password");
+
+        E2eDatabaseCredentialFile.DeleteExactForTest(
+            directory.FullName,
+            filePath,
+            path => Directory.Delete(path, recursive: false));
+
+        Assert.False(Directory.Exists(directory.FullName));
+    }
+
     [Theory]
     [InlineData(E2eFixtureHostFailurePhase.FixtureStart, "fixture_start_failed")]
     [InlineData(E2eFixtureHostFailurePhase.Seed, "seed_failed")]
     [InlineData(E2eFixtureHostFailurePhase.HostStart, "host_start_failed")]
     [InlineData(E2eFixtureHostFailurePhase.Readback, "readback_failed")]
+    [InlineData(E2eFixtureHostFailurePhase.CredentialExport, "credential_export_failed")]
+    [InlineData(E2eFixtureHostFailurePhase.Cleanup, "cleanup_failed")]
     public async Task Public_output_maps_typed_failures_without_exception_details(
         E2eFixtureHostFailurePhase phase,
         string category)
@@ -97,6 +413,19 @@ public sealed class E2eFixtureHostOptionsTests
     }
 
     [Fact]
+    public async Task Process_policy_retries_one_failed_cleanup_and_preserves_the_first_failure()
+    {
+        var firstFailure = new InvalidOperationException("first-cleanup-failure");
+        var resource = new FailOnceAsyncDisposable(firstFailure);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            E2eFixtureHostProcessPolicy.DisposeWithOneRetryAsync(resource));
+
+        Assert.Same(firstFailure, exception);
+        Assert.Equal(2, resource.DisposeCalls);
+    }
+
+    [Fact]
     public void Runtime_supports_the_two_required_posix_signal_registrations()
     {
         using var interrupt = PosixSignalRegistration.Create(
@@ -121,6 +450,9 @@ public sealed class E2eFixtureHostOptionsTests
     [
         [],
         ["--profile"],
+        ["--profile", "maria"],
+        ["--profiles", "maria,clara"],
+        ["--profile", "maria", "--agent-mode", "unknown"],
         ["maria"],
         ["--profile", "unknown"],
         ["--profile", "Maria"],
@@ -128,6 +460,11 @@ public sealed class E2eFixtureHostOptionsTests
         ["--profile", "maria", "--profile", "joao"],
         ["--profile", "maria", "--extra"],
         ["--extra", "--profile", "maria"],
+        ["--profiles", "maria"],
+        ["--profiles", "clara,maria"],
+        ["--profiles", "maria, clara"],
+        ["--profiles", "maria,clara,joao"],
+        ["--profiles", "maria,clara", "--profile", "maria"],
     ];
 
     private static async Task<CapturedOutput> CaptureAsync(
@@ -156,4 +493,17 @@ public sealed class E2eFixtureHostOptionsTests
     }
 
     private sealed record CapturedOutput(string StandardOutput, string StandardError);
+
+    private sealed class FailOnceAsyncDisposable(Exception firstFailure) : IAsyncDisposable
+    {
+        public int DisposeCalls { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalls += 1;
+            return DisposeCalls == 1
+                ? ValueTask.FromException(firstFailure)
+                : ValueTask.CompletedTask;
+        }
+    }
 }

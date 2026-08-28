@@ -132,7 +132,12 @@ export function AppHeader({
               </Avatar>
             }
             label={userName}
-            sx={{ mr: 0.5, maxWidth: { xs: "8rem", sm: "none" } }}
+            sx={{
+              mr: 0.5,
+              width: { xs: 40, sm: "auto" },
+              "& .MuiChip-avatar": { mr: { xs: 0, sm: -0.5 } },
+              "& .MuiChip-label": { display: { xs: "none", sm: "block" } },
+            }}
           />
         ) : null}
         <Divider
@@ -141,20 +146,32 @@ export function AppHeader({
           sx={{ display: { xs: "none", sm: "block" }, mx: 0.75, my: 1 }}
         />
         <AppearanceMenu />
-        {isAgentWorkspaceEnabled() ? <AgentTrigger /> : null}
-        <IconButton aria-label="Abrir ajuda" component={RouterLink} to="/ajuda">
-          <HelpOutlinedIcon />
-        </IconButton>
+        <Box sx={{ alignItems: "center", display: { xs: "none", sm: "flex" } }}>
+          {isAgentWorkspaceEnabled() ? <AgentTrigger /> : null}
+          <IconButton
+            aria-label="Abrir ajuda"
+            component={RouterLink}
+            to="/ajuda"
+          >
+            <HelpOutlinedIcon />
+          </IconButton>
+        </Box>
         <Button
+          aria-label={isSigningOut ? "Saindo…" : "Sair"}
           disabled={isSigningOut}
           onClick={onSignOut}
           startIcon={<LogoutRoundedIcon />}
           sx={(theme) => ({
             minHeight: theme.vinx.layout.controlMinHeight,
             mr: 0.25,
+            minWidth: { xs: 40, sm: "auto" },
+            px: { xs: 1, sm: 2 },
+            "& .MuiButton-startIcon": { mr: { xs: 0, sm: 1 } },
           })}
         >
-          {isSigningOut ? "Saindo…" : "Sair"}
+          <Box component="span" sx={{ display: { xs: "none", sm: "block" } }}>
+            {isSigningOut ? "Saindo…" : "Sair"}
+          </Box>
         </Button>
       </Toolbar>
     </AppBar>

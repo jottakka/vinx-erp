@@ -16,13 +16,15 @@ public sealed class AtendimentoCard
 
     public string Column { get; set; } = "novo";
 
-    public Guid? AssigneeMembershipId { get; set; }
+    public string Channel { get; set; } = "manual";
 
-    /// <summary>Solicitante como referência opaca; People Core pode resolver depois.</summary>
-    public string? RequesterPersonRef { get; set; }
+    public Guid? AssigneeMembershipId { get; set; }
 
     /// <summary>Nullável para compatibilidade: ausente significa sem prioridade definida.</summary>
     public string? Priority { get; set; }
+
+    /// <summary>Solicitante como referência opaca; People Core pode resolver depois.</summary>
+    public string? RequesterPersonRef { get; set; }
 
     /// <summary>Categoria por referência da tabela da empresa.</summary>
     public Guid? CategoryRefId { get; set; }
@@ -32,6 +34,14 @@ public sealed class AtendimentoCard
 
     /// <summary>Prazo de SLA; atraso é derivado em leitura (passado e não concluído).</summary>
     public DateTimeOffset? SlaDueAt { get; set; }
+
+    public Guid? AttachmentFileId { get; set; }
+
+    public DateTimeOffset? CancelledAt { get; set; }
+
+    public Guid? CancelledByUserId { get; set; }
+
+    public string? CancellationReason { get; set; }
 
     public Guid CreatedByUserId { get; set; }
 
@@ -50,4 +60,7 @@ public sealed class AtendimentoCard
     public string? DeletedReason { get; set; }
 
     public long RowVersion { get; set; } = 1;
+
+    public ICollection<AtendimentoCardParticipant> Participants { get; } =
+        new List<AtendimentoCardParticipant>();
 }

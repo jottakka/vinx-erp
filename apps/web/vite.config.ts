@@ -10,6 +10,10 @@ type VinxApiProxy = {
     changeOrigin: false;
     target: string;
   };
+  "^/atendimento/assignment-options(?:\\?|$)": {
+    changeOrigin: false;
+    target: string;
+  };
   "/foundation": {
     changeOrigin: false;
     target: string;
@@ -19,6 +23,10 @@ type VinxApiProxy = {
     target: string;
   };
   "^/paguai/requests(?:/|\\?|$)": {
+    changeOrigin: false;
+    target: string;
+  };
+  "^/paguai/draft-proposals(?:/|\\?|$)": {
     changeOrigin: false;
     target: string;
   };
@@ -58,6 +66,10 @@ export function resolveDevelopmentApiProxy(
         changeOrigin: false,
         target: target.origin,
       },
+      "^/atendimento/assignment-options(?:\\?|$)": {
+        changeOrigin: false,
+        target: target.origin,
+      },
       "/foundation": {
         changeOrigin: false,
         target: target.origin,
@@ -67,6 +79,10 @@ export function resolveDevelopmentApiProxy(
         target: target.origin,
       },
       "^/paguai/requests(?:/|\\?|$)": {
+        changeOrigin: false,
+        target: target.origin,
+      },
+      "^/paguai/draft-proposals(?:/|\\?|$)": {
         changeOrigin: false,
         target: target.origin,
       },

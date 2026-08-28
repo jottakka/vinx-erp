@@ -14,6 +14,7 @@ public sealed class PaguaiRequestConfiguration : IEntityTypeConfiguration<Paguai
             table => table.HasCheckConstraint("ck_paguai_requests_currency_brl", "currency = 'BRL'")
         );
         builder.HasKey(request => request.Id);
+        builder.HasAlternateKey(request => new { request.CompanyId, request.Id });
         builder.Property(request => request.Id).HasColumnName("id").ValueGeneratedNever();
         builder
             .Property(request => request.CompanyId)
@@ -55,6 +56,23 @@ public sealed class PaguaiRequestConfiguration : IEntityTypeConfiguration<Paguai
             .HasColumnType("text")
             .HasMaxLength(10)
             .IsRequired();
+        builder.Property(request => request.InvoiceFileId).HasColumnName("invoice_file_id");
+        builder.HasIndex(request => new { request.CompanyId, request.InvoiceFileId });
+        builder.HasOne<FileRecord>()
+            .WithMany()
+            .HasForeignKey(request => new { request.CompanyId, request.InvoiceFileId })
+            .HasPrincipalKey(file => new { file.CompanyId, file.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.Property(request => request.SourceProposalId).HasColumnName("source_proposal_id");
+        builder.HasIndex(request => request.SourceProposalId)
+            .IsUnique()
+            .HasFilter("source_proposal_id IS NOT NULL")
+            .HasDatabaseName("uq_paguai_requests_source_proposal_id");
+        builder.HasOne<PaguaiDraftProposal>()
+            .WithMany()
+            .HasForeignKey(request => new { request.CompanyId, request.SourceProposalId })
+            .HasPrincipalKey(proposal => new { proposal.CompanyId, proposal.Id })
+            .OnDelete(DeleteBehavior.Restrict);
         builder.Property(request => request.State).HasColumnName("state");
         builder.Property(request => request.Version).HasColumnName("version");
         builder

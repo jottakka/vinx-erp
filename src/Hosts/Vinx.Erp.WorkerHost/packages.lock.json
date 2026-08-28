@@ -561,7 +561,8 @@
           "PDFtoImage": "[5.4.0, )",
           "PdfPig": "[0.1.16, )",
           "System.ClientModel": "[1.15.0, )",
-          "Vinx.Erp.Foundation": "[1.0.0, )"
+          "Vinx.Erp.Foundation": "[1.0.0, )",
+          "Vinx.Erp.Paguai": "[1.0.0, )"
         }
       },
       "vinx.erp.foundation": {
@@ -582,6 +583,14 @@
           "Microsoft.EntityFrameworkCore": "[10.0.11, )",
           "Npgsql": "[10.0.3, )",
           "Vinx.Erp.AI": "[1.0.0, )",
+          "Vinx.Erp.Foundation": "[1.0.0, )"
+        }
+      },
+      "vinx.erp.paguai": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.11, )",
+          "Npgsql": "[10.0.3, )",
           "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },

@@ -116,6 +116,24 @@ public sealed class FileRecord : SoftDeletableEntity, ICompanyScoped
         RecordUpdate(actorUserId, requestId);
     }
 
+    /// <summary>Promove somente um anexo agentic confirmado e vivo para fatura Pagaí.</summary>
+    public void PromoteAgenticAttachmentToPaguaiInvoice(
+        Guid actorUserId,
+        Guid requestId,
+        DateTimeOffset databaseNow)
+    {
+        if (ProcessingState != ConfirmedState
+            || Classification != "agentic_attachment"
+            || DeletedAt is not null
+            || RetentionUntil <= databaseNow)
+        {
+            throw new InvalidOperationException("Document is not eligible for Paguai promotion.");
+        }
+
+        Classification = "paguai_request_invoice";
+        RecordUpdate(actorUserId, requestId);
+    }
+
     public void MarkVerificationFailed(string reason, Guid actorUserId, Guid requestId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
