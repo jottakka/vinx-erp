@@ -64,7 +64,14 @@ public sealed record UpdateAtendimentoCardFieldsCommand(
     DateTimeOffset? SlaDueAt,
     string? RequesterPersonRef,
     IReadOnlyList<Guid>? MentionedMembershipIds
-);
+)
+{
+    /// <summary>Teto de menções por comando (espelha MaxParticipants da criação).</summary>
+    public const int MaxMentionedMembershipIds = 25;
+
+    /// <summary>Teto da coluna requester_person_ref (varchar(200)).</summary>
+    public const int MaxRequesterPersonRefLength = 200;
+}
 
 public sealed record AtendimentoCardWatcherCommand(
     Guid CompanyId,
@@ -191,8 +198,10 @@ public sealed record AtendimentoCategoryResponse(Guid Id, Guid CompanyId, string
 public enum AtendimentoLookupWriteState
 {
     Created,
+    Success,
     Replay,
     Conflict,
+    IdempotencyConflict,
     Invalid,
     MembershipRequired,
     CapabilityDenied,

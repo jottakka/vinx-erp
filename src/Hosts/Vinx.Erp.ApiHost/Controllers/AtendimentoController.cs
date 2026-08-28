@@ -455,6 +455,7 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> DeactivateCategory(
@@ -470,7 +471,7 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
 
         var actor = HttpContext.GetRequiredActorContext();
         var result = await service.DeactivateCategoryAsync(actor, model.ToCommand(id), cancellationToken);
-        return ToLookupResult(result, conflictCode: null);
+        return ToLookupResult(result);
     }
 
     private IActionResult ToCommandResult(AtendimentoCardOperationResult result) =>
@@ -518,20 +519,22 @@ public sealed class AtendimentoController(AtendimentoCardService service) : Cont
             ),
         };
 
-    private IActionResult ToLookupResult(
-        AtendimentoLookupWriteResult result,
-        string? conflictCode = "lookup_conflict"
-    ) =>
+    private IActionResult ToLookupResult(AtendimentoLookupWriteResult result) =>
         result.State switch
         {
             AtendimentoLookupWriteState.Created => StatusCode(
                 StatusCodes.Status201Created,
                 result.Category
             ),
-            AtendimentoLookupWriteState.Replay => Ok(result.Category),
+            AtendimentoLookupWriteState.Success
+            or AtendimentoLookupWriteState.Replay => Ok(result.Category),
             AtendimentoLookupWriteState.Conflict => StatusCode(
                 StatusCodes.Status409Conflict,
-                new { code = conflictCode ?? "lookup_conflict" }
+                new { code = "lookup_conflict" }
+            ),
+            AtendimentoLookupWriteState.IdempotencyConflict => ApiControllerError.Error(
+                "idempotency_conflict",
+                StatusCodes.Status409Conflict
             ),
             AtendimentoLookupWriteState.Invalid => ApiControllerError.Error(
                 "invalid_request",

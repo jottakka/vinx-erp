@@ -47,6 +47,7 @@ public sealed class AtendimentoCardService(
     private const string WatcherAddedTemplateKey = "atendimento.card.watcher_added";
 
     private const string ClosedColumn = "concluido";
+    private const string CancelledColumn = "cancelado";
 
     private static readonly HashSet<string> ValidPriorities =
         new(StringComparer.Ordinal) { "critica", "alta", "media", "baixa" };
@@ -509,6 +510,20 @@ public sealed class AtendimentoCardService(
         if (card is null)
         {
             return Mutation.ResourceNotFound();
+        }
+        if (IsCancelled(card))
+        {
+            // Cancelado é terminal (mesmo contrato do caminho de mutação
+            // compartilhado): campos nunca mudam após o cancelamento.
+            var cancelled = await FindCardAsync(
+                command.CompanyId,
+                cardId,
+                DateTimeOffset.UtcNow,
+                cancellationToken
+            );
+            return cancelled is null
+                ? Mutation.ResourceNotFound()
+                : Mutation.IntegrityConflict(cancelled);
         }
         if (card.RowVersion != command.ExpectedVersion)
         {
@@ -973,7 +988,7 @@ public sealed class AtendimentoCardService(
                        entry.event_seq,
                        entry.action_kind,
                        entry.actor_membership_id,
-                       COALESCE(actor.display_name, '') AS actor_display_name,
+                       COALESCE(resolved.display_name, '') AS actor_display_name,
                        entry.occurred_at
                 FROM (
                     SELECT *
@@ -982,8 +997,8 @@ public sealed class AtendimentoCardService(
                     ORDER BY event_seq DESC
                     LIMIT 100
                 ) AS entry
-                LEFT JOIN foundation.memberships AS membership ON membership.id = entry.actor_membership_id
-                LEFT JOIN foundation.users AS actor ON actor.id = membership.user_id
+                LEFT JOIN service_desk.resolve_card_actor_names({companyId}, {cardId}) AS resolved
+                    ON resolved.actor_membership_id = entry.actor_membership_id
                 ORDER BY entry.event_seq ASC
                 """
             ).ToListAsync(cancellationToken))
@@ -1100,20 +1115,127 @@ public sealed class AtendimentoCardService(
         }
     }
 
-    /// <summary>Cria categoria por empresa; nome é aparado e duplicata é conflito estável.</summary>
-    public async Task<AtendimentoLookupWriteResult> CreateCategoryAsync(
+    /// <summary>
+    /// Cria categoria por empresa; nome é aparado e duplicata é conflito
+    /// estável. Passa pelo mesmo executor de idempotência com comparação de
+    /// hash e reconciliação de concorrência das mutações de cartão.
+    /// </summary>
+    public Task<AtendimentoLookupWriteResult> CreateCategoryAsync(
         ActorContext actor,
         CreateAtendimentoCategoryCommand command,
         CancellationToken cancellationToken
     )
     {
         var name = command.Name?.Trim();
-        if (
-            command.CompanyId == Guid.Empty
-            || command.RequestId == Guid.Empty
-            || string.IsNullOrWhiteSpace(name)
-            || name.Length > 80
-        )
+        return ExecuteLookupWriteAsync(
+            actor,
+            command.CompanyId,
+            command.RequestId,
+            CategoryCreateAction,
+            CategoryCreateAction,
+            valid: !string.IsNullOrWhiteSpace(name) && name.Length <= 80,
+            payloadHash: Hash(name),
+            async () =>
+            {
+                var duplicate = await database.AtendimentoCardCategories.AnyAsync(
+                    category =>
+                        category.CompanyId == command.CompanyId && category.Name == name,
+                    cancellationToken
+                );
+                if (duplicate)
+                {
+                    return LookupMutation.Conflict();
+                }
+
+                var now = DateTimeOffset.UtcNow;
+                var category = new AtendimentoCardCategory
+                {
+                    Id = Guid.NewGuid(),
+                    CompanyId = command.CompanyId,
+                    Name = name!,
+                    IsActive = true,
+                    CreatedByUserId = actor.UserId,
+                    UpdatedByUserId = actor.UserId,
+                    RequestId = command.RequestId,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+                database.AtendimentoCardCategories.Add(category);
+                await database.SaveChangesAsync(cancellationToken);
+                return LookupMutation.Succeeded(
+                    new AtendimentoCategoryResponse(category.Id, category.CompanyId, name!),
+                    AtendimentoLookupWriteState.Created
+                );
+            },
+            cancellationToken
+        );
+    }
+
+    /// <summary>
+    /// Desativa categoria com recibo de idempotência: 200 Success/Replay para
+    /// o comando e o retry; reuso divergente do mesmo requestId é conflito.
+    /// </summary>
+    public Task<AtendimentoLookupWriteResult> DeactivateCategoryAsync(
+        ActorContext actor,
+        DeactivateAtendimentoCategoryCommand command,
+        CancellationToken cancellationToken
+    ) =>
+        ExecuteLookupWriteAsync(
+            actor,
+            command.CompanyId,
+            command.RequestId,
+            CategoryDeactivateAction,
+            CommandScope(CategoryDeactivateAction, command.CategoryId),
+            valid: command.CategoryId != Guid.Empty,
+            payloadHash: Hash(new DeactivateCategoryPayload(command.CategoryId)),
+            async () =>
+            {
+                var category = await database.AtendimentoCardCategories.SingleOrDefaultAsync(
+                    candidate =>
+                        candidate.CompanyId == command.CompanyId
+                        && candidate.Id == command.CategoryId,
+                    cancellationToken
+                );
+                if (category is null)
+                {
+                    return LookupMutation.ResourceNotFound();
+                }
+
+                if (category.IsActive)
+                {
+                    category.IsActive = false;
+                    category.UpdatedByUserId = actor.UserId;
+                    category.UpdatedAt = DateTimeOffset.UtcNow;
+                    category.RequestId = command.RequestId;
+                    await database.SaveChangesAsync(cancellationToken);
+                }
+                return LookupMutation.Succeeded(
+                    new AtendimentoCategoryResponse(category.Id, category.CompanyId, category.Name),
+                    AtendimentoLookupWriteState.Success
+                );
+            },
+            cancellationToken
+        );
+
+    /// <summary>
+    /// Executor de escrita de lookups no padrão de ExecuteAsync: valida,
+    /// autoriza, compara hash do recibo de idempotência (divergente é
+    /// idempotency_conflict), persiste recibo+auditoria na mesma transação e
+    /// reconcilia corrida de chave única como Replay/Conflict.
+    /// </summary>
+    private async Task<AtendimentoLookupWriteResult> ExecuteLookupWriteAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid requestId,
+        string auditAction,
+        string idempotencyCommandName,
+        bool valid,
+        string payloadHash,
+        Func<Task<LookupMutation>> mutation,
+        CancellationToken cancellationToken
+    )
+    {
+        if (companyId == Guid.Empty || requestId == Guid.Empty || !valid)
         {
             return new(AtendimentoLookupWriteState.Invalid);
         }
@@ -1123,10 +1245,10 @@ public sealed class AtendimentoCardService(
             await using var transaction = await database.Database.BeginTransactionAsync(
                 cancellationToken
             );
-            await SetContextAsync(actor, command.CompanyId, cancellationToken);
+            await SetContextAsync(actor, companyId, cancellationToken);
             var denied = await AuthorizeAsync(
                 actor,
-                command.CompanyId,
+                companyId,
                 KnownCapabilities.ServiceDeskLookupAdmin,
                 cancellationToken
             );
@@ -1135,23 +1257,36 @@ public sealed class AtendimentoCardService(
                 await transaction.RollbackAsync(cancellationToken);
                 return await AuditLookupDeniedAsync(
                     actor,
-                    command.CompanyId,
-                    CategoryCreateAction,
-                    denied.Value,
+                    companyId,
+                    auditAction,
+                    denied is AtendimentoCardOperationState.MembershipRequired
+                        ? AtendimentoLookupWriteState.MembershipRequired
+                        : AtendimentoLookupWriteState.CapabilityDenied,
                     cancellationToken
                 );
             }
 
             var existing = await FindIdempotencyRecordAsync(
-                command.CompanyId,
+                companyId,
                 actor.UserId,
-                CategoryCreateAction,
-                command.RequestId,
+                idempotencyCommandName,
+                requestId,
                 cancellationToken
             );
             if (existing is not null)
             {
                 await transaction.RollbackAsync(cancellationToken);
+                if (!string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal))
+                {
+                    return await AuditLookupDeniedAsync(
+                        actor,
+                        companyId,
+                        auditAction,
+                        AtendimentoLookupWriteState.IdempotencyConflict,
+                        cancellationToken
+                    );
+                }
+
                 var replay = JsonSerializer.Deserialize<AtendimentoCategoryResponse>(
                     existing.ResultJson
                 );
@@ -1164,57 +1299,67 @@ public sealed class AtendimentoCardService(
                 return new(AtendimentoLookupWriteState.Replay, replay);
             }
 
-            var duplicate = await database.AtendimentoCardCategories.AnyAsync(
-                category =>
-                    category.CompanyId == command.CompanyId && category.Name == name,
-                cancellationToken
-            );
-            if (duplicate)
+            var result = await mutation();
+            if (
+                result.State
+                is AtendimentoLookupWriteState.ResourceNotFound
+                    or AtendimentoLookupWriteState.Conflict
+            )
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return new(AtendimentoLookupWriteState.Conflict);
+                return await AuditLookupDeniedAsync(
+                    actor,
+                    companyId,
+                    auditAction,
+                    result.State,
+                    cancellationToken
+                );
             }
 
-            var now = DateTimeOffset.UtcNow;
-            var category = new AtendimentoCardCategory
-            {
-                Id = Guid.NewGuid(),
-                CompanyId = command.CompanyId,
-                Name = name,
-                IsActive = true,
-                CreatedByUserId = actor.UserId,
-                UpdatedByUserId = actor.UserId,
-                RequestId = command.RequestId,
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            database.AtendimentoCardCategories.Add(category);
+            database.IdempotencyRecords.Add(
+                new IdempotencyRecord(
+                    Guid.NewGuid(),
+                    companyId,
+                    actor.UserId,
+                    idempotencyCommandName,
+                    requestId,
+                    payloadHash,
+                    JsonSerializer.Serialize(result.Category)
+                )
+            );
             await AppendAuditAsync(
                 actor,
-                command.CompanyId,
-                CategoryCreateAction,
-                category.Id,
+                companyId,
+                auditAction,
+                result.Category!.Id,
                 AuditOutcome.Success,
                 null,
                 cancellationToken
             );
-            database.IdempotencyRecords.Add(
-                new IdempotencyRecord(
-                    Guid.NewGuid(),
-                    command.CompanyId,
-                    actor.UserId,
-                    CategoryCreateAction,
-                    command.RequestId,
-                    Hash(command.Name),
-                    JsonSerializer.Serialize(new AtendimentoCategoryResponse(category.Id, category.CompanyId, name))
-                )
-            );
             await database.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            LogInformation("succeeded", "category_created");
-            return new(
-                AtendimentoLookupWriteState.Created,
-                new AtendimentoCategoryResponse(category.Id, category.CompanyId, name)
+            LogInformation("succeeded", "lookup_command_completed");
+            return new(result.State, result.Category);
+        }
+        catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
+        {
+            database.ChangeTracker.Clear();
+            logger.LogWarning(
+                exception,
+                "Atendimento {Operation} {Module} {Result} {Reason}",
+                Operation,
+                Module,
+                "retrying",
+                "idempotency_unique_conflict"
+            );
+            return await ResolveConcurrentLookupReplayAsync(
+                actor,
+                companyId,
+                requestId,
+                auditAction,
+                idempotencyCommandName,
+                payloadHash,
+                cancellationToken
             );
         }
         catch (DbUpdateException exception) when (exception.InnerException is PostgresException postgres
@@ -1230,80 +1375,88 @@ public sealed class AtendimentoCardService(
         catch (Exception exception)
         {
             database.ChangeTracker.Clear();
-            LogUnavailable(exception, "category_create_failed");
+            LogUnavailable(exception, "lookup_write_failed");
             return new(AtendimentoLookupWriteState.Unavailable);
         }
     }
 
-    public async Task<AtendimentoLookupWriteResult> DeactivateCategoryAsync(
+    private async Task<AtendimentoLookupWriteResult> ResolveConcurrentLookupReplayAsync(
         ActorContext actor,
-        DeactivateAtendimentoCategoryCommand command,
+        Guid companyId,
+        Guid requestId,
+        string auditAction,
+        string idempotencyCommandName,
+        string payloadHash,
         CancellationToken cancellationToken
     )
     {
-        if (command.CompanyId == Guid.Empty || command.CategoryId == Guid.Empty)
-        {
-            return new(AtendimentoLookupWriteState.Invalid);
-        }
-
         try
         {
-            await using var transaction = await database.Database.BeginTransactionAsync(
-                cancellationToken
-            );
-            await SetContextAsync(actor, command.CompanyId, cancellationToken);
-            var denied = await AuthorizeAsync(
-                actor,
-                command.CompanyId,
-                KnownCapabilities.ServiceDeskLookupAdmin,
-                cancellationToken
-            );
-            if (denied is not null)
+            IdempotencyRecord? record = null;
+            AtendimentoCardOperationState? denial = null;
+            await using (
+                var transaction = await database.Database.BeginTransactionAsync(cancellationToken)
+            )
             {
+                await SetContextAsync(actor, companyId, cancellationToken);
+                denial = await AuthorizeAsync(
+                    actor,
+                    companyId,
+                    KnownCapabilities.ServiceDeskLookupAdmin,
+                    cancellationToken
+                );
+                if (denial is null)
+                {
+                    record = await FindIdempotencyRecordAsync(
+                        companyId,
+                        actor.UserId,
+                        idempotencyCommandName,
+                        requestId,
+                        cancellationToken
+                    );
+                }
+
                 await transaction.RollbackAsync(cancellationToken);
+            }
+
+            if (denial is not null)
+            {
                 return await AuditLookupDeniedAsync(
                     actor,
-                    command.CompanyId,
-                    CategoryDeactivateAction,
-                    denied.Value,
+                    companyId,
+                    auditAction,
+                    denial is AtendimentoCardOperationState.MembershipRequired
+                        ? AtendimentoLookupWriteState.MembershipRequired
+                        : AtendimentoLookupWriteState.CapabilityDenied,
                     cancellationToken
                 );
             }
 
-            var category = await database.AtendimentoCardCategories.SingleOrDefaultAsync(
-                candidate =>
-                    candidate.CompanyId == command.CompanyId
-                    && candidate.Id == command.CategoryId,
-                cancellationToken
-            );
-            if (category is null)
+            if (record is null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return new(AtendimentoLookupWriteState.ResourceNotFound);
+                return new(AtendimentoLookupWriteState.Conflict);
             }
 
-            if (category.IsActive)
+            if (!string.Equals(record.PayloadHash, payloadHash, StringComparison.Ordinal))
             {
-                category.IsActive = false;
-                category.UpdatedByUserId = actor.UserId;
-                category.UpdatedAt = DateTimeOffset.UtcNow;
-                category.RequestId = command.RequestId;
-                await AppendAuditAsync(
+                return await AuditLookupDeniedAsync(
                     actor,
-                    command.CompanyId,
-                    CategoryDeactivateAction,
-                    category.Id,
-                    AuditOutcome.Success,
-                    null,
+                    companyId,
+                    auditAction,
+                    AtendimentoLookupWriteState.IdempotencyConflict,
                     cancellationToken
                 );
-                await database.SaveChangesAsync(cancellationToken);
             }
-            await transaction.CommitAsync(cancellationToken);
-            return new(
-                AtendimentoLookupWriteState.Created,
-                new AtendimentoCategoryResponse(category.Id, category.CompanyId, category.Name)
-            );
+
+            var replay = JsonSerializer.Deserialize<AtendimentoCategoryResponse>(record.ResultJson);
+            if (replay is null)
+            {
+                LogUnavailable(null, "idempotency_result_invalid");
+                return new(AtendimentoLookupWriteState.Unavailable);
+            }
+
+            LogInformation("replayed", "concurrent_idempotency_match");
+            return new(AtendimentoLookupWriteState.Replay, replay);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1312,7 +1465,7 @@ public sealed class AtendimentoCardService(
         catch (Exception exception)
         {
             database.ChangeTracker.Clear();
-            LogUnavailable(exception, "category_deactivate_failed");
+            LogUnavailable(exception, "idempotency_reconciliation_failed");
             return new(AtendimentoLookupWriteState.Unavailable);
         }
     }
@@ -1782,11 +1935,14 @@ public sealed class AtendimentoCardService(
             }
             if (filter.Overdue)
             {
+                // Mesma predica terminal de IsOverdue: concluído e cancelado
+                // nunca aparecem como atrasados.
                 query = query.Where(
                     card =>
                         card.SlaDueAt != null
                         && card.SlaDueAt < now
                         && card.Column != ClosedColumn
+                        && card.Column != CancelledColumn
                 );
             }
             if (!string.IsNullOrWhiteSpace(filter.Search))
@@ -2238,7 +2394,7 @@ public sealed class AtendimentoCardService(
         ActorContext actor,
         Guid companyId,
         string auditAction,
-        AtendimentoCardOperationState state,
+        AtendimentoLookupWriteState state,
         CancellationToken cancellationToken
     )
     {
@@ -2259,9 +2415,7 @@ public sealed class AtendimentoCardService(
             );
             await transaction.CommitAsync(cancellationToken);
             LogInformation("denied", ErrorCode(state));
-            return state is AtendimentoCardOperationState.MembershipRequired
-                ? new(AtendimentoLookupWriteState.MembershipRequired)
-                : new(AtendimentoLookupWriteState.CapabilityDenied);
+            return new(state);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -2318,7 +2472,11 @@ public sealed class AtendimentoCardService(
     private static bool IsValid(CancelAtendimentoCardCommand command) =>
         command.ExpectedVersion > 0 && command.Reason?.Trim().Length is > 0 and <= 500;
 
-    /// <summary>Prioridade e SLA válidos quando presentes; SLA no passado é rejeitado.</summary>
+    /// <summary>
+    /// Prioridade e SLA válidos quando presentes; SLA no passado é rejeitado.
+    /// Solicitante acima do varchar(200) e menções vazias/sem conta excedida
+    /// são invalid_request (400), nunca erro de infraestrutura.
+    /// </summary>
     private static bool IsValid(UpdateAtendimentoCardFieldsCommand command)
     {
         if (command.ExpectedVersion <= 0)
@@ -2331,6 +2489,24 @@ public sealed class AtendimentoCardService(
         )
         {
             return false;
+        }
+        if (
+            command.RequesterPersonRef?.Trim().Length
+                is > UpdateAtendimentoCardFieldsCommand.MaxRequesterPersonRefLength
+        )
+        {
+            return false;
+        }
+        if (command.MentionedMembershipIds is { } mentions)
+        {
+            if (mentions.Any(id => id == Guid.Empty))
+            {
+                return false;
+            }
+            if (mentions.Count > UpdateAtendimentoCardFieldsCommand.MaxMentionedMembershipIds)
+            {
+                return false;
+            }
         }
         return true;
     }
@@ -2367,10 +2543,10 @@ public sealed class AtendimentoCardService(
         };
 
     private static bool IsCancelled(AtendimentoCardResponse card) =>
-        string.Equals(card.Column, "cancelado", StringComparison.Ordinal);
+        string.Equals(card.Column, CancelledColumn, StringComparison.Ordinal);
 
     private static bool IsCancelled(AtendimentoCard card) =>
-        string.Equals(card.Column, "cancelado", StringComparison.Ordinal);
+        string.Equals(card.Column, CancelledColumn, StringComparison.Ordinal);
 
     private static bool IsOverdue(DateTimeOffset? slaDueAt, string column, DateTimeOffset now) =>
         slaDueAt is not null
@@ -2413,6 +2589,18 @@ public sealed class AtendimentoCardService(
             _ => "atendimento_unavailable",
         };
 
+    private static string ErrorCode(AtendimentoLookupWriteState state) =>
+        state switch
+        {
+            AtendimentoLookupWriteState.Invalid => "invalid_request",
+            AtendimentoLookupWriteState.MembershipRequired => "membership_required",
+            AtendimentoLookupWriteState.CapabilityDenied => "capability_denied",
+            AtendimentoLookupWriteState.ResourceNotFound => "resource_not_found",
+            AtendimentoLookupWriteState.IdempotencyConflict => "idempotency_conflict",
+            AtendimentoLookupWriteState.Conflict => "lookup_conflict",
+            _ => "atendimento_unavailable",
+        };
+
     private void LogInformation(string result, string reason) =>
 #pragma warning disable CA1873 // Os argumentos são constantes ou valores baratos; o guard de logging não agrega ganho.
         logger.LogInformation(
@@ -2448,6 +2636,24 @@ public sealed class AtendimentoCardService(
         AtendimentoCardWatcherCommand Command,
         bool IsAdd
     );
+
+    private sealed record DeactivateCategoryPayload(Guid CategoryId);
+
+    private sealed record LookupMutation(
+        AtendimentoLookupWriteState State,
+        AtendimentoCategoryResponse? Category = null
+    )
+    {
+        public static LookupMutation Succeeded(
+            AtendimentoCategoryResponse category,
+            AtendimentoLookupWriteState state
+        ) => new(state, category);
+
+        public static LookupMutation ResourceNotFound() =>
+            new(AtendimentoLookupWriteState.ResourceNotFound);
+
+        public static LookupMutation Conflict() => new(AtendimentoLookupWriteState.Conflict);
+    }
 
     private sealed record Mutation(
         AtendimentoCardOperationState State,

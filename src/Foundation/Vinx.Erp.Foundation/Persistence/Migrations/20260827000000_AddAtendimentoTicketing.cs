@@ -165,10 +165,52 @@ public sealed class AddAtendimentoTicketing : Migration
             GRANT SELECT, INSERT, DELETE ON service_desk.atendimento_card_watchers TO vinx_runtime;
             GRANT SELECT, INSERT ON service_desk.atendimento_card_events TO vinx_runtime;
 
-            -- Timeline resolve o nome do ator com leitura de menor privilégio:
-            -- o grant do 20260825110000 cobre somente vinx_permissions_owner,
-            -- então o runtime do atendimento precisa da mesma coluna mínima.
-            GRANT SELECT (id, display_name) ON foundation.users TO vinx_runtime;
+            -- Timeline resolve nomes de atores SEM leitura direta de users pelo
+            -- runtime (postura do BootstrapProfileMigrationTests): função
+            -- SECURITY DEFINER estreita no padrão do 20260827073650, de
+            -- vinx_permissions_owner (já detém memberships + users id/display_name),
+            -- filtrada pela empresa do cartão; EXECUTE somente para o runtime.
+            GRANT SELECT ON service_desk.atendimento_card_events TO vinx_permissions_owner;
+            GRANT USAGE, CREATE ON SCHEMA service_desk TO vinx_permissions_owner;
+            SET ROLE vinx_permissions_owner;
+            CREATE FUNCTION service_desk.resolve_card_actor_names(
+                p_company_id uuid,
+                p_card_id uuid)
+            RETURNS TABLE (actor_membership_id uuid, display_name text)
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path TO pg_catalog, service_desk, pg_temp
+            AS $function$
+            BEGIN
+                IF p_company_id IS NULL OR p_card_id IS NULL THEN
+                    RAISE EXCEPTION 'card actor name parameters are invalid'
+                        USING ERRCODE = '22023';
+                END IF;
+
+                -- Contexto de empresa antes da leitura para satisfazer as
+                -- policies com FORCE (mesma disciplina do seed de canais).
+                PERFORM set_config('app.company_id', p_company_id::text, true);
+
+                RETURN QUERY
+                SELECT DISTINCT card_event.actor_membership_id,
+                    app_user.display_name::text
+                FROM service_desk.atendimento_card_events AS card_event
+                INNER JOIN foundation.memberships AS membership
+                    ON membership.id = card_event.actor_membership_id
+                   AND membership.company_id = card_event.company_id
+                INNER JOIN foundation.users AS app_user
+                    ON app_user.id = membership.user_id
+                WHERE card_event.company_id = p_company_id
+                  AND card_event.card_id = p_card_id
+                  AND card_event.actor_membership_id IS NOT NULL;
+            END;
+            $function$;
+            REVOKE ALL ON FUNCTION service_desk.resolve_card_actor_names(uuid, uuid)
+                FROM PUBLIC, vinx_runtime, vinx_worker, vinx_migrator;
+            GRANT EXECUTE ON FUNCTION service_desk.resolve_card_actor_names(uuid, uuid)
+                TO vinx_runtime;
+            RESET ROLE;
+            REVOKE CREATE ON SCHEMA service_desk FROM vinx_permissions_owner;
             """
         );
 
@@ -180,7 +222,13 @@ public sealed class AddAtendimentoTicketing : Migration
                 service_desk.atendimento_card_watchers,
                 service_desk.atendimento_categories,
                 service_desk.atendimento_channels FROM vinx_runtime;
-            REVOKE SELECT (id, display_name) ON foundation.users FROM vinx_runtime;
+            SET ROLE vinx_permissions_owner;
+            REVOKE ALL ON FUNCTION service_desk.resolve_card_actor_names(uuid, uuid)
+                FROM PUBLIC, vinx_runtime, vinx_worker, vinx_migrator;
+            DROP FUNCTION service_desk.resolve_card_actor_names(uuid, uuid);
+            RESET ROLE;
+            REVOKE USAGE, CREATE ON SCHEMA service_desk FROM vinx_permissions_owner;
+            REVOKE SELECT ON service_desk.atendimento_card_events FROM vinx_permissions_owner;
             DROP TABLE service_desk.atendimento_card_events;
             DROP TABLE service_desk.atendimento_card_watchers;
             ALTER TABLE service_desk.atendimento_cards

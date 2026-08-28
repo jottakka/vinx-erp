@@ -594,6 +594,292 @@ public sealed class AtendimentoTicketingEndpointTests
         Assert.Empty((await byAssignee.Content.ReadFromJsonAsync<List<CardResponse>>())!);
     }
 
+    // ---------- Estado terminal ----------
+
+    [Fact]
+    public async Task Canceled_card_rejects_fields_update_and_never_reports_overdue()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(
+            factory,
+            [
+                KnownCapabilities.ServiceDeskTicketReadQueue,
+                KnownCapabilities.ServiceDeskTicketCreate,
+                KnownCapabilities.ServiceDeskTicketCancel,
+                FieldsCapability,
+            ]
+        );
+        using var client = factory.CreateClient();
+        var created = await CreateCardAsync(client, scenario.CompanyId);
+
+        using var scheduled = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/fields",
+            new UpdateFieldsRequest(
+                scenario.CompanyId, Guid.NewGuid(), created.Version,
+                Priority: null, CategoryRefId: null, ChannelRefId: null,
+                SlaDueAt: DateTimeOffset.UtcNow.AddHours(1),
+                RequesterPersonRef: null, MentionedMembershipIds: null
+            )
+        );
+        scheduled.EnsureSuccessStatusCode();
+        var withSla = await scheduled.Content.ReadFromJsonAsync<CardResponse>();
+
+        using var cancelled = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/cancel",
+            new CancelCardRequest(
+                scenario.CompanyId,
+                Guid.NewGuid(),
+                withSla!.Version,
+                "Cliente desistiu."
+            )
+        );
+        cancelled.EnsureSuccessStatusCode();
+        var cancelledCard = await cancelled.Content.ReadFromJsonAsync<CardResponse>();
+        Assert.Equal("cancelado", cancelledCard!.Column);
+
+        // Cancelado é terminal: mesmo com a versão corrente correta, campos
+        // nunca mudam (409 integrity_conflict com estado atual).
+        using var denied = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/fields",
+            new UpdateFieldsRequest(
+                scenario.CompanyId, Guid.NewGuid(), cancelledCard.Version,
+                Priority: "critica", CategoryRefId: null, ChannelRefId: null,
+                SlaDueAt: null, RequesterPersonRef: "persona-x", MentionedMembershipIds: null
+            )
+        );
+        Assert.Equal(HttpStatusCode.Conflict, denied.StatusCode);
+        var conflict = await denied.Content.ReadFromJsonAsync<IntegrityConflictResponse>();
+        Assert.Equal("integrity_conflict", conflict?.Code);
+        Assert.Equal("cancelado", conflict!.Current!.Column);
+        Assert.Equal(cancelledCard.Version, conflict.Current.Version);
+
+        // SLA vencido em cartão cancelado: fora do filtro overdue E com a
+        // flag derivada falsa (a predica SQL e IsOverdue coincidem).
+        await BackdateSlaAsync(factory, created.Id);
+        using var overdueQueue = await client.GetAsync(
+            $"/atendimento/cards?companyId={scenario.CompanyId}&overdue=true"
+        );
+        overdueQueue.EnsureSuccessStatusCode();
+        Assert.DoesNotContain(
+            (await overdueQueue.Content.ReadFromJsonAsync<List<CardResponse>>())!,
+            card => card.Id == created.Id
+        );
+
+        using var queue = await client.GetAsync(
+            $"/atendimento/cards?companyId={scenario.CompanyId}"
+        );
+        queue.EnsureSuccessStatusCode();
+        var queued = Assert.Single((await queue.Content.ReadFromJsonAsync<List<CardResponse>>())!);
+        Assert.Equal(created.Id, queued.Id);
+        Assert.False(queued.IsOverdue);
+    }
+
+    // ---------- Idempotência de lookups ----------
+
+    [Fact]
+    public async Task Category_request_id_reuse_conflicts_on_divergent_name_and_deactivation_replays()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var elevated = await SeedScenarioAsync(
+            factory,
+            [KnownCapabilities.ServiceDeskTicketReadQueue, LookupAdminCapability],
+            "Vinx Lookup Admin"
+        );
+        using var adminClient = factory.CreateClient();
+
+        // Reuso do mesmo requestId com nome divergente é conflito estável de
+        // idempotência, não Replay da primeira categoria.
+        var requestId = Guid.NewGuid();
+        using var first = await adminClient.PostAsJsonAsync(
+            "/atendimento/categories",
+            new CategoryCreateRequest(elevated.CompanyId, requestId, "Financeiro")
+        );
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var category = await first.Content.ReadFromJsonAsync<CategoryResponse>();
+
+        using var divergent = await adminClient.PostAsJsonAsync(
+            "/atendimento/categories",
+            new CategoryCreateRequest(elevated.CompanyId, requestId, "RH")
+        );
+        Assert.Equal(HttpStatusCode.Conflict, divergent.StatusCode);
+        Assert.Equal(
+            "idempotency_conflict",
+            (await divergent.Content.ReadFromJsonAsync<ErrorResponse>())?.Code
+        );
+
+        // Desativação: 200 Success com recibo; mesmo requestId repete 200.
+        var deactivateRequestId = Guid.NewGuid();
+        using var deactivated = await adminClient.PostAsJsonAsync(
+            $"/atendimento/categories/{category!.Id}/deactivate",
+            new CategoryDeactivateRequest(elevated.CompanyId, deactivateRequestId)
+        );
+        Assert.Equal(HttpStatusCode.OK, deactivated.StatusCode);
+        var receipt = await deactivated.Content.ReadFromJsonAsync<CategoryResponse>();
+        Assert.Equal(category.Id, receipt!.Id);
+
+        using var replayed = await adminClient.PostAsJsonAsync(
+            $"/atendimento/categories/{category.Id}/deactivate",
+            new CategoryDeactivateRequest(elevated.CompanyId, deactivateRequestId)
+        );
+        Assert.Equal(HttpStatusCode.OK, replayed.StatusCode);
+        var replay = await replayed.Content.ReadFromJsonAsync<CategoryResponse>();
+        Assert.Equal(receipt.Id, replay!.Id);
+
+        // Comando novo em categoria já inativa é idempotente por natureza.
+        using var freshCommand = await adminClient.PostAsJsonAsync(
+            $"/atendimento/categories/{category.Id}/deactivate",
+            new CategoryDeactivateRequest(elevated.CompanyId, Guid.NewGuid())
+        );
+        Assert.Equal(HttpStatusCode.OK, freshCommand.StatusCode);
+
+        using var lookups = await adminClient.GetAsync(
+            $"/atendimento/lookups?companyId={elevated.CompanyId}"
+        );
+        lookups.EnsureSuccessStatusCode();
+        var lookupList = await lookups.Content.ReadFromJsonAsync<LookupsResponse>();
+        Assert.Contains(
+            lookupList!.Categories,
+            candidate => candidate.Id == category.Id && !candidate.IsActive
+        );
+    }
+
+    // ---------- Limites de entrada ----------
+
+    [Fact]
+    public async Task Fields_limits_reject_oversized_requester_excess_mentions_and_empty_guids()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(
+            factory,
+            [
+                KnownCapabilities.ServiceDeskTicketReadQueue,
+                KnownCapabilities.ServiceDeskTicketCreate,
+                FieldsCapability,
+            ]
+        );
+        using var client = factory.CreateClient();
+        var created = await CreateCardAsync(client, scenario.CompanyId);
+
+        using var oversizedRequester = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/fields",
+            new UpdateFieldsRequest(
+                scenario.CompanyId, Guid.NewGuid(), created.Version,
+                Priority: null, CategoryRefId: null, ChannelRefId: null,
+                SlaDueAt: null, RequesterPersonRef: new string('p', 201),
+                MentionedMembershipIds: null
+            )
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, oversizedRequester.StatusCode);
+
+        var twentySixMentions = Enumerable.Range(0, 26)
+            .Select(_ => Guid.NewGuid())
+            .ToArray();
+        using var excessMentions = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/fields",
+            new UpdateFieldsRequest(
+                scenario.CompanyId, Guid.NewGuid(), created.Version,
+                Priority: null, CategoryRefId: null, ChannelRefId: null,
+                SlaDueAt: null, RequesterPersonRef: null,
+                MentionedMembershipIds: twentySixMentions
+            )
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, excessMentions.StatusCode);
+
+        using var emptyGuidMention = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/fields",
+            new UpdateFieldsRequest(
+                scenario.CompanyId, Guid.NewGuid(), created.Version,
+                Priority: null, CategoryRefId: null, ChannelRefId: null,
+                SlaDueAt: null, RequesterPersonRef: null,
+                MentionedMembershipIds: [Guid.NewGuid(), Guid.Empty]
+            )
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, emptyGuidMention.StatusCode);
+
+        // O teto exato de menções com referências válidas segue aceito.
+        var validMentions = Enumerable.Range(0, 25)
+            .Select(_ => Guid.NewGuid())
+            .ToArray();
+        using var unknownMentions = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/fields",
+            new UpdateFieldsRequest(
+                scenario.CompanyId, Guid.NewGuid(), created.Version,
+                Priority: null, CategoryRefId: null, ChannelRefId: null,
+                SlaDueAt: null, RequesterPersonRef: null,
+                MentionedMembershipIds: validMentions
+            )
+        );
+        Assert.Equal(HttpStatusCode.NotFound, unknownMentions.StatusCode);
+        Assert.Equal(
+            "resource_not_found",
+            (await unknownMentions.Content.ReadFromJsonAsync<ErrorResponse>())?.Code
+        );
+
+        using var queue = await client.GetAsync($"/atendimento/cards?companyId={scenario.CompanyId}");
+        queue.EnsureSuccessStatusCode();
+        var untouched = Assert.Single((await queue.Content.ReadFromJsonAsync<List<CardResponse>>())!);
+        Assert.Equal(created.Version, untouched.Version);
+        Assert.Null(untouched.RequesterPersonRef);
+    }
+
+    // ---------- Picker de pessoas ----------
+
+    [Fact]
+    public async Task Picker_options_need_directory_read_and_stay_company_scoped()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(
+            factory,
+            [
+                KnownCapabilities.ServiceDeskTicketReadQueue,
+                KnownCapabilities.ServiceDeskTicketCreate,
+            ]
+        );
+        using var client = factory.CreateClient();
+
+        // Sem directory.read o picker nega: ler opções é privilégio menor e
+        // distinto de criar funcionário.
+        using var denied = await client.GetAsync(
+            $"/foundation/companies/{scenario.CompanyId}/directory-options"
+        );
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+
+        var elevated = await SeedScenarioAsync(
+            factory,
+            [DirectoryReadCapability],
+            "Vinx Directory Reader"
+        );
+        using var readerClient = factory.CreateClient();
+        await SeedEmployeeAsync(
+            factory,
+            elevated.CompanyId,
+            "Bea Picker",
+            elevated.AssigneeMembershipId
+        );
+        await SeedEmployeeAsync(
+            factory,
+            elevated.CompanyId,
+            "Caio Picker",
+            elevated.OtherMembershipId
+        );
+
+        using var options = await readerClient.GetAsync(
+            $"/foundation/companies/{elevated.CompanyId}/directory-options"
+        );
+        Assert.Equal(HttpStatusCode.OK, options.StatusCode);
+        var people = await options.Content.ReadFromJsonAsync<List<PickerOptionResponse>>();
+        Assert.NotNull(people);
+        Assert.Equal(2, people!.Count);
+        Assert.All(people, person => Assert.False(string.IsNullOrWhiteSpace(person.DisplayName)));
+        Assert.Contains(people, person => person.DisplayName == "Bea Picker");
+
+        // Empresa em que o ator é membro sem a capability nunca vaza opções.
+        using var foreign = await readerClient.GetAsync(
+            $"/foundation/companies/{scenario.CompanyId}/directory-options"
+        );
+        Assert.Equal(HttpStatusCode.Forbidden, foreign.StatusCode);
+    }
+
     // ---------- Infraestrutura compartilhada ----------
 
 
@@ -866,6 +1152,15 @@ public sealed class AtendimentoTicketingEndpointTests
         Guid CompanyId,
         Guid RequestId,
         string Name
+    );
+
+    private sealed record CategoryDeactivateRequest(Guid CompanyId, Guid RequestId);
+
+    private sealed record CancelCardRequest(
+        Guid CompanyId,
+        Guid RequestId,
+        long ExpectedVersion,
+        string Reason
     );
 
     private sealed record CardResponse(
