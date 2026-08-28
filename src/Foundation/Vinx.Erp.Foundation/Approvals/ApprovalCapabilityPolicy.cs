@@ -37,8 +37,4 @@ public sealed record ApprovalCapabilityPolicy(
             CapabilityName: capability,
             AuditSource: auditSource
         );
-
-    /// <summary>Só altera a capability; nomes de comando ficam no legado AI.</summary>
-    public static ApprovalCapabilityPolicy FromCapability(string capability) =>
-        Legacy with { CapabilityName = capability };
 }

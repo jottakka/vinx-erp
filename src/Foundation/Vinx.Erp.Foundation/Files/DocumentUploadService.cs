@@ -678,7 +678,7 @@ public sealed class DocumentUploadService(
             resourceType,
             resourceId,
             outcome,
-            new CorrelationContext(actor.CorrelationId).CorrelationId,
+            actor.CorrelationId,
             reason,
             "{}"), cancellationToken);
 

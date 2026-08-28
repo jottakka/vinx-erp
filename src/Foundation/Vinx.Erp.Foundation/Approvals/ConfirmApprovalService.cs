@@ -145,7 +145,7 @@ public sealed class ConfirmApprovalService(
                             "approval",
                             approval.Id,
                             AuditOutcome.Success,
-                            new CorrelationContext(actor.CorrelationId).CorrelationId,
+                            actor.CorrelationId,
                             null,
                             "{}"), cancellationToken);
                         await database.SaveChangesAsync(cancellationToken);
@@ -292,7 +292,7 @@ public sealed class ConfirmApprovalService(
                         "approval",
                         command.ApprovalId,
                         AuditOutcome.Success,
-                        new CorrelationContext(actor.CorrelationId).CorrelationId,
+                        actor.CorrelationId,
                         null,
                         "{}"), cancellationToken);
                     await scope.CommitAsync(cancellationToken);
@@ -480,7 +480,7 @@ public sealed class ConfirmApprovalService(
                 "approval",
                 null,
                 AuditOutcome.Denied,
-                new CorrelationContext(actor.CorrelationId).CorrelationId,
+                actor.CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
             await scope.CommitAsync(cancellationToken);
@@ -536,7 +536,7 @@ public sealed class ConfirmApprovalService(
                 "approval",
                 null,
                 AuditOutcome.Denied,
-                new CorrelationContext(actor.CorrelationId).CorrelationId,
+                actor.CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
             await scope.CommitAsync(cancellationToken);

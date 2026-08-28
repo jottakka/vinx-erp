@@ -157,7 +157,7 @@ public sealed class PrepareApprovalService(
                         "approval",
                         approvalId,
                         AuditOutcome.Success,
-                        new CorrelationContext(actor.CorrelationId).CorrelationId,
+                        actor.CorrelationId,
                         null,
                         "{}"), cancellationToken);
                     await database.SaveChangesAsync(cancellationToken);
@@ -263,7 +263,7 @@ public sealed class PrepareApprovalService(
                 "approval",
                 expiredId,
                 AuditOutcome.Success,
-                new CorrelationContext(actor.CorrelationId).CorrelationId,
+                actor.CorrelationId,
                 null,
                 "{}"), cancellationToken);
         }
@@ -298,7 +298,7 @@ public sealed class PrepareApprovalService(
                 "approval",
                 null,
                 AuditOutcome.Denied,
-                new CorrelationContext(actor.CorrelationId).CorrelationId,
+                actor.CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
             await scope.CommitAsync(cancellationToken);

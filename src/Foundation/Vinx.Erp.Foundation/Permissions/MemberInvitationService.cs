@@ -206,7 +206,7 @@ public sealed class MemberInvitationService(
                     "member_invitation",
                     null,
                     AuditOutcome.Denied,
-                    new CorrelationContext(actor.CorrelationId).CorrelationId,
+                    actor.CorrelationId,
                     DenialReason,
                     "{}"
                 ),
