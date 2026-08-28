@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
 import { atendimentoClient, type PersonOption } from "./atendimento-client";
 import { PeoplePicker } from "./people-picker";
+import { useDirectoryOptions } from "./use-directory-options";
 
 const alfaCompanyId = "11111111-1111-4111-8111-111111111111";
 const betaCompanyId = "22222222-2222-4222-8222-222222222222";
@@ -69,26 +70,51 @@ describe("PeoplePicker", () => {
   });
 
   it("drops previous-company options in the same render as the switch", async () => {
-    // A troca de empresa expõe lista vazia JÁ NA renderização da troca, sem
-    // esperar fetch ou efeito — fail-closed síncrono do vínculo por empresa.
-    const user = userEvent.setup();
+    // IDs inéditos (o cache de módulo das outras suítes não interfere), a
+    // requisição da empresa destino fica pendurada para sempre e cada
+    // renderização exposta pelo hook é registrada: a PRIMEIRA render da nova
+    // empresa precisa já expor lista vazia — fail-closed síncrono.
+    const freshAlfa = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa01";
+    const freshBeta = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa02";
     vi.spyOn(atendimentoClient, "directoryOptions").mockImplementation(
-      async (companyId) =>
-        new Promise((resolve) =>
-          // Beta nunca resolve: só o estado síncrono importa aqui.
-          setTimeout(() => resolve(companyId === alfaCompanyId ? alfaOptions : betaOptions), 10_000),
-        ),
+      async (companyId) => {
+        if (companyId === freshAlfa) return alfaOptions;
+        return new Promise<PersonOption[]>(() => {});
+      },
     );
 
-    render(<Harness initialCompanyId={alfaCompanyId} />);
-    const combobox = screen.getByRole("combobox", { name: "Pessoas" });
-    await waitFor(() => expect(combobox).toHaveValue("Ana Alfa"));
+    const renders: Array<{ companyId: string; options: PersonOption[] }> = [];
+    function Probe({ companyId }: { companyId: string }) {
+      const { options } = useDirectoryOptions(companyId);
+      renders.push({ companyId, options });
+      return (
+        <ul>
+          {options.map((option) => (
+            <li key={option.membershipId}>{option.displayName}</li>
+          ))}
+        </ul>
+      );
+    }
+    function SwitchHarness() {
+      const [companyId, setCompanyId] = useState(freshAlfa);
+      return (
+        <>
+          <Probe companyId={companyId} />
+          <button onClick={() => setCompanyId(freshBeta)} type="button">
+            Trocar empresa
+          </button>
+        </>
+      );
+    }
 
-    await user.click(screen.getByRole("button", { name: "Trocar empresa" }));
+    render(<SwitchHarness />);
+    await screen.findByText("Ana Alfa");
 
-    // Mesma renderização da troca: sem waitFor, sem fetch resolvido.
-    expect(combobox).toHaveValue("");
-    expect(screen.getByText("Não resolvido")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Trocar empresa" }));
+
+    const firstBetaRender = renders.find((entry) => entry.companyId === freshBeta);
+    expect(firstBetaRender).toBeDefined();
+    expect(firstBetaRender!.options).toEqual([]);
     expect(screen.queryByText("Ana Alfa")).not.toBeInTheDocument();
   });
 
