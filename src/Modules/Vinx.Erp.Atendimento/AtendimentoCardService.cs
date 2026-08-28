@@ -1365,8 +1365,18 @@ public sealed class AtendimentoCardService(
         catch (DbUpdateException exception) when (exception.InnerException is PostgresException postgres
             && postgres.ConstraintName == "uq_atendimento_categories_company_id_name")
         {
+            // Corrida de criação concorrente: mesmo request/hash reconcilia como
+            // Replay; só um request divergente sob o mesmo nome é conflito.
             database.ChangeTracker.Clear();
-            return new(AtendimentoLookupWriteState.Conflict);
+            return await ResolveConcurrentLookupReplayAsync(
+                actor,
+                companyId,
+                requestId,
+                auditAction,
+                idempotencyCommandName,
+                payloadHash,
+                cancellationToken
+            );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

@@ -677,6 +677,42 @@ public sealed class AtendimentoTicketingEndpointTests
     // ---------- Idempotência de lookups ----------
 
     [Fact]
+    public async Task Concurrent_identical_category_creates_reconcile_as_replay_not_conflict()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var elevated = await SeedScenarioAsync(
+            factory,
+            [KnownCapabilities.ServiceDeskTicketReadQueue, LookupAdminCapability],
+            "Vinx Lookup Admin"
+        );
+        using var adminClient = factory.CreateClient();
+
+        var requestId = Guid.NewGuid();
+        var payload = new CategoryCreateRequest(elevated.CompanyId, requestId, "Concorrente");
+
+        // Duas requests idênticas em paralelo: exatamente uma cria (201) e a
+        // perdedora da corrida de nome único reconcilia como Replay (200).
+        var first = adminClient.PostAsJsonAsync("/atendimento/categories", payload);
+        var second = adminClient.PostAsJsonAsync("/atendimento/categories", payload);
+        var responses = await Task.WhenAll(first, second);
+
+        Assert.Contains(responses, response => response.StatusCode == HttpStatusCode.Created);
+        Assert.Contains(responses, response => response.StatusCode == HttpStatusCode.OK);
+        Assert.DoesNotContain(responses, response => response.StatusCode == HttpStatusCode.Conflict);
+        foreach (var response in responses)
+        {
+            response.Dispose();
+        }
+
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var count = new NpgsqlCommand(
+            "SELECT count(*) FROM service_desk.atendimento_categories WHERE company_id = @company_id AND name = 'Concorrente'",
+            administrator);
+        count.Parameters.AddWithValue("company_id", elevated.CompanyId);
+        Assert.Equal(1L, Convert.ToInt64(await count.ExecuteScalarAsync()));
+    }
+
+    [Fact]
     public async Task Category_request_id_reuse_conflicts_on_divergent_name_and_deactivation_replays()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
