@@ -2591,6 +2591,7 @@ CREATE TRIGGER audit_events_reject_mutation BEFORE DELETE OR UPDATE ON audit.aud
 
 CREATE TRIGGER trg_seed_company_lookup_defaults AFTER INSERT ON foundation.companies FOR EACH ROW EXECUTE FUNCTION service_desk.seed_company_lookup_defaults_trigger();
 
+
 -- Name: agent_execution_ledger fk_agent_execution_ledger_companies_company_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.agent_execution_ledger

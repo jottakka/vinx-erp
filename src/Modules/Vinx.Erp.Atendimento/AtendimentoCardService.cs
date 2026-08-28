@@ -2303,7 +2303,7 @@ public sealed class AtendimentoCardService(
     private static bool IsValid(CreateAtendimentoCardCommand command) =>
         command.Title?.Trim().Length is > 0 and <= 200
         && command.Description?.Trim().Length is > 0 and <= 4000
-        && command.Priority is (AtendimentoPriority.Critical or AtendimentoPriority.High or AtendimentoPriority.Medium or AtendimentoPriority.Low)
+        && command.Priority is (null or AtendimentoPriority.Critical or AtendimentoPriority.High or AtendimentoPriority.Medium or AtendimentoPriority.Low)
         && command.Channel is (AtendimentoChannel.WhatsApp or AtendimentoChannel.Email or AtendimentoChannel.Web or AtendimentoChannel.Manual)
         && command.AttachmentFileId != Guid.Empty
         && command.ParticipantMembershipIds?.All(id => id != Guid.Empty) is not false;
@@ -2343,8 +2343,7 @@ public sealed class AtendimentoCardService(
     ) =>
         command with
         {
-            // Prioridade permanece null-means-unset (P6); canal tem default
-            // NOT NULL no schema do main.
+            Priority = command.Priority ?? AtendimentoPriority.Medium,
             Channel = command.Channel ?? AtendimentoChannel.Manual,
             SlaDueAt = command.SlaDueAt?.ToUniversalTime(),
             ParticipantMembershipIds =
@@ -2361,6 +2360,7 @@ public sealed class AtendimentoCardService(
     ) =>
         response with
         {
+            Priority = response.Priority ?? AtendimentoPriority.Medium,
             Channel = response.Channel ?? AtendimentoChannel.Manual,
             ParticipantMembershipIds = response.ParticipantMembershipIds ?? [],
             IsOverdue = IsOverdue(response.SlaDueAt, response.Column, now),

@@ -188,7 +188,9 @@ public sealed class AtendimentoTicketingEndpointTests
         using var queue = await client.GetAsync($"/atendimento/cards?companyId={scenario.CompanyId}");
         queue.EnsureSuccessStatusCode();
         var untouched = Assert.Single((await queue.Content.ReadFromJsonAsync<List<CardResponse>>())!);
-        Assert.Null(untouched.Priority);
+        // O default de criação do main (media) permanece; a rejeição não
+        // alterou o cartão.
+        Assert.Equal("media", untouched.Priority);
         Assert.Equal(created.Version, untouched.Version);
     }
 
@@ -593,6 +595,7 @@ public sealed class AtendimentoTicketingEndpointTests
     }
 
     // ---------- Infraestrutura compartilhada ----------
+
 
     private static async Task<CardResponse> CreateCardAsync(
         HttpClient client,
