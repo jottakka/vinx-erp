@@ -73,6 +73,9 @@ export function DemandasPage() {
     [bootstrap],
   );
   const [companyId, setCompanyId] = useState("");
+  const [pendingAdvanceIds, setPendingAdvanceIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   // Contexto ativo por empresa (contrato da baseline de arquitetura): a troca
   // de empresa limpa SINCRONAMENTE cartões/detalhe/erro e invalida respostas
@@ -84,6 +87,7 @@ export function DemandasPage() {
     (nextCompanyId: string) => {
       scopeGeneration.current += 1;
       boardRequest.current += 1;
+      setPendingAdvanceIds(new Set());
       setCards([]);
       setTotal(0);
       setHasMore(false);
@@ -186,6 +190,9 @@ export function DemandasPage() {
     void loadBoard();
   }, [loadBoard]);
 
+  const latestLoadBoard = useRef(loadBoard);
+  latestLoadBoard.current = loadBoard;
+
   // Deep link /demandas?demand=<id canônico>: abre o detalhe direto; seletor
   // inválido (UUID não canônico, query extra) é ignorado, não chamado.
   useEffect(() => {
@@ -213,7 +220,9 @@ export function DemandasPage() {
     card: DemandBoardCard,
     action: () => Promise<CommandResult>,
   ) {
+    const generation = scopeGeneration.current;
     const result = await action();
+    if (generation !== scopeGeneration.current) return;
     if (!result.ok) {
       setError(messageFor(result.code));
       const current = result.current;
@@ -225,7 +234,22 @@ export function DemandasPage() {
         );
       return;
     }
-    void loadBoard({ silent: true });
+    await latestLoadBoard.current({ silent: true });
+  }
+
+  function beginAdvance(card: DemandBoardCard) {
+    if (pendingAdvanceIds.has(card.id)) return;
+    setPendingAdvanceIds((current) => new Set(current).add(card.id));
+    void act(card, () => demandasClient.advance(companyId, card)).finally(
+      () => {
+        setPendingAdvanceIds((current) => {
+          if (!current.has(card.id)) return current;
+          const next = new Set(current);
+          next.delete(card.id);
+          return next;
+        });
+      },
+    );
   }
 
   const visibleCards = onlyOverdue
@@ -327,12 +351,9 @@ export function DemandasPage() {
                     <DemandCard
                       card={card}
                       canAdvance={permissions.canEdit}
+                      isAdvancing={pendingAdvanceIds.has(card.id)}
                       key={card.id}
-                      onAdvance={() =>
-                        void act(card, () =>
-                          demandasClient.advance(companyId, card),
-                        )
-                      }
+                      onAdvance={() => beginAdvance(card)}
                       onOpen={() => setDetailId(card.id)}
                     />
                   ))}
@@ -395,11 +416,13 @@ function deadlineLabel(
 function DemandCard({
   card,
   canAdvance,
+  isAdvancing,
   onAdvance,
   onOpen,
 }: {
   card: DemandBoardCard;
   canAdvance: boolean;
+  isAdvancing: boolean;
   onAdvance: () => void;
   onOpen: () => void;
 }) {
@@ -460,6 +483,7 @@ function DemandCard({
         {canAdvance && card.stage !== "closed" ? (
           <Button
             data-testid={`advance-${card.id}`}
+            disabled={isAdvancing}
             onClick={onAdvance}
             size="small"
             startIcon={<AdvanceIcon />}
