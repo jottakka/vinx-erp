@@ -79,7 +79,10 @@ public sealed class AgentOutputContract(string journey, IReadOnlySet<string> req
                     return Invalid($"unknown_field:{property.Name}");
                 }
 
-                present.Add(property.Name);
+                if (!present.Add(property.Name))
+                {
+                    return Invalid(StructuredJsonInvalid);
+                }
             }
 
             foreach (var required in requiredFields)

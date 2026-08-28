@@ -8,7 +8,7 @@ versioned architecture and repository policies below.
 
 - [Architecture design](docs/superpowers/specs/2026-08-08-vinx-erp-architecture-design.md)
 - [Local-development runbook](docs/runbooks/local-development.md)
-- [ADR index](docs/adr/README.md)
+- [ADR index](docs/adr/)
 - [Public verification](docs/runbooks/public-verification.md)
 
 Read [AGENTS.md](AGENTS.md) before changing behavior. It defines the required

@@ -22,9 +22,17 @@ describe("development API proxy", () => {
     expect(resolveDevelopmentApiProxy()).toBeUndefined();
   });
 
-  it("proxies Agent, Foundation, Paguai, Atendimento, and Notifications APIs to the exact loopback origin", () => {
+  it("proxies active BFF API paths to the exact loopback origin", () => {
     expect(resolveDevelopmentApiProxy("http://127.0.0.1:5080")).toEqual({
+      "^/agent/channel-company-selection(?:\\?.*)?$": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
       "^/agent/runs(?:\\?.*)?$": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "^/atendimento/(?:lookups|categories)(?:\\?.*)?$": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
@@ -33,6 +41,10 @@ describe("development API proxy", () => {
         changeOrigin: false,
       },
       "^/atendimento/cards(?:/|\\?|$)": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "^/demandas/(?:board|demands|routines)(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
@@ -76,7 +88,7 @@ describe("development API proxy", () => {
     }
   });
 
-  it.each(["/paguai", "/atendimento"])(
+  it.each(["/paguai", "/atendimento", "/demandas"])(
     "leaves the module SPA route %s outside every API proxy context",
     (route) => {
       const proxy = resolveDevelopmentApiProxy("http://127.0.0.1:5080");
@@ -141,6 +153,13 @@ describe("development API proxy", () => {
       const run = await fetch(`${origin}/agent/runs?source=test`);
       expect(await run.text()).toBe("/agent/runs?source=test");
 
+      const agentCompanySelection = await fetch(
+        `${origin}/agent/channel-company-selection?companyId=test`,
+      );
+      expect(await agentCompanySelection.text()).toBe(
+        "/agent/channel-company-selection?companyId=test",
+      );
+
       const notifications = await fetch(`${origin}/notifications/inbox`);
       expect(await notifications.text()).toBe("/notifications/inbox");
 
@@ -154,6 +173,39 @@ describe("development API proxy", () => {
         "/atendimento/cards?companyId=test",
       );
 
+      const atendimentoLookups = await fetch(
+        `${origin}/atendimento/lookups?companyId=test`,
+      );
+      expect(await atendimentoLookups.text()).toBe(
+        "/atendimento/lookups?companyId=test",
+      );
+
+      const atendimentoCategories = await fetch(
+        `${origin}/atendimento/categories?companyId=test`,
+      );
+      expect(await atendimentoCategories.text()).toBe(
+        "/atendimento/categories?companyId=test",
+      );
+
+      const demandasBoard = await fetch(
+        `${origin}/demandas/board?companyId=test`,
+      );
+      expect(await demandasBoard.text()).toBe("/demandas/board?companyId=test");
+
+      const demandasDemand = await fetch(
+        `${origin}/demandas/demands/demand-id?companyId=test`,
+      );
+      expect(await demandasDemand.text()).toBe(
+        "/demandas/demands/demand-id?companyId=test",
+      );
+
+      const demandasRoutines = await fetch(
+        `${origin}/demandas/routines?companyId=test`,
+      );
+      expect(await demandasRoutines.text()).toBe(
+        "/demandas/routines?companyId=test",
+      );
+
       // Navegação de browser: o fallback de SPA só atende requisições que
       // aceitam HTML, então o fetch emula o header que o browser enviaria.
       const page = await fetch(`${origin}/agente`, {
@@ -161,6 +213,12 @@ describe("development API proxy", () => {
       });
       expect(page.headers.get("content-type")).toContain("text/html");
       expect(await page.text()).toContain('<div id="root"></div>');
+
+      const demandasPage = await fetch(`${origin}/demandas`, {
+        headers: { accept: "text/html" },
+      });
+      expect(demandasPage.headers.get("content-type")).toContain("text/html");
+      expect(await demandasPage.text()).toContain('<div id="root"></div>');
 
       const notificationsPage = await fetch(`${origin}/notificacoes`, {
         headers: { accept: "text/html" },
@@ -193,7 +251,15 @@ describe("web Vite configuration", () => {
     const config = createWebViteConfig("development", "http://127.0.0.1:5080");
 
     expect(config.server?.proxy).toEqual({
+      "^/agent/channel-company-selection(?:\\?.*)?$": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
       "^/agent/runs(?:\\?.*)?$": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "^/atendimento/(?:lookups|categories)(?:\\?.*)?$": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },
@@ -202,6 +268,10 @@ describe("web Vite configuration", () => {
         changeOrigin: false,
       },
       "^/atendimento/cards(?:/|\\?|$)": {
+        target: "http://127.0.0.1:5080",
+        changeOrigin: false,
+      },
+      "^/demandas/(?:board|demands|routines)(?:/|\\?|$)": {
         target: "http://127.0.0.1:5080",
         changeOrigin: false,
       },

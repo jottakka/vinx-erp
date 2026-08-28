@@ -84,14 +84,13 @@ test("Scenario: Authorized user visits modules, chooses themes and restores mobi
 }) => {
   await enterHome(page);
   const homeModuleSection = page
-    .getByRole("heading", { name: "Estrutura em evolução" })
+    .getByRole("heading", { name: "Áreas disponíveis" })
     .locator("xpath=ancestor::section[1]");
   const sidebar = page.getByRole("navigation", { name: "Navegação lateral" });
 
   for (const [name, path] of [
     ["Paguai", "/paguai"],
     ["Atendimento", "/atendimento"],
-    ["Kanban", "/kanban"],
     ["Pessoas", "/pessoas"],
   ] as const) {
     await homeModuleSection.getByRole("link", { name }).click();

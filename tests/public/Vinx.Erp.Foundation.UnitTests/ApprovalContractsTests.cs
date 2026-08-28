@@ -51,7 +51,8 @@ public sealed class ApprovalContractsTests
         Assert.Equal(expected, CanonicalPayloadHasher.IsValidHash(hash));
 
     [Theory]
-    [InlineData("ix_approvals_company_id_actor_user_id", UniqueViolationKind.LiveProposal)]
+    [InlineData("ix_approvals_company_id_actor_user_id_resource_key", UniqueViolationKind.LiveProposal)]
+    [InlineData("ix_approvals_company_id_actor_user_id", UniqueViolationKind.Other)]
     [InlineData("ix_idempotency_records_company_id_actor_user_id_command_name_r", UniqueViolationKind.Idempotency)]
     [InlineData(null, UniqueViolationKind.Other)]
     [InlineData("", UniqueViolationKind.Other)]

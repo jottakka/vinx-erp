@@ -1,4 +1,3 @@
-import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
 import AdvanceIcon from "@mui/icons-material/FastForwardOutlined";
 import SearchOutlinedIcon from "@mui/icons-material/SearchOutlined";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
@@ -44,7 +43,6 @@ const columns: readonly { id: string; label: string }[] = [
 ];
 
 const readCapability = "demandas.demand.read";
-const createCapability = "demandas.demand.create";
 const advanceCapability = "demandas.demand.advance";
 
 function messageFor(code: string) {
@@ -128,7 +126,6 @@ export function DemandasPage() {
   const permissions = useMemo(
     () =>
       resolveCompanyEntityPermissions(selectedCompany, {
-        create: createCapability,
         edit: advanceCapability,
       }),
     [selectedCompany],
@@ -245,20 +242,6 @@ export function DemandasPage() {
     <CompanyProvider company={selectedCompany ?? null}>
       <Stack spacing={3}>
         <PageHeader
-          actions={
-            permissions.canCreate ? (
-              <Button
-                component="a"
-                href="#criar"
-                onClick={(event) => event.preventDefault()}
-                startIcon={<AddOutlinedIcon />}
-                variant="contained"
-                data-testid="demandas-create"
-              >
-                Nova demanda
-              </Button>
-            ) : null
-          }
           description="Fluxo operacional com gatilhos por conclusão, checklist ou tempo. Avanço sempre por comando explícito — sem arrastar cartões."
           title="Demandas"
         />
@@ -349,6 +332,7 @@ export function DemandasPage() {
                   .map((card) => (
                     <DemandCard
                       card={card}
+                      canAdvance={permissions.canEdit}
                       key={card.id}
                       onAdvance={() =>
                         void act(card, () =>
@@ -416,10 +400,12 @@ function deadlineLabel(
 
 function DemandCard({
   card,
+  canAdvance,
   onAdvance,
   onOpen,
 }: {
   card: DemandBoardCard;
+  canAdvance: boolean;
   onAdvance: () => void;
   onOpen: () => void;
 }) {
@@ -477,7 +463,7 @@ function DemandCard({
         >
           Detalhes
         </Button>
-        {card.stage !== "closed" ? (
+        {canAdvance && card.stage !== "closed" ? (
           <Button
             data-testid={`advance-${card.id}`}
             onClick={onAdvance}

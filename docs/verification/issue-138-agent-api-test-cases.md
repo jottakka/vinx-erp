@@ -56,7 +56,7 @@ ou conflito 409) → runner: validação de entrada → resolução de contexto
 confiável (membership + `ai.read` escopo Company; empresa forjada nega sem
 consultar o modelo) → gate de provider (fail-closed `provider_not_configured`)
 → UMA chamada de modelo com seleção server-side → `AgentOutputGate`
-(contrato→injeção→fontes→grounding→redação) → resposta tipada; persistência de
+(contrato→fontes→grounding/confiança→ok) → resposta tipada; persistência de
 idempotência e auditoria `AuditSource.Ai` na mesma transação. 5xx não é durável.
 
 ## Lacunas conhecidas

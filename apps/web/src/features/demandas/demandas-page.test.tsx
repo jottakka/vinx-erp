@@ -125,10 +125,12 @@ function gatewayFor(getBootstrap = async () => snapshot()): MockSessionGateway {
   };
 }
 
-function renderPage() {
+function renderPage(
+  capabilities: readonly EffectiveCapability[] = allDemandasCapabilities,
+) {
   render(
     <VinxThemeProvider>
-      <SessionProvider gateway={gatewayFor()}>
+      <SessionProvider gateway={gatewayFor(async () => snapshot(capabilities))}>
         <DemandasPage />
       </SessionProvider>
     </VinxThemeProvider>,
@@ -161,6 +163,38 @@ describe("DemandasPage", () => {
       await screen.findByTestId(`advance-${initiationCard.id}`),
     );
     await waitFor(() => expect(advanceSpy).toHaveBeenCalledOnce());
+  });
+
+  it("hides advance actions from a company with read capability only", async () => {
+    const advanceSpy = vi.spyOn(demandasClient, "advance");
+    vi.spyOn(demandasClient, "board").mockResolvedValue({
+      items: [initiationCard],
+      total: 1,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    renderPage([readCapability]);
+
+    expect(await screen.findByText("Pagar fornecedor")).toBeVisible();
+    expect(
+      screen.queryByTestId(`advance-${initiationCard.id}`),
+    ).not.toBeInTheDocument();
+    expect(advanceSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not publish an inert create action", async () => {
+    vi.spyOn(demandasClient, "board").mockResolvedValue({
+      items: [initiationCard],
+      total: 1,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    renderPage([readCapability, createCapability, advanceCapability]);
+
+    expect(await screen.findByText("Pagar fornecedor")).toBeVisible();
+    expect(screen.queryByTestId("demandas-create")).not.toBeInTheDocument();
   });
 
   it("surfaces the derived overdue state without an overdue column", async () => {
