@@ -107,7 +107,11 @@ public sealed class PaguaiDraftService(
                     return await AuditedConflictAsync(actor, command.CompanyId, cancellationToken);
                 }
 
-                return DeserializeReplay(existing.ResultJson);
+                return await ReplayWithFreshProofMetadataAsync(
+                    actor,
+                    command.CompanyId,
+                    existing.ResultJson,
+                    cancellationToken);
             }
 
             // O comprovante é validado e vinculado atomicamente com o rascunho:
@@ -178,6 +182,9 @@ public sealed class PaguaiDraftService(
                 bindMetadata?.FileName,
                 bindMetadata?.MimeType,
                 bindMetadata?.SizeBytes);
+            // O recibo persiste APENAS o ponteiro: nenhum metadado de arquivo é
+            // duplicado fora de foundation.files; o replay reenriquece com
+            // verificação fresca de ciclo de vida na hora da leitura.
             database.IdempotencyRecords.Add(
                 new IdempotencyRecord(
                     Guid.NewGuid(),
@@ -186,7 +193,7 @@ public sealed class PaguaiDraftService(
                     CreateCommandName,
                     command.RequestId,
                     hash,
-                    JsonSerializer.Serialize(draft)
+                    JsonSerializer.Serialize(ToDraft(request))
                 )
             );
             await auditAppender.AppendAsync(
@@ -576,15 +583,21 @@ public sealed class PaguaiDraftService(
             // TTL = min(5 minutos, retenção restante no relógio autoritativo),
             // com margem conservadora quando o teto é a retenção: a URL não pode
             // sobreviver à retenção nem pela latência entre esta leitura e a
-            // assinatura do provedor.
+            // assinatura do provedor. O provedor trunca para segundos inteiros,
+            // então exigimos margem + 1 segundo válido: menos que isso falha
+            // fechado (404), nunca um expiresIn 0/subsegundo nem um 503.
             var serverNow = await documentUploads.ReadServerClockAsync(cancellationToken);
             var remaining = metadata.RetentionUntil.UtcDateTime - serverNow;
+            if (remaining < ProofLinkCapSafetyMargin + TimeSpan.FromSeconds(1))
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return PaguaiProofLinkResult.Of(PaguaiDraftState.NotFound);
+            }
+
             var lifetime = ProofLinkLifetime;
             if (remaining < ProofLinkLifetime)
             {
-                lifetime = remaining > ProofLinkCapSafetyMargin
-                    ? remaining - ProofLinkCapSafetyMargin
-                    : remaining;
+                lifetime = remaining - ProofLinkCapSafetyMargin;
             }
             var signed = await fileStorage.CreateSignedDownloadUrlAsync(
                 metadata.ProviderKey,
@@ -592,9 +605,13 @@ public sealed class PaguaiDraftService(
                 cancellationToken
             );
             await transaction.CommitAsync(cancellationToken);
+            // A expiração exposta nunca ultrapassa a retenção do arquivo.
+            var expiresAt = signed.ExpiresAt < metadata.RetentionUntil
+                ? signed.ExpiresAt
+                : metadata.RetentionUntil;
             return new PaguaiProofLinkResult(
                 PaguaiDraftState.Created,
-                new PaguaiProofLink(signed.Url, signed.ExpiresAt)
+                new PaguaiProofLink(signed.Url, expiresAt)
             );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -719,7 +736,11 @@ public sealed class PaguaiDraftService(
             }
 
             return PayloadHashMatches(existing.PayloadHash, command, hash)
-                ? DeserializeReplay(existing.ResultJson)
+                ? await ReplayWithFreshProofMetadataAsync(
+                    actor,
+                    command.CompanyId,
+                    existing.ResultJson,
+                    cancellationToken)
                 : await AuditedConflictAsync(actor, command.CompanyId, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -772,7 +793,11 @@ public sealed class PaguaiDraftService(
             }
 
             return PayloadHashMatches(existing.PayloadHash, command, hash)
-                ? DeserializeReplay(existing.ResultJson)
+                ? await ReplayWithFreshProofMetadataAsync(
+                    actor,
+                    command.CompanyId,
+                    existing.ResultJson,
+                    cancellationToken)
                 : await AuditedConflictAsync(actor, command.CompanyId, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -1081,6 +1106,52 @@ public sealed class PaguaiDraftService(
         && value.Length <= maximumLength
         && value == value.Trim()
         && !value.Any(char.IsControl);
+
+    /// <summary>
+    /// Replay com enriquecimento fresco: o recibo persiste apenas o ponteiro
+    /// do comprovante, então nome/MIME/tamanho vêm da fronteira Files AGORA,
+    /// sob verificação de ciclo de vida — arquivo vencido/removido devolve o
+    /// rascunho original com ponteiro e SEM metadados stale.
+    /// </summary>
+    private async Task<PaguaiDraftResult> ReplayWithFreshProofMetadataAsync(
+        ActorContext actor,
+        Guid companyId,
+        string resultJson,
+        CancellationToken cancellationToken
+    )
+    {
+        var replay = DeserializeReplay(resultJson);
+        if (
+            replay.State != PaguaiDraftState.Replay
+            || replay.Draft?.ProofFileId is not { } proofFileId
+        )
+        {
+            return replay;
+        }
+
+        var detail = await documentUploads.ValidateActiveForBindAsync(
+            actor,
+            companyId,
+            proofFileId,
+            requiredClassification: ProofClassification,
+            lockRowForBinding: false,
+            cancellationToken
+        );
+        if (detail.Value is not { } metadata)
+        {
+            return replay;
+        }
+
+        return new PaguaiDraftResult(
+            PaguaiDraftState.Replay,
+            replay.Draft with
+            {
+                ProofFileName = metadata.FileName,
+                ProofFileMimeType = metadata.MimeType,
+                ProofFileSizeBytes = metadata.SizeBytes,
+            }
+        );
+    }
 
     private static PaguaiDraftResult DeserializeReplay(string resultJson)
     {

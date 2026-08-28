@@ -208,6 +208,34 @@ public sealed class PaguaiProofEndpointTests
             audit.Outcome == AuditOutcome.Success).ToListAsync());
     }
 
+    [Fact]
+    public async Task Link_refuses_when_remaining_retention_is_below_margin_plus_one_second()
+    {
+        var storage = new StubProofStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            fileStorage: storage);
+        var scenario = await SeedScenarioAsync(factory);
+        var proof = await SeedFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "limite.pdf");
+        using var client = factory.CreateClient();
+        var draftId = await CreateDraftAsync(client, scenario.CompanyId, proof.Id);
+
+        // Retenção a ~1,5s: acima de zero, abaixo da margem de segurança + 1
+        // segundo válido no provedor — o link falha fechado, não assina.
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            await administrator.Files.Where(file => file.Id == proof.Id)
+                .ExecuteUpdateAsync(setter => setter.SetProperty(
+                    file => file.RetentionUntil, DateTimeOffset.UtcNow.AddMilliseconds(1500)));
+            await administrator.SaveChangesAsync();
+        }
+
+        using var link = await client.GetAsync(
+            $"/paguai/requests/{draftId}/proof-link?companyId={scenario.CompanyId}");
+        Assert.Equal(HttpStatusCode.NotFound, link.StatusCode);
+        Assert.Equal("{\"code\":\"resource_not_found\"}", await link.Content.ReadAsStringAsync());
+        Assert.Empty(storage.Attempts);
+    }
+
     [Theory]
     [InlineData("missing_file")]
     [InlineData("cross_company")]
@@ -357,10 +385,15 @@ public sealed class PaguaiProofEndpointTests
     [Fact]
     public async Task Capability_denials_are_typed_for_create_and_fail_closed_for_reads()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var storage = new StubProofStorage();
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            fileStorage: storage);
         var scenario = await SeedScenarioAsync(factory);
         var proof = await SeedFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "capability.pdf");
         using var client = factory.CreateClient();
+        // O rascunho nasce COM comprovante enquanto a capability existe; só
+        // então as leituras são revogadas para provar o fail-closed do link.
+        var draftId = await CreateDraftAsync(client, scenario.CompanyId, proof.Id);
 
         await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
         {
@@ -385,13 +418,20 @@ public sealed class PaguaiProofEndpointTests
             await administrator.SaveChangesAsync();
         }
 
-        using var list = await client.GetAsync($"/paguai/requests?companyId={scenario.CompanyId}");
-        Assert.Equal(HttpStatusCode.NotFound, list.StatusCode);
-        Assert.Equal("{\"code\":\"resource_not_found\"}", await list.Content.ReadAsStringAsync());
+        using var detail = await client.GetAsync($"/paguai/requests/{draftId}?companyId={scenario.CompanyId}");
+        using var link = await client.GetAsync(
+            $"/paguai/requests/{draftId}/proof-link?companyId={scenario.CompanyId}");
+        Assert.Equal(HttpStatusCode.NotFound, detail.StatusCode);
+        Assert.Equal("{\"code\":\"resource_not_found\"}", await detail.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, link.StatusCode);
+        Assert.Equal("{\"code\":\"resource_not_found\"}", await link.Content.ReadAsStringAsync());
+        // Assinador de teste registra cada chamada: nenhuma aconteceu.
+        Assert.Empty(storage.Attempts);
 
         await using var administrator2 = factory.Fixture.CreateAdministratorDbContext();
-        Assert.False(await administrator2.PaguaiRequests.AnyAsync(request =>
-            request.CompanyId == scenario.CompanyId));
+        var stored = await administrator2.PaguaiRequests.SingleAsync(request => request.Id == draftId);
+        Assert.Equal(proof.Id, stored.ProofFileId);
+        Assert.Equal(1, stored.Version);
         Assert.NotNull(await administrator2.AuditEvents.SingleOrDefaultAsync(audit =>
             audit.Action == "capability_denied" && audit.Outcome == AuditOutcome.Denied));
     }
@@ -447,11 +487,22 @@ public sealed class PaguaiProofEndpointTests
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
         using var replayBody = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
         Assert.Equal(draftId, ReadGuid(replayBody.RootElement, "id"));
+        // O replay devolve o rascunho com o ponteiro, mas SEM metadados stale:
+        // o enriquecimento é sempre fresco e o arquivo já venceu.
         Assert.Equal(proof.Id, ReadGuid(replayBody.RootElement, "proofFileId"));
+        Assert.Equal(JsonValueKind.Null, replayBody.RootElement.GetProperty("proofFileName").ValueKind);
+        Assert.Equal(JsonValueKind.Null, replayBody.RootElement.GetProperty("proofFileMimeType").ValueKind);
+        Assert.Equal(JsonValueKind.Null, replayBody.RootElement.GetProperty("proofFileSizeBytes").ValueKind);
 
         await using var administrator2 = factory.Fixture.CreateAdministratorDbContext();
         Assert.Equal(1, await administrator2.AuditEvents.CountAsync(audit =>
             audit.Action == "paguai.draft.create" && audit.ResourceId == draftId));
+        // O recibo persiste apenas o ponteiro: nenhum metadado de arquivo é
+        // duplicado fora de foundation.files.
+        var receipt = await administrator2.IdempotencyRecords.SingleAsync(record =>
+            record.CompanyId == scenario.CompanyId && record.RequestId == request.RequestId);
+        Assert.DoesNotContain("replay.pdf", receipt.ResultJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("application/pdf", receipt.ResultJson, StringComparison.Ordinal);
     }
 
     [Fact]
