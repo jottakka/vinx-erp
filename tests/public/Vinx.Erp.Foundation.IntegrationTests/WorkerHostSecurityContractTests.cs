@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Npgsql;
+using Microsoft.Extensions.Options;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Vinx.Erp.Foundation.Platform;
 using Wolverine.Persistence.Durability;
@@ -84,6 +85,12 @@ public sealed class WorkerHostSecurityContractTests
         Assert.Equal(
             WorkerHostTypes.WorkerMemberInvitationDeadLetterException.UnexpectedExceptionType,
             fallbackMemberException.ExceptionType);
+        Assert.Equal(
+            "Worker member invitation delivery failed unexpectedly.",
+            fallbackMemberException.ExceptionMessage);
+        var redactedFallbackMember = Assert.IsType<Vinx.Erp.Foundation.Permissions.MemberInvitationDeliveryRequested>(
+            memberFallbackEnvelope.Message);
+        Assert.Equal(Guid.Empty, redactedFallbackMember.InvitationId);
 
         // Convite de membro preserva a classificação operacional, mesmo quando
         // a exceção recebida contém detalhes não persistíveis.
@@ -100,7 +107,36 @@ public sealed class WorkerHostSecurityContractTests
         Assert.DoesNotContain("sensitive retry detail", redactedMemberException.ExceptionMessage, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Worker_host_invalid_malware_scanner_timeout_fails_startup_with_options_validation()
+    {
+        using var worker = new WorkerHostFactory(
+            "Host=127.0.0.1;Port=1;Database=vinx;Username=vinx_worker;Password=test",
+            new Dictionary<string, string?>
+            {
+                ["MalwareScanner:Timeout"] = "00:00:00",
+            });
+
+        var failure = Assert.ThrowsAny<Exception>(worker.CreateClient);
+
+        Assert.NotNull(FindException<OptionsValidationException>(failure));
+    }
+
     private sealed record UnknownWorkerProbe(string Payload);
+
+    private static TException? FindException<TException>(Exception failure)
+        where TException : Exception
+    {
+        for (var current = failure; current is not null; current = current.InnerException)
+        {
+            if (current is TException expected)
+            {
+                return expected;
+            }
+        }
+
+        return null;
+    }
 
     [Fact]
     public async Task Server_correlation_flows_through_envelope_to_worker_ingress_audit()

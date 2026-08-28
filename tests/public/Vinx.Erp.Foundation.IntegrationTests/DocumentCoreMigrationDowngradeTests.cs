@@ -87,6 +87,16 @@ public sealed class DocumentCoreMigrationDowngradeTests
         // original para parear cada linha com o binário is_quarantined.
         await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
         {
+            await using (var rlsCommand = new NpgsqlCommand(
+                "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid = 'foundation.files'::regclass",
+                administrator))
+            await using (var rlsReader = await rlsCommand.ExecuteReaderAsync())
+            {
+                Assert.True(await rlsReader.ReadAsync());
+                Assert.True(rlsReader.GetBoolean(0));
+                Assert.True(rlsReader.GetBoolean(1));
+            }
+
             await using var command = new NpgsqlCommand(
                 "SELECT checksum, is_quarantined FROM foundation.files ORDER BY checksum",
                 administrator);
@@ -109,6 +119,16 @@ public sealed class DocumentCoreMigrationDowngradeTests
 
         await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
         {
+            await using (var rlsCommand = new NpgsqlCommand(
+                "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid = 'foundation.files'::regclass",
+                administrator))
+            await using (var rlsReader = await rlsCommand.ExecuteReaderAsync())
+            {
+                Assert.True(await rlsReader.ReadAsync());
+                Assert.True(rlsReader.GetBoolean(0));
+                Assert.True(rlsReader.GetBoolean(1));
+            }
+
             await using var command = new NpgsqlCommand(
                 "SELECT processing_state, count(*) FROM foundation.files GROUP BY processing_state ORDER BY processing_state",
                 administrator);
