@@ -11,8 +11,6 @@ public sealed class AgentTaskProfileTests
 
     private const int ApprovedTurnLimit = 1;
 
-    private const int ApprovedBudget = 8_000;
-
     [Fact]
     public void CreateValidated_accepts_read_only_summarize_v1_values()
     {
@@ -24,7 +22,6 @@ public sealed class AgentTaskProfileTests
             modelSelection: null,
             timeout: ApprovedTimeout,
             turnLimit: ApprovedTurnLimit,
-            maxTotalTokens: ApprovedBudget,
             allowedTools: []);
 
         Assert.Equal(AgentTaskProfileCatalog.ReadOnlySummarizeProfileId, profile.ProfileId);
@@ -34,7 +31,6 @@ public sealed class AgentTaskProfileTests
         Assert.Null(profile.ModelSelection);
         Assert.Equal(ApprovedTimeout, profile.Timeout);
         Assert.Equal(ApprovedTurnLimit, profile.TurnLimit);
-        Assert.Equal(ApprovedBudget, profile.MaxTotalTokens);
         Assert.Empty(profile.AllowedTools);
     }
 
@@ -74,16 +70,6 @@ public sealed class AgentTaskProfileTests
         AssertProfileRejected(
             BuildProfile(turnLimit: turnLimit),
             nameof(AgentTaskProfile.TurnLimit));
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-8_000)]
-    public void Validate_rejects_non_positive_budget(int maxTotalTokens)
-    {
-        AssertProfileRejected(
-            BuildProfile(maxTotalTokens: maxTotalTokens),
-            nameof(AgentTaskProfile.MaxTotalTokens));
     }
 
     [Fact]
@@ -188,7 +174,6 @@ public sealed class AgentTaskProfileTests
         Assert.Equal(selection, profile.ModelSelection);
         Assert.Equal(ApprovedTimeout, profile.Timeout);
         Assert.Equal(ApprovedTurnLimit, profile.TurnLimit);
-        Assert.Equal(ApprovedBudget, profile.MaxTotalTokens);
         Assert.Empty(profile.AllowedTools);
         Assert.False(profile.SourcesRequired);
         Assert.Null(profile.RequiredOutputFields);
@@ -228,7 +213,6 @@ public sealed class AgentTaskProfileTests
         AgentModelSelection? modelSelection = null,
         TimeSpan? timeout = null,
         int turnLimit = ApprovedTurnLimit,
-        int maxTotalTokens = ApprovedBudget,
         IReadOnlyList<string>? allowedTools = null)
         => new(
             profileId,
@@ -238,7 +222,6 @@ public sealed class AgentTaskProfileTests
             modelSelection,
             timeout ?? ApprovedTimeout,
             turnLimit,
-            maxTotalTokens,
             allowedTools ?? []);
 
     private static void AssertProfileRejected(AgentTaskProfile profile, string expectedParamName)
@@ -255,7 +238,6 @@ public sealed class AgentTaskProfileTests
                 profile.ModelSelection,
                 profile.Timeout,
                 profile.TurnLimit,
-                profile.MaxTotalTokens,
                 profile.AllowedTools));
         Assert.Equal(expectedParamName, viaCreate.ParamName);
     }
