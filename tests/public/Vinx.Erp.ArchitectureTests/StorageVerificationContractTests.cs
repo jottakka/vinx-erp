@@ -21,7 +21,7 @@ public sealed class StorageVerificationContractTests
         var script = File.ReadAllText(Path.Combine(RepositoryRoot(), "scripts/verify-supabase-storage.sh"));
 
         Assert.DoesNotContain("supabase_status", script, StringComparison.Ordinal);
-        Assert.Equal(2, CountOccurrences(script, "supabase status -o env"));
+        Assert.Equal(2, CountOccurrences(script, "status -o env"));
         Assert.Contains("sed -n 's/^API_URL=//p'", script, StringComparison.Ordinal);
         Assert.Contains("sed -n 's/^SERVICE_ROLE_KEY=//p'", script, StringComparison.Ordinal);
         Assert.Contains(
@@ -37,8 +37,7 @@ public sealed class StorageVerificationContractTests
 
         Assert.True(result.ExitCode == 0, result.Diagnostics);
         Assert.All(result.SupabaseContexts, context => Assert.Equal("<default>", context));
-        Assert.Contains("supabase start", result.SupabaseCommands);
-        Assert.Equal("supabase stop", result.SupabaseCommands.Last());
+        AssertScopedExecutionStack(result);
     }
 
     [Fact]
@@ -77,6 +76,13 @@ public sealed class StorageVerificationContractTests
         Assert.Contains("Supabase local startup failed", result.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("test-service-role-secret", result.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("raw Supabase failure", result.Output, StringComparison.Ordinal);
+
+        var start = Assert.Single(result.SupabaseCommands, command => command.Action == "start");
+        var stop = Assert.Single(result.SupabaseCommands, command => command.Action == "stop");
+        Assert.Equal(start.Workdir, stop.Workdir);
+        Assert.Equal(start.ConfiguredProjectId, stop.ProjectId);
+        Assert.NotEqual("vinx-erp-groundwork", stop.ProjectId);
+        Assert.False(stop.UsesAllProjects);
     }
 
     [Fact]
@@ -86,7 +92,31 @@ public sealed class StorageVerificationContractTests
 
         Assert.Equal(2, result.ExitCode);
         Assert.Contains("already running", result.Output, StringComparison.Ordinal);
-        Assert.Equal(["supabase status"], result.SupabaseCommands);
+        var command = Assert.Single(result.SupabaseCommands);
+        Assert.Equal("status", command.Action);
+        Assert.Equal(RepositoryRoot(), command.Workdir);
+        Assert.Null(command.ProjectId);
+    }
+
+    private static void AssertScopedExecutionStack(VerifierResult result)
+    {
+        var canonicalStatus = Assert.Single(
+            result.SupabaseCommands,
+            command => command.Action == "status" && command.Workdir == RepositoryRoot());
+        Assert.Null(canonicalStatus.ProjectId);
+
+        var executionCommands = result.SupabaseCommands
+            .Where(command => command.Workdir != RepositoryRoot())
+            .ToArray();
+        Assert.NotEmpty(executionCommands);
+        Assert.Single(executionCommands.Select(command => command.Workdir).Distinct());
+
+        var start = Assert.Single(executionCommands, command => command.Action == "start");
+        var stop = Assert.Single(executionCommands, command => command.Action == "stop");
+        Assert.Equal(start.Workdir, stop.Workdir);
+        Assert.Equal(start.ConfiguredProjectId, stop.ProjectId);
+        Assert.NotEqual("vinx-erp-groundwork", stop.ProjectId);
+        Assert.False(stop.UsesAllProjects);
     }
 
     private static async Task<VerifierResult> RunVerifierAsync(
@@ -112,17 +142,47 @@ public sealed class StorageVerificationContractTests
                 #!/usr/bin/env bash
                 set -euo pipefail
                 printf '%s\n' "${DOCKER_CONTEXT-<default>}" >> "${STORAGE_VERIFIER_LOG:?}"
-                printf '%s\n' "$*" >> "${STORAGE_VERIFIER_COMMAND_LOG:?}"
-                if [[ "${1-} ${2-}" == "supabase start" && "${FAIL_SUPABASE_START-}" == "1" ]]; then
+
+                workdir="$PWD"
+                index=1
+                if [[ "${index:+x}" && "${!index-}" == "supabase" ]]; then
+                  ((index += 1))
+                fi
+                if [[ "${!index-}" == "--workdir" ]]; then
+                  ((index += 1))
+                  workdir="${!index-}"
+                  ((index += 1))
+                fi
+                action="${!index-}"
+                ((index += 1))
+                project_id=""
+                uses_all_projects=false
+                while (( index <= $# )); do
+                  if [[ "${!index-}" == "--project-id" ]]; then
+                    ((index += 1))
+                    project_id="${!index-}"
+                  fi
+                  if [[ "${!index-}" == "--all" ]]; then
+                    uses_all_projects=true
+                  fi
+                  ((index += 1))
+                done
+                configured_project_id=""
+                if [[ -f "$workdir/supabase/config.toml" ]]; then
+                  configured_project_id="$(sed -n 's/^project_id = "\(.*\)"$/\1/p' "$workdir/supabase/config.toml" | head -n 1)"
+                fi
+                printf '%s|%s|%s|%s|%s\n' "$action" "$workdir" "$project_id" "$configured_project_id" "$uses_all_projects" >> "${STORAGE_VERIFIER_COMMAND_LOG:?}"
+
+                if [[ "$action" == "start" && "${FAIL_SUPABASE_START-}" == "1" ]]; then
                   printf '%s\n' 'raw Supabase failure: test-service-role-secret' >&2
                   exit 1
                 fi
-                if [[ "${1-} ${2-} ${3-}" == "supabase status -o" && "${4-}" == "env" ]]; then
+                if [[ "$action" == "status" && "$*" == *" -o env"* ]]; then
                   printf '%s\n' 'API_URL="http://127.0.0.1:54321"'
                   printf '%s\n' 'SERVICE_ROLE_KEY="test-service-role-secret"'
                   exit 0
                 fi
-                if [[ "${1-} ${2-}" == "supabase status" ]]; then
+                if [[ "$action" == "status" ]]; then
                   [[ "${PREEXISTING_SUPABASE_STACK-}" == "1" ]] && exit 0
                   exit 1
                 fi
@@ -181,7 +241,15 @@ public sealed class StorageVerificationContractTests
                 ? await File.ReadAllLinesAsync(logPath)
                 : [];
             var commands = File.Exists(commandLogPath)
-                ? await File.ReadAllLinesAsync(commandLogPath)
+                ? (await File.ReadAllLinesAsync(commandLogPath))
+                    .Select(line => line.Split('|'))
+                    .Select(parts => new VerifierCommand(
+                        parts[0],
+                        parts[1],
+                        string.IsNullOrEmpty(parts[2]) ? null : parts[2],
+                        string.IsNullOrEmpty(parts[3]) ? null : parts[3],
+                        bool.Parse(parts[4])))
+                    .ToArray()
                 : [];
 
             return new VerifierResult(process.ExitCode, output, contexts, commands);
@@ -241,8 +309,15 @@ public sealed class StorageVerificationContractTests
         int ExitCode,
         string Output,
         string[] SupabaseContexts,
-        string[] SupabaseCommands)
+        VerifierCommand[] SupabaseCommands)
     {
         public string Diagnostics => $"Output: {Output}; contexts: {string.Join(",", SupabaseContexts)}";
     }
+
+    private sealed record VerifierCommand(
+        string Action,
+        string Workdir,
+        string? ProjectId,
+        string? ConfiguredProjectId,
+        bool UsesAllProjects);
 }
