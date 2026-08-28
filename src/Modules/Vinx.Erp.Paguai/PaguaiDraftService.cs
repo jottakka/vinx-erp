@@ -235,16 +235,13 @@ public sealed class PaguaiDraftService(
         catch (DbUpdateException exception)
             when (IsProofBindUniqueViolation(exception))
         {
-            // Defesa dupla contra corrida de vínculo: o índice parcial único
-            // rejeita no storage e a resposta fica tipada, não indisponível.
+            // Defesa dupla contra corrida de vínculo na criação: o índice
+            // parcial único rejeita no storage, mas antes de classificar como
+            // duplo vínculo o recibo de idempotência é reconciliado — duas
+            // criações idênticas concorrentes (mesma chave, mesmo comprovante)
+            // resultam em 201 + replay 200, nunca em 409 espúrio.
             database.ChangeTracker.Clear();
-            return await AuditedFailureAsync(
-                actor,
-                command.CompanyId,
-                ProofReason(PaguaiDraftState.ProofFileBound),
-                PaguaiDraftState.ProofFileBound,
-                cancellationToken
-            );
+            return await ReconcileProofIndexConflictAsync(actor, command, hash, cancellationToken);
         }
         catch (DbUpdateException exception) when (IsUniqueViolation(exception))
         {
@@ -675,6 +672,69 @@ public sealed class PaguaiDraftService(
             PaguaiDraftState.ProofFileBound => "proof_file_bound",
             _ => "invalid_request",
         };
+
+    private async Task<PaguaiDraftResult> ReconcileProofIndexConflictAsync(
+        ActorContext actor,
+        CreateDraftCommand command,
+        string hash,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await using var transaction = await database.Database.BeginTransactionAsync(
+                cancellationToken
+            );
+            await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+            var membership = await FindMembershipAsync(actor, command.CompanyId, cancellationToken);
+            if (
+                membership is null
+                || !await capabilityEvaluator.HasGrantAsync(
+                    command.CompanyId,
+                    membership.Id,
+                    CreateCapability,
+                    cancellationToken
+                )
+            )
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return await AuditedDenialAsync(actor, command.CompanyId, cancellationToken);
+            }
+
+            // O 23505 do índice parcial único pode ser a perda de uma corrida
+            // entre criações IDÊNTICAS: o vencedor já commitou o recibo, então
+            // o perdedor responde replay 200. Sem recibo (e sem hash igual) é
+            // um duplo vínculo real de outro rascunho — 409 tipado.
+            var existing = await FindIdempotencyAsync(actor, command, cancellationToken);
+            await transaction.RollbackAsync(cancellationToken);
+            if (existing is null)
+            {
+                return await AuditedFailureAsync(
+                    actor,
+                    command.CompanyId,
+                    ProofReason(PaguaiDraftState.ProofFileBound),
+                    PaguaiDraftState.ProofFileBound,
+                    cancellationToken
+                );
+            }
+
+            return PayloadHashMatches(existing.PayloadHash, command, hash)
+                ? DeserializeReplay(existing.ResultJson)
+                : await AuditedConflictAsync(actor, command.CompanyId, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(
+                exception,
+                "Paguai draft {Operation} {Module} {Result} {Reason}",
+                "reconcile",
+                "paguai",
+                "unavailable",
+                "proof_index_reconciliation_failed"
+            );
+            return PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
+        }
+    }
 
     private async Task<PaguaiDraftResult> ReconcileReplayAsync(
         ActorContext actor,
@@ -1228,7 +1288,11 @@ public sealed class PaguaiDraftService(
         string currentHash
     ) => string.Equals(existingHash, currentHash, StringComparison.Ordinal)
         || (
+            // Hashes legados só casam com payloads sem fatura E sem
+            // comprovante: um recibo pré-corte jamais pode reabrir replay de
+            // uma criação que agora traz comprovante (409 idempotency_conflict).
             command.InvoiceFileId is null
+            && command.ProofFileId is null
             && (
                 string.Equals(
                     existingHash,

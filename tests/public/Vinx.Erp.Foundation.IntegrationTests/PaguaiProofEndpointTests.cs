@@ -471,11 +471,94 @@ public sealed class PaguaiProofEndpointTests
     }
 
     [Fact]
-    public async Task Unique_proof_race_is_typed_conflict_from_the_partial_unique_index()
+    public async Task Parallel_identical_creates_with_the_same_proof_reconcile_as_replay()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var scenario = await SeedScenarioAsync(factory);
         var proof = await SeedFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "unico.pdf");
+        using var client = factory.CreateClient();
+        var payload = ProofRequest(scenario.CompanyId, proof.Id);
+
+        // Genuinamente paralelos: mesma chave idempotente, mesmo comprovante,
+        // chegando juntos à persistência — o perdedor do 23505 reconcilia o
+        // recibo commitado pelo vencedor e responde 200, nunca 409.
+        var first = client.PostAsJsonAsync("/paguai/requests", payload);
+        using var second = await client.PostAsJsonAsync("/paguai/requests", payload);
+        using var firstResponse = await first;
+
+        var codes = new[] { firstResponse.StatusCode, second.StatusCode };
+        Assert.Contains(HttpStatusCode.Created, codes);
+        Assert.Contains(HttpStatusCode.OK, codes);
+        Assert.DoesNotContain(HttpStatusCode.Conflict, codes);
+        Guid draftId;
+        string winnerBody;
+        if (firstResponse.StatusCode == HttpStatusCode.Created)
+        {
+            winnerBody = await firstResponse.Content.ReadAsStringAsync();
+            var replayBody = await second.Content.ReadAsStringAsync();
+            Assert.Equal(
+                ReadGuid(JsonDocument.Parse(winnerBody).RootElement, "id"),
+                ReadGuid(JsonDocument.Parse(replayBody).RootElement, "id"));
+            draftId = ReadGuid(JsonDocument.Parse(winnerBody).RootElement, "id");
+        }
+        else
+        {
+            winnerBody = await second.Content.ReadAsStringAsync();
+            var replayBody = await firstResponse.Content.ReadAsStringAsync();
+            Assert.Equal(
+                ReadGuid(JsonDocument.Parse(winnerBody).RootElement, "id"),
+                ReadGuid(JsonDocument.Parse(replayBody).RootElement, "id"));
+            draftId = ReadGuid(JsonDocument.Parse(winnerBody).RootElement, "id");
+        }
+        Assert.Equal(proof.Id, ReadGuid(JsonDocument.Parse(winnerBody).RootElement, "proofFileId"));
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(1, await administrator.PaguaiRequests.CountAsync(request =>
+            request.ProofFileId == proof.Id));
+        Assert.Equal(1, await administrator.AuditEvents.CountAsync(audit =>
+            audit.Action == "paguai.draft.create"
+            && audit.ResourceId == draftId
+            && audit.Outcome == AuditOutcome.Success));
+    }
+
+    [Fact]
+    public async Task Parallel_divergent_creates_under_one_request_id_end_in_idempotency_conflict()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var first = await SeedFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "a.pdf");
+        var second = await SeedFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "b.pdf");
+        using var client = factory.CreateClient();
+        // Mesma chave idempotente, comprovantes distintos: o perdedor do
+        // recibo recebe 409 idempotency_conflict, não duplo vínculo.
+        var requestId = Guid.NewGuid();
+        var payloadA = ProofRequest(scenario.CompanyId, first.Id, requestId: requestId);
+        var payloadB = ProofRequest(scenario.CompanyId, second.Id, requestId: requestId);
+
+        var winner = client.PostAsJsonAsync("/paguai/requests", payloadA);
+        using var loser = await client.PostAsJsonAsync("/paguai/requests", payloadB);
+        using var winnerResponse = await winner;
+
+        var codes = new[] { winnerResponse.StatusCode, loser.StatusCode };
+        Assert.Contains(HttpStatusCode.Created, codes);
+        Assert.Contains(HttpStatusCode.Conflict, codes);
+        var conflict = winnerResponse.StatusCode == HttpStatusCode.Conflict ? winnerResponse : loser;
+        Assert.Equal(
+            "{\"code\":\"idempotency_conflict\"}",
+            await conflict.Content.ReadAsStringAsync());
+
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var bound = await administrator.PaguaiRequests.SingleAsync(request =>
+            request.ProofFileId == first.Id || request.ProofFileId == second.Id);
+        Assert.Equal(1, await administrator.PaguaiRequests.CountAsync());
+    }
+
+    [Fact]
+    public async Task Another_draft_binding_the_same_proof_gets_typed_proof_file_bound()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var proof = await SeedFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "disputado.pdf");
         using var client = factory.CreateClient();
 
         using var first = await client.PostAsJsonAsync(
@@ -509,6 +592,87 @@ public sealed class PaguaiProofEndpointTests
         var postgresConflict = Assert.IsType<PostgresException>(conflict);
         Assert.Equal(PostgresErrorCodes.UniqueViolation, postgresConflict.SqlState);
         Assert.Equal("uq_paguai_requests_proof_file", postgresConflict.ConstraintName);
+    }
+
+    [Fact]
+    public async Task Legacy_receipt_cannot_replay_a_proof_bearing_request()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        var proof = await SeedFileAsync(factory, scenario.CompanyId, scenario.MembershipId, "legado.pdf");
+        using var client = factory.CreateClient();
+        var basePayload = ProofRequest(scenario.CompanyId, null);
+        var draftId = Guid.NewGuid();
+        var createdAt = DateTimeOffset.UtcNow;
+
+        await using (var administrator = factory.Fixture.CreateAdministratorDbContext())
+        {
+            administrator.PaguaiRequests.Add(
+                new PaguaiRequest
+                {
+                    Id = draftId,
+                    CompanyId = scenario.CompanyId,
+                    RequesterUserId = factory.ActorUserId,
+                    RequestId = basePayload.RequestId,
+                    Title = basePayload.Title,
+                    Description = basePayload.Description,
+                    Amount = 1250.00m,
+                    Currency = "BRL",
+                    DueDate = basePayload.DueDate,
+                    BeneficiaryDisplayName = basePayload.BeneficiaryDisplayName,
+                    ProofRequirement = basePayload.ProofRequirement,
+                    State = "rascunho",
+                    Version = 1,
+                    CreatedAt = createdAt,
+                });
+            administrator.IdempotencyRecords.Add(
+                new IdempotencyRecord(
+                    Guid.NewGuid(),
+                    scenario.CompanyId,
+                    factory.ActorUserId,
+                    "paguai.draft.create",
+                    basePayload.RequestId,
+                    LegacyAmountMinorPayloadHash(basePayload),
+                    JsonSerializer.Serialize(new
+                    {
+                        Id = draftId,
+                        CompanyId = scenario.CompanyId,
+                        RequestId = basePayload.RequestId,
+                        Title = basePayload.Title,
+                        Description = basePayload.Description,
+                        AmountMinor = 125000L,
+                        Currency = "BRL",
+                        DueDate = basePayload.DueDate,
+                        BeneficiaryDisplayName = basePayload.BeneficiaryDisplayName,
+                        ProofRequirement = basePayload.ProofRequirement,
+                        State = "rascunho",
+                        Version = 1,
+                        CreatedAt = createdAt,
+                    })));
+            await administrator.SaveChangesAsync();
+        }
+
+        // O mesmo payload agora com comprovante NÃO é replay do recibo legado:
+        // 409 tipado, sem segundo vínculo nem auditoria de sucesso nova.
+        var proofPayload = basePayload with { ProofFileId = proof.Id };
+        using var withProof = await client.PostAsJsonAsync("/paguai/requests", proofPayload);
+        Assert.Equal(HttpStatusCode.Conflict, withProof.StatusCode);
+        Assert.Equal(
+            "{\"code\":\"idempotency_conflict\"}",
+            await withProof.Content.ReadAsStringAsync());
+
+        // Controle: o mesmo payload SEM comprovante segue sendo replay legado 200.
+        using var replay = await client.PostAsJsonAsync("/paguai/requests", basePayload);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        using var replayBody = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+        Assert.Equal(draftId, ReadGuid(replayBody.RootElement, "id"));
+        Assert.Equal(JsonValueKind.Null, replayBody.RootElement.GetProperty("proofFileId").ValueKind);
+
+        await using var administrator2 = factory.Fixture.CreateAdministratorDbContext();
+        var stored = await administrator2.PaguaiRequests.SingleAsync(request => request.Id == draftId);
+        Assert.Null(stored.ProofFileId);
+        Assert.Equal(1, await administrator2.AuditEvents.CountAsync(audit =>
+            audit.ResourceId == draftId && audit.Outcome == AuditOutcome.Success));
     }
 
     [Fact]
@@ -566,10 +730,13 @@ public sealed class PaguaiProofEndpointTests
     }
 
     private static ProofRequestBody ProofRequest(
-        Guid companyId, Guid? proofFileId, string proofRequirement = "required") =>
+        Guid companyId,
+        Guid? proofFileId,
+        string proofRequirement = "required",
+        Guid? requestId = null) =>
         new(
             companyId,
-            Guid.NewGuid(),
+            requestId ?? Guid.NewGuid(),
             "Office supplies",
             "Replacement printer paper",
             "1250.00",
@@ -711,6 +878,26 @@ public sealed class PaguaiProofEndpointTests
         Assert.True(root.TryGetProperty(propertyName, out var property));
         Assert.True(Guid.TryParse(property.GetString(), out var value));
         return value;
+    }
+
+    /// <summary>Hash canônico legado (amountMinor) aceito na transição de recibos pré-corte.</summary>
+    private static string LegacyAmountMinorPayloadHash(ProofRequestBody request)
+    {
+        var canonical = JsonSerializer.Serialize(new
+        {
+            companyId = request.CompanyId,
+            requestId = request.RequestId,
+            title = request.Title,
+            description = request.Description,
+            amountMinor = 125000L,
+            currency = request.Currency,
+            dueDate = request.DueDate,
+            beneficiaryDisplayName = request.BeneficiaryDisplayName,
+            proofRequirement = request.ProofRequirement,
+        });
+        return Convert
+            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
     }
 
     private sealed record ProofRequestBody(
