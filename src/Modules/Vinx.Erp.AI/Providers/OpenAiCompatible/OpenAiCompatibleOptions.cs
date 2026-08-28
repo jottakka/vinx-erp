@@ -80,6 +80,18 @@ public sealed class OpenAiCompatibleOptions
         private static readonly TimeSpan MaximumTimeout = TimeSpan.FromMinutes(5);
 
         public ValidateOptionsResult Validate(string? name, OpenAiCompatibleOptions? options)
+            => ValidateCore(options, requiresProfileApiKey: true);
+
+        /// <summary>
+        /// Valida o perfil quando a credencial já foi obtida pelo tipo sensível
+        /// do runtime, sem tornar a chave uma propriedade bindable do host.
+        /// </summary>
+        public ValidateOptionsResult ValidateForRuntimeCredential(string? name, OpenAiCompatibleOptions? options) =>
+            ValidateCore(options, requiresProfileApiKey: false);
+
+        private static ValidateOptionsResult ValidateCore(
+            OpenAiCompatibleOptions? options,
+            bool requiresProfileApiKey)
         {
             if (options is null)
             {
@@ -96,7 +108,7 @@ public sealed class OpenAiCompatibleOptions
                 failures.Add("model must be a non-empty approved model name");
             }
 
-            if (string.IsNullOrWhiteSpace(options.ApiKey))
+            if (requiresProfileApiKey && string.IsNullOrWhiteSpace(options.ApiKey))
             {
                 // A chave nunca aparece na mensagem.
                 failures.Add("api key must be provided by the approved configuration");

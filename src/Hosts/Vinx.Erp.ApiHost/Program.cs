@@ -85,8 +85,10 @@ builder
     .Bind(builder.Configuration)
     .Validate(
         options =>
-            string.IsNullOrEmpty(options.WebhookSecretToken)
-            || TelegramOptions.IsValidWebhookSecret(options.WebhookSecretToken),
+            (string.IsNullOrEmpty(options.WebhookSecretToken)
+                || TelegramOptions.IsValidWebhookSecret(options.WebhookSecretToken))
+            && (string.IsNullOrWhiteSpace(options.WebAppBaseUrl)
+                || options.ReviewLinksAreConfigured),
         "Telegram webhook secret token is invalid."
     )
     .ValidateOnStart();
@@ -157,6 +159,10 @@ builder.Host.UseWolverine(options =>
         .ToPostgresqlQueue("whatsapp-inbound")
         .UseDurableOutbox();
     options
+        .PublishMessage<InboundAgentRequestReceived>()
+        .ToPostgresqlQueue("whatsapp-inbound")
+        .UseDurableOutbox();
+    options
         .PublishMessage<InboundWhatsAppTextCorrelationExpired>()
         .ToPostgresqlQueue("whatsapp-inbound")
         .UseDurableOutbox();
@@ -213,13 +219,18 @@ builder.Services.AddSingleton<IMalwareScanner>(serviceProvider =>
 );
 builder.Services.AddScoped<DocumentUploadService>();
 builder.Services.AddScoped<PaguaiDraftService>();
+builder.Services.AddScoped<PaguaiProposalService>();
+builder.Services.AddScoped<PaguaiProposalConfirmationService>();
 builder.Services.AddScoped<AtendimentoCardService>();
 builder.Services.AddScoped<DemandasNotificationComposer>();
 builder.Services.AddScoped<DemandasApprovalsService>();
 builder.Services.AddScoped<DemandasService>();
 // Superfície do agente: options validadas on-start, gates e provider decididos
 // na composição; sem provider configurado o runner falha fechado.
-builder.Services.AddAgentRunSurface(builder.Configuration);
+builder.Services.AddAgentRunSurface(
+    builder.Configuration,
+    Environment.GetEnvironmentVariable,
+    builder.Configuration.GetValue<bool>("AgentRun:AllowCredentiallessTestModel"));
 builder
     .Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false)
     .AddJsonOptions(options =>
@@ -397,6 +408,7 @@ if (app.Environment.IsDevelopment())
 }
 app.MapBrowserBffSessionEndpoints();
 app.MapAgentRunSurface();
+app.MapAgentChannelCompanySelectionEndpoints();
 app.MapMetaWhatsAppWebhookEndpoints();
 app.MapTelegramWebhookEndpoints(
     (services, inbound, cancellationToken) =>

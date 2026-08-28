@@ -764,7 +764,8 @@
           "PDFtoImage": "[5.4.0, )",
           "PdfPig": "[0.1.16, )",
           "System.ClientModel": "[1.15.0, )",
-          "Vinx.Erp.Foundation": "[1.0.0, )"
+          "Vinx.Erp.Foundation": "[1.0.0, )",
+          "Vinx.Erp.Paguai": "[1.0.0, )"
         }
       },
       "vinx.erp.foundation": {
@@ -776,6 +777,14 @@
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
           "OpenTelemetry.Extensions.Hosting": "[1.18.0, )",
           "WolverineFx.EntityFrameworkCore": "[6.29.2, )"
+        }
+      },
+      "vinx.erp.paguai": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.EntityFrameworkCore": "[10.0.11, )",
+          "Npgsql": "[10.0.3, )",
+          "Vinx.Erp.Foundation": "[1.0.0, )"
         }
       },
       "EFCore.NamingConventions": {

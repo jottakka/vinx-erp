@@ -21,6 +21,7 @@ import { AgentDock } from "./agent-dock";
 import { AgentTrigger } from "./agent-trigger";
 
 const agentRunsPath = "/agent/runs";
+const channelSelectionPath = "/agent/channel-company-selection";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const confirmationPath = "/foundation/files/confirmations";
 const intentionPath = "/foundation/files/upload-intentions";
@@ -299,6 +300,7 @@ describe("agent attachment clarification", () => {
       ok: true,
       run: {
         correlationId,
+        paguaiProposalId: null,
         reasonCode: "document_context_unavailable",
         sources: null,
         status: "needs_clarification",
@@ -331,6 +333,7 @@ describe("agent access copy", () => {
         ok: true,
         run: {
           correlationId,
+          paguaiProposalId: null,
           reasonCode,
           sources: null,
           status: "denied",
@@ -345,6 +348,53 @@ describe("agent access copy", () => {
 });
 
 describe("agent workspace", () => {
+  it("shows authenticated Telegram company selection without starting an agent run", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(antiforgeryTokenResponse())
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: "selected" }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+
+    await renderAgentWorkspace(
+      "/agente?channelSelection=11111111-1111-4111-8111-111111111111",
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Escolha a empresa para o Telegram",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("combobox", { name: "Empresa do Telegram" }),
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole("combobox", { name: "Empresa do Telegram" }),
+    );
+    await user.click(await screen.findByRole("option", { name: /Alfa/ }));
+    await user.click(screen.getByRole("button", { name: "Salvar empresa" }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    const selectionCall = fetchSpy.mock.calls[1];
+    expect(selectionCall[0]).toBe(channelSelectionPath);
+    expect(JSON.parse(selectionCall[1].body as string)).toEqual({
+      companyId: alfaCompanyId,
+      inboundMessageId: "11111111-1111-4111-8111-111111111111",
+      requestId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      ),
+    });
+    expect(
+      await screen.findByText(/A próxima mensagem usará essa empresa/i),
+    ).toBeVisible();
+    expect(runCalls(fetchSpy)).toHaveLength(0);
+  });
+
   it("sends the message to POST /agent/runs and renders the typed result with sources", async () => {
     const fetchSpy = vi
       .fn()
@@ -400,6 +450,7 @@ describe("agent workspace", () => {
   });
 
   it("renders a fixed confirmation notice without any proposal card for opaque confirmation state", async () => {
+    const proposalId = "11111111-1111-4111-8111-111111111111";
     vi.stubGlobal(
       "fetch",
       vi
@@ -412,6 +463,7 @@ describe("agent workspace", () => {
             text: null,
             sources: null,
             correlationId,
+            paguaiProposalId: proposalId,
           }),
         ),
     );
@@ -425,6 +477,9 @@ describe("agent workspace", () => {
     expect(
       screen.queryByRole("button", { name: "Aprovar execução" }),
     ).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Revisar proposta Paguai" }),
+    ).toHaveAttribute("href", `/paguai?proposal=${proposalId}`);
   });
 
   it("blocks a second submission while one is in flight and issues a fresh requestId per accepted send", async () => {

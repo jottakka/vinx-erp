@@ -40,7 +40,9 @@ public sealed class MembershipDiscoveryMigrationTests
                           (SELECT oid FROM pg_roles WHERE rolname = 'vinx_runtime'),
                           -- Inbox #94: as funções SECURITY DEFINER de notificação
                           -- consultam memberships ativas via esta função.
-                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_notifications_owner'))),
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_notifications_owner'),
+                          -- O worker do agente reautoriza o ator antes de processar anexos.
+                          (SELECT oid FROM pg_roles WHERE rolname = 'vinx_worker'))),
                 authorization_owner.rolcanlogin,
                 authorization_owner.rolinherit,
                 authorization_owner.rolbypassrls,

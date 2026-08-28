@@ -1,12 +1,18 @@
 using System.Runtime.InteropServices;
-using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
 
 return await RunAsync(args);
 
 static async Task<int> RunAsync(string[] arguments)
 {
     if (!E2eFixtureHostOptions.TryParse(arguments, out var request) || request is null)
+    {
+        return 2;
+    }
+
+    if (request.AgentMode == E2eFixtureAgentMode.Real
+        && !OpenAiCompatibleChatClient.HasServerCredential(Environment.GetEnvironmentVariable))
     {
         return 2;
     }
@@ -26,7 +32,13 @@ static async Task<int> RunAsync(string[] arguments)
                 {
                     var profile = request.Profile
                         ?? throw new InvalidOperationException("The single E2E profile was missing.");
-                    var singleHost = await E2eFixtureHost.StartAsync(profile, shutdown.Token);
+                    var configuration = E2eFixtureAgentConfiguration.Create(request.AgentMode);
+                    var singleHost = await E2eFixtureHost.StartAsync(
+                        profile,
+                        shutdown.Token,
+                        configuration.Model,
+                        configuration.Options,
+                        configuration.Storage);
                     host = singleHost;
                     if (!shutdown.IsCancellationRequested)
                     {
@@ -37,18 +49,12 @@ static async Task<int> RunAsync(string[] arguments)
                 }
             case E2eFixtureHostMode.Shared:
                 {
-                    var testAgentModel = new DeterministicE2eAgentModel();
-                    var testAgentRunOptions = new AgentRunOptions
-                    {
-                        Provider = AgentRunOptions.OpenAiCompatibleProvider,
-                        Endpoint = new Uri("https://agent-provider.example/v1"),
-                        ApiKey = "test-agent-key",
-                        Model = "test-agent-model",
-                    };
+                    var configuration = E2eFixtureAgentConfiguration.Create(request.AgentMode);
                     var sharedHost = await SharedE2eFixtureHost.StartAsync(
                         shutdown.Token,
-                        testAgentModel,
-                        testAgentRunOptions);
+                        configuration.Model,
+                        configuration.Options,
+                        configuration.Storage);
                     host = sharedHost;
                     if (!shutdown.IsCancellationRequested)
                     {

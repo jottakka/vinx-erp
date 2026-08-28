@@ -4,6 +4,7 @@ import { isValidDateOnly } from "./paguai-format";
 
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const draftsPath = "/paguai/requests";
+const proposalsPath = "/paguai/draft-proposals";
 const amountSchema = z
   .string()
   .regex(/^\d+(?:\.\d{1,2})?$/)
@@ -28,28 +29,40 @@ const draftSchema = z
     invoiceFileId: z.uuid().nullable(),
     proofRequirement: z.enum(["optional", "required"]),
     state: z.literal("rascunho"),
-    version: z.number().int().min(1),
+    version: z.literal(1),
     createdAt: z.string().datetime({ offset: true }),
-    proofFileId: z.uuid().nullish(),
-    proofFileName: z.string().trim().min(1).max(255).nullish(),
-    proofFileMimeType: z.string().trim().min(1).max(100).nullish(),
-    proofFileSizeBytes: z.number().int().min(0).nullish(),
+  })
+  .strict();
+const proposalSchema = z
+  .object({
+    id: z.uuid(),
+    companyId: z.uuid(),
+    title: z.string().trim().min(1).max(200),
+    description: z.string().trim().min(1).max(4000),
+    amount: amountSchema,
+    currency: z.literal("BRL"),
+    dueDate: dateSchema,
+    beneficiaryDisplayName: z.string().trim().min(1).max(200),
+    proofRequirement: z.enum(["optional", "required"]),
+    invoiceFileId: z.uuid(),
+    confidence: z.number().min(0).max(1),
+    sourceReferences: z.array(
+      z
+        .object({ field: z.string().min(1), source: z.string().min(1) })
+        .strict(),
+    ),
+    state: z.enum(["pending", "consumed", "rejected", "invalidated"]),
+    createdAt: z.string().datetime({ offset: true }),
+    expiresAt: z.string().datetime({ offset: true }),
   })
   .strict();
 const errorSchema = z.object({ code: z.string() }).strict();
 const antiforgerySchema = z
   .object({ requestToken: z.string().min(1) })
   .strict();
-const proofLinkSchema = z
-  .object({
-    url: z.string().url(),
-    expiresAt: z.string().datetime({ offset: true }),
-  })
-  .strict();
-
-export type PaguaiProofLink = z.infer<typeof proofLinkSchema>;
 
 export type PaguaiDraft = z.infer<typeof draftSchema>;
+export type PaguaiProposal = z.infer<typeof proposalSchema>;
 export type CreatePaguaiDraftInput = Pick<
   PaguaiDraft,
   | "companyId"
@@ -62,7 +75,7 @@ export type CreatePaguaiDraftInput = Pick<
   | "beneficiaryDisplayName"
   | "invoiceFileId"
   | "proofRequirement"
-> & { proofFileId?: string | null };
+>;
 export type PaguaiDraftError =
   | 400
   | 401
@@ -71,7 +84,6 @@ export type PaguaiDraftError =
   | 409
   | 429
   | 503
-  | { status: 400 | 403 | 409; code: string }
   | "network"
   | "protocol";
 export type PaguaiResult<T> =
@@ -96,20 +108,8 @@ async function readError(response: Response): Promise<PaguaiDraftError> {
   if ([401, 429].includes(response.status)) return response.status as 401 | 429;
   if ([400, 403, 404, 409, 503].includes(response.status)) {
     try {
-      const parsed = errorSchema.safeParse(await response.json());
-      // Códigos tipados de comprovante chegam à página como objeto; os
-      // demais códigos documentados mantêm o canal numérico legado.
-      if (
-        parsed.success &&
-        response.status !== 503 &&
-        parsed.data.code.startsWith("proof_")
-      )
-        return {
-          status: response.status as 400 | 403 | 409,
-          code: parsed.data.code,
-        };
-      if (parsed.success) return response.status as PaguaiDraftError;
-      return "protocol";
+      if (errorSchema.safeParse(await response.json()).success)
+        return response.status as PaguaiDraftError;
     } catch {
       return "protocol";
     }
@@ -160,29 +160,45 @@ export function createPaguaiDraftClient(
         return { ok: false, error: "network" };
       }
     },
-    /**
-     * Busca sob demanda a URL assinada de curta duração; a URL NUNCA é
-     * persistida em estado ou payload — vale só para a abuição imediata.
-     */
-    async proofLink(
+    async getProposal(
       companyId: string,
-      id: string,
-    ): Promise<PaguaiResult<PaguaiProofLink>> {
+      proposalId: string,
+    ): Promise<PaguaiResult<PaguaiProposal>> {
       try {
         const response = await request(
-          `${draftsPath}/${encodeURIComponent(id)}/proof-link?companyId=${encodeURIComponent(companyId)}`,
+          `${proposalsPath}/${encodeURIComponent(proposalId)}?companyId=${encodeURIComponent(companyId)}`,
           { method: "GET" },
           fetchImplementation,
         );
         if (!response.ok)
           return { ok: false, error: await readError(response) };
-        const parsed = proofLinkSchema.safeParse(await response.json());
+        const parsed = proposalSchema.safeParse(await response.json());
         return parsed.success
           ? { ok: true, value: parsed.data }
           : { ok: false, error: "protocol" };
       } catch {
         return { ok: false, error: "network" };
       }
+    },
+    async confirmProposal(
+      companyId: string,
+      proposalId: string,
+      requestId: string,
+    ): Promise<PaguaiResult<PaguaiDraft>> {
+      return mutateProposal(
+        companyId,
+        proposalId,
+        requestId,
+        "confirm",
+        draftSchema,
+      );
+    },
+    async rejectProposal(
+      companyId: string,
+      proposalId: string,
+      requestId: string,
+    ): Promise<PaguaiResult<void>> {
+      return mutateProposal(companyId, proposalId, requestId, "reject");
     },
     async create(
       input: CreatePaguaiDraftInput,
@@ -221,4 +237,45 @@ export function createPaguaiDraftClient(
       }
     },
   };
+
+  async function mutateProposal<T>(
+    companyId: string,
+    proposalId: string,
+    requestId: string,
+    operation: "confirm" | "reject",
+    responseSchema?: z.ZodType<T>,
+  ): Promise<PaguaiResult<T extends undefined ? void : T>> {
+    try {
+      const tokenResponse = await request(
+        antiforgeryPath,
+        { method: "GET", headers: { Accept: "application/json" } },
+        fetchImplementation,
+      );
+      if (!tokenResponse.ok)
+        return { ok: false, error: await readError(tokenResponse) };
+      const token = antiforgerySchema.safeParse(await tokenResponse.json());
+      if (!token.success) return { ok: false, error: "protocol" };
+      const response = await request(
+        `${proposalsPath}/${encodeURIComponent(proposalId)}/${operation}`,
+        {
+          body: JSON.stringify({ companyId, requestId }),
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "X-CSRF-TOKEN": token.data.requestToken,
+          },
+          method: "POST",
+        },
+        fetchImplementation,
+      );
+      if (!response.ok) return { ok: false, error: await readError(response) };
+      if (!responseSchema) return { ok: true, value: undefined as never };
+      const parsed = responseSchema.safeParse(await response.json());
+      return parsed.success
+        ? { ok: true, value: parsed.data as never }
+        : { ok: false, error: "protocol" };
+    } catch {
+      return { ok: false, error: "network" };
+    }
+  }
 }

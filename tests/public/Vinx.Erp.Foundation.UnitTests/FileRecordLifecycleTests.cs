@@ -48,6 +48,21 @@ public sealed class FileRecordLifecycleTests
     }
 
     [Fact]
+    public void Confirmed_agentic_attachment_can_be_promoted_once_for_a_paguai_request()
+    {
+        var record = NewRecord("agentic_attachment");
+        var requestId = Guid.NewGuid();
+        record.MarkVerified(Guid.NewGuid(), requestId);
+        record.MarkConfirmed(Guid.NewGuid(), requestId);
+
+        record.PromoteAgenticAttachmentToPaguaiInvoice(Guid.NewGuid(), requestId, DateTimeOffset.UtcNow);
+
+        Assert.Equal("paguai_request_invoice", record.Classification);
+        Assert.Throws<InvalidOperationException>(() =>
+            record.PromoteAgenticAttachmentToPaguaiInvoice(Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
     public void Failed_verification_keeps_object_inaccessible()
     {
         var record = NewRecord();
@@ -85,7 +100,7 @@ public sealed class FileRecordLifecycleTests
         Assert.False(record.IsPhysicalDeletionAllowed(DateTimeOffset.UtcNow.AddDays(31)));
     }
 
-    private static FileRecord NewRecord() => new(
+    private static FileRecord NewRecord(string classification = "financial") => new(
         Guid.NewGuid(),
         Guid.NewGuid(),
         Guid.NewGuid(),
@@ -94,7 +109,7 @@ public sealed class FileRecordLifecycleTests
         128,
         "application/pdf",
         "sha256:abc",
-        "financial",
+        classification,
         "user_upload",
         DateTimeOffset.UtcNow.AddDays(30),
         Guid.NewGuid(),

@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { paguaiProposalPath } from "../../shared/routing/app-paths";
 import { hasCompanyCapability } from "../auth/company-capabilities";
 import type { AuthorizedCompanyMembership } from "../auth/session-contract";
 import { useSession } from "../auth/session-provider";
@@ -488,6 +489,15 @@ function ScopedAgentConversationProvider({
             ...previous,
             {
               id: `agent-message-${sequence.current}`,
+              ...(result.ok &&
+              result.run.status === "requires_confirmation" &&
+              result.run.paguaiProposalId
+                ? {
+                    proposalPath: paguaiProposalPath(
+                      result.run.paguaiProposalId,
+                    ),
+                  }
+                : {}),
               role: "agent",
               sources: replySources(result),
               text: agentReplyText(result),

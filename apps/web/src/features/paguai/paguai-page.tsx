@@ -11,11 +11,16 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AttachmentUploader } from "../../shared/ui/attachment-field";
+import { useLocation, useNavigate } from "react-router-dom";
+import {
+  paguaiPath,
+  readPaguaiProposalId,
+} from "../../shared/routing/app-paths";
 import { AuthorizedCompanyFilter } from "../../shared/ui/authorized-company-filter";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanyIdentity } from "../../shared/ui/company-identity";
 import { EntityDialog } from "../../shared/ui/entity-dialog";
+import { useFeedback } from "../../shared/ui/feedback-provider";
 import { PageHeader } from "../../shared/ui/page-header";
 import { StatusChip } from "../../shared/ui/status-chip";
 import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
@@ -26,12 +31,11 @@ import {
   createPaguaiDraftClient,
   type PaguaiDraft,
   type PaguaiDraftError,
+  type PaguaiProposal,
 } from "./paguai-draft-client";
 import { formatAmount, formatDueDate } from "./paguai-format";
-import {
-  createPaguaiInvoiceUploader,
-  createPaguaiProofUploader,
-} from "./paguai-proof-uploader";
+import { createPaguaiInvoiceUploader } from "./paguai-proof-uploader";
+import { PaguaiProposalReviewDialog } from "./paguai-proposal-review-dialog";
 
 const client = createPaguaiDraftClient();
 const readCapability = "paguai.draft.read";
@@ -39,23 +43,6 @@ const createCapability = "paguai.draft.create";
 type PaguaiDraftClient = ReturnType<typeof createPaguaiDraftClient>;
 
 function message(error: PaguaiDraftError) {
-  if (typeof error === "object") {
-    return (
-      (
-        {
-          proof_file_not_found:
-            "O comprovante informado não foi encontrado nesta empresa.",
-          proof_file_not_ready:
-            "O comprovante ainda está em análise de segurança. Tente novamente.",
-          proof_file_bound:
-            "Este comprovante já está vinculado a outra solicitação.",
-          proof_version_conflict:
-            "Outra alteração salvou antes de você. Recarregue e tente novamente.",
-        } as const
-      )[error.code] ?? "Não foi possível concluir a operação."
-    );
-  }
-
   return (
     {
       400: "Revise os campos obrigatórios.",
@@ -101,6 +88,17 @@ type PaguaiCreateAttempt = {
   payload: PaguaiCreatePayload;
   requestId: string;
 };
+type PaguaiProposalOperation = "confirm" | "reject";
+type PaguaiProposalMutationAttempt = {
+  companyId: string;
+  operation: PaguaiProposalOperation;
+  proposalId: string;
+  requestId: string;
+};
+
+function isAmbiguousProposalError(error: PaguaiDraftError) {
+  return error === "network" || error === "protocol" || error === 503;
+}
 
 function sameCreatePayload(
   left: PaguaiCreatePayload,
@@ -114,7 +112,6 @@ function sameCreatePayload(
     left.description === right.description &&
     left.dueDate === right.dueDate &&
     left.invoiceFileId === right.invoiceFileId &&
-    left.proofFileId === right.proofFileId &&
     left.proofRequirement === right.proofRequirement &&
     left.title === right.title
   );
@@ -150,12 +147,16 @@ function scopeKeyFor(
 
 export function PaguaiPage({
   draftClient = client,
-  proofUploader,
 }: {
   draftClient?: PaguaiDraftClient;
-  proofUploader?: AttachmentUploader;
 }) {
   const { bootstrap } = useSession();
+  const { notify } = useFeedback();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const proposalId = readPaguaiProposalId(location.search);
+  const hasInvalidProposalId =
+    new URLSearchParams(location.search).has("proposal") && proposalId === null;
   const companies = useMemo(
     () =>
       (bootstrap?.companies ?? []).filter((company) =>
@@ -182,8 +183,12 @@ export function PaguaiPage({
     readonly { companyId: string; error: PaguaiDraftError }[]
   >([]);
   const [createDialogInstance, setCreateDialogInstance] = useState(0);
-
-  const proofUploaderInstance = useMemo(() => createPaguaiProofUploader(), []);
+  const [proposal, setProposal] = useState<PaguaiProposal | null>(null);
+  const [proposalError, setProposalError] = useState<PaguaiDraftError | null>(
+    null,
+  );
+  const [proposalLoading, setProposalLoading] = useState(false);
+  const [proposalSubmitting, setProposalSubmitting] = useState(false);
 
   const requestedCompanies = useMemo(() => {
     if (!selectedCompanyIds.length) return companies;
@@ -216,7 +221,10 @@ export function PaguaiPage({
   const scopeGenerationRef = useRef(0);
   const scopeKeyRef = useRef(scopeKey);
   const createAttemptRef = useRef<PaguaiCreateAttempt | null>(null);
+  const proposalMutationAttemptRef =
+    useRef<PaguaiProposalMutationAttempt | null>(null);
   const detailRequestRef = useRef(0);
+  const proposalRequestRef = useRef(0);
 
   useEffect(() => {
     const validIds = new Set(companies.map((company) => company.companyId));
@@ -230,6 +238,7 @@ export function PaguaiPage({
     scopeKeyRef.current = scopeKey;
     scopeGenerationRef.current += 1;
     createAttemptRef.current = null;
+    proposalMutationAttemptRef.current = null;
     detailRequestRef.current += 1;
     setCreateError(null);
     setCreateRecoveryRequired(false);
@@ -239,7 +248,107 @@ export function PaguaiPage({
     setSelected(null);
     setStatus((current) => (current === "submitting" ? "idle" : current));
     setViewOpen(false);
+    setProposal(null);
+    setProposalError(null);
+    setProposalLoading(false);
+    setProposalSubmitting(false);
   }, [scopeKey]);
+
+  useEffect(() => {
+    proposalMutationAttemptRef.current = null;
+    const request = proposalRequestRef.current + 1;
+    proposalRequestRef.current = request;
+    setProposal(null);
+    setProposalError(hasInvalidProposalId ? 400 : null);
+    setProposalLoading(false);
+    if (!proposalId || hasInvalidProposalId || !createCompany) return;
+
+    setProposalLoading(true);
+    void draftClient
+      .getProposal(createCompany.companyId, proposalId)
+      .then((result) => {
+        if (proposalRequestRef.current !== request) return;
+        setProposalLoading(false);
+        if (!result.ok) {
+          setProposalError(result.error);
+          return;
+        }
+        if (result.value.companyId !== createCompany.companyId) {
+          setProposalError(404);
+          return;
+        }
+        setProposal(result.value);
+      });
+  }, [createCompany, draftClient, hasInvalidProposalId, proposalId]);
+
+  function closeProposalReview() {
+    proposalMutationAttemptRef.current = null;
+    proposalRequestRef.current += 1;
+    setProposal(null);
+    setProposalError(null);
+    navigate(paguaiPath, { replace: true });
+  }
+
+  async function resolveProposal(operation: PaguaiProposalOperation) {
+    if (!proposal || !createCompany || proposalSubmitting) return;
+    setProposalSubmitting(true);
+    setProposalError(null);
+    const previousAttempt = proposalMutationAttemptRef.current;
+    const attempt =
+      previousAttempt?.companyId === createCompany.companyId &&
+      previousAttempt.proposalId === proposal.id &&
+      previousAttempt.operation === operation
+        ? previousAttempt
+        : {
+            companyId: createCompany.companyId,
+            operation,
+            proposalId: proposal.id,
+            requestId: crypto.randomUUID(),
+          };
+    proposalMutationAttemptRef.current = attempt;
+    if (operation === "confirm") {
+      const result = await draftClient.confirmProposal(
+        createCompany.companyId,
+        proposal.id,
+        attempt.requestId,
+      );
+      setProposalSubmitting(false);
+      if (!result.ok) {
+        if (!isAmbiguousProposalError(result.error)) {
+          proposalMutationAttemptRef.current = null;
+        }
+        setProposalError(result.error);
+        return;
+      }
+      proposalMutationAttemptRef.current = null;
+      setDrafts((current) =>
+        [
+          ...current.filter((draft) => draft.id !== result.value.id),
+          result.value,
+        ].sort(sortDrafts),
+      );
+      notify("Solicitação criada a partir da proposta.");
+      closeProposalReview();
+      return;
+    }
+
+    const result = await draftClient.rejectProposal(
+      createCompany.companyId,
+      proposal.id,
+      attempt.requestId,
+    );
+    setProposalSubmitting(false);
+    if (!result.ok) {
+      if (!isAmbiguousProposalError(result.error)) {
+        proposalMutationAttemptRef.current = null;
+      }
+      setProposalError(result.error);
+      return;
+    }
+    proposalMutationAttemptRef.current = null;
+    notify("Proposta rejeitada.", "info");
+    closeProposalReview();
+  }
 
   useEffect(() => {
     if (!requestedCompanies.length) {
@@ -286,31 +395,6 @@ export function PaguaiPage({
     };
   }, [draftClient, requestedCompanies]);
 
-  const proofUploaderAdapter: AttachmentUploader | undefined = useMemo(() => {
-    if (!createCompany) return undefined;
-    if (proofUploader) return proofUploader;
-    return (file: File, signal: AbortSignal) =>
-      proofUploaderInstance
-        .upload({ companyId: createCompany.companyId, file, signal })
-        .then((result) =>
-          result.ok
-            ? {
-                ok: true as const,
-                fileId: result.proof.fileId,
-                fileName: result.proof.fileName,
-                mimeType: result.proof.mimeType,
-                sizeBytes: result.proof.sizeBytes,
-              }
-            : {
-                ok: false as const,
-                error: {
-                  kind: result.error.kind,
-                  message: "Falha ao anexar.",
-                },
-              },
-        );
-  }, [createCompany, proofUploader, proofUploaderInstance]);
-
   const uploaderAdapter = useMemo(() => {
     if (!createCompany) return undefined;
     return (file: File, signal: AbortSignal) =>
@@ -350,8 +434,7 @@ export function PaguaiPage({
       return;
     setStatus("idle");
     if (!result.ok) {
-      // A falha do create superficia só no alerta do próprio dialog;
-      // replicá-la no alerta da página renderizaria a mensagem em dobro.
+      setError(result.error);
       if (result.error === "network") {
         setCreateError(null);
         setCreateRecoveryRequired(true);
@@ -382,7 +465,6 @@ export function PaguaiPage({
     description: string;
     dueDate: string;
     invoiceFileId: string | null;
-    proofFileId: string | null;
     proofRequirement: "optional" | "required";
     title: string;
   }) {
@@ -396,7 +478,6 @@ export function PaguaiPage({
       description: values.description,
       dueDate: values.dueDate,
       invoiceFileId: values.invoiceFileId,
-      proofFileId: values.proofFileId,
       proofRequirement: values.proofRequirement,
       title: values.title,
     };
@@ -472,6 +553,25 @@ export function PaguaiPage({
               </Alert>
             ) : null}
             {error ? <Alert severity="error">{message(error)}</Alert> : null}
+            {proposalError ? (
+              <Alert severity="error">
+                {proposalError === 400
+                  ? "A proposta indicada é inválida."
+                  : proposalError === 409
+                    ? "Esta proposta expirou ou já foi resolvida."
+                    : message(proposalError)}
+              </Alert>
+            ) : null}
+            {proposalId && !createCompany && !hasInvalidProposalId ? (
+              <Alert severity="info">
+                Selecione uma única empresa para revisar a proposta.
+              </Alert>
+            ) : null}
+            {proposalLoading ? (
+              <Typography aria-live="polite" role="status">
+                Carregando proposta…
+              </Typography>
+            ) : null}
             {partialFailures.map(({ companyId, error: failure }) => (
               <Alert key={companyId} severity="warning">
                 {companyById.get(companyId)?.companyName ?? "Empresa"}{" "}
@@ -572,13 +672,9 @@ export function PaguaiPage({
         recoveryRequired={createRecoveryRequired}
         submitting={status === "submitting"}
         uploader={uploaderAdapter}
-        proofUploader={proofUploaderAdapter}
       />
       <DraftViewDialog
         draft={selected}
-        fetchProofLink={(id) =>
-          draftClient.proofLink(selected?.companyId ?? "", id)
-        }
         onClose={() => setViewOpen(false)}
         open={viewOpen}
         companyName={
@@ -587,6 +683,19 @@ export function PaguaiPage({
             : "Empresa"
         }
       />
+      <PaguaiProposalReviewDialog
+        companyName={
+          proposal
+            ? (companyById.get(proposal.companyId)?.companyName ?? "Empresa")
+            : "Empresa"
+        }
+        onClose={closeProposalReview}
+        onConfirm={() => void resolveProposal("confirm")}
+        onReject={() => void resolveProposal("reject")}
+        open={proposal !== null}
+        proposal={proposal}
+        submitting={proposalSubmitting}
+      />
     </CompanyProvider>
   );
 }
@@ -594,41 +703,14 @@ export function PaguaiPage({
 function DraftViewDialog({
   companyName,
   draft,
-  fetchProofLink,
   onClose,
   open,
 }: {
   companyName: string;
   draft: PaguaiDraft | null;
-  fetchProofLink: (
-    id: string,
-  ) => Promise<
-    | { ok: true; value: { url: string } }
-    | { ok: false; error: PaguaiDraftError }
-  >;
   onClose: () => void;
   open: boolean;
 }) {
-  const [openingProof, setOpeningProof] = useState(false);
-  const [proofError, setProofError] = useState<string | null>(null);
-
-  // A URL assinada é buscada SOMENTE no clique e nunca guardada em estado.
-  async function abrirComprovante() {
-    if (!draft || openingProof) return;
-    setOpeningProof(true);
-    setProofError(null);
-    try {
-      const result = await fetchProofLink(draft.id);
-      if (result.ok) {
-        window.open(result.value.url, "_blank", "noopener,noreferrer");
-      } else {
-        setProofError(message(result.error));
-      }
-    } finally {
-      setOpeningProof(false);
-    }
-  }
-
   return (
     <EntityDialog
       description={`Solicitação de ${companyName}. Apenas leitura.`}
@@ -657,34 +739,11 @@ function DraftViewDialog({
           <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             <AttachFileOutlinedIcon color="action" fontSize="small" />
             <Typography>
-              {draft.proofFileId
-                ? `Comprovante anexado (${draft.proofFileName ?? draft.proofFileId}).`
-                : "Nenhum comprovante anexado."}
-            </Typography>
-          </Stack>
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <AttachFileOutlinedIcon color="action" fontSize="small" />
-            <Typography>
               {draft.invoiceFileId
                 ? "Fatura anexada"
                 : "Nenhuma fatura anexada."}
             </Typography>
           </Stack>
-          {draft.proofFileId ? (
-            <Button
-              disabled={openingProof}
-              onClick={() => void abrirComprovante()}
-              startIcon={<VisibilityOutlinedIcon />}
-              variant="outlined"
-            >
-              {openingProof ? "Abrindo…" : "Abrir comprovante"}
-            </Button>
-          ) : null}
-          {proofError ? (
-            <Alert role="alert" severity="error">
-              {proofError}
-            </Alert>
-          ) : null}
           <Typography color="text.secondary" variant="caption">
             Criado em {new Date(draft.createdAt).toLocaleString()}
           </Typography>

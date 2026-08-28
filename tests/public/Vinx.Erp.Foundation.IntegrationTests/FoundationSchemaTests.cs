@@ -15,6 +15,8 @@ public sealed class FoundationSchemaTests
         string Privilege
     )[] ExpectedRuntimeTableGrants =
     [
+        ("foundation", "agent_execution_ledger", "INSERT"),
+        ("foundation", "agent_execution_ledger", "SELECT"),
         ("foundation", "approvals", "INSERT"),
         ("foundation", "approvals", "SELECT"),
         ("foundation", "capabilities", "SELECT"),
@@ -41,6 +43,7 @@ public sealed class FoundationSchemaTests
     private static readonly string[] ExpectedTables =
     [
         "audit.audit_events",
+        "foundation.agent_execution_ledger",
         "foundation.approvals",
         "foundation.capabilities",
         "foundation.companies",

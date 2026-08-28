@@ -7,8 +7,10 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { BrowserRouter } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
+import { FeedbackProvider } from "../../shared/ui/feedback-provider";
 import type {
   BootstrapSnapshot,
   MockSessionGateway,
@@ -19,7 +21,6 @@ import { PaguaiPage } from "./paguai-page";
 
 const companyId = "11111111-1111-4111-8111-111111111111";
 const secondCompanyId = "66666666-6666-4666-8666-666666666666";
-const proofFileId = "44444444-4444-4444-8444-444444444444";
 const draft = {
   id: "33333333-3333-4333-8333-333333333333",
   companyId,
@@ -36,10 +37,29 @@ const draft = {
   version: 1 as const,
   createdAt: "2026-08-16T12:00:00.000+00:00",
 };
-const draftWithServerProof = {
-  ...draft,
-  proofFileId,
-  proofFileName: "comprovante.pdf",
+const proposal = {
+  id: "99999999-9999-4999-8999-999999999999",
+  companyId,
+  title: "Papel extraído",
+  description: "Papel para impressora extraído",
+  amount: "1250.00",
+  currency: "BRL" as const,
+  dueDate: "2026-09-01",
+  beneficiaryDisplayName: "Fornecedor Demo",
+  proofRequirement: "required" as const,
+  invoiceFileId: "88888888-8888-4888-8888-888888888888",
+  confidence: 0.95,
+  sourceReferences: [
+    { field: "amount", source: "88888888888848888888888888888888:p1" },
+    {
+      field: "beneficiaryDisplayName",
+      source: "88888888888848888888888888888888:p1",
+    },
+    { field: "dueDate", source: "88888888888848888888888888888888:p1" },
+  ],
+  state: "pending" as const,
+  createdAt: "2026-08-16T12:00:00.000+00:00",
+  expiresAt: "2026-08-16T12:15:00.000+00:00",
 };
 
 const readCapability = {
@@ -77,35 +97,27 @@ const gateway: MockSessionGateway = {
   logout: async () => undefined,
 };
 
+afterEach(() => {
+  window.history.pushState({}, "", "/paguai");
+});
+
 function renderPage(
   draftClient: unknown,
   sessionGateway: MockSessionGateway = gateway,
-  proofUploader?: (
-    file: File,
-    signal: AbortSignal,
-  ) => Promise<
-    | {
-        ok: true;
-        fileId: string;
-        fileName: string;
-        mimeType: string;
-        sizeBytes: number;
-      }
-    | { ok: false; error: { kind: string; message: string } }
-  >,
 ) {
   render(
     <VinxThemeProvider>
-      <SessionProvider gateway={sessionGateway}>
-        <PaguaiPage
-          draftClient={
-            draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
-          }
-          proofUploader={
-            proofUploader as Parameters<typeof PaguaiPage>[0]["proofUploader"]
-          }
-        />
-      </SessionProvider>
+      <FeedbackProvider>
+        <BrowserRouter>
+          <SessionProvider gateway={sessionGateway}>
+            <PaguaiPage
+              draftClient={
+                draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
+              }
+            />
+          </SessionProvider>
+        </BrowserRouter>
+      </FeedbackProvider>
     </VinxThemeProvider>,
   );
 }
@@ -130,14 +142,18 @@ function renderPageWithSessionRefresh(
 ) {
   render(
     <VinxThemeProvider>
-      <SessionProvider gateway={sessionGateway}>
-        <RefreshBootstrapButton />
-        <PaguaiPage
-          draftClient={
-            draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
-          }
-        />
-      </SessionProvider>
+      <FeedbackProvider>
+        <BrowserRouter>
+          <SessionProvider gateway={sessionGateway}>
+            <RefreshBootstrapButton />
+            <PaguaiPage
+              draftClient={
+                draftClient as Parameters<typeof PaguaiPage>[0]["draftClient"]
+              }
+            />
+          </SessionProvider>
+        </BrowserRouter>
+      </FeedbackProvider>
     </VinxThemeProvider>,
   );
 }
@@ -967,121 +983,78 @@ describe("PaguaiPage", () => {
     expect(await screen.findByRole("dialog")).toBeVisible();
   });
 
-  it("persists the dialog proof file id into the create payload", async () => {
+  it("reuses one confirm request ID across network protocol and 503 ambiguity", async () => {
     const user = userEvent.setup();
-    const proofUploader = vi.fn(async (file: File) => ({
-      ok: true as const,
-      fileId: proofFileId,
-      fileName: file.name,
-      mimeType: "application/pdf",
-      sizeBytes: file.size,
-    }));
-    const create = vi.fn(async (input: { proofFileId?: string | null }) => ({
-      ok: true as const,
-      value: { ...draft, proofFileId: input.proofFileId ?? null },
-    }));
+    let attempts = 0;
+    const confirmProposal = vi.fn(
+      async (_company: string, _proposal: string, _requestId: string) => {
+        attempts += 1;
+        if (attempts === 1)
+          return { error: "network" as const, ok: false as const };
+        if (attempts === 2)
+          return { error: "protocol" as const, ok: false as const };
+        if (attempts === 3) return { error: 503 as const, ok: false as const };
+        return { ok: true as const, value: draft };
+      },
+    );
     const draftClient = {
-      create,
+      confirmProposal,
+      create: async () => ({ ok: true as const, value: draft }),
       detail: async () => ({ ok: true as const, value: draft }),
+      getProposal: async () => ({ ok: true as const, value: proposal }),
       list: async () => ({ ok: true as const, value: [] }),
+      rejectProposal: async () => ({ ok: true as const, value: undefined }),
     };
-
-    renderPage(draftClient, gateway, proofUploader);
-
-    await openCreate(user);
-    await fillForm(user);
-    const attachInput = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Anexar comprovante: anexar arquivo"]',
-    );
-    if (!attachInput) throw new Error("attachment input missing");
-    await user.upload(attachInput, new File(["pdf"], "comprovante.pdf"));
-    expect(await screen.findByText("comprovante.pdf")).toBeVisible();
-
-    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
-
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    expect(create.mock.calls[0]?.[0]).toMatchObject({
-      proofFileId,
-    });
-  });
-
-  it("surfaces the server-owned attachment after a fresh reload read", async () => {
-    const user = userEvent.setup();
-    const draftClient = {
-      create: async () => ({ ok: true as const, value: draftWithServerProof }),
-      detail: async () => ({ ok: true as const, value: draftWithServerProof }),
-      list: async () => ({ ok: true as const, value: [draftWithServerProof] }),
-    };
+    window.history.pushState({}, "", `/paguai?proposal=${proposal.id}`);
 
     renderPage(draftClient);
+    await screen.findByRole("heading", { name: "Revisar proposta" });
+    for (let expectedCalls = 1; expectedCalls <= 4; expectedCalls += 1) {
+      await user.click(
+        screen.getByRole("button", { name: "Confirmar solicitação" }),
+      );
+      await waitFor(() =>
+        expect(confirmProposal).toHaveBeenCalledTimes(expectedCalls),
+      );
+    }
 
-    await user.click(await screen.findByRole("button", { name: "Visualizar" }));
-
-    const dialog = await screen.findByRole("dialog");
-    // A anexação vem da leitura autorizada do servidor, não do estado local.
-    expect(
-      within(dialog).getByText(/Comprovante anexado \(comprovante\.pdf\)/),
-    ).toBeVisible();
+    const requestIds = confirmProposal.mock.calls.map((call) => call[2]);
+    expect(new Set(requestIds)).toEqual(new Set([requestIds[0]]));
+    expect(requestIds[0]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
   });
 
-  it("fetches the signed proof link on click and never stores the URL", async () => {
+  it("reuses one reject request ID after a lost response", async () => {
     const user = userEvent.setup();
-    const signedUrl = "https://signed.storage.test/comprovante";
-    const proofLink = vi.fn(async () => ({
-      ok: true as const,
-      value: { url: signedUrl, expiresAt: "2026-08-26T12:05:00.000+00:00" },
-    }));
-    const draftClient = {
-      create: async () => ({ ok: true as const, value: draftWithServerProof }),
-      detail: async () => ({ ok: true as const, value: draftWithServerProof }),
-      list: async () => ({ ok: true as const, value: [draftWithServerProof] }),
-      proofLink,
-    };
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
-
-    renderPage(draftClient);
-
-    await user.click(await screen.findByRole("button", { name: "Visualizar" }));
-    const dialog = await screen.findByRole("dialog");
-    await user.click(
-      within(dialog).getByRole("button", { name: "Abrir comprovante" }),
+    let attempts = 0;
+    const rejectProposal = vi.fn(
+      async (_company: string, _proposal: string, _requestId: string) => {
+        attempts += 1;
+        return attempts === 1
+          ? { error: "network" as const, ok: false as const }
+          : { ok: true as const, value: undefined };
+      },
     );
-
-    await waitFor(() => expect(proofLink).toHaveBeenCalledTimes(1));
-    expect(proofLink).toHaveBeenCalledWith(companyId, draft.id);
-    expect(openSpy).toHaveBeenCalledTimes(1);
-    expect(openSpy).toHaveBeenCalledWith(
-      signedUrl,
-      "_blank",
-      "noopener,noreferrer",
-    );
-    // A URL assinada jamais vira estado/JSX.
-    expect(within(dialog).queryByText(signedUrl)).toBeNull();
-    openSpy.mockRestore();
-  });
-
-  it("renders the typed conflict code when the proof is already bound", async () => {
-    const user = userEvent.setup();
     const draftClient = {
-      create: async () =>
-        ({
-          ok: false as const,
-          error: { status: 409, code: "proof_file_bound" },
-        }) as const,
+      confirmProposal: async () => ({ ok: true as const, value: draft }),
+      create: async () => ({ ok: true as const, value: draft }),
       detail: async () => ({ ok: true as const, value: draft }),
+      getProposal: async () => ({ ok: true as const, value: proposal }),
       list: async () => ({ ok: true as const, value: [] }),
+      rejectProposal,
     };
+    window.history.pushState({}, "", `/paguai?proposal=${proposal.id}`);
 
     renderPage(draftClient);
+    await screen.findByRole("heading", { name: "Revisar proposta" });
+    await user.click(screen.getByRole("button", { name: "Rejeitar proposta" }));
+    await waitFor(() => expect(rejectProposal).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "Rejeitar proposta" }));
+    await waitFor(() => expect(rejectProposal).toHaveBeenCalledTimes(2));
 
-    await openCreate(user);
-    await fillForm(user);
-    await user.click(screen.getByRole("button", { name: "Criar rascunho" }));
-
-    expect(
-      await screen.findByText(
-        "Este comprovante já está vinculado a outra solicitação.",
-      ),
-    ).toBeVisible();
+    expect(rejectProposal.mock.calls[1]?.[2]).toBe(
+      rejectProposal.mock.calls[0]?.[2],
+    );
   });
 });

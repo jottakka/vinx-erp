@@ -619,7 +619,7 @@ public sealed class PaguaiDraftCreatedTests
         return document.RootElement.GetProperty("id").GetGuid();
     }
 
-    private static async Task<IReadOnlyList<PaguaiEnvelope>> WaitForPaguaiQueueAsync(
+    internal static async Task<IReadOnlyList<PaguaiEnvelope>> WaitForPaguaiQueueAsync(
         FoundationApiFactory factory,
         int expectedCount
     )
@@ -640,7 +640,7 @@ public sealed class PaguaiDraftCreatedTests
         return envelopes;
     }
 
-    private static async Task<IReadOnlyList<PaguaiEnvelope>> ReadPaguaiQueueAsync(
+    internal static async Task<IReadOnlyList<PaguaiEnvelope>> ReadPaguaiQueueAsync(
         FoundationApiFactory factory
     )
     {
@@ -1131,7 +1131,7 @@ public sealed class PaguaiDraftCreatedTests
         Guid ForeignApproverId
     );
 
-    private sealed record PaguaiEnvelope(
+    internal sealed record PaguaiEnvelope(
         Guid CompanyId,
         Guid DraftId,
         Guid RequesterUserId,

@@ -133,13 +133,39 @@ public sealed class TelegramOutboundTests
     }
 
     [Theory]
-    [InlineData(429)]
+    [InlineData(500)]
+    [InlineData(502)]
     [InlineData(503)]
-    public async Task Transient_responses_use_the_finite_worker_retry_without_false_confirmation(int statusCode)
+    public async Task Agent_reply_server_errors_finalize_ambiguous_without_retry(int statusCode)
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
         var seed = await CreateEligibleSeedAsync(factory);
         var bot = FakeTelegramBotHandler.Response((HttpStatusCode)statusCode, "{\"ok\":false}");
+        var deliveryId = await EnqueueTelegramAgentReplyAsync(factory, seed);
+
+        await using var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString,
+            telegramBotHandler: bot
+        );
+        using var client = worker.CreateClient();
+
+        var result = await DeliverDirectAsync(worker, deliveryId, Guid.NewGuid());
+        var state = await NotificationIntentSeed.ReadDeliveryAsync(factory, deliveryId);
+
+        Assert.Equal("provider_ambiguous", result.Status);
+        Assert.True(result.Finalized);
+        Assert.Equal("provider_ambiguous", state.Status);
+        Assert.Equal("provider_ambiguous", state.FailureReason);
+        Assert.Equal(1, state.AttemptCount);
+        Assert.Equal(1, bot.Calls);
+    }
+
+    [Fact]
+    public async Task Rate_limit_uses_the_finite_worker_retry_without_false_confirmation()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await CreateEligibleSeedAsync(factory);
+        var bot = FakeTelegramBotHandler.Response(HttpStatusCode.TooManyRequests, "{\"ok\":false}");
         var deliveryId = await EnqueueTelegramAsync(factory, seed);
 
         await using var worker = new NotificationWorkerHostFactory(
@@ -418,6 +444,36 @@ public sealed class TelegramOutboundTests
         );
         Assert.True(enqueued.Telegram!.Created);
         return enqueued.Telegram.DeliveryId!.Value;
+    }
+
+    private static async Task<Guid> EnqueueTelegramAgentReplyAsync(
+        FoundationApiFactory factory,
+        TelegramNotificationCompanySeed seed)
+    {
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new Npgsql.NpgsqlCommand(
+            """
+            INSERT INTO notifications.notification_intents (
+                id, company_id, recipient_user_id, event_key, channel, template_key,
+                status, correlation_id, created_by_user_id,
+                telegram_agent_text, telegram_agent_identity_id)
+            SELECT
+                gen_random_uuid(), @company_id, @user_id, @event_key, 'telegram',
+                '_telegram_agent_result', 'pending_delivery', @correlation_id, @user_id,
+                'Resposta segura', contact.agent_channel_identity_id
+            FROM notifications.notification_recipient_contacts AS contact
+            WHERE contact.company_id = @company_id
+              AND contact.user_id = @user_id
+              AND contact.channel = 'telegram'
+              AND contact.is_validated
+            RETURNING id
+            """,
+            administrator);
+        command.Parameters.AddWithValue("company_id", seed.CompanyId);
+        command.Parameters.AddWithValue("user_id", seed.RecipientUserId);
+        command.Parameters.AddWithValue("event_key", NotificationIntentSeed.NewEventKey());
+        command.Parameters.AddWithValue("correlation_id", Guid.NewGuid());
+        return (Guid)(await command.ExecuteScalarAsync())!;
     }
 
     private static async Task WaitForCallsAsync(

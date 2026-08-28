@@ -147,6 +147,23 @@ o rascunho criado permanece válido.
 Qualquer PR futuro de comportamento Paguai registra
 `docs/verification/issue-<numero>[-be|-fe]-test-cases.md`: cenário/BDD, teste ou caminho, intenção e situação. Estimativas contam todos os arquivos não teste, inclusive migrations, snapshots e lockfiles. O limiar de linhas inclui todo conteúdo manual, inclusive testes, e separa apenas linhas geradas de migrations, snapshots e lockfiles.
 
+## Proposta de documento do Agente (#335)
+
+`paguai_from_document_v1` aceita exatamente um `FileRecord` autorizado,
+classificado como `agentic_attachment`, e materializa somente proposta tipada e
+fechada. Prompt, OCR, resposta bruta e bytes não são persistidos. A proposta
+fica `pending` por 15 minutos e pode tornar-se `consumed`, `rejected` ou
+`invalidated`, sempre com RLS forçado e leitura limitada ao mesmo ator/empresa.
+
+O rascunho só nasce após confirmação Web/BFF autenticada e antiforgery. Na única
+transação, o serviço reautoriza sessão, membership, capabilities e arquivo,
+promove internamente a classificação para `paguai_request_invoice`, cria no
+máximo um rascunho por proposta, consome a proposta e grava
+idempotência/auditoria. A primeira confirmação publica o mesmo
+`PaguaiDraftCreated` no outbox da transação; replay, conflito e falha não
+publicam outro evento. A revisão é imutável. WhatsApp e Telegram não confirmam,
+não alteram classificação e não criam rascunho.
+
 ## Limite da V1
 
 Paguai é a fonte de verdade para uma solicitação financeira empresarial: rascunho, conferência, alçadas, fila financeira e confirmação manual do pagamento. Kanban é somente projeção operacional; arrastar, concluir ou apagar card não movimenta a solicitação.

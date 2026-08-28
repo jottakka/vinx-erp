@@ -2,9 +2,11 @@ using System.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
+using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications;
 using Wolverine;
+using Wolverine.EntityFrameworkCore;
 using Wolverine.ErrorHandling;
 using Wolverine.Runtime;
 
@@ -14,7 +16,9 @@ namespace Vinx.Erp.WorkerHost;
 [InboundTelegramFailurePolicy]
 public sealed class InboundTelegramTextReceivedHandler(
     FoundationDbContext database,
-    ILogger<InboundTelegramTextReceivedHandler> logger
+    ILogger<InboundTelegramTextReceivedHandler> logger,
+    InboundAgentChannelAdapter? adapter,
+    IDbContextOutbox outbox
 )
 {
     private const string Operation = "telegram_inbound_receipt";
@@ -59,6 +63,36 @@ public sealed class InboundTelegramTextReceivedHandler(
             { Status: "not_admitted", Transitioned: false } => ("noop", "not_admitted"),
             _ => throw new InvalidOperationException("Inbound Telegram receipt returned an unknown state."),
         };
+
+        if (receipt.Status == "completed")
+        {
+            var deliveryId = await EnqueueSelectionDeliveryAsync(
+                message.InboundMessageId,
+                cancellationToken).ConfigureAwait(false);
+            if (deliveryId is null && adapter is not null)
+            {
+                try
+                {
+                    // O adapter publica o envelope de entrega na mesma transação
+                    // do intent de reply; sem envelope órfão em caso de falha.
+                    await adapter.ProcessAsync(
+                        new InboundAgentRequestReceived(
+                            message.InboundMessageId,
+                            AgentChannelKind.Telegram),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (NotificationProviderTransientException)
+                {
+                    throw new InboundTelegramReceiptExecutionException(isTransient: true);
+                }
+            }
+        }
+        else if (receipt.Status == "not_admitted")
+        {
+            _ = await EnqueueSelectionDeliveryAsync(
+                message.InboundMessageId,
+                cancellationToken).ConfigureAwait(false);
+        }
 
 #pragma warning disable CA1873 // Os argumentos são valores constantes e baratos; o guard não agrega ganho.
         logger.LogInformation(
@@ -173,6 +207,78 @@ public sealed class InboundTelegramTextReceivedHandler(
                 await database.Database.CloseConnectionAsync();
             }
         }
+    }
+
+    /// <summary>
+    /// Insere o intent de seleção e publica o envelope na MESMA transação
+    /// (ADR 0006): falha de persistência do outbox desfaz o intent. Em uma
+    /// transação ambiente (middleware Wolverine/caller), o commit e o flush
+    /// pertencem ao dono da transação.
+    /// </summary>
+    private async Task<Guid?> EnqueueSelectionDeliveryAsync(
+        Guid inboundMessageId,
+        CancellationToken cancellationToken)
+    {
+        Guid? deliveryId = null;
+        var ambientTransaction = database.Database.CurrentTransaction;
+        await using var ownedTransaction = ambientTransaction is null
+            ? await database.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+        var transaction = ambientTransaction ?? ownedTransaction!;
+
+        var connection = database.Database.GetDbConnection();
+        if (!connection.State.HasFlag(ConnectionState.Open))
+        {
+            await database.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction.GetDbTransaction();
+            command.CommandText =
+                "SELECT delivery_id FROM notifications.enqueue_inbound_telegram_selection_reply(@inbound_id)";
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "inbound_id";
+            parameter.Value = inboundMessageId;
+            command.Parameters.Add(parameter);
+            var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            deliveryId = result is Guid opaqueDeliveryId ? opaqueDeliveryId : null;
+
+            if (deliveryId is { } pendingDeliveryId)
+            {
+                outbox.Enroll(database);
+                await outbox.PublishAsync(
+                    new NotificationDeliveryRequested(pendingDeliveryId),
+                    new DeliveryOptions { CorrelationId = inboundMessageId.ToString("D") })
+                    .ConfigureAwait(false);
+            }
+        }
+
+        if (ownedTransaction is null)
+        {
+            return deliveryId;
+        }
+
+        await ownedTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        if (deliveryId is not null)
+        {
+            try
+            {
+                await outbox.FlushOutgoingMessagesAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Inbound Telegram receipt {Operation} {Module} {Result} {Reason}",
+                    Operation,
+                    Module,
+                    "selection_delivery",
+                    "outbox_flush_deferred");
+            }
+        }
+
+        return deliveryId;
     }
 
     private sealed record TelegramInboundReceipt(string Status, bool Transitioned);

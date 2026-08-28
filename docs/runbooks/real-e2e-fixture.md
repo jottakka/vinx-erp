@@ -40,13 +40,22 @@ ele não compila o host implicitamente em cada execução.
 Na raiz do repositório, o modo compartilhado é o roteiro multiempresa:
 
 ```bash
-npm run dev:real-e2e -- --profiles maria,clara
+npm run dev:real-e2e -- --profiles maria,clara --agent-mode deterministic
 ```
 
 O modo compatível individual continua aceitando `--profile maria`, `beatriz`,
-`joao` ou `clara`. O modo compartilhado aceita somente o literal
-`--profiles maria,clara`; não aceita inversão, espaços, profiles extras ou
-troca por header, cookie, query string ou interface web.
+`joao` ou `clara`. Todo comando exige exatamente `--agent-mode deterministic`
+ou `--agent-mode real`; o modo compartilhado aceita somente o literal
+`--profiles maria,clara`, sem inversão, espaços, profiles extras ou troca por
+header, cookie, query string ou interface web.
+
+`deterministic` não faz rede externa e remove
+`VINX_AGENT_PROVIDER_API_KEY` de todos os filhos. `real` exige essa variável
+válida antes de verificar portas ou iniciar Docker; a chave chega somente aos
+ApiHosts, que fixam internamente o endpoint OpenAI-compatible e o modelo de
+smoke. Vite, browser, readiness e diagnóstico não recebem nem publicam chave,
+endpoint ou modelo. O smoke real só usa conteúdo sintético e continua sem
+envio de mensagens por canais.
 
 Depois do readback dos dois hosts e do HTTP dos dois Vites, o modo compartilhado
 publica somente:
@@ -100,8 +109,10 @@ printf %s '' | pbcopy
 - Maria participa de Alfa e Beta; Beatriz, somente de Alfa; João, somente de
   Beta; Clara, somente de Gama.
 - Unidades, equipes, cargos, assignments e capabilities distintos por empresa.
-- Employees em cada empresa, quatro rascunhos Paguai, cinco cards Atendimento e
-  notificações entregues, incluindo uma já lida.
+- Employees em cada empresa, quatro rascunhos Paguai, cinco cards Atendimento,
+  notificações entregues e um único PNG sintético sem metadados, confirmado
+  como `agentic_attachment` de Maria/Alfa, com favorecido, valor e vencimento
+  visíveis. Não há token, endereço de canal, OCR bruto ou saída de provider.
 
 No modo compartilhado, seed e verify executam uma vez antes dos dois Kestrels.
 Uma mutação de Maria é persistida no mesmo PostgreSQL usado por Clara; Clara só
@@ -115,6 +126,13 @@ determinístico de demonstração. Maria em Alfa recebe o texto fixo marcado com
 `capability_denied`, antes de qualquer chamada ao modelo. Essa evidência é
 automática e prova a ordem autorização-modelo com os principals reais do
 fixture; ela não consulta provider externo nem avalia qualidade de resposta.
+
+Maria/Alfa também possui um roteiro Pagaí compilado: o anexo sintético passa
+pela fonte autorizada real, cruza uma vez a visão determinística fechada, chama
+uma vez o modelo principal, gera proposta tipada, permite a confirmação e cria
+um único rascunho vinculado à proposta. A execução contra PostgreSQL/containers
+permanece uma evidência runtime pendente; não a trate como já demonstrada neste
+checkout sem executar a fatia focada aprovada.
 
 ## Roteiro manual mínimo
 
@@ -170,6 +188,8 @@ e-mail, IDs do dataset, payloads ou mensagens internas de provider.
 Este fluxo prova migrations, seed, autorização/RLS, session gate de teste,
 ApiHost real, proxy Vite, leitura dos módulos contra PostgreSQL real e, apenas
 no modo compartilhado, a demonstração determinística do endpoint do Agente.
+O roteiro Pagaí determinístico acima está compilado, mas sua prova runtime fica
+pendente quando Docker/Testcontainers não são autorizados.
 Não prova login Supabase, MFA, provider externo, qualidade de IA, WorkerHost,
 Meta, ClamAV, Storage, TLS/ingress, produção, reconnect ou revogação de sessão.
 A automação browser real completa permanece no escopo de #115.

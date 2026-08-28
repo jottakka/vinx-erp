@@ -26,7 +26,6 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     // não troca endpoint, modelo ou limites em runtime.
     private readonly OpenAiCompatibleOptions _profile;
     private readonly Uri _endpoint;
-    private readonly string _apiKey;
     private readonly string _model;
     private readonly TimeSpan _timeout;
     private readonly string _module;
@@ -35,6 +34,44 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     private readonly IChatClient _inner;
 
     public OpenAiCompatibleChatClient(OpenAiCompatibleOptions profile, HttpClient httpClient, ILogger? logger = null)
+        : this(profile, null, httpClient, logger, requiresProfileApiKey: true)
+    {
+    }
+
+    internal OpenAiCompatibleChatClient(
+        OpenAiCompatibleOptions profile,
+        AgentProviderCredential credential,
+        HttpClient httpClient,
+        ILogger? logger = null)
+        : this(profile, RequireCredential(credential), httpClient, logger, requiresProfileApiKey: false)
+    {
+    }
+
+    /// <summary>
+    /// Constrói o adapter com a credencial exclusiva do ambiente do processo,
+    /// sem expor nem copiar o valor para options bindable do host.
+    /// </summary>
+    public static OpenAiCompatibleChatClient CreateForServer(
+        OpenAiCompatibleOptions profile,
+        Func<string, string?> readEnvironment,
+        HttpClient httpClient,
+        ILogger? logger = null)
+    {
+        var credential = AgentProviderCredential.Resolve(readEnvironment)
+            ?? throw new ProviderProfileRejectedException("OpenAI-compatible provider credential is not configured");
+        return new OpenAiCompatibleChatClient(profile, credential, httpClient, logger);
+    }
+
+    /// <summary>Indica somente se a credencial dedicada está presente e válida.</summary>
+    public static bool HasServerCredential(Func<string, string?> readEnvironment) =>
+        AgentProviderCredential.Resolve(readEnvironment) is not null;
+
+    private OpenAiCompatibleChatClient(
+        OpenAiCompatibleOptions profile,
+        AgentProviderCredential? runtimeCredential,
+        HttpClient httpClient,
+        ILogger? logger,
+        bool requiresProfileApiKey)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(httpClient);
@@ -60,7 +97,6 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         };
         _endpoint = _profile.Endpoint
             ?? throw new ProviderEgressRejectedException("provider endpoint is required");
-        _apiKey = _profile.ApiKey;
         _model = _profile.Model;
         _timeout = _profile.Timeout;
         _module = string.IsNullOrWhiteSpace(_profile.ModuleTag) ? DefaultModule : _profile.ModuleTag;
@@ -76,7 +112,11 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
         // Validação completa do perfil na construção (o Validator completo é o
         // mesmo que o host registrará com ValidateOnStart em #138).
-        if (new OpenAiCompatibleOptions.Validator().Validate(nameof(OpenAiCompatibleOptions), _profile).Failed)
+        var validator = new OpenAiCompatibleOptions.Validator();
+        var profileValidation = requiresProfileApiKey
+            ? validator.Validate(nameof(OpenAiCompatibleOptions), _profile)
+            : validator.ValidateForRuntimeCredential(nameof(OpenAiCompatibleOptions), _profile);
+        if (profileValidation.Failed)
         {
             throw new ProviderProfileRejectedException("OpenAI-compatible profile is not approved");
         }
@@ -88,8 +128,15 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             // Sem retry automático: falha externa permanece falha/abstenção.
             RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
         };
-        _openAIClient = new OpenAIClient(new ApiKeyCredential(_apiKey), clientOptions);
+        var apiKeyCredential = runtimeCredential?.ToApiKeyCredential() ?? new ApiKeyCredential(_profile.ApiKey);
+        _openAIClient = new OpenAIClient(apiKeyCredential, clientOptions);
         _inner = _openAIClient.GetChatClient(_model).AsIChatClient();
+    }
+
+    private static AgentProviderCredential RequireCredential(AgentProviderCredential credential)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+        return credential;
     }
 
     public async Task<ChatResponse> GetResponseAsync(
@@ -120,6 +167,10 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             response.AdditionalProperties ??= [];
             response.AdditionalProperties["CorrelationId"] = correlationId;
             return response;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception) when (
             exception is not OpenAiCompatibleProviderException
