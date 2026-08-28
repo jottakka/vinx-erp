@@ -14,6 +14,7 @@
     <!-- O serviço de aplicação usa AgentRunner/AgentOutcome (módulo AI); a fonte é
          copiada por Compile Include porque referenciar o ApiHost traria todo o host. -->
     <ProjectReference Include="../../../src/Modules/Vinx.Erp.AI/Vinx.Erp.AI.csproj" />
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.Paguai/Vinx.Erp.Paguai.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Contracts/StrictJsonFieldSet.cs" Link="Contracts/StrictJsonFieldSet.cs" />

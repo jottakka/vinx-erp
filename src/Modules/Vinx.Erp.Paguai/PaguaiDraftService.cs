@@ -47,6 +47,16 @@ public sealed class PaguaiDraftService(
         }
 
         command = command with { Amount = PaguaiAmountRules.Canonicalize(command.Amount) };
+        var request = BuildDraftRequest(
+            actor,
+            command,
+            Guid.NewGuid(),
+            sourceProposalId: null);
+        if (request is null)
+        {
+            return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
+        }
+
         var hash = ComputePayloadHash(command);
         // One clock reading per operation: a new draft may only reference an
         // invoice still inside its retention window at this instant, while a
@@ -118,24 +128,6 @@ public sealed class PaguaiDraftService(
                 }
             }
 
-            var request = new PaguaiRequest
-            {
-                Id = Guid.NewGuid(),
-                CompanyId = command.CompanyId,
-                RequesterUserId = actor.UserId,
-                RequestId = command.RequestId,
-                Title = command.Title,
-                Description = command.Description,
-                Amount = command.Amount,
-                Currency = command.Currency,
-                DueDate = command.DueDate,
-                BeneficiaryDisplayName = command.BeneficiaryDisplayName,
-                ProofRequirement = command.ProofRequirement,
-                InvoiceFileId = command.InvoiceFileId,
-                SourceInboundMessageId = command.SourceInboundMessageId,
-                State = "rascunho",
-                Version = 1,
-            };
             database.PaguaiRequests.Add(request);
             await database.SaveChangesAsync(cancellationToken);
             var draft = ToDraft(request);
@@ -696,7 +688,54 @@ public sealed class PaguaiDraftService(
         return [.. requests.Select(ToDraft)];
     }
 
-    private static PaguaiDraft ToDraft(PaguaiRequest request) =>
+    /// <summary>Valida e constrói um rascunho sem persistência nem transação.</summary>
+    internal static PaguaiRequest? BuildDraftRequest(
+        ActorContext actor,
+        CreateDraftCommand command,
+        Guid id,
+        Guid? sourceProposalId)
+    {
+        if (id == Guid.Empty
+            || actor.UserId == Guid.Empty
+            || command.CompanyId == Guid.Empty
+            || command.RequestId == Guid.Empty
+            || command.InvoiceFileId == Guid.Empty
+            || command.SourceInboundMessageId == Guid.Empty
+            || sourceProposalId == Guid.Empty
+            || (sourceProposalId is not null && command.SourceInboundMessageId is not null)
+            || !IsCanonicalText(command.Title, 200)
+            || !IsCanonicalText(command.Description, 4_000)
+            || !IsCanonicalText(command.BeneficiaryDisplayName, 200)
+            || !PaguaiAmountRules.IsValid(command.Amount)
+            || command.Currency != "BRL"
+            || command.DueDate == default
+            || command.ProofRequirement is not ("optional" or "required"))
+        {
+            return null;
+        }
+
+        return new PaguaiRequest
+        {
+            Id = id,
+            CompanyId = command.CompanyId,
+            RequesterUserId = actor.UserId,
+            RequestId = command.RequestId,
+            Title = command.Title,
+            Description = command.Description,
+            Amount = PaguaiAmountRules.Canonicalize(command.Amount),
+            Currency = command.Currency,
+            DueDate = command.DueDate,
+            BeneficiaryDisplayName = command.BeneficiaryDisplayName,
+            ProofRequirement = command.ProofRequirement,
+            InvoiceFileId = command.InvoiceFileId,
+            SourceInboundMessageId = command.SourceInboundMessageId,
+            SourceProposalId = sourceProposalId,
+            State = "rascunho",
+            Version = 1,
+        };
+    }
+
+    internal static PaguaiDraft ToDraft(PaguaiRequest request) =>
         new(
             request.Id,
             request.CompanyId,
@@ -713,6 +752,12 @@ public sealed class PaguaiDraftService(
             request.Version,
             request.CreatedAt
         );
+
+    private static bool IsCanonicalText(string value, int maximumLength) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Length <= maximumLength
+        && value == value.Trim()
+        && !value.Any(char.IsControl);
 
     private static PaguaiDraftResult DeserializeReplay(string resultJson)
     {

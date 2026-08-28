@@ -31,6 +31,24 @@ public sealed class AgentOutcomeMappingTests
         Assert.Equal(AgentOutcomeReason.Completed, result.Response.ReasonCode);
         Assert.Equal("Resumo aprovado com fonte citada.", result.Response.Text);
         Assert.Equal(CorrelationId, result.Response.CorrelationId);
+        Assert.Null(result.Response.PaguaiProposalId);
+    }
+
+    [Fact]
+    public void Completed_paguai_proposal_maps_to_requires_confirmation_with_only_the_durable_id()
+    {
+        var proposalId = Guid.Parse("11111111-1111-4111-8111-111111111111");
+
+        var result = AgentExecutionApplicationService.MapOutcome(
+            Outcome(AgentOutcomeStatus.Completed, AgentOutcomeReason.Completed, "must-not-travel"),
+            proposalId);
+
+        Assert.NotNull(result.Response);
+        Assert.Equal(StatusCodes.Status200OK, result.HttpStatusCode);
+        Assert.Equal(AgentRunStatus.RequiresConfirmation, result.Response.Status);
+        Assert.Equal(proposalId, result.Response.PaguaiProposalId);
+        Assert.Null(result.Response.Text);
+        Assert.Null(result.Response.Sources);
     }
 
     [Fact]
@@ -78,6 +96,7 @@ public sealed class AgentOutcomeMappingTests
         Assert.Equal(AgentOutcomeReason.ToolProposalRequiresConfirmation, result.Response.ReasonCode);
         // A ação proposta permanece opaca: nem o texto nem o nome viajam na resposta.
         Assert.Null(result.Response.Text);
+        Assert.Null(result.Response.PaguaiProposalId);
     }
 
     [Fact]

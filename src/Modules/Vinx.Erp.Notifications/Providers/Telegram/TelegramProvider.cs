@@ -56,7 +56,13 @@ public sealed class TelegramProvider(
         TelegramMessage message;
         try
         {
-            message = TelegramMapper.Map(target.ChatId, target.MessageText);
+            message = target.DeepLinkSelector is null
+                ? TelegramMapper.Map(target.ChatId, target.MessageText)
+                : TelegramMapper.MapAgentReply(
+                    target.ChatId,
+                    target.MessageText,
+                    target.DeepLinkSelector,
+                    options.WebAppBaseUrl);
         }
         catch (ArgumentException)
         {
@@ -88,7 +94,7 @@ public sealed class TelegramProvider(
         await using var command = connection.CreateCommand();
         command.Transaction = transaction.GetDbTransaction();
         command.CommandText = """
-            SELECT chat_id, message_text
+            SELECT chat_id, message_text, deep_link_selector
             FROM notifications.get_telegram_notification_delivery_target(@delivery_id, @attempt_id)
             """;
         AddParameter(command, "delivery_id", request.DeliveryId);
@@ -103,7 +109,10 @@ public sealed class TelegramProvider(
                 && !reader.IsDBNull(1)
             )
             {
-                target = new DeliveryTarget(reader.GetString(0), reader.GetString(1));
+                target = new DeliveryTarget(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2));
             }
         }
 
@@ -122,5 +131,8 @@ public sealed class TelegramProvider(
         command.Parameters.Add(parameter);
     }
 
-    private sealed record DeliveryTarget(string ChatId, string MessageText);
+    private sealed record DeliveryTarget(
+        string ChatId,
+        string MessageText,
+        string? DeepLinkSelector);
 }

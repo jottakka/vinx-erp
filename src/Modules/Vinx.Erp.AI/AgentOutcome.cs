@@ -1,3 +1,5 @@
+using Vinx.Erp.AI.Guardrails;
+
 namespace Vinx.Erp.AI;
 
 /// <summary>
@@ -39,9 +41,10 @@ public static class AgentOutcomeReason
 }
 
 /// <summary>
-/// Resultado seguro da execução: texto da resposta ou proposta de ação a
-/// confirmar; nunca prompt, contexto, JWT, PII ou segredo. Tool call é
-/// proposta — não existe execução no runner.
+/// Resultado seguro da execução: texto da resposta, proposta Pagaí tipada com
+/// a versão exata da política aplicada ou
+/// proposta de ação a confirmar; nunca prompt, contexto, JSON/OCR bruto, JWT,
+/// PII ou segredo. Tool call não executa no runner.
 /// </summary>
 public sealed record AgentOutcome(
     AgentOutcomeStatus Status,
@@ -49,4 +52,6 @@ public sealed record AgentOutcome(
     string? Text,
     string? ProposedActionName,
     Guid CorrelationId,
-    TimeSpan Elapsed);
+    TimeSpan Elapsed,
+    PaguaiDocumentProposal? PaguaiProposal = null,
+    string? PolicyVersion = null);

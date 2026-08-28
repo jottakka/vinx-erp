@@ -1766,6 +1766,32 @@ CREATE TABLE audit.audit_events (
 );
 
 
+-- Name: agent_execution_ledger; Type: TABLE; Schema: foundation; Owner: -
+
+CREATE TABLE foundation.agent_execution_ledger (
+    id uuid NOT NULL,
+    company_id uuid NOT NULL,
+    actor_user_id uuid NOT NULL,
+    channel character varying(50) NOT NULL,
+    inbound_message_id uuid,
+    request_id uuid NOT NULL,
+    journey character varying(200) NOT NULL,
+    payload_hash character varying(64) NOT NULL,
+    state character varying(30) NOT NULL,
+    safe_result_json jsonb,
+    reason_code character varying(100),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    row_version bigint DEFAULT 1 NOT NULL,
+    CONSTRAINT ck_agent_execution_ledger_channel_inbound_message CHECK (((((channel)::text = 'web'::text) AND (inbound_message_id IS NULL)) OR (((channel)::text = ANY ((ARRAY['whatsapp'::character varying, 'telegram'::character varying])::text[])) AND (inbound_message_id IS NOT NULL)))),
+    CONSTRAINT ck_agent_execution_ledger_payload_hash_format CHECK (((payload_hash)::text ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_agent_execution_ledger_state CHECK (((state)::text = ANY ((ARRAY['claimed'::character varying, 'vision_in_flight'::character varying, 'model_in_flight'::character varying, 'completed'::character varying, 'failed_closed'::character varying, 'ambiguous'::character varying])::text[]))),
+    CONSTRAINT ck_agent_execution_ledger_terminal_data CHECK (((((state)::text = 'completed'::text) AND (safe_result_json IS NOT NULL) AND (reason_code IS NULL)) OR (((state)::text = ANY ((ARRAY['failed_closed'::character varying, 'ambiguous'::character varying])::text[])) AND (safe_result_json IS NULL) AND (reason_code IS NOT NULL)) OR (((state)::text = ANY ((ARRAY['claimed'::character varying, 'vision_in_flight'::character varying, 'model_in_flight'::character varying])::text[])) AND (safe_result_json IS NULL) AND (reason_code IS NULL))))
+);
+
+ALTER TABLE ONLY foundation.agent_execution_ledger FORCE ROW LEVEL SECURITY;
+
+
 -- Name: approvals; Type: TABLE; Schema: foundation; Owner: -
 
 CREATE TABLE foundation.approvals (
@@ -2169,6 +2195,12 @@ ALTER TABLE ONLY audit.audit_events
     ADD CONSTRAINT pk_audit_events PRIMARY KEY (id);
 
 
+-- Name: agent_execution_ledger ak_agent_execution_ledger_company_id_id; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.agent_execution_ledger
+    ADD CONSTRAINT ak_agent_execution_ledger_company_id_id UNIQUE (company_id, id);
+
+
 -- Name: approvals ak_approvals_company_id_id; Type: CONSTRAINT; Schema: foundation; Owner: -
 
 ALTER TABLE ONLY foundation.approvals
@@ -2245,6 +2277,12 @@ ALTER TABLE ONLY foundation.pending_member_invitations
 
 ALTER TABLE ONLY foundation.pending_owner_invitations
     ADD CONSTRAINT pending_owner_invitations_pkey PRIMARY KEY (id);
+
+
+-- Name: agent_execution_ledger pk_agent_execution_ledger; Type: CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.agent_execution_ledger
+    ADD CONSTRAINT pk_agent_execution_ledger PRIMARY KEY (id);
 
 
 -- Name: approvals pk_approvals; Type: CONSTRAINT; Schema: foundation; Owner: -
@@ -2387,6 +2425,11 @@ CREATE INDEX ix_audit_events_actor_user_id_occurred_at ON audit.audit_events USI
 -- Name: ix_audit_events_requested_company_id_occurred_at; Type: INDEX; Schema: audit; Owner: -
 
 CREATE INDEX ix_audit_events_requested_company_id_occurred_at ON audit.audit_events USING btree (requested_company_id, occurred_at);
+
+
+-- Name: ix_agent_execution_ledger_company_id_actor_user_id_channel_requ; Type: INDEX; Schema: foundation; Owner: -
+
+CREATE UNIQUE INDEX ix_agent_execution_ledger_company_id_actor_user_id_channel_requ ON foundation.agent_execution_ledger USING btree (company_id, actor_user_id, channel, request_id);
 
 
 -- Name: ix_approvals_actor_user_id; Type: INDEX; Schema: foundation; Owner: -
@@ -2547,6 +2590,11 @@ CREATE TRIGGER audit_events_reject_mutation BEFORE DELETE OR UPDATE ON audit.aud
 -- Name: companies trg_seed_company_lookup_defaults; Type: TRIGGER; Schema: foundation; Owner: -
 
 CREATE TRIGGER trg_seed_company_lookup_defaults AFTER INSERT ON foundation.companies FOR EACH ROW EXECUTE FUNCTION service_desk.seed_company_lookup_defaults_trigger();
+
+-- Name: agent_execution_ledger fk_agent_execution_ledger_companies_company_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
+
+ALTER TABLE ONLY foundation.agent_execution_ledger
+    ADD CONSTRAINT fk_agent_execution_ledger_companies_company_id FOREIGN KEY (company_id) REFERENCES foundation.companies(id) ON DELETE RESTRICT;
 
 
 -- Name: approvals fk_approvals_companies_company_id; Type: FK CONSTRAINT; Schema: foundation; Owner: -
@@ -2753,6 +2801,15 @@ ALTER TABLE ONLY foundation.pending_owner_invitations
     ADD CONSTRAINT pending_owner_invitations_user_id_fkey FOREIGN KEY (user_id) REFERENCES foundation.users(id) ON DELETE RESTRICT;
 
 
+-- Name: agent_execution_ledger; Type: ROW SECURITY; Schema: foundation; Owner: -
+
+ALTER TABLE foundation.agent_execution_ledger ENABLE ROW LEVEL SECURITY;
+
+-- Name: agent_execution_ledger agent_execution_ledger_company_isolation; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY agent_execution_ledger_company_isolation ON foundation.agent_execution_ledger USING (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid))) WITH CHECK (((company_id = (NULLIF(current_setting('app.company_id'::text, true), ''::text))::uuid) AND (actor_user_id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)));
+
+
 -- Name: approvals; Type: ROW SECURITY; Schema: foundation; Owner: -
 
 ALTER TABLE foundation.approvals ENABLE ROW LEVEL SECURITY;
@@ -2778,7 +2835,7 @@ CREATE POLICY capabilities_notifications_owner_paguai_approve_read ON foundation
 
 -- Name: capabilities capabilities_notifications_owner_read; Type: POLICY; Schema: foundation; Owner: -
 
-CREATE POLICY capabilities_notifications_owner_read ON foundation.capabilities FOR SELECT TO vinx_notifications_owner USING (((name)::text = 'foundation.files.upload'::text));
+CREATE POLICY capabilities_notifications_owner_read ON foundation.capabilities FOR SELECT TO vinx_notifications_owner USING (((name)::text = ANY ((ARRAY['foundation.files.upload'::character varying, 'foundation.files.read-ocr'::character varying, 'ai.read'::character varying, 'paguai.draft.create'::character varying])::text[])));
 
 
 -- Name: capabilities capabilities_permissions_owner_granted_select; Type: POLICY; Schema: foundation; Owner: -
@@ -2801,6 +2858,11 @@ CREATE POLICY capabilities_provisioning_owner ON foundation.capabilities FOR SEL
 -- Name: capabilities capabilities_runtime_read; Type: POLICY; Schema: foundation; Owner: -
 
 CREATE POLICY capabilities_runtime_read ON foundation.capabilities FOR SELECT TO vinx_runtime USING (true);
+
+
+-- Name: capabilities capabilities_worker_agent_read; Type: POLICY; Schema: foundation; Owner: -
+
+CREATE POLICY capabilities_worker_agent_read ON foundation.capabilities FOR SELECT TO vinx_worker USING (((name)::text = ANY ((ARRAY['foundation.files.upload'::character varying, 'foundation.files.read-ocr'::character varying, 'ai.read'::character varying, 'paguai.draft.create'::character varying])::text[])));
 
 
 -- Name: companies; Type: ROW SECURITY; Schema: foundation; Owner: -

@@ -62,6 +62,7 @@ public sealed class ProviderEgressPolicyTests
     [InlineData("https://[::]/v1/")]
     [InlineData("https://[fc00::1]/v1/")]
     [InlineData("https://[fd12::1]/v1/")]
+    [InlineData("https://[fec0::1]/v1/")]
     [InlineData("https://[fe80::1]/v1/")]
     [InlineData("https://[ff02::1]/v1/")]
     [InlineData("https://[2001:db8::1]/v1/")]

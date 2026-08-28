@@ -7,9 +7,9 @@ namespace Vinx.Erp.AI.Providers.DeepSeek;
 /// <summary>
 /// Adapter do perfil DeepSeek v4 Flash: fachada fina sobre o núcleo
 /// <see cref="OpenAiCompatibleChatClient"/> que preserva o contrato público
-/// do #135-A (exceções e tipos DeepSeek) e o rótulo de logging
-/// `ai/deepseek`. Não autoriza, não escolhe empresa, não invoca tool, não
-/// persiste conversa e não faz retry.
+/// do #135-A (tipos de falha DeepSeek, com cancelamento do chamador propagado)
+/// e o rótulo de logging `ai/deepseek`. Não autoriza, não escolhe empresa,
+/// não invoca tool, não persiste conversa e não faz retry.
 /// </summary>
 public sealed class DeepSeekChatClient : IChatClient
 {

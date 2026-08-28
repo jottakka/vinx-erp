@@ -22,6 +22,13 @@ public sealed record AgentContextRequest(
 /// </summary>
 public static class AgentPolicy
 {
+    private static readonly string[] PaguaiRequiredCapabilities =
+    [
+        KnownCapabilities.AiRead,
+        KnownCapabilities.FilesReadOcr,
+        KnownCapabilities.PaguaiDraftCreate,
+    ];
+
     private const string MessageEmptyReason = "message_empty";
     private const string ProfileUnknownReason = "profile_unknown";
     private const string CompanyRequiredReason = "company_required";
@@ -53,10 +60,14 @@ public static class AgentPolicy
                 CompanyNotAuthorizedReason);
         }
 
-        var hasRequiredCapability = membership.Capabilities.Any(capability =>
-            capability.Name == request.Profile.RequiredCapabilityName
-            && capability.Scopes.Contains(CapabilityScope.Company)
-        );
+        var requiredCapabilities = request.Profile.ProfileId
+            == AgentTaskProfileCatalog.PaguaiFromDocumentProfileId
+                ? PaguaiRequiredCapabilities
+                : [request.Profile.RequiredCapabilityName];
+        var hasRequiredCapability = requiredCapabilities.All(required =>
+            membership.Capabilities.Any(capability =>
+                capability.Name == required
+                && capability.Scopes.Contains(CapabilityScope.Company)));
         if (!hasRequiredCapability)
         {
             return new AgentContextResolution(

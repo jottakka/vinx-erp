@@ -1,6 +1,9 @@
 using System.Net;
 using System.Text.Json;
 using Npgsql;
+using Vinx.Erp.AI;
+using Vinx.Erp.ApiHost.Agent;
+using Vinx.Erp.Foundation.Files;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -28,7 +31,16 @@ public enum E2eFixtureHostMode
     Shared,
 }
 
-public sealed record E2eFixtureHostRequest(E2eFixtureHostMode Mode, string? Profile);
+public enum E2eFixtureAgentMode
+{
+    Deterministic,
+    Real,
+}
+
+public sealed record E2eFixtureHostRequest(
+    E2eFixtureHostMode Mode,
+    string? Profile,
+    E2eFixtureAgentMode AgentMode);
 
 public sealed record E2eSharedFixtureReadiness(
     Uri MariaOrigin,
@@ -45,22 +57,91 @@ public static class E2eFixtureHostOptions
     public static bool TryParse(string[] arguments, out E2eFixtureHostRequest? request)
     {
         request = null;
-        if (arguments is ["--profile", var candidate]
+        if (arguments is ["--profile", var candidate, "--agent-mode", var agentMode]
+            && TryParseAgentMode(agentMode, out var parsedAgentMode)
             && E2eFixtureProfileCatalog.TryGet(candidate, out _))
         {
-            request = new E2eFixtureHostRequest(E2eFixtureHostMode.Single, candidate);
+            request = new E2eFixtureHostRequest(
+                E2eFixtureHostMode.Single,
+                candidate,
+                parsedAgentMode);
             return true;
         }
 
-        if (arguments is ["--profiles", "maria,clara"])
+        if (arguments is ["--profiles", "maria,clara", "--agent-mode", var sharedAgentMode]
+            && TryParseAgentMode(sharedAgentMode, out var parsedSharedAgentMode))
         {
-            request = new E2eFixtureHostRequest(E2eFixtureHostMode.Shared, null);
+            request = new E2eFixtureHostRequest(
+                E2eFixtureHostMode.Shared,
+                null,
+                parsedSharedAgentMode);
             return true;
         }
 
         return false;
     }
+
+    private static bool TryParseAgentMode(string candidate, out E2eFixtureAgentMode agentMode)
+    {
+        agentMode = candidate switch
+        {
+            "deterministic" => E2eFixtureAgentMode.Deterministic,
+            "real" => E2eFixtureAgentMode.Real,
+            _ => default,
+        };
+        return candidate is "deterministic" or "real";
+    }
 }
+
+/// <summary>Compõe os únicos perfis de agente permitidos pelo host E2E descartável.</summary>
+public static class E2eFixtureAgentConfiguration
+{
+    public static E2eFixtureAgentConfigurationResult Create(E2eFixtureAgentMode mode) => mode switch
+    {
+        E2eFixtureAgentMode.Deterministic => new(
+            new DeterministicE2eAgentModel(),
+            new AgentRunOptions
+            {
+                Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                Endpoint = new Uri("https://agent-provider.example/v1"),
+                Model = "test-agent-model",
+                ApprovedHosts = ["agent-provider.example"],
+                Vision = new AgentRunVisionOptions
+                {
+                    Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                    Endpoint = new Uri("https://agent-provider.example/v1"),
+                    Model = "test-agent-model",
+                    ApprovedHosts = ["agent-provider.example"],
+                    AllowedClassifications = ["agentic_attachment"],
+                },
+            },
+            new E2eFixtureAttachmentStorage()),
+        E2eFixtureAgentMode.Real => new(
+            null,
+            new AgentRunOptions
+            {
+                Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                Endpoint = new Uri("https://opencode.ai/zen/go/v1"),
+                Model = "deepseek-v4-flash-vision-exp",
+                ApprovedHosts = ["opencode.ai"],
+                Vision = new AgentRunVisionOptions
+                {
+                    Provider = AgentRunOptions.OpenAiCompatibleProvider,
+                    Endpoint = new Uri("https://opencode.ai/zen/go/v1"),
+                    Model = "deepseek-v4-flash-vision-exp",
+                    ApprovedHosts = ["opencode.ai"],
+                    AllowedClassifications = ["agentic_attachment"],
+                },
+            },
+            new E2eFixtureAttachmentStorage()),
+        _ => throw new InvalidOperationException("The E2E agent mode was invalid."),
+    };
+}
+
+public sealed record E2eFixtureAgentConfigurationResult(
+    IAgentModel? Model,
+    AgentRunOptions Options,
+    E2eFixtureAttachmentStorage Storage);
 
 public static class E2eFixtureHostProcessPolicy
 {
@@ -278,20 +359,27 @@ public sealed class E2eFixtureHost : IAsyncDisposable
     public Uri Origin { get; }
     public string ProfileName { get; }
     public E2eDatasetReceipt Receipt { get; }
+    internal int AgentVisionCallCount => _factory.AgentVisionCallCount;
     internal string DatabaseHost { get; }
     internal int DatabasePort { get; }
     internal string DatabaseName { get; }
 
     public static async Task<E2eFixtureHost> StartAsync(
         string profileName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IAgentModel? testAgentModel = null,
+        AgentRunOptions? testAgentRunOptions = null,
+        FileStorage? testFileStorage = null)
     {
         E2eFixtureFactoryContext? context = null;
         try
         {
             context = await FoundationApiFactory.CreateWithE2eProfileAsync(
                 profileName,
-                cancellationToken);
+                cancellationToken,
+                testAgentModel,
+                testAgentRunOptions,
+                testFileStorage);
             return await StartPreparedAsync(context, context.Factory.Fixture, cancellationToken);
         }
         catch (ArgumentException) when (context is null)

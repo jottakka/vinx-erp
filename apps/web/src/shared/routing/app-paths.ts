@@ -43,6 +43,10 @@ export const appRouteCatalog = [
 export const prototypePath = "/prototipos" as const;
 export const paguaiPrototypePath = "/prototipos/paguai" as const;
 export const agentPath = "/agente" as const;
+export const paguaiPath = "/paguai" as const;
+
+const canonicalUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export type AppPath =
   | (typeof appRouteCatalog)[number]["path"]
@@ -67,4 +71,15 @@ export function isKnownAppPath(value: unknown): value is AppPath {
 
 export function resolveAppPath(value: unknown): AppPath {
   return isKnownAppPath(value) ? value : "/";
+}
+
+/** Builds the only supported Paguai proposal-review deep link. */
+export function paguaiProposalPath(proposalId: string): string {
+  return `${paguaiPath}?proposal=${encodeURIComponent(proposalId)}`;
+}
+
+/** Accepts only the opaque, canonical proposal identifier from Paguai's query. */
+export function readPaguaiProposalId(search: string): string | null {
+  const value = new URLSearchParams(search).get("proposal");
+  return value && canonicalUuidPattern.test(value) ? value : null;
 }

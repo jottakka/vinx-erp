@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Vinx.Erp.ApiHost.Constants;
+using Vinx.Erp.Foundation.Files;
 using Vinx.Erp.Notifications.Providers.Telegram;
 
 namespace Vinx.Erp.ApiHost.Notifications;
@@ -9,7 +10,15 @@ namespace Vinx.Erp.ApiHost.Notifications;
 /// Texto privado inbound do Telegram que já passou pela autenticação do
 /// webhook e pelo allowlist semântico do transporte.
 /// </summary>
-public sealed record InboundTelegramText(long UpdateId, long ChatId, long MessageId, string Body);
+public sealed record InboundTelegramText(
+    long UpdateId,
+    long ChatId,
+    long MessageId,
+    string? Body,
+    string MessageType = "text",
+    string? MediaId = null,
+    long? MediaSize = null,
+    string? MediaType = null);
 
 /// <summary>
 /// Webhook público do Telegram: autentica o único header de segredo antes de
@@ -155,22 +164,110 @@ public static class TelegramWebhookEndpoints
             || chatType.ValueKind != JsonValueKind.String
             || !string.Equals(chatType.GetString(), "private", StringComparison.Ordinal)
             || fromId != chatId
-            || !message.TryGetProperty("text", out var text)
-            || text.ValueKind != JsonValueKind.String
-            || text.GetString() is not { } textBody
-            || !HasValidText(textBody)
         )
         {
             return null;
         }
 
-        return new InboundTelegramText(
-            UpdateId: updateId,
-            ChatId: chatId,
-            MessageId: messageId,
-            Body: textBody
-        );
+        var caption = ReadOptionalText(message, "caption");
+        if (message.TryGetProperty("text", out var text)
+            && text.ValueKind == JsonValueKind.String
+            && text.GetString() is { } textBody
+            && HasValidText(textBody))
+        {
+            return new InboundTelegramText(updateId, chatId, messageId, textBody);
+        }
+
+        if (message.TryGetProperty("document", out var documentPayload)
+            && documentPayload.ValueKind == JsonValueKind.Object
+            && TryReadMedia(documentPayload, out var documentMediaId, out var documentSize)
+            && documentPayload.TryGetProperty("mime_type", out var documentMime)
+            && documentMime.ValueKind == JsonValueKind.String
+            && documentMime.GetString() is { } mimeType
+            && IsAllowedMediaType(mimeType))
+        {
+            return new InboundTelegramText(
+                updateId,
+                chatId,
+                messageId,
+                caption,
+                "document",
+                documentMediaId,
+                documentSize,
+                mimeType);
+        }
+
+        if (message.TryGetProperty("photo", out var photoPayload)
+            && photoPayload.ValueKind == JsonValueKind.Array)
+        {
+            string? photoMediaId = null;
+            long photoSize = 0;
+            foreach (var candidate in photoPayload.EnumerateArray())
+            {
+                if (candidate.ValueKind == JsonValueKind.Object
+                    && TryReadMedia(candidate, out var candidateId, out var candidateSize)
+                    && candidateSize >= photoSize)
+                {
+                    photoMediaId = candidateId;
+                    photoSize = candidateSize;
+                }
+            }
+
+            if (photoMediaId is not null)
+            {
+                return new InboundTelegramText(
+                    updateId,
+                    chatId,
+                    messageId,
+                    caption,
+                    "photo",
+                    photoMediaId,
+                    photoSize,
+                    "image/jpeg");
+            }
+        }
+
+        return null;
     }
+
+    private static string? ReadOptionalText(JsonElement parent, string propertyName)
+    {
+        if (!parent.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind == JsonValueKind.String
+            && property.GetString() is { } value
+            && HasValidText(value)
+                ? value
+                : null;
+    }
+
+    private static bool TryReadMedia(JsonElement media, out string fileId, out long fileSize)
+    {
+        fileId = string.Empty;
+        fileSize = 0;
+        return media.TryGetProperty("file_id", out var fileIdProperty)
+            && fileIdProperty.ValueKind == JsonValueKind.String
+            && fileIdProperty.GetString() is { Length: >= 1 and <= 512 } candidate
+            && candidate.All(character => character is (>= 'A' and <= 'Z')
+                or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '-')
+            && media.TryGetProperty("file_size", out var sizeProperty)
+            && sizeProperty.ValueKind == JsonValueKind.Number
+            && sizeProperty.TryGetInt64(out fileSize)
+            && fileSize is > 0 and <= DocumentUploadPolicy.MaxSizeBytes
+            && AssignFileId(candidate, out fileId);
+    }
+
+    private static bool AssignFileId(string candidate, out string fileId)
+    {
+        fileId = candidate;
+        return true;
+    }
+
+    private static bool IsAllowedMediaType(string mediaType) =>
+        mediaType is "application/pdf" or "image/jpeg" or "image/png";
 
     private static bool TryGetPositiveId(JsonElement parent, string propertyName, out long value)
     {

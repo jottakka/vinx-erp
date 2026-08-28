@@ -209,24 +209,24 @@ public sealed class InboundWhatsAppIngressService(
             {
                 if (messageType == "text")
                 {
-                    outboundKind = "text_expiry";
+                    outboundKind = "agent";
                     scheduleDelay = true;
                 }
                 else if (messageType == "image")
                 {
                     if (caption is not null || string.Equals(correlation, "correlated", StringComparison.Ordinal))
                     {
-                        outboundKind = "image";
+                        outboundKind = "agent";
                     }
                     else if (string.Equals(correlation, "no_match", StringComparison.Ordinal))
                     {
-                        outboundKind = "image";
+                        outboundKind = "agent";
                         scheduleDelay = true;
                     }
                 }
                 else if (messageType == "document")
                 {
-                    outboundKind = "document";
+                    outboundKind = "agent";
                 }
             }
 
@@ -242,27 +242,12 @@ public sealed class InboundWhatsAppIngressService(
                     delivery.ScheduleDelay = CorrelationWindow;
                 }
 
-                switch (outboundKind)
-                {
-                    case "image":
-                        await outbox.PublishAsync(
-                            new InboundWhatsAppImageReceived(inboundId),
-                            delivery
-                        );
-                        break;
-                    case "text_expiry":
-                        await outbox.PublishAsync(
-                            new InboundWhatsAppTextCorrelationExpired(inboundId),
-                            delivery
-                        );
-                        break;
-                    case "document":
-                        await outbox.PublishAsync(
-                            new InboundWhatsAppDocumentReceived(inboundId),
-                            delivery
-                        );
-                        break;
-                }
+                await outbox.PublishAsync(
+                    new InboundAgentRequestReceived(
+                        inboundId,
+                        AgentChannelKind.WhatsApp),
+                    delivery
+                );
 
                 commitAttempted = true;
                 await outbox.SaveChangesAndFlushMessagesAsync(

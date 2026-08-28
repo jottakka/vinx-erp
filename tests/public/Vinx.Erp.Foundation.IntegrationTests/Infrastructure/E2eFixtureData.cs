@@ -1,6 +1,10 @@
 using System.Globalization;
+using System.Buffers.Binary;
+using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Npgsql;
+using Vinx.Erp.Foundation.Files;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -16,7 +20,211 @@ public sealed record E2eDatasetReceipt(
     Guid GroupId,
     Guid AlfaCompanyId,
     Guid BetaCompanyId,
-    Guid GamaCompanyId);
+    Guid GamaCompanyId,
+    Guid MariaAlfaAgenticAttachmentId);
+
+/// <summary>Storage privado, imutável e exclusivamente sintético do anexo Pagaí da fixture E2E.</summary>
+public sealed class E2eFixtureAttachmentStorage : FileStorage
+{
+    public const string ProviderKey = "e2e/alfa/agentic-attachment";
+    public const string PaguaiPrompt = "gere a proposta Pagaí sintética da nota E2E";
+
+    public static readonly IReadOnlyList<string> VisibleInvoiceLines =
+    [
+        "VINX NOTA E2E",
+        "FORNECEDOR E2E",
+        "BRL 250.00",
+        "2026-09-10",
+    ];
+
+    public static readonly byte[] Content = BuildInvoicePng();
+    public static readonly string Checksum = $"sha256:{Convert.ToHexString(SHA256.HashData(Content)).ToLowerInvariant()}";
+
+    public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(
+        string providerKey,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task UploadObjectAsync(
+        string providerKey,
+        ReadOnlyMemory<byte> content,
+        string contentType,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task<StorageObjectMetadata> GetObjectMetadataAsync(string providerKey, CancellationToken cancellationToken)
+    {
+        EnsureExactKey(providerKey);
+        return Task.FromResult(new StorageObjectMetadata(ProviderKey, Content.LongLength, "image/png", Checksum));
+    }
+
+    public Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
+    public Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken)
+    {
+        EnsureExactKey(providerKey);
+        return Task.FromResult<Stream>(new MemoryStream(Content, writable: false));
+    }
+
+    public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
+        string providerKey,
+        TimeSpan lifetime,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
+        string prefix,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
+    private static void EnsureExactKey(string providerKey)
+    {
+        if (!string.Equals(providerKey, ProviderKey, StringComparison.Ordinal))
+        {
+            throw new KeyNotFoundException("The synthetic E2E object was not found.");
+        }
+    }
+
+    private static byte[] BuildInvoicePng()
+    {
+        const int width = 800;
+        const int height = 360;
+        const int scale = 8;
+        const int originX = 40;
+        const int originY = 28;
+        const int lineAdvance = 80;
+        var pixels = Enumerable.Repeat((byte)255, width * height).ToArray();
+
+        for (var lineIndex = 0; lineIndex < VisibleInvoiceLines.Count; lineIndex++)
+        {
+            var line = VisibleInvoiceLines[lineIndex];
+            for (var characterIndex = 0; characterIndex < line.Length; characterIndex++)
+            {
+                var glyph = Glyph(line[characterIndex]);
+                for (var row = 0; row < glyph.Length; row++)
+                {
+                    for (var column = 0; column < 5; column++)
+                    {
+                        if ((glyph[row] & (1 << (4 - column))) == 0)
+                        {
+                            continue;
+                        }
+
+                        var left = originX + (characterIndex * 6 * scale) + (column * scale);
+                        var top = originY + (lineIndex * lineAdvance) + (row * scale);
+                        for (var y = top; y < top + scale; y++)
+                        {
+                            Array.Fill(pixels, (byte)0, (y * width) + left, scale);
+                        }
+                    }
+                }
+            }
+        }
+
+        return EncodeGrayscalePng(pixels, width, height);
+    }
+
+    private static byte[] Glyph(char value) => value switch
+    {
+        ' ' => [0, 0, 0, 0, 0, 0, 0],
+        '-' => [0, 0, 0, 0b11111, 0, 0, 0],
+        '.' => [0, 0, 0, 0, 0, 0b01100, 0b01100],
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        'C' => [0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111],
+        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
+        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+        'I' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+        '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+        '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+        '3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+        '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+        '5' => [0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110],
+        '6' => [0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+        '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+        '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+        '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110],
+        _ => throw new InvalidOperationException("The synthetic invoice contains an unsupported glyph."),
+    };
+
+    private static byte[] EncodeGrayscalePng(byte[] pixels, int width, int height)
+    {
+        var scanlines = new byte[checked((width + 1) * height)];
+        for (var row = 0; row < height; row++)
+        {
+            Buffer.BlockCopy(pixels, row * width, scanlines, (row * (width + 1)) + 1, width);
+        }
+
+        byte[] compressed;
+        using (var compressedBuffer = new MemoryStream())
+        {
+            using (var compressor = new ZLibStream(
+                compressedBuffer,
+                CompressionLevel.SmallestSize,
+                leaveOpen: true))
+            {
+                compressor.Write(scanlines);
+            }
+
+            compressed = compressedBuffer.ToArray();
+        }
+
+        using var png = new MemoryStream();
+        png.Write([137, 80, 78, 71, 13, 10, 26, 10]);
+        Span<byte> header = stackalloc byte[13];
+        BinaryPrimitives.WriteInt32BigEndian(header[..4], width);
+        BinaryPrimitives.WriteInt32BigEndian(header.Slice(4, 4), height);
+        header[8] = 8;
+        header[9] = 0;
+        WritePngChunk(png, "IHDR", header);
+        WritePngChunk(png, "IDAT", compressed);
+        WritePngChunk(png, "IEND", []);
+        return png.ToArray();
+    }
+
+    private static void WritePngChunk(Stream destination, string type, ReadOnlySpan<byte> data)
+    {
+        Span<byte> length = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32BigEndian(length, data.Length);
+        destination.Write(length);
+        var typeBytes = System.Text.Encoding.ASCII.GetBytes(type);
+        destination.Write(typeBytes);
+        destination.Write(data);
+        var checksumInput = new byte[typeBytes.Length + data.Length];
+        typeBytes.CopyTo(checksumInput, 0);
+        data.CopyTo(checksumInput.AsSpan(typeBytes.Length));
+        Span<byte> checksum = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(checksum, Crc32(checksumInput));
+        destination.Write(checksum);
+    }
+
+    private static uint Crc32(ReadOnlySpan<byte> data)
+    {
+        var checksum = uint.MaxValue;
+        foreach (var value in data)
+        {
+            checksum ^= value;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                checksum = (checksum >> 1) ^ ((checksum & 1) == 0 ? 0 : 0xedb88320u);
+            }
+        }
+
+        return ~checksum;
+    }
+
+}
 
 public static class E2eFixtureProfileCatalog
 {
@@ -90,11 +298,13 @@ public static class E2eFixtureSeeder
     private static readonly Guid BetaReaderRoleId = FixtureId("d1000000", 3);
     private static readonly Guid BetaFinanceRoleId = FixtureId("d1000000", 4);
     private static readonly Guid GamaRestrictedRoleId = FixtureId("d1000000", 5);
+    internal static readonly Guid MariaAlfaAgenticAttachmentId = FixtureId("f4000000", 1);
     private static readonly E2eDatasetReceipt ExpectedReceipt = new(
         GroupId,
         AlfaCompanyId,
         BetaCompanyId,
-        GamaCompanyId);
+        GamaCompanyId,
+        MariaAlfaAgenticAttachmentId);
 
     /// <summary>
     /// Semeia o dataset completo em uma transação e recusa banco já populado.
@@ -173,7 +383,8 @@ public static class E2eFixtureSeeder
             ("at", FixtureTimestamp),
             ("claimed_at", FixtureTimestamp.AddMinutes(1)),
             ("resolved_at", FixtureTimestamp.AddMinutes(2)),
-            ("read_at", FixtureTimestamp.AddMinutes(3)));
+            ("read_at", FixtureTimestamp.AddMinutes(3)),
+            ("retention_until", FixtureTimestamp.AddYears(1)));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -277,6 +488,29 @@ public static class E2eFixtureSeeder
                     new { Id = FixtureId("d2000000", 5), CompanyId = GamaCompanyId, RoleId = GamaRestrictedRoleId, MembershipId = ClaraGamaMembershipId, ActorUserId = profile.Clara.UserId, RequestId = RequestId(25) }
                 },
                 Grants = CreateGrantRows(profile),
+                Files = new[]
+                {
+                    new
+                    {
+                        Id = MariaAlfaAgenticAttachmentId,
+                        CompanyId = AlfaCompanyId,
+                        UploaderMembershipId = MariaAlfaMembershipId,
+                        OriginalFileName = "nota-fiscal-sintetica.png",
+                        Extension = ".png",
+                        SizeBytes = E2eFixtureAttachmentStorage.Content.LongLength,
+                        MimeType = "image/png",
+                        Checksum = E2eFixtureAttachmentStorage.Checksum,
+                        Classification = "agentic_attachment",
+                        Origin = "e2e_fixture",
+                        ProviderKey = "e2e/alfa/agentic-attachment",
+                        ProcessingState = "confirmed",
+                        ScanEngine = "e2e",
+                        ScanEngineVersion = "1",
+                        ScanSignatureVersion = "fixture",
+                        ActorUserId = profile.Maria.UserId,
+                        RequestId = RequestId(69),
+                    }
+                },
                 Employees = new[]
                 {
                     new { Id = FixtureId("e1000000", 1), CompanyId = AlfaCompanyId, MembershipId = MariaAlfaMembershipId, profile.Maria.DisplayName, ActorUserId = profile.Maria.UserId, RequestId = RequestId(43) },
@@ -328,7 +562,8 @@ public static class E2eFixtureSeeder
         AddGrants(rows, GamaCompanyId, GamaRestrictedRoleId, profile.Clara.UserId, 17, 42,
             "service_desk.ticket.read_queue");
         AddGrants(rows, AlfaCompanyId, AlfaOperationsRoleId, profile.Maria.UserId, 18, 65,
-            "ai.read");
+            "ai.read", "foundation.files.upload", "foundation.files.confirm",
+            "foundation.files.read-ocr");
         return rows.ToArray();
     }
 
@@ -477,6 +712,24 @@ public static class E2eFixtureSeeder
             AS seed(id uuid, company_id uuid, membership_id uuid, display_name text,
                 actor_user_id uuid, request_id uuid);
 
+        INSERT INTO foundation.files
+            (id, company_id, uploader_membership_id, original_file_name, extension,
+                size_bytes, mime_type, checksum, classification, origin, retention_until,
+                provider_key, processing_state, created_by_user_id, updated_by_user_id,
+                request_id, created_at, updated_at, row_version, scan_engine,
+                scan_engine_version, scan_signature_version, scanned_at_utc)
+        SELECT id, company_id, uploader_membership_id, original_file_name, extension,
+            size_bytes, mime_type, checksum, classification, origin, @retention_until,
+            provider_key, processing_state, actor_user_id, actor_user_id,
+            request_id, @at, @at, 1, scan_engine, scan_engine_version,
+            scan_signature_version, @at
+        FROM jsonb_to_recordset(@seed::jsonb -> 'files')
+            AS seed(id uuid, company_id uuid, uploader_membership_id uuid,
+                original_file_name text, extension text, size_bytes bigint, mime_type text,
+                checksum text, classification text, origin text, provider_key text,
+                processing_state text, scan_engine text, scan_engine_version text,
+                scan_signature_version text, actor_user_id uuid, request_id uuid);
+
         INSERT INTO paguai.requests
             (id, company_id, requester_user_id, request_id, title, description,
                 amount, currency, due_date, beneficiary_display_name, proof_requirement,
@@ -567,6 +820,17 @@ public static class E2eFixtureSeeder
                     'request_id', request_id) ORDER BY id)
                 FROM foundation.employees) = (@seed::jsonb -> 'employees')
             AND (SELECT jsonb_agg(jsonb_build_object(
+                    'id', id, 'company_id', company_id,
+                    'uploader_membership_id', uploader_membership_id,
+                    'original_file_name', original_file_name, 'extension', extension,
+                    'size_bytes', size_bytes, 'mime_type', mime_type, 'checksum', checksum,
+                    'classification', classification, 'origin', origin,
+                    'provider_key', provider_key, 'processing_state', processing_state,
+                    'scan_engine', scan_engine, 'scan_engine_version', scan_engine_version,
+                    'scan_signature_version', scan_signature_version,
+                    'actor_user_id', created_by_user_id, 'request_id', request_id) ORDER BY id)
+                FROM foundation.files) = (@seed::jsonb -> 'files')
+            AND (SELECT jsonb_agg(jsonb_build_object(
                     'id', id, 'company_id', company_id, 'requester_user_id', requester_user_id,
                     'request_id', request_id, 'title', title, 'description', description,
                     'amount', amount, 'due_date', due_date,
@@ -625,5 +889,8 @@ public static class E2eFixtureSeeder
                     OR provider_resolved_at IS NULL OR failure_reason IS NOT NULL
                     OR ((read_at IS NULL) <> (read_by_user_id IS NULL))
                     OR (read_by_user_id IS NOT NULL AND read_by_user_id <> recipient_user_id))
+            AND NOT EXISTS (SELECT 1 FROM foundation.files
+                WHERE processing_state <> 'confirmed' OR classification <> 'agentic_attachment'
+                    OR deleted_at IS NOT NULL OR row_version <> 1)
         """;
 }

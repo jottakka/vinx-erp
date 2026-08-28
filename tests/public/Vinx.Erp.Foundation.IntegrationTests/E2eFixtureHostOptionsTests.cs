@@ -1,5 +1,11 @@
 using System.Globalization;
+using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Extensions.AI;
+using Vinx.Erp.AI;
+using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 using Xunit;
 
@@ -16,16 +22,162 @@ public sealed class E2eFixtureHostOptionsTests
     public void TryParse_accepts_an_exact_allowlisted_single_profile(string profileName)
     {
         Assert.True(
-            E2eFixtureHostOptions.TryParse(["--profile", profileName], out var request));
-        Assert.Equal(new E2eFixtureHostRequest(E2eFixtureHostMode.Single, profileName), request);
+            E2eFixtureHostOptions.TryParse(
+                ["--profile", profileName, "--agent-mode", "deterministic"], out var request));
+        Assert.Equal(
+            new E2eFixtureHostRequest(
+                E2eFixtureHostMode.Single,
+                profileName,
+                E2eFixtureAgentMode.Deterministic),
+            request);
     }
 
     [Fact]
     public void TryParse_accepts_only_the_literal_shared_maria_clara_pair()
     {
         Assert.True(
-            E2eFixtureHostOptions.TryParse(["--profiles", "maria,clara"], out var request));
-        Assert.Equal(new E2eFixtureHostRequest(E2eFixtureHostMode.Shared, null), request);
+            E2eFixtureHostOptions.TryParse(
+                ["--profiles", "maria,clara", "--agent-mode", "real"], out var request));
+        Assert.Equal(
+            new E2eFixtureHostRequest(E2eFixtureHostMode.Shared, null, E2eFixtureAgentMode.Real),
+            request);
+    }
+
+    [Fact]
+    public async Task Deterministic_model_returns_a_closed_paguai_proposal_only_for_the_synthetic_fixture_prompt()
+    {
+        var model = new DeterministicE2eAgentModel();
+        var selection = new AgentModelSelection(
+            AgentRunOptions.OpenAiCompatibleProvider,
+            "test-agent-model");
+        var attachmentId = E2eFixtureSeeder.MariaAlfaAgenticAttachmentId;
+
+        var response = await model.GetResponseAsync(
+            [new ChatMessage(
+                ChatRole.User,
+                $"{E2eFixtureAttachmentStorage.PaguaiPrompt}\n{attachmentId:N}:p1")],
+            selection,
+            CancellationToken.None);
+
+        var proposalJson = Assert.IsType<TextContent>(Assert.Single(response.Messages.Single().Contents)).Text;
+        Assert.Contains($"\"invoiceFileId\":\"{attachmentId:D}\"", proposalJson, StringComparison.Ordinal);
+        Assert.Equal(1, model.CallCount);
+
+        var normal = await model.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "resuma a empresa Alfa")],
+            selection,
+            CancellationToken.None);
+        Assert.Equal(DeterministicE2eAgentModel.ResponseText, normal.Text);
+    }
+
+    [Fact]
+    public void Deterministic_agent_configuration_fixes_main_and_vision_hosts()
+    {
+        var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Deterministic);
+
+        Assert.IsType<DeterministicE2eAgentModel>(configuration.Model);
+        Assert.Equal(new Uri("https://agent-provider.example/v1"), configuration.Options.Endpoint);
+        Assert.Equal(["agent-provider.example"], configuration.Options.ApprovedHosts);
+        var vision = Assert.IsType<AgentRunVisionOptions>(configuration.Options.Vision);
+        Assert.Equal(new Uri("https://agent-provider.example/v1"), vision.Endpoint);
+        Assert.Equal(["agent-provider.example"], vision.ApprovedHosts);
+    }
+
+    [Fact]
+    public void Synthetic_paguai_artifact_is_a_visible_metadata_free_invoice_image()
+    {
+        Assert.Equal(
+            ["VINX NOTA E2E", "FORNECEDOR E2E", "BRL 250.00", "2026-09-10"],
+            E2eFixtureAttachmentStorage.VisibleInvoiceLines);
+        var content = E2eFixtureAttachmentStorage.Content;
+        Assert.True(content.AsSpan(0, 8).SequenceEqual(
+            new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }));
+
+        var position = 8;
+        var idat = new MemoryStream();
+        var width = 0;
+        var height = 0;
+        var chunks = new List<string>();
+        while (position < content.Length)
+        {
+            var length = BinaryPrimitives.ReadInt32BigEndian(content.AsSpan(position, 4));
+            var type = Encoding.ASCII.GetString(content, position + 4, 4);
+            var data = content.AsSpan(position + 8, length);
+            chunks.Add(type);
+            if (type == "IHDR")
+            {
+                width = BinaryPrimitives.ReadInt32BigEndian(data[..4]);
+                height = BinaryPrimitives.ReadInt32BigEndian(data.Slice(4, 4));
+                Assert.Equal(8, data[8]);
+                Assert.Equal(0, data[9]);
+            }
+            else if (type == "IDAT")
+            {
+                idat.Write(data);
+            }
+
+            position += 12 + length;
+        }
+
+        Assert.Equal(["IHDR", "IDAT", "IEND"], chunks);
+        Assert.True(width >= 600);
+        Assert.True(height >= 240);
+        idat.Position = 0;
+        using var decompressor = new ZLibStream(idat, CompressionMode.Decompress);
+        using var raw = new MemoryStream();
+        decompressor.CopyTo(raw);
+        var scanlines = raw.ToArray();
+        Assert.Equal((width + 1) * height, scanlines.Length);
+        var darkPixels = 0;
+        for (var row = 0; row < height; row++)
+        {
+            Assert.Equal(0, scanlines[row * (width + 1)]);
+            foreach (var value in scanlines.AsSpan((row * (width + 1)) + 1, width))
+            {
+                if (value < 128)
+                {
+                    darkPixels++;
+                }
+            }
+        }
+
+        Assert.True(darkPixels > 10_000);
+    }
+
+    [Fact]
+    public async Task Deterministic_agent_configuration_composes_the_credentialless_ApiHost()
+    {
+        var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Deterministic);
+
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(
+            fileStorage: configuration.Storage,
+            agentModel: configuration.Model,
+            agentRunOptions: configuration.Options);
+        using var response = await factory.CreateClient().GetAsync("/health");
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public void Real_agent_configuration_fixes_main_and_vision_profiles_without_a_bindable_key()
+    {
+        var configuration = E2eFixtureAgentConfiguration.Create(E2eFixtureAgentMode.Real);
+
+        Assert.Null(configuration.Model);
+        Assert.Equal(new Uri("https://opencode.ai/zen/go/v1"), configuration.Options.Endpoint);
+        Assert.Equal("deepseek-v4-flash-vision-exp", configuration.Options.Model);
+        Assert.Equal(["opencode.ai"], configuration.Options.ApprovedHosts);
+        var vision = Assert.IsType<AgentRunVisionOptions>(configuration.Options.Vision);
+        Assert.Equal(new Uri("https://opencode.ai/zen/go/v1"), vision.Endpoint);
+        Assert.Equal("deepseek-v4-flash-vision-exp", vision.Model);
+        Assert.Equal(["opencode.ai"], vision.ApprovedHosts);
+        Assert.Equal(["agentic_attachment"], vision.AllowedClassifications);
+        Assert.DoesNotContain(
+            typeof(AgentRunOptions).GetProperties(),
+            property => string.Equals(property.Name, "ApiKey", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            typeof(AgentRunVisionOptions).GetProperties(),
+            property => string.Equals(property.Name, "ApiKey", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -298,6 +450,9 @@ public sealed class E2eFixtureHostOptionsTests
     [
         [],
         ["--profile"],
+        ["--profile", "maria"],
+        ["--profiles", "maria,clara"],
+        ["--profile", "maria", "--agent-mode", "unknown"],
         ["maria"],
         ["--profile", "unknown"],
         ["--profile", "Maria"],
