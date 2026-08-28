@@ -75,18 +75,48 @@ public sealed class StorageVerificationContractTests
         Assert.Contains("Supabase local startup failed", result.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("test-service-role-secret", result.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("raw Supabase failure", result.Output, StringComparison.Ordinal);
+        // Start falho não dá posse: o descarte não pode parar a stack.
+        Assert.Empty(result.Stops);
+    }
+
+    [Fact]
+    public async Task Storage_verifier_refuses_to_take_ownership_of_a_preexisting_stack()
+    {
+        var result = await RunVerifierAsync("Linux", preexistingStack: true);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("already running", result.Output, StringComparison.Ordinal);
+        Assert.Empty(result.Stops);
+    }
+
+    [Fact]
+    public async Task Storage_verifier_stops_only_the_stack_it_started()
+    {
+        var result = await RunVerifierAsync("Linux");
+
+        Assert.True(result.ExitCode == 0, result.Diagnostics);
+        // A execução começou a stack: o descarte é dela.
+        Assert.Single(result.Stops);
     }
 
     private static async Task<VerifierResult> RunVerifierAsync(
         string operatingSystem,
         string? dockerContext = null,
         bool dockerDesktopContextAvailable = true,
-        bool failSupabaseStart = false)
+        bool failSupabaseStart = false,
+        bool preexistingStack = false)
     {
         var temporaryDirectory = Path.Combine(Path.GetTempPath(), $"vinx-storage-verifier-{Guid.NewGuid():N}");
         var binDirectory = Path.Combine(temporaryDirectory, "bin");
         var logPath = Path.Combine(temporaryDirectory, "supabase-contexts.log");
+        var statePath = Path.Combine(temporaryDirectory, "supabase-stack-state");
+        var stopLogPath = Path.Combine(temporaryDirectory, "supabase-stops.log");
         Directory.CreateDirectory(binDirectory);
+        if (preexistingStack)
+        {
+            // Stack que já estava no ar antes desta execução do verificador.
+            File.WriteAllText(statePath, "running");
+        }
 
         try
         {
@@ -94,18 +124,31 @@ public sealed class StorageVerificationContractTests
             WriteExecutable(
                 binDirectory,
                 "npx",
-                """
+                $$"""
                 #!/usr/bin/env bash
                 set -euo pipefail
                 printf '%s\n' "${DOCKER_CONTEXT-<default>}" >> "${STORAGE_VERIFIER_LOG:?}"
-                if [[ "$1 $2" == "supabase start" && "${FAIL_SUPABASE_START-}" == "1" ]]; then
-                  printf '%s\n' 'raw Supabase failure: test-service-role-secret' >&2
-                  exit 1
+                STATE="${STORAGE_STATE:?}"
+                if [[ "$1 $2" == "supabase start" ]]; then
+                  if [[ "${FAIL_SUPABASE_START-}" == "1" ]]; then
+                    printf '%s\n' 'raw Supabase failure: test-service-role-secret' >&2
+                    exit 1
+                  fi
+                  : > "$STATE"
+                  exit 0
+                fi
+                if [[ "$1 $2" == "supabase stop" ]]; then
+                  printf '%s\n' 'stop' >> "${STORAGE_STOP_LOG:?}"
+                  rm -f "$STATE"
+                  exit 0
                 fi
                 if [[ "$1 $2" == "supabase status" ]]; then
+                  [[ -f "$STATE" ]] || exit 1
                   printf '%s\n' 'API_URL="http://127.0.0.1:54321"'
                   printf '%s\n' 'SERVICE_ROLE_KEY="test-service-role-secret"'
+                  exit 0
                 fi
+                exit 1
                 """);
             WriteExecutable(binDirectory, "dotnet", "#!/usr/bin/env bash\nexit 0\n");
             WriteExecutable(
@@ -133,6 +176,8 @@ public sealed class StorageVerificationContractTests
             process.StartInfo.Environment["PATH"] = $"{binDirectory}{Path.PathSeparator}{process.StartInfo.Environment["PATH"]}";
             process.StartInfo.Environment["STORAGE_VERIFIER_LOG"] = logPath;
             process.StartInfo.Environment["DOCKER_DESKTOP_CONTEXT_AVAILABLE"] = dockerDesktopContextAvailable ? "1" : "0";
+            process.StartInfo.Environment["STORAGE_STATE"] = statePath;
+            process.StartInfo.Environment["STORAGE_STOP_LOG"] = stopLogPath;
             process.StartInfo.Environment.Remove("DOCKER_CONTEXT");
             process.StartInfo.Environment.Remove("FAIL_SUPABASE_START");
             if (dockerContext is not null)
@@ -154,7 +199,10 @@ public sealed class StorageVerificationContractTests
                 ? await File.ReadAllLinesAsync(logPath)
                 : [];
 
-            return new VerifierResult(process.ExitCode, output, contexts);
+            var stops = File.Exists(stopLogPath)
+                ? await File.ReadAllLinesAsync(stopLogPath)
+                : [];
+            return new VerifierResult(process.ExitCode, output, contexts, stops);
         }
         finally
         {
@@ -207,7 +255,7 @@ public sealed class StorageVerificationContractTests
             ?? throw new InvalidOperationException("Could not locate Vinx.Erp.sln.");
     }
 
-    private sealed record VerifierResult(int ExitCode, string Output, string[] SupabaseContexts)
+    private sealed record VerifierResult(int ExitCode, string Output, string[] SupabaseContexts, string[] Stops)
     {
         public string Diagnostics => $"Output: {Output}; contexts: {string.Join(",", SupabaseContexts)}";
     }

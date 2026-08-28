@@ -1967,8 +1967,36 @@ public sealed class DemandasService(
         // A violação de unicidade abortou o batch e o SET LOCAL de RLS morreu
         // com a transação: limpa o tracker, abre transação própria com
         // ator/empresa reaplicados, classifica o receipt e fecha a transação
-        // ANTES de qualquer auditoria (DeniedAsync abre a própria).
+        // ANTES de qualquer auditoria (DeniedAsync abre a própria). Chamado de
+        // dentro de um catch: falha própria vira indisponibilidade tipada em
+        // vez de escapar como 500.
         database.ChangeTracker.Clear();
+        try
+        {
+            return await ReconcileReceiptAsync(actor, companyId, commandName, requestId, payloadHash, routineCommand, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            database.ChangeTracker.Clear();
+            LogUnavailable(exception, "idempotency_reconciliation_failed");
+            return new(DemandOperationState.Unavailable);
+        }
+    }
+
+    private async Task<DemandOperationResult> ReconcileReceiptAsync(
+        ActorContext actor,
+        Guid companyId,
+        string commandName,
+        Guid requestId,
+        string payloadHash,
+        bool routineCommand,
+        CancellationToken cancellationToken
+    )
+    {
         string? resultJson = null;
         var divergent = false;
         await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))

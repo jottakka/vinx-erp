@@ -102,9 +102,8 @@ describe("demandas client", () => {
     let calls = 0;
     const fetchSpy = antiforgeryAware(() => {
       calls += 1;
-      return new Response(JSON.stringify({ demand: commandDemand }), {
-        status: 200,
-      });
+      // Contrato real: o controller devolve a DemandResponse direta.
+      return new Response(JSON.stringify(commandDemand), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -130,7 +129,7 @@ describe("demandas client", () => {
         new Response(
           JSON.stringify({
             code: "integrity_conflict",
-            current: { stage: "execution", version: 7 },
+            current: { ...commandDemand, stage: "execution", version: 7 },
           }),
           { status: 409 },
         ),
@@ -201,10 +200,9 @@ describe("demandas client", () => {
   it("rejects a malformed command payload without exposing raw data", async () => {
     const fetchSpy = antiforgeryAware(
       () =>
-        new Response(
-          JSON.stringify({ demand: { ...commandDemand, version: "1" } }),
-          { status: 200 },
-        ),
+        new Response(JSON.stringify({ ...commandDemand, extraField: true }), {
+          status: 200,
+        }),
     );
     vi.stubGlobal("fetch", fetchSpy);
 

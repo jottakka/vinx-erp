@@ -103,6 +103,8 @@ export function isDemandasDeepLink(value: string): boolean {
 
 /** Accepts only the canonical demand identifier from Demandas' query. */
 export function readDemandasDemandId(search: string): string | null {
-  const value = new URLSearchParams(search).get("demand");
-  return value && canonicalUuidPattern.test(value) ? value : null;
+  // Mesmo validador da inbox, ancorado na query inteira: query extra,
+  // chave duplicada ou origem absoluta não passam.
+  if (!isDemandasDeepLink(`/demandas${search}`)) return null;
+  return new URLSearchParams(search).get("demand");
 }

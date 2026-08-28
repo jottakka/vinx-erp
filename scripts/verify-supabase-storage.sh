@@ -25,8 +25,9 @@ trap cleanup EXIT
 select_docker_context
 npm ci
 
-# Fronteira de propriedade: se a stack local já está no ar, recusa sem tocar
-# nela (status ambíguo ou falho também impede o start — nunca assume posse).
+# Fronteira de propriedade: stack respondendo ao status já está no ar — esta
+# execução recusa sem tocar nela. Status falho é tratado como parada e o
+# começo decide a posse: só o que ESTA execução iniciou é parado no cleanup.
 if npx supabase status >/dev/null 2>&1; then
   printf '%s\n' 'A Supabase local stack is already running; this verifier refuses to take ownership of a pre-existing stack. Stop it or run the Storage category against it explicitly.' >&2
   exit 2

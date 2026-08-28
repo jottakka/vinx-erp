@@ -8,6 +8,8 @@ export type DemandStage =
 
 export type DemandPriority = "critical" | "high" | "medium" | "low";
 
+export type DemandResponse = z.infer<typeof demandResponseSchema>;
+
 export type DemandBoardPage = {
   items: DemandBoardCard[];
   total: number;
@@ -72,31 +74,8 @@ export type DemandDetail = {
   }>;
 };
 
-export type DemandCommandDemand = {
-  id: string;
-  companyId: string;
-  demandNumber: number;
-  demandDisplayNumber: string;
-  title: string;
-  description: string;
-  priority: DemandPriority;
-  stage: DemandStage;
-  routineId: string | null;
-  responsibleMembershipId: string;
-  tipo: string | null;
-  departamento: string | null;
-  manualDueAt: string | null;
-  slaDueAt: string | null;
-  stageDueAt: string | null;
-  effectiveDeadline: string | null;
-  automationPaused: boolean;
-  isOverdue: boolean;
-  cycleCount: number;
-  version: number;
-};
-
 export type CommandResult =
-  | { ok: true; demand?: DemandCommandDemand }
+  | { ok: true; demand?: DemandResponse }
   | { ok: false; code: string; current?: { version: number; stage: string } };
 
 const basePath = "/demandas";
@@ -113,6 +92,34 @@ const demandStageSchema = z.enum([
   "closed",
 ]);
 const demandPrioritySchema = z.enum(["critical", "high", "medium", "low"]);
+
+// DemandResponse completa do controller (contrato canônico de comandos e
+// do campo demand do detalhe): sem stageStartedAt — esse campo só existe
+// no card do board.
+const demandResponseSchema = z
+  .object({
+    automationPaused: z.boolean(),
+    companyId: z.string().uuid(),
+    cycleCount: z.number().int().nonnegative(),
+    departamento: z.string().nullable(),
+    demandDisplayNumber: z.string(),
+    demandNumber: z.number().int(),
+    description: z.string(),
+    effectiveDeadline: z.string().nullable(),
+    id: z.string().uuid(),
+    isOverdue: z.boolean(),
+    manualDueAt: z.string().nullable(),
+    priority: demandPrioritySchema,
+    responsibleMembershipId: z.string().uuid(),
+    routineId: z.string().nullable(),
+    slaDueAt: z.string().nullable(),
+    stage: demandStageSchema,
+    stageDueAt: z.string().nullable(),
+    title: z.string(),
+    tipo: z.string().nullable(),
+    version: z.number().int().nonnegative(),
+  })
+  .strict();
 
 const demandBoardCardSchema = z
   .object({
@@ -153,31 +160,7 @@ const demandDetailSchema = z
         })
         .strict(),
     ),
-    demand: z
-      .object({
-        automationPaused: z.boolean(),
-        companyId: z.string().uuid(),
-        cycleCount: z.number().int().nonnegative(),
-        departamento: z.string().nullable(),
-        demandDisplayNumber: z.string(),
-        demandNumber: z.number().int(),
-        description: z.string(),
-        effectiveDeadline: z.string().nullable(),
-        id: z.string().uuid(),
-        isOverdue: z.boolean(),
-        manualDueAt: z.string().nullable(),
-        priority: demandPrioritySchema,
-        responsibleMembershipId: z.string().uuid(),
-        routineId: z.string().nullable(),
-        slaDueAt: z.string().nullable(),
-        stage: demandStageSchema,
-        stageDueAt: z.string().nullable(),
-        stageStartedAt: z.string(),
-        title: z.string(),
-        tipo: z.string().nullable(),
-        version: z.number().int().nonnegative(),
-      })
-      .strict(),
+    demand: demandResponseSchema,
     history: z.array(
       z
         .object({
@@ -203,44 +186,15 @@ const demandDetailSchema = z
   })
   .strict();
 
-// Os comandos devolvem a DemandResponse completa (não o card do board):
-// stageDueAt entra no lugar de stageStartedAt, que o contrato não expõe.
-const demandCommandDemandSchema = z
-  .object({
-    automationPaused: z.boolean(),
-    companyId: z.string().uuid(),
-    cycleCount: z.number().int().nonnegative(),
-    departamento: z.string().nullable(),
-    demandDisplayNumber: z.string(),
-    demandNumber: z.number().int(),
-    description: z.string(),
-    effectiveDeadline: z.string().nullable(),
-    id: z.string().uuid(),
-    isOverdue: z.boolean(),
-    manualDueAt: z.string().nullable(),
-    priority: demandPrioritySchema,
-    responsibleMembershipId: z.string().uuid(),
-    routineId: z.string().nullable(),
-    slaDueAt: z.string().nullable(),
-    stage: demandStageSchema,
-    stageDueAt: z.string().nullable(),
-    title: z.string(),
-    tipo: z.string().nullable(),
-    version: z.number().int().nonnegative(),
-  })
-  .strict();
-
-const commandSuccessSchema = z
-  .object({ demand: demandCommandDemandSchema.optional() })
-  .strict();
+// Sucesso do comando: o controller devolve a DemandResponse DIRETA (sem
+// envelope). Conflito: current é a DemandResponse atual — projeta o par que
+// a UI consome depois de validar o objeto completo.
+const commandSuccessSchema = demandResponseSchema;
 
 const commandErrorSchema = z
   .object({
     code: z.string().min(1),
-    current: z
-      .object({ stage: z.string(), version: z.number().int() })
-      .strict()
-      .optional(),
+    current: demandResponseSchema.optional(),
   })
   .strict();
 
@@ -336,16 +290,20 @@ export const demandasClient = {
       if (response.ok) {
         const parsed = commandSuccessSchema.safeParse(await response.json());
         return parsed.success
-          ? { ok: true as const, demand: parsed.data.demand }
+          ? { ok: true as const, demand: parsed.data }
           : { code: "demandas_unavailable", ok: false as const };
       }
       const error = commandErrorSchema.safeParse(
         await response.json().catch(() => null),
       );
+      if (!error.success) return { code: "demandas_unavailable", ok: false };
+      const { current, ...rest } = error.data;
       return {
-        code: error.success ? error.data.code : "demandas_unavailable",
-        current: error.success ? error.data.current : undefined,
-        ok: false,
+        ...rest,
+        ok: false as const,
+        current: current
+          ? { stage: current.stage, version: current.version }
+          : undefined,
       };
     } catch {
       return { code: "demandas_unavailable", ok: false };

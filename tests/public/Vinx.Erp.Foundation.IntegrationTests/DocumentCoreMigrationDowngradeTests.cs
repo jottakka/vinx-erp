@@ -122,5 +122,20 @@ public sealed class DocumentCoreMigrationDowngradeTests
             Assert.Equal(0, recovered.GetValueOrDefault("verification_failed"));
             Assert.Equal(4, recovered.Values.Sum());
         }
+
+        // A postura de RLS da tabela volta exatamente como era (FORCE ativo).
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
+        {
+            await using var command = new NpgsqlCommand(
+                """
+                SELECT relrowsecurity, relforcerowsecurity
+                FROM pg_class
+                WHERE oid = 'foundation.files'::regclass
+                """, administrator);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.True(reader.GetBoolean(0));
+            Assert.True(reader.GetBoolean(1));
+        }
     }
 }

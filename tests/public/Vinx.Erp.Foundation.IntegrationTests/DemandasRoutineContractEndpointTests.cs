@@ -168,6 +168,13 @@ public sealed class DemandasRoutineContractEndpointTests
         Assert.Equal(HttpStatusCode.Conflict, divergent.StatusCode);
         var body = await divergent.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("idempotency_conflict", body.GetProperty("code").GetString());
+
+        // A negação divergente é auditada FORA da transação abortada.
+        await using var administratorAfter = factory.Fixture.CreateAdministratorDbContext();
+        var deniedAudits = await administratorAfter.Database
+            .SqlQuery<long>($"SELECT count(*) AS \"Value\" FROM audit.audit_events WHERE action = 'demandas.demand.create' AND outcome = 'denied' AND reason = 'idempotency_conflict'")
+            .SingleAsync();
+        Assert.True(deniedAudits >= 1);
     }
 
     [Fact]
