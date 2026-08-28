@@ -27,25 +27,29 @@ export function useDirectoryOptions(companyId: string): {
   failed: boolean;
   options: PersonOption[];
 } {
-  const [options, setOptions] = useState<PersonOption[]>([]);
-  const [failed, setFailed] = useState(false);
+  // Opções são vinculadas à empresa que as produziu: qualquer render com
+  // companyId diferente da dona (troca ou esvaziamento) expõe lista vazia
+  // fail-closed, sem esperar efeito.
+  const [owned, setOwned] = useState<{ companyId: string; options: PersonOption[] }>({
+    companyId: "",
+    options: [],
+  });
+  const [failedOwner, setFailedOwner] = useState<string | null>(null);
 
   useEffect(() => {
     if (!companyId) return;
     let active = true;
-    // Empresa nova começa sem rótulos da anterior (fail-closed): nomes são
-    // vinculados à empresa consultada e nunca atravessam a troca de contexto.
-    setOptions([]);
-    setFailed(false);
     void loadDirectoryOptions(companyId).then((result) => {
       if (!active) return;
-      if (result) setOptions(result);
-      else setFailed(true);
+      if (result) setOwned({ companyId, options: result });
+      else setFailedOwner(companyId);
     });
     return () => {
       active = false;
     };
   }, [companyId]);
 
+  const options = owned.companyId === companyId ? owned.options : [];
+  const failed = failedOwner === companyId && options.length === 0;
   return { failed, options };
 }

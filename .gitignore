@@ -27,3 +27,4 @@ supabase/.temp/
 # Capturas legadas: bundles confidenciais nunca entram no repositório
 legacy-snapshot-bundle*/
 legacy-profile-bundle*/
+.mimosa/

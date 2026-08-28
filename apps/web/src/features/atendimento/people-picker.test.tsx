@@ -68,6 +68,30 @@ describe("PeoplePicker", () => {
     expect(screen.queryByRole("option", { name: /Ana Alfa/ })).toBeNull();
   });
 
+  it("drops previous-company options in the same render as the switch", async () => {
+    // A troca de empresa expõe lista vazia JÁ NA renderização da troca, sem
+    // esperar fetch ou efeito — fail-closed síncrono do vínculo por empresa.
+    const user = userEvent.setup();
+    vi.spyOn(atendimentoClient, "directoryOptions").mockImplementation(
+      async (companyId) =>
+        new Promise((resolve) =>
+          // Beta nunca resolve: só o estado síncrono importa aqui.
+          setTimeout(() => resolve(companyId === alfaCompanyId ? alfaOptions : betaOptions), 10_000),
+        ),
+    );
+
+    render(<Harness initialCompanyId={alfaCompanyId} />);
+    const combobox = screen.getByRole("combobox", { name: "Pessoas" });
+    await waitFor(() => expect(combobox).toHaveValue("Ana Alfa"));
+
+    await user.click(screen.getByRole("button", { name: "Trocar empresa" }));
+
+    // Mesma renderização da troca: sem waitFor, sem fetch resolvido.
+    expect(combobox).toHaveValue("");
+    expect(screen.getByText("Não resolvido")).toBeVisible();
+    expect(screen.queryByText("Ana Alfa")).not.toBeInTheDocument();
+  });
+
   it("shows a neutral unresolved state instead of the raw membership id", async () => {
     vi.spyOn(atendimentoClient, "directoryOptions").mockResolvedValue(
       alfaOptions,
