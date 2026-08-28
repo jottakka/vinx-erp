@@ -1,4 +1,4 @@
-# Módulo AI — núcleo OpenAI-compatible e perfil DeepSeek
+# Módulo AI — núcleo OpenAI-compatible
 
 ## Estado
 
@@ -14,6 +14,11 @@ autorizado antes da única chamada principal. Não existe Anthropic,
 OpenCode, memória longa, vector store, streaming nem persistência de
 conversa.
 
+Desde #335, Web, WhatsApp e Telegram traduzem seus contratos para um comando
+comum, fazem claim durável antes de OCR ou provider e carregam somente
+identificadores internos opacos. O núcleo continua sem regra de domínio ou
+runtime específico de OpenCode.
+
 O adapter serve leitura, resumo, extração e rascunho não persistido. Ele
 converte protocolo e devolve resposta normalizada ou proposta de tool; não
 autoriza, não escolhe empresa, não invoca ferramenta e não persiste conversa.
@@ -27,6 +32,14 @@ tira um snapshot imutável na construção e valida o perfil na fronteira:
 mutar as options em runtime não troca endpoint, modelo ou limites de uma
 instância viva. Desde #138 o host registra o `Validator` com
 `ValidateOnStart` na composição da API (`AddAgentRunSurface`).
+
+A credencial é lida exclusivamente de `VINX_AGENT_PROVIDER_API_KEY` no
+ambiente do processo de ApiHost/WorkerHost; appsettings, banco, browser,
+argumentos e fixtures não podem fornecê-la. OpenCode Go é apenas o primeiro
+perfil real de fixture/smoke, não uma dependência do núcleo nem dos testes.
+Quando visão está configurada, ela exige o mesmo provider, endpoint
+normalizado, modelo e conjunto exato normalizado de hosts do perfil principal;
+somente timeout e classificações continuam específicos da modalidade.
 
 Limites do perfil:
 
@@ -55,11 +68,10 @@ rejeitados (IPv4, IPv6 e grafias equivalentes). `ApprovedHosts`, quando
 presente no cofre de configuração, restringe por host exato normalizado ou
 sufixo com fronteira de ponto — `EndsWith` ingênuo é proibido. A política
 expõe validação por endereço resolvido para o transporte do host validar cada
-conexão contra DNS rebinding; redirects automáticos e proxy também são
-decisões do transporte. A composição de #138 registra o `HttpClientFactory`
-nomeado com endpoint e timeout do perfil aprovado; a guarda por endereço
-resolvido e o travamento de redirects permanecem pendentes de transporte
-dedicado (registro na issue).
+conexão contra DNS rebinding. O transporte dedicado também desabilita redirect,
+proxy e cookies; literal ou resposta DNS com qualquer endereço proibido fecha
+antes do socket. A composição registra o `HttpClientFactory` nomeado com
+endpoint, timeout e perfil aprovados.
 
 ## Modalidades e contrato de visão
 
@@ -94,14 +106,15 @@ A invocação de ferramenta é estruturalmente impossível: o adapter não monta
 pipeline de invocação (não usa `FunctionInvokingChatClient`), mesmo com
 `ChatToolMode.Auto`.
 
-Falhas externas são classificadas em `timeout`, `cancelled`, `rate_limited`,
+Falhas externas são classificadas em `timeout`, `rate_limited`,
 `provider_invalid` e `provider_unavailable`, sem retry (inclusive no SDK:
 `ClientRetryPolicy(0)`). A exceção publicada tem mensagem fixa e redacted e
 nenhuma causa bruta na cadeia pública (nem `Message`, nem `ToString()`, nem
 `InnerException`): body, prompt, headers secretos e resposta bruta nunca
-aparecem em exceção ou log. O cancelamento do chamador é `cancelled` e não
-gera log. Cada execução recebe um correlation ID devolvido na resposta e
-propagado pelo escopo de logging com o rótulo do perfil
+aparecem em exceção ou log. O cancelamento do chamador propaga
+`OperationCanceledException` sem log de falha; somente o timeout interno vira
+a exceção redigida `timeout`. Cada execução recebe um correlation ID devolvido
+na resposta e propagado pelo escopo de logging com o rótulo do perfil
 (`ai/openai-compatible`, `ai/deepseek`).
 
 O SDK aprovado serializa o teto de saída como `max_completion_tokens`; o valor
@@ -198,8 +211,10 @@ ordem fixa → resposta tipada `result | needs_clarification | denied |
 validation_error | conflict | requires_confirmation` com correlation;
 `requires_confirmation` é opaco (sem texto nem nome da ação). Timeout vira 504
 `agent_timeout`; provider ausente/indisponível vira 503
-`provider_not_configured`/`agent_unavailable`; desfechos 5xx não são
-persistidos nem auditados e o `requestId` pode retentar. A persistência
+`provider_not_configured`/`agent_unavailable`. O claim é durável antes da
+fronteira: falha anterior ao provider termina em `failed_closed`, replay do
+mesmo `requestId` devolve o terminal e nova tentativa exige outro ID; incerteza
+após `*_in_flight` termina em `ambiguous`, sem retry cego. A persistência
 (idempotência + auditoria `AuditSource.Ai` com metadata `{status,
 reasonCode}`) acontece na mesma transação e nunca carrega prompt, resposta
 bruta, transcript ou PII — o `ResultJson` guarda somente a resposta segura.

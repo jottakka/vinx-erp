@@ -18,6 +18,9 @@ public sealed class TelegramOptions
     [Microsoft.Extensions.Configuration.ConfigurationKeyName("TELEGRAM_WEBHOOK_SECRET_TOKEN")]
     public string WebhookSecretToken { get; set; } = string.Empty;
 
+    [Microsoft.Extensions.Configuration.ConfigurationKeyName("VINX_WEB_APP_BASE_URL")]
+    public string WebAppBaseUrl { get; set; } = string.Empty;
+
     /// <summary>Indica se o envio possui token e base HTTPS utilizáveis.</summary>
     public bool OutboundIsConfigured =>
         !string.IsNullOrWhiteSpace(BotToken)
@@ -26,6 +29,15 @@ public sealed class TelegramOptions
 
     /// <summary>Indica se o segredo de webhook possui a sintaxe aceita pelo Telegram.</summary>
     public bool WebhookIsConfigured => IsValidWebhookSecret(WebhookSecretToken);
+
+    /// <summary>Origem HTTPS fixa usada somente para rotas internas allow-listed.</summary>
+    public bool ReviewLinksAreConfigured =>
+        IsAllowedHttpsUrl(WebAppBaseUrl)
+        && Uri.TryCreate(WebAppBaseUrl, UriKind.Absolute, out var uri)
+        && string.IsNullOrEmpty(uri.UserInfo)
+        && uri.AbsolutePath == "/"
+        && string.IsNullOrEmpty(uri.Query)
+        && string.IsNullOrEmpty(uri.Fragment);
 
     /// <summary>Aplica a política HTTPS a uma base sem query ou fragmento.</summary>
     public static bool IsAllowedHttpsUrl(string value) =>

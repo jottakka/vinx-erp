@@ -182,4 +182,5 @@ internal sealed class BrowserBffAntiforgeryRequiredMetadata(bool cookieAuthentic
     public bool CookieAuthenticatedOnly { get; } = cookieAuthenticatedOnly;
 }
 
-internal sealed class BrowserBffCookieOnlyEndpointMetadata;
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
+internal sealed class BrowserBffCookieOnlyEndpointMetadata : Attribute;

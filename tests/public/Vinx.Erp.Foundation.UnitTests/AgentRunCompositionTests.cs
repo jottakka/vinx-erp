@@ -12,6 +12,7 @@ using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Paguai;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.UnitTests;
@@ -61,17 +62,71 @@ public sealed class AgentRunCompositionTests
     {
         var configuration = CreateConfiguration(
             ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
-            ("AgentRun:Endpoint", "https://api.example.com/v1/"),
+            ("AgentRun:Endpoint", "https://API.EXAMPLE.COM/v1/"),
             ("AgentRun:Model", "approved-model"),
-            ("AgentRun:ApiKey", "test-api-key"));
+            ("AgentRun:ApprovedHosts:0", " api.example.com. "));
 
         var services = CreateBaseServices();
-        services.AddAgentRunSurface(configuration);
+        services.AddAgentRunSurface(configuration, ReadDedicatedCredential);
 
         using var provider = services.BuildServiceProvider();
         Assert.IsType<ChatClientAgentModel>(provider.GetRequiredService<IAgentModel>());
         Assert.NotNull(provider.GetRequiredService<AgentRunner>());
         Assert.NotNull(provider.GetRequiredService<AgentOutputGate>());
+    }
+
+    [Fact]
+    public async Task Paguai_profile_uses_its_catalog_contract_with_the_server_selected_model()
+    {
+        var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "https://api.example.com/v1/"),
+            ("AgentRun:Model", "approved-model"),
+            ("AgentRun:ApprovedHosts:0", "api.example.com"));
+        var services = CreateBaseServices();
+        services.AddAgentRunSurface(configuration, ReadDedicatedCredential);
+
+        var companyId = Guid.NewGuid();
+        var actor = new ActorContext(Guid.NewGuid(), Guid.NewGuid());
+        var resolver = new CapturingContextResolver(new AgentExecutionContext(
+            actor.UserId,
+            actor.CorrelationId,
+            companyId,
+            "Empresa Aprovada",
+            Guid.NewGuid(),
+            AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+            new HashSet<string>()));
+        services.AddScoped<IAgentContextResolver>(_ => resolver);
+
+        using var provider = services.BuildServiceProvider();
+        var outcome = await provider.GetRequiredService<AgentRunner>().RunAsync(
+            actor,
+            AgentTaskProfileCatalog.PaguaiFromDocumentProfileId,
+            "extraia a fatura",
+            companyId,
+            [Guid.NewGuid()],
+            CancellationToken.None);
+
+        Assert.Equal(AgentOutcomeStatus.NeedsClarification, outcome.Status);
+        Assert.Equal(AgentOutcomeReason.DocumentContextUnavailable, outcome.ReasonCode);
+        var profile = Assert.IsType<AgentTaskProfile>(resolver.Profile);
+        Assert.Equal(AgentTaskProfileCatalog.PaguaiFromDocumentProfileId, profile.ProfileId);
+        Assert.Equal(AgentTaskProfileCatalog.PaguaiFromDocumentProfileId, profile.Journey);
+        Assert.True(profile.AllowDocumentAttachments);
+        Assert.Equal(new AgentModelSelection(AgentRunOptions.OpenAiCompatibleProvider, "approved-model"), profile.ModelSelection);
+    }
+
+    [Fact]
+    public void Text_runtime_profile_rejects_a_parent_allowlist_entry()
+    {
+        var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "https://api.opencode.ai/zen/go/v1/"),
+            ("AgentRun:Model", "approved-model"),
+            ("AgentRun:ApprovedHosts:0", "opencode.ai"));
+
+        Assert.Throws<InvalidOperationException>(
+            () => CreateBaseServices().AddAgentRunSurface(configuration, ReadDedicatedCredential));
     }
 
     [Fact]
@@ -87,15 +142,16 @@ public sealed class AgentRunCompositionTests
     }
 
     [Fact]
-    public void Provider_without_api_key_fails_the_composition()
+    public void Provider_without_the_dedicated_process_key_fails_the_composition()
     {
         var configuration = CreateConfiguration(
             ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Endpoint", "https://api.example.com/v1/"),
-            ("AgentRun:Model", "approved-model"));
+            ("AgentRun:Model", "approved-model"),
+            ("AgentRun:ApiKey", "ignored-test-key"));
 
         Assert.Throws<InvalidOperationException>(
-            () => CreateBaseServices().AddAgentRunSurface(configuration));
+            () => CreateBaseServices().AddAgentRunSurface(configuration, _ => null));
     }
 
     [Fact]
@@ -106,8 +162,7 @@ public sealed class AgentRunCompositionTests
         var configuration = CreateConfiguration(
             ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Endpoint", "http://127.0.0.1:9999"),
-            ("AgentRun:Model", "approved-model"),
-            ("AgentRun:ApiKey", "test-api-key"));
+            ("AgentRun:Model", "approved-model"));
 
         Assert.Throws<InvalidOperationException>(
             () => CreateBaseServices().AddAgentRunSurface(configuration));
@@ -117,15 +172,19 @@ public sealed class AgentRunCompositionTests
     public void Complete_document_vision_configuration_registers_the_normalizer_as_scoped()
     {
         var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "https://VISION.EXAMPLE.COM/v1/"),
+            ("AgentRun:Model", "approved-vision-model"),
+            ("AgentRun:ApprovedHosts:0", " vision.example.com. "),
             ("AgentRun:Vision:Provider", AgentRunOptions.OpenAiCompatibleProvider),
-            ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
+            ("AgentRun:Vision:Endpoint", "https://VISION.EXAMPLE.COM/v1/"),
             ("AgentRun:Vision:Model", "approved-vision-model"),
-            ("AgentRun:Vision:ApiKey", "test-vision-api-key"),
+            ("AgentRun:Vision:ApprovedHosts:0", " vision.example.com. "),
             ("AgentRun:Vision:Timeout", TimeSpan.FromSeconds(20).ToString()),
             ("AgentRun:Vision:AllowedClassifications:0", "fiscal"));
         var services = CreateBaseServices();
 
-        services.AddAgentRunSurface(configuration);
+        services.AddAgentRunSurface(configuration, ReadDedicatedCredential);
 
         var normalizer = Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(DocumentContextNormalizer));
@@ -133,6 +192,56 @@ public sealed class AgentRunCompositionTests
         var source = Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(IAuthorizedDocumentSource));
         Assert.Equal(ServiceLifetime.Scoped, source.Lifetime);
+    }
+
+    [Fact]
+    public void Vision_runtime_profile_rejects_a_parent_allowlist_entry()
+    {
+        var configuration = CreateConfiguration(
+            ("AgentRun:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Endpoint", "https://vision.opencode.ai/zen/go/v1/"),
+            ("AgentRun:Model", "approved-vision-model"),
+            ("AgentRun:ApprovedHosts:0", "vision.opencode.ai"),
+            ("AgentRun:Vision:Provider", AgentRunOptions.OpenAiCompatibleProvider),
+            ("AgentRun:Vision:Endpoint", "https://vision.opencode.ai/zen/go/v1/"),
+            ("AgentRun:Vision:Model", "approved-vision-model"),
+            ("AgentRun:Vision:ApprovedHosts:0", "opencode.ai"),
+            ("AgentRun:Vision:AllowedClassifications:0", "fiscal"));
+
+        Assert.Throws<InvalidOperationException>(
+            () => CreateBaseServices().AddAgentRunSurface(configuration, ReadDedicatedCredential));
+    }
+
+    [Fact]
+    public void Vision_requires_the_identical_main_profile()
+    {
+        AssertInvalid(CreateMatchingOptions(includeMain: false));
+
+        var differentEndpoint = CreateMatchingOptions();
+        differentEndpoint.Vision!.Endpoint = new Uri("https://other.example/v1/");
+        differentEndpoint.Vision.ApprovedHosts = ["other.example"];
+        AssertInvalid(differentEndpoint);
+
+        var differentModel = CreateMatchingOptions();
+        differentModel.Vision!.Model = "different-model";
+        AssertInvalid(differentModel);
+
+        var differentHosts = CreateMatchingOptions();
+        differentHosts.Vision!.ApprovedHosts = ["api.example", "other.example"];
+        AssertInvalid(differentHosts);
+
+        var normalizedEquivalent = CreateMatchingOptions();
+        normalizedEquivalent.Endpoint = new Uri("https://API.EXAMPLE/v1/");
+        normalizedEquivalent.ApprovedHosts = [" api.example. ", "SECOND.EXAMPLE"];
+        normalizedEquivalent.Timeout = TimeSpan.FromSeconds(12);
+        normalizedEquivalent.Vision!.Endpoint = new Uri("https://api.example:443/v1/");
+        normalizedEquivalent.Vision.ApprovedHosts = ["second.example.", "api.example"];
+        normalizedEquivalent.Vision.Timeout = TimeSpan.FromSeconds(45);
+
+        normalizedEquivalent.Validate();
+
+        static void AssertInvalid(AgentRunOptions options) =>
+            Assert.Throws<InvalidOperationException>(options.Validate);
     }
 
     [Theory]
@@ -161,14 +270,12 @@ public sealed class AgentRunCompositionTests
             ("AgentRun:Vision:Provider", (string?)AgentRunOptions.OpenAiCompatibleProvider),
             ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
             ("AgentRun:Vision:Model", "approved-vision-model"),
-            ("AgentRun:Vision:ApiKey", "test-vision-api-key"),
         },
         new[]
         {
             ("AgentRun:Vision:Provider", (string?)"unsupported"),
             ("AgentRun:Vision:Endpoint", "https://vision.example.com/v1/"),
             ("AgentRun:Vision:Model", "approved-vision-model"),
-            ("AgentRun:Vision:ApiKey", "test-vision-api-key"),
             ("AgentRun:Vision:AllowedClassifications:0", "fiscal"),
         },
     };
@@ -182,6 +289,8 @@ public sealed class AgentRunCompositionTests
         services.AddDbContext<FoundationDbContext>(options =>
             options.UseNpgsql("Host=localhost;Database=vinx;Username=postgres;Password=postgres"));
         services.AddScoped<AuditAppender>();
+        services.AddScoped<CapabilityEvaluator>();
+        services.AddScoped<PaguaiProposalService>();
         services.AddScoped<AuthorizedCompanySetResolver>();
         return services;
     }
@@ -192,6 +301,25 @@ public sealed class AgentRunCompositionTests
                 pairs.Select(pair => new KeyValuePair<string, string?>(pair.Key, pair.Value)))
             .Build();
 
+    private static AgentRunOptions CreateMatchingOptions(bool includeMain = true) => new()
+    {
+        Provider = includeMain ? AgentRunOptions.OpenAiCompatibleProvider : null,
+        Endpoint = includeMain ? new Uri("https://api.example/v1/") : null,
+        Model = includeMain ? "approved-model" : null,
+        ApprovedHosts = includeMain ? ["api.example"] : [],
+        Vision = new AgentRunVisionOptions
+        {
+            Provider = AgentRunOptions.OpenAiCompatibleProvider,
+            Endpoint = new Uri("https://api.example/v1/"),
+            Model = "approved-model",
+            ApprovedHosts = ["api.example"],
+            AllowedClassifications = ["agentic_attachment"],
+        },
+    };
+
+    private static string? ReadDedicatedCredential(string name) =>
+        name == "VINX_AGENT_PROVIDER_API_KEY" ? "synthetic-test-key" : null;
+
     private sealed class StaticContextResolver(AgentContextResolution resolution) : IAgentContextResolver
     {
         public Task<AgentContextResolution> ResolveAsync(
@@ -199,5 +327,20 @@ public sealed class AgentRunCompositionTests
             AgentTaskProfile profile,
             Guid? requestedCompanyId,
             CancellationToken cancellationToken) => Task.FromResult(resolution);
+    }
+
+    private sealed class CapturingContextResolver(AgentExecutionContext context) : IAgentContextResolver
+    {
+        public AgentTaskProfile? Profile { get; private set; }
+
+        public Task<AgentContextResolution> ResolveAsync(
+            ActorContext actor,
+            AgentTaskProfile profile,
+            Guid? requestedCompanyId,
+            CancellationToken cancellationToken)
+        {
+            Profile = profile;
+            return Task.FromResult(new AgentContextResolution(AgentContextResolutionStatus.Resolved, "resolved", context));
+        }
     }
 }

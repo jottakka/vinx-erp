@@ -42,6 +42,14 @@ public sealed class DocumentContextNormalizer
         Guid companyId,
         Guid fileRecordId,
         CancellationToken cancellationToken)
+        => await BuildContextAsync(actor, companyId, fileRecordId, lifecycle: null, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<DocumentContextResult> BuildContextAsync(
+        ActorContext actor,
+        Guid companyId,
+        Guid fileRecordId,
+        IAgentExecutionLifecycle? lifecycle,
+        CancellationToken cancellationToken)
     {
         AuthorizedDocument document;
         try
@@ -72,9 +80,9 @@ public sealed class DocumentContextNormalizer
             {
                 var segments = document.MediaType switch
                 {
-                    "application/pdf" => await FromPdfAsync(document, timeout.Token).ConfigureAwait(false),
+                    "application/pdf" => await FromPdfAsync(document, lifecycle, timeout.Token).ConfigureAwait(false),
                     "image/png" or "image/jpeg" or "image/webp" =>
-                        await FromImageAsync(document, timeout.Token).ConfigureAwait(false),
+                        await FromImageAsync(document, lifecycle, timeout.Token).ConfigureAwait(false),
                     _ => throw new DocumentContextValidationException("document media type is not supported"),
                 };
 
@@ -96,6 +104,7 @@ public sealed class DocumentContextNormalizer
 
     private async Task<List<DocumentSegment>> FromPdfAsync(
         AuthorizedDocument document,
+        IAgentExecutionLifecycle? lifecycle,
         CancellationToken cancellationToken)
     {
         var pages = DocumentTextExtractor.Extract(document.Content, _limits, cancellationToken);
@@ -111,7 +120,7 @@ public sealed class DocumentContextNormalizer
             // Página escaneada: uma rasterização e uma chamada de visão por página.
             var raster = await PageRasterizer.RasterizePageAsync(
                 document.Content, page.Page, page.WidthPoints, page.HeightPoints, _limits, cancellationToken).ConfigureAwait(false);
-            var ocr = await _visionOcr.TranscribePageAsync(raster, "image/jpeg", cancellationToken).ConfigureAwait(false);
+            var ocr = await _visionOcr.TranscribePageAsync(raster, "image/jpeg", lifecycle, cancellationToken).ConfigureAwait(false);
             segments.Add(Segment(document.FileRecordId, page.Page, null, ocr.Confidence, DocumentSegmentSource.VisionOcr, ocr.Text));
         }
 
@@ -120,6 +129,7 @@ public sealed class DocumentContextNormalizer
 
     private async Task<List<DocumentSegment>> FromImageAsync(
         AuthorizedDocument document,
+        IAgentExecutionLifecycle? lifecycle,
         CancellationToken cancellationToken)
     {
         await using var content = new MemoryStream();
@@ -127,7 +137,7 @@ public sealed class DocumentContextNormalizer
 
         // Canonicalizar: o provider nunca recebe os bytes originais.
         var canonical = ImageCanonicalizer.Canonicalize(content.ToArray(), _limits);
-        var ocr = await _visionOcr.TranscribePageAsync(canonical.Bytes, canonical.MediaType, cancellationToken).ConfigureAwait(false);
+        var ocr = await _visionOcr.TranscribePageAsync(canonical.Bytes, canonical.MediaType, lifecycle, cancellationToken).ConfigureAwait(false);
         return [Segment(document.FileRecordId, 1, null, ocr.Confidence, DocumentSegmentSource.VisionOcr, ocr.Text)];
     }
 

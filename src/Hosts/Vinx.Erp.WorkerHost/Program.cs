@@ -1,9 +1,17 @@
 using JasperFx;
 using System.Net.Http.Headers;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Vinx.Erp.AI;
+using Vinx.Erp.AI.DocumentContext;
+using Vinx.Erp.AI.Guardrails;
+using Vinx.Erp.AI.Providers;
+using Vinx.Erp.AI.Providers.OpenAiCompatible;
+using Vinx.Erp.Foundation.Audit;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Configuration;
 using Vinx.Erp.Foundation.Identity;
 using Vinx.Erp.Foundation.Notifications;
@@ -127,6 +135,76 @@ builder.Services.AddDbContext<FoundationDbContext>(
             .UseSnakeCaseNamingConvention()
             .AddInterceptors(new RowVersionInterceptor())
 );
+var workerAgent =
+    builder.Configuration.GetSection(WorkerAgentRunOptions.SectionName)
+        .Get<WorkerAgentRunOptions>() ?? new WorkerAgentRunOptions();
+workerAgent.Validate(Environment.GetEnvironmentVariable);
+builder.Services.AddScoped<AuditAppender>();
+builder.Services.AddScoped<CapabilityEvaluator>();
+builder.Services.AddScoped<AuthorizedCompanySetResolver>();
+builder.Services.AddScoped<IAgentContextResolver, AgentContextResolver>();
+builder.Services.AddScoped<PaguaiProposalService>();
+builder.Services.AddSingleton<SourceAuthorizationGate>();
+builder.Services.AddSingleton<AgentOutputGate>();
+AgentModelSelection? workerAgentSelection = null;
+if (workerAgent.Provider is not null)
+{
+    workerAgentSelection = new AgentModelSelection(workerAgent.Provider, workerAgent.Model!);
+    var providerProfile = workerAgent.ToProviderOptions();
+    builder.Services.AddHttpClient(
+        WorkerAgentRunOptions.ProviderHttpClientName,
+        client =>
+        {
+            client.BaseAddress = providerProfile.Endpoint;
+            client.Timeout = providerProfile.Timeout;
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => OpenAiCompatibleTransport.Create(providerProfile));
+    builder.Services.AddScoped<IAgentModel>(serviceProvider =>
+        new ChatClientAgentModel(OpenAiCompatibleChatClient.CreateForServer(
+            providerProfile,
+            Environment.GetEnvironmentVariable,
+            serviceProvider.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(WorkerAgentRunOptions.ProviderHttpClientName),
+            serviceProvider.GetRequiredService<ILogger<OpenAiCompatibleChatClient>>())));
+}
+
+if (workerAgent.Vision is { } workerVision)
+{
+    var visionProfile = workerVision.ToProviderOptions();
+    builder.Services.AddHttpClient(
+        WorkerAgentRunOptions.VisionHttpClientName,
+        client =>
+        {
+            client.BaseAddress = visionProfile.Endpoint;
+            client.Timeout = visionProfile.Timeout;
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => OpenAiCompatibleTransport.Create(visionProfile));
+    builder.Services.AddScoped<IAuthorizedDocumentSource, FoundationAuthorizedDocumentSource>();
+    builder.Services.AddScoped(serviceProvider =>
+        new DocumentContextNormalizer(
+            serviceProvider.GetRequiredService<IAuthorizedDocumentSource>(),
+            new DocumentVisionOcr(OpenAiCompatibleChatClient.CreateForServer(
+                visionProfile,
+                Environment.GetEnvironmentVariable,
+                serviceProvider.GetRequiredService<IHttpClientFactory>()
+                    .CreateClient(WorkerAgentRunOptions.VisionHttpClientName),
+                serviceProvider.GetRequiredService<ILogger<OpenAiCompatibleChatClient>>())),
+            DocumentContextLimits.FromVisionProfile(
+                visionProfile,
+                workerVision.AllowedClassifications.ToHashSet(StringComparer.Ordinal))));
+}
+
+builder.Services.AddScoped(serviceProvider => new AgentRunner(
+    serviceProvider.GetRequiredService<IAgentContextResolver>(),
+    serviceProvider.GetService<IAgentModel>(),
+    serviceProvider.GetRequiredService<ILogger<AgentRunner>>(),
+    profileId => AgentTaskProfileCatalog.CreateApprovedProfile(
+        profileId,
+        workerAgentSelection,
+        AgentInputLimits.MainTurnMaxCharacters),
+    serviceProvider.GetRequiredService<AgentOutputGate>(),
+    serviceProvider.GetService<DocumentContextNormalizer>()));
+builder.Services.AddScoped<AgentExecutionService>();
 builder.Services.AddScoped<OwnerInvitationDeliveryIngressService>();
 builder.Services.AddScoped<OwnerInvitationProviderDeliveryService>();
 builder.Services.AddScoped<MemberInvitationDeliveryIngressService>();
@@ -141,6 +219,8 @@ builder.Services.AddScoped<NotificationDeliveryWorkerService>();
 builder.Services.AddScoped<NotificationIntentService>();
 builder.Services.AddScoped<InboundWhatsAppInteractionService>();
 builder.Services.AddScoped<InboundWhatsAppDocumentService>();
+builder.Services.AddScoped<InboundAttachmentMaterializer>();
+builder.Services.AddScoped<InboundAgentChannelAdapter>();
 // Storage privado condicionado por configuração (padrão do antimalware):
 // sem SUPABASE_STORAGE_* o worker sobe e o fluxo de documentos falha fechado
 // (BlockedFileStorage); configurado ativa o adapter Supabase.
@@ -198,21 +278,6 @@ builder
     .ValidateOnStart();
 builder.Services.AddSingleton<Vinx.Erp.Foundation.Files.IMalwareScanner, WorkerMalwareScanner>();
 builder
-    .Services.AddOptions<InboundWhatsAppAiOptions>()
-    .Bind(builder.Configuration.GetSection(InboundWhatsAppAiOptions.SectionName))
-    .Validate(
-        options =>
-            // Tudo-ou-nada no espírito do Meta WhatsApp: ausente mantém o
-            // worker de pé (cada imagem falha fechada como ai_unconfigured);
-            // presente-porém-parcial é erro de deploy e derruba o boot.
-            options.ValidateConfiguration() is null,
-        "Inbound WhatsApp AI profiles are invalid."
-    )
-    .ValidateOnStart();
-builder.Services.AddSingleton(serviceProvider =>
-    serviceProvider.GetRequiredService<IOptions<InboundWhatsAppAiOptions>>().Value
-);
-builder
     .Services.AddOptions<MetaWhatsAppOptions>()
     .Bind(builder.Configuration)
     .Validate(
@@ -269,14 +334,18 @@ builder
             // só envia outbound, portanto valida exclusivamente token e base;
             // o ApiHost assume o segredo de webhook quando o receber.
             (
-                string.IsNullOrWhiteSpace(options.BotToken)
-                && string.Equals(
-                    options.ApiBaseUrl,
-                    "https://api.telegram.org",
-                    StringComparison.Ordinal
+                (
+                    string.IsNullOrWhiteSpace(options.BotToken)
+                    && string.Equals(
+                        options.ApiBaseUrl,
+                        "https://api.telegram.org",
+                        StringComparison.Ordinal
+                    )
                 )
+                || options.OutboundIsConfigured
             )
-            || options.OutboundIsConfigured,
+            && (string.IsNullOrWhiteSpace(options.WebAppBaseUrl)
+                || options.ReviewLinksAreConfigured),
         "Telegram options are invalid."
     )
     .ValidateOnStart();
@@ -292,28 +361,6 @@ builder
         new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
     )
     .RemoveAllLoggers();
-builder
-    .Services.AddHttpClient(
-        InboundWhatsAppInteractionService.TextHttpClientName,
-        (serviceProvider, client) =>
-            client.Timeout = serviceProvider
-                .GetRequiredService<IOptions<InboundWhatsAppAiOptions>>()
-                .Value.Text.Timeout
-    )
-    .ConfigurePrimaryHttpMessageHandler(() =>
-        new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
-    );
-builder
-    .Services.AddHttpClient(
-        InboundWhatsAppInteractionService.VisionHttpClientName,
-        (serviceProvider, client) =>
-            client.Timeout = serviceProvider
-                .GetRequiredService<IOptions<InboundWhatsAppAiOptions>>()
-                .Value.Vision.Timeout
-    )
-    .ConfigurePrimaryHttpMessageHandler(() =>
-        new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
-    );
 builder
     .Services.AddHttpClient(
         SupabaseAdminInvitationClient.HttpClientName,
@@ -333,6 +380,7 @@ builder.Host.UseWolverine(options =>
     // global e fixado pelo primeiro host; amarrar explicitamente evita que
     // este worker adote outro assembly (GH-3521).
     options.ApplicationAssembly = typeof(Program).Assembly;
+    options.CodeGeneration.AlwaysUseServiceLocationFor<AgentRunner>();
     options.UseEntityFrameworkCoreTransactions();
     options.Discovery.DisableConventionalDiscovery(true);
     options.Discovery.IncludeType<OwnerInvitationDeliveryRequestedHandler>();
@@ -342,6 +390,7 @@ builder.Host.UseWolverine(options =>
     options.Discovery.IncludeType<InboundWhatsAppImageReceivedHandler>();
     options.Discovery.IncludeType<InboundWhatsAppTextCorrelationExpiredHandler>();
     options.Discovery.IncludeType<InboundWhatsAppDocumentReceivedHandler>();
+    options.Discovery.IncludeType<InboundAgentRequestReceivedHandler>();
     options.Discovery.IncludeType<InboundTelegramTextReceivedHandler>();
     options.AutoBuildMessageStorageOnStartup = AutoCreate.None;
     options
@@ -381,4 +430,85 @@ internal sealed class WorkerDatabaseOptions
 
     [Microsoft.Extensions.Configuration.ConfigurationKeyName(ConnectionStringConfigurationKey)]
     public string ConnectionString { get; set; } = string.Empty;
+}
+
+internal sealed class WorkerAgentRunOptions
+{
+    public const string SectionName = "AgentRun";
+    public const string ProviderHttpClientName = "agent-provider";
+    public const string VisionHttpClientName = "agent-document-vision";
+    private const string OpenAiCompatibleProvider = "openai_compatible";
+
+    public string? Provider { get; set; }
+    public Uri? Endpoint { get; set; }
+    public string? Model { get; set; }
+    public IReadOnlyList<string> ApprovedHosts { get; set; } = [];
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
+    public WorkerAgentVisionOptions? Vision { get; set; }
+
+    public void Validate(Func<string, string?> readEnvironment)
+    {
+        if (Provider is null && Vision is null)
+        {
+            return;
+        }
+
+        if (!OpenAiCompatibleChatClient.HasServerCredential(readEnvironment)
+            || (Provider is not null
+                && (!string.Equals(Provider, OpenAiCompatibleProvider, StringComparison.Ordinal)
+                    || !ExactApprovedHostPolicy.Matches(Endpoint, ApprovedHosts)
+                    || new OpenAiCompatibleOptions.Validator()
+                        .ValidateForRuntimeCredential(null, ToProviderOptions()).Failed))
+            || (Vision is not null
+                && (!Vision.IsValid()
+                    || Provider is null
+                    || !string.Equals(Provider, Vision.Provider, StringComparison.Ordinal)
+                    || !string.Equals(Model, Vision.Model, StringComparison.Ordinal)
+                    || !ExactApprovedHostPolicy.ProfilesMatch(
+                        Endpoint,
+                        ApprovedHosts,
+                        Vision.Endpoint,
+                        Vision.ApprovedHosts))))
+        {
+            throw new InvalidOperationException("Agent run configuration is invalid.");
+        }
+    }
+
+    public OpenAiCompatibleOptions ToProviderOptions() => new()
+    {
+        Endpoint = Endpoint,
+        Model = Model ?? string.Empty,
+        Timeout = Timeout,
+        MaxInputCharacters = AgentInputLimits.MainTurnMaxCharacters,
+        ApprovedHosts = ApprovedHosts,
+        ModuleTag = "ai/agent-provider",
+    };
+}
+
+internal sealed class WorkerAgentVisionOptions
+{
+    public string? Provider { get; set; }
+    public Uri? Endpoint { get; set; }
+    public string? Model { get; set; }
+    public IReadOnlyList<string> ApprovedHosts { get; set; } = [];
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(45);
+    public IReadOnlyList<string> AllowedClassifications { get; set; } = [];
+
+    public bool IsValid() =>
+        string.Equals(Provider, "openai_compatible", StringComparison.Ordinal)
+        && AllowedClassifications.Count > 0
+        && AllowedClassifications.All(value => !string.IsNullOrWhiteSpace(value))
+        && ExactApprovedHostPolicy.Matches(Endpoint, ApprovedHosts)
+        && !new OpenAiCompatibleOptions.Validator()
+            .ValidateForRuntimeCredential(null, ToProviderOptions()).Failed;
+
+    public OpenAiCompatibleOptions ToProviderOptions() => new()
+    {
+        Endpoint = Endpoint,
+        Model = Model ?? string.Empty,
+        Timeout = Timeout,
+        ApprovedHosts = ApprovedHosts,
+        AllowImageInputs = true,
+        ModuleTag = "ai/agent-document-vision",
+    };
 }

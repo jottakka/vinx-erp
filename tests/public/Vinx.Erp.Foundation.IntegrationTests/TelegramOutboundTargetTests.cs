@@ -11,6 +11,8 @@ public sealed class TelegramOutboundTargetTests
 {
     private const string TelegramChannelMigration =
         "20260826120000_AddTelegramNotificationChannel";
+    private const string TelegramOutboundTargetMigration =
+        "20260826121000_AddTelegramOutboundTarget";
 
     [Fact]
     public async Task Worker_reads_only_the_matching_in_flight_telegram_target_and_no_other_attempt()
@@ -87,30 +89,25 @@ public sealed class TelegramOutboundTargetTests
     [Fact]
     public async Task Downgrade_to_the_PR1_Telegram_contract_removes_only_the_outbound_target()
     {
-        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
-        var seed = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
-            factory,
-            telegramOptedIn: true,
-            telegramContactValidated: true
-        );
-        var original = await NotificationIntentSeed.EnqueueAsync(
-            factory,
-            new NotificationIntentCommand(
-                seed.CompanyId,
-                seed.RecipientUserId,
-                NotificationIntentSeed.NewEventKey(),
-                seed.InAppTemplateKey,
-                TelegramTemplateKey: seed.TelegramTemplateKey
-            )
-        );
-        Assert.True(original.Telegram!.Created);
+        await using var fixture = new FoundationPostgresFixture();
+        await fixture.StartAsync();
+        await using (var migration = fixture.CreateMigratorDbContext())
+        {
+            await migration.Database.MigrateAsync(TelegramOutboundTargetMigration);
+        }
 
-        await using (var migrator = factory.Fixture.CreateMigratorDbContext())
+        var seed = await SeedTelegramDowngradeStateAsync(fixture);
+        var originalDeliveryId = await EnqueueTelegramAsRuntimeAsync(
+            fixture,
+            seed,
+            "outbound-target-before-downgrade");
+
+        await using (var migrator = fixture.CreateMigratorDbContext())
         {
             await migrator.Database.MigrateAsync(TelegramChannelMigration);
         }
 
-        await using (var administrator = await factory.Fixture.OpenAdministratorConnectionAsync())
+        await using (var administrator = await fixture.OpenAdministratorConnectionAsync())
         {
             await using var command = new NpgsqlCommand(
                 """
@@ -153,9 +150,9 @@ public sealed class TelegramOutboundTargetTests
                 administrator
             );
             command.Parameters.AddWithValue("company_id", seed.CompanyId);
-            command.Parameters.AddWithValue("user_id", seed.RecipientUserId);
-            command.Parameters.AddWithValue("template_key", seed.TelegramTemplateKey);
-            command.Parameters.AddWithValue("delivery_id", original.Telegram.DeliveryId!.Value);
+            command.Parameters.AddWithValue("user_id", seed.UserId);
+            command.Parameters.AddWithValue("template_key", seed.TemplateKey);
+            command.Parameters.AddWithValue("delivery_id", originalDeliveryId);
             await using var reader = await command.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
             for (var column = 0; column < reader.FieldCount; column++)
@@ -164,17 +161,112 @@ public sealed class TelegramOutboundTargetTests
             }
         }
 
-        var enqueuedAfterDowngrade = await NotificationIntentSeed.EnqueueAsync(
-            factory,
-            new NotificationIntentCommand(
-                seed.CompanyId,
-                seed.RecipientUserId,
-                NotificationIntentSeed.NewEventKey(),
-                seed.InAppTemplateKey,
-                TelegramTemplateKey: seed.TelegramTemplateKey
-            )
-        );
-        Assert.True(enqueuedAfterDowngrade.Telegram!.Created);
+        Assert.NotEqual(
+            originalDeliveryId,
+            await EnqueueTelegramAsRuntimeAsync(
+                fixture,
+                seed,
+                "outbound-target-after-downgrade"));
+    }
+
+    private static async Task<TelegramDowngradeSeed> SeedTelegramDowngradeStateAsync(
+        FoundationPostgresFixture fixture)
+    {
+        var seed = new TelegramDowngradeSeed(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "legacy.telegram");
+        var groupId = Guid.NewGuid();
+        var suffix = Guid.NewGuid().ToString("N")[..10];
+        await using var administrator = await fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO foundation.users (id, display_name, email, created_at)
+            VALUES (@user_id, @display_name, @email, clock_timestamp());
+            INSERT INTO foundation.groups (
+                id, name, created_by_user_id, updated_by_user_id, request_id, created_at, updated_at)
+            VALUES (
+                @group_id, @group_name, @user_id, @user_id, gen_random_uuid(),
+                clock_timestamp(), clock_timestamp());
+            INSERT INTO foundation.companies (
+                id, group_id, name, created_by_user_id, updated_by_user_id, request_id,
+                created_at, updated_at)
+            VALUES (
+                @company_id, @group_id, @company_name, @user_id, @user_id,
+                gen_random_uuid(), clock_timestamp(), clock_timestamp());
+            INSERT INTO foundation.memberships (
+                id, company_id, user_id, created_by_user_id, updated_by_user_id,
+                request_id, created_at, updated_at)
+            VALUES (
+                gen_random_uuid(), @company_id, @user_id, @user_id, @user_id,
+                gen_random_uuid(), clock_timestamp(), clock_timestamp());
+            INSERT INTO notifications.notification_templates (
+                company_id, channel, template_key, is_approved, telegram_text)
+            VALUES (@company_id, 'telegram', @template_key, true, 'Telegram aprovado');
+            INSERT INTO notifications.notification_preferences (
+                company_id, user_id, channel, opted_in, updated_by_user_id)
+            VALUES (@company_id, @user_id, 'telegram', true, @user_id);
+            INSERT INTO notifications.notification_recipient_contacts (
+                company_id, user_id, channel, address, is_validated, updated_by_user_id)
+            VALUES (@company_id, @user_id, 'telegram', '123456789', true, @user_id);
+            """,
+            administrator);
+        command.Parameters.AddWithValue("user_id", seed.UserId);
+        command.Parameters.AddWithValue("display_name", $"telegram-recipient-{suffix}");
+        command.Parameters.AddWithValue("email", $"telegram-recipient-{suffix}@example.test");
+        command.Parameters.AddWithValue("group_id", groupId);
+        command.Parameters.AddWithValue("group_name", $"telegram-group-{suffix}");
+        command.Parameters.AddWithValue("company_id", seed.CompanyId);
+        command.Parameters.AddWithValue("company_name", $"telegram-company-{suffix}");
+        command.Parameters.AddWithValue("template_key", seed.TemplateKey);
+        await command.ExecuteNonQueryAsync();
+        return seed;
+    }
+
+    private static async Task<Guid> EnqueueTelegramAsRuntimeAsync(
+        FoundationPostgresFixture fixture,
+        TelegramDowngradeSeed seed,
+        string eventKey)
+    {
+        await using var runtime = new NpgsqlConnection(fixture.RuntimeConnectionString);
+        await runtime.OpenAsync();
+        await using var transaction = await runtime.BeginTransactionAsync();
+        await using (var context = new NpgsqlCommand(
+            """
+            SELECT set_config('app.user_id', @user_id::text, true),
+                   set_config('app.correlation_id', @correlation_id::text, true)
+            """,
+            runtime,
+            transaction))
+        {
+            context.Parameters.AddWithValue("user_id", seed.UserId);
+            context.Parameters.AddWithValue("correlation_id", Guid.NewGuid());
+            await context.ExecuteNonQueryAsync();
+        }
+
+        await using var enqueue = new NpgsqlCommand(
+            """
+            SELECT status, delivery_id
+            FROM notifications.enqueue_notification_intent(
+                @company_id, @user_id, @event_key, 'telegram', @template_key, '/paguai')
+            """,
+            runtime,
+            transaction);
+        enqueue.Parameters.AddWithValue("company_id", seed.CompanyId);
+        enqueue.Parameters.AddWithValue("user_id", seed.UserId);
+        enqueue.Parameters.AddWithValue("event_key", eventKey);
+        enqueue.Parameters.AddWithValue("template_key", seed.TemplateKey);
+        Guid deliveryId;
+        await using (var reader = await enqueue.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("created", reader.GetString(0));
+            deliveryId = reader.GetGuid(1);
+            Assert.False(await reader.ReadAsync());
+        }
+
+        await transaction.CommitAsync();
+        return deliveryId;
     }
 
     internal static async Task<TelegramDeliveryClaim> CreateClaimedTelegramAsync(
@@ -295,6 +387,8 @@ public sealed class TelegramOutboundTargetTests
     }
 
     internal sealed record TelegramDeliveryClaim(Guid DeliveryId, Guid AttemptId);
+
+    private sealed record TelegramDowngradeSeed(Guid CompanyId, Guid UserId, string TemplateKey);
 
     private sealed record TelegramTarget(string? ChatId, string? MessageText);
 }

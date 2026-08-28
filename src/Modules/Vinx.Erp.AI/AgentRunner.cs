@@ -28,6 +28,7 @@ public sealed class AgentRunner(
 {
     private const string Operation = "run";
     private const string Module = "Vinx.Erp.AI";
+    private const string ExactlyOneAttachmentRequired = "exactly_one_attachment_required";
     private const string ExecutionLogTemplate = "Agent execution {Operation} {Module} {Result} {Reason} {ElapsedMs}";
 
     private static readonly IReadOnlySet<string> NoRequiredOutputFields = new HashSet<string>();
@@ -49,6 +50,17 @@ public sealed class AgentRunner(
         Guid? requestedCompanyId,
         IReadOnlyList<Guid> attachmentIds,
         CancellationToken cancellationToken)
+        => await RunAsync(actor, profileId, message, requestedCompanyId, attachmentIds, lifecycle: null, cancellationToken)
+            .ConfigureAwait(false);
+
+    internal async Task<AgentOutcome> RunAsync(
+        ActorContext actor,
+        string profileId,
+        string message,
+        Guid? requestedCompanyId,
+        IReadOnlyList<Guid> attachmentIds,
+        IAgentExecutionLifecycle? lifecycle,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(attachmentIds);
         var stopwatch = Stopwatch.StartNew();
@@ -64,6 +76,11 @@ public sealed class AgentRunner(
         if (attachmentIds.Count > 0 && !profile!.AllowDocumentAttachments)
         {
             return Finish(AgentOutcomeStatus.Invalid, AgentOutcomeReason.AttachmentsNotAllowed, actor, stopwatch);
+        }
+
+        if (profile!.ProfileId == AgentTaskProfileCatalog.PaguaiFromDocumentProfileId && attachmentIds.Count != 1)
+        {
+            return Finish(AgentOutcomeStatus.Invalid, ExactlyOneAttachmentRequired, actor, stopwatch);
         }
 
         // 2. Contexto confiável resolvido ANTES do modelo; reason copiado.
@@ -83,6 +100,7 @@ public sealed class AgentRunner(
         }
 
         var turnText = message;
+        PaguaiDocumentProposalParseRequest? paguaiDocumentProposalRequest = null;
         if (attachmentIds.Count > 0)
         {
             var documentContexts = new List<DocumentContextResult>(attachmentIds.Count);
@@ -93,6 +111,7 @@ public sealed class AgentRunner(
                         actor,
                         resolution.Context!.CompanyId,
                         attachmentId,
+                        lifecycle,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (documentContext.Status is not DocumentContextStatus.Ready)
@@ -108,6 +127,15 @@ public sealed class AgentRunner(
             }
 
             turnText = ComposeTurn(message, documentContexts, profile!.MaxInputCharacters);
+            if (profile.ProfileId == AgentTaskProfileCatalog.PaguaiFromDocumentProfileId)
+            {
+                paguaiDocumentProposalRequest = new PaguaiDocumentProposalParseRequest(
+                    documentContexts[0].FileRecordId,
+                    documentContexts.SelectMany(document => document.Segments)
+                        .Select(segment => segment.SourceRef)
+                        .ToHashSet(StringComparer.Ordinal),
+                    StructuredJson: string.Empty);
+            }
         }
 
         // 3. Provider não atribuído ou cliente ausente: fail-closed até #135.
@@ -124,6 +152,13 @@ public sealed class AgentRunner(
         ChatResponse response;
         try
         {
+            // A transição durável acontece imediatamente antes da única chamada
+            // principal; qualquer saída incerta depois dela é ambígua.
+            if (lifecycle is not null)
+            {
+                await lifecycle.MarkModelInFlightAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             response = await model.GetResponseAsync(messages, profile.ModelSelection, linkedCts.Token);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -161,9 +196,13 @@ public sealed class AgentRunner(
         {
             var gated = outputGate.Evaluate(new AgentOutputGateRequest(
                 resolution.Context!,
-                ToModelResponse(response, toolCall is not null),
+                ToModelResponse(
+                    response,
+                    toolCall is not null,
+                    profile!.ProfileId == AgentTaskProfileCatalog.PaguaiFromDocumentProfileId),
                 new AgentOutputContract(profile!.Journey, profile.RequiredOutputFields ?? NoRequiredOutputFields),
-                profile.SourcesRequired));
+                profile.SourcesRequired,
+                paguaiDocumentProposalRequest));
 
             // Proposta de tool domina o desfecho do gate: segue exigindo
             // confirmação, com o texto que o gate liberou.
@@ -175,11 +214,19 @@ public sealed class AgentRunner(
                     actor,
                     stopwatch,
                     text: gated.Text,
-                    proposedActionName: toolCall.Name);
+                    proposedActionName: toolCall.Name,
+                    policyVersion: gated.PolicyVersion);
             }
 
             var gatedStatus = MapOutputGateStatus(gated.Status);
-            return Finish(gatedStatus, gated.ReasonCode, actor, stopwatch, text: gated.Text);
+            return Finish(
+                gatedStatus,
+                gated.ReasonCode,
+                actor,
+                stopwatch,
+                text: gated.Text,
+                paguaiProposal: gated.PaguaiProposal,
+                policyVersion: gated.PolicyVersion);
         }
 
         if (toolCall is not null)
@@ -201,7 +248,10 @@ public sealed class AgentRunner(
     /// estruturado, sem fontes citadas e sem confiança — as regras completas
     /// permanecem no gate.
     /// </summary>
-    private static AgentModelResponse ToModelResponse(ChatResponse response, bool hasToolProposal)
+    private static AgentModelResponse ToModelResponse(
+        ChatResponse response,
+        bool hasToolProposal,
+        bool structuredOutputRequired)
     {
         var firstText = response.Messages
             .SelectMany(messageContent => messageContent.Contents)
@@ -209,8 +259,8 @@ public sealed class AgentRunner(
             .FirstOrDefault();
 
         return new AgentModelResponse(
-            firstText?.Text,
-            StructuredJson: null,
+            structuredOutputRequired ? null : firstText?.Text,
+            StructuredJson: structuredOutputRequired ? firstText?.Text : null,
             CitedSources: [],
             Confidence: null,
             HasToolProposal: hasToolProposal);
@@ -323,10 +373,20 @@ public sealed class AgentRunner(
         Stopwatch stopwatch,
         string? text = null,
         string? proposedActionName = null,
+        PaguaiDocumentProposal? paguaiProposal = null,
+        string? policyVersion = null,
         Exception? exception = null)
     {
         stopwatch.Stop();
-        var outcome = new AgentOutcome(status, reasonCode, text, proposedActionName, actor.CorrelationId, stopwatch.Elapsed);
+        var outcome = new AgentOutcome(
+            status,
+            reasonCode,
+            text,
+            proposedActionName,
+            actor.CorrelationId,
+            stopwatch.Elapsed,
+            paguaiProposal,
+            policyVersion);
         AgentTelemetry.RecordExecution(status, reasonCode);
 
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = actor.CorrelationId });

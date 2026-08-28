@@ -31,6 +31,16 @@ Esta etapa não lê o texto e não chama HTTP, provedor ou IA. Toda confirmaçã
 humana ou de negócio continua sendo decidida pelo servidor em um fluxo próprio;
 nunca deve ser inferida deste estado.
 
+## Encaminhamento ao Agente (#335)
+
+O recibo técnico permanece separado da execução do Agente. Ela usa envelope
+próprio apenas com `InboundMessageId`, faz claim/read/finalize no registro
+admitido e nunca carrega texto, chat ID, username ou segredo. Quando a empresa
+é ambígua, o servidor oferece seleção autenticada limitada às memberships
+ativas; a preferência só é aplicada a uma nova mensagem, e a original não roda
+o Agente. Nenhuma resposta do canal confirma Pagaí ou equivale a entrega
+confirmada pelo Telegram.
+
 Somente `vinx_worker` executa a função de conclusão e acessa, com DML explícito,
 as tabelas `wolverine_queue_telegram_inbound` e `_scheduled`. O runtime não
 conclui diretamente e o worker não recebe `CREATE` no schema da fila.

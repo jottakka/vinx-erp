@@ -115,6 +115,10 @@ public sealed class AgentTaskProfileTests
 
         Assert.False(AgentTaskProfileCatalog.TryGet(" ", out var whitespace));
         Assert.Null(whitespace);
+
+        Assert.Null(AgentTaskProfileCatalog.CreateApprovedProfile(
+            "inventado",
+            new AgentModelSelection("openai-compatible", "modelo-aprovado")));
     }
 
     [Fact]

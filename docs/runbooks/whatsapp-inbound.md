@@ -1,4 +1,4 @@
-# Runbook — WhatsApp inbound, correlação curta e imagem → IA
+# Runbook — WhatsApp inbound e Agente multicanal
 
 ## Visão
 
@@ -20,16 +20,18 @@ processamento de imagem. O envelope de expiração de texto já exigido pode
 permanecer agendado e vira no-op ao encontrar o estado terminal. Replay não
 republica; texto sem imagem expira sem IA nem resposta automática.
 
-Imagens processadas seguem pela fila durável `whatsapp-inbound` e o WorkerHost:
-download da mídia → canonicalização (strip de metadados, tetos de pixel/byte) →
-OCR pelo perfil de visão → um turno único de IA → resposta de texto ao
-remetente (janela 24h aberta pelo inbound). O pedido à IA contém um sistema
-fixo e um único turno de usuário com blocos opcionais `User text`,
-`Image caption` e `OCR transcription`, sempre como dados não confiáveis.
-Documentos admitidos ficam
-duráveis sem consumidor nesta fatia (download/quarentena/OCR/Pagaí são os PRs
-seguintes do #272; sem resposta automática). Outros tipos de mensagem continuam
-ignorados (fora do corte).
+Após admissão, o canal publica para o Agente somente `InboundMessageId`. O
+handler compartilhado relê o registro autorizado, faz claim durável antes de
+OCR/provider e chama o mesmo núcleo de Web e Telegram. Documento segue
+download, quarentena, scan, `FileRecord` confirmado e contexto OCR efêmero;
+mídia, número, texto, prompt e credencial não entram no envelope. A resposta
+conserva a barreira de ambiguidade e não confirma Pagaí nem entrega externa.
+Se houver queda depois do terminal do ledger e antes da resposta, uma redelivery
+recupera somente o ledger correspondente em `completed`, `failed_closed` ou
+`ambiguous`, reutiliza o `agent_file_id` confirmado e converge a mesma barreira.
+Ledger ausente ou ainda em `claimed`/`*_in_flight` permanece no-op para
+reconciliação manual; não há timer, reset automático, novo OCR ou nova chamada
+ao modelo.
 
 ## Variáveis de ambiente
 
@@ -37,13 +39,11 @@ ignorados (fora do corte).
 | --- | --- | --- |
 | `META_WHATSAPP_APP_SECRET` / `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN` / `META_WHATSAPP_WEB_APP_BASE_URL` | sim | webhook (assinatura/challenge) |
 | `META_WHATSAPP_PHONE_NUMBER_ID` | sim, para admissão de mídia | canal estável: o `phone_number_id` do webhook deve ser exatamente este valor |
-| `InboundWhatsAppAi:Text:Endpoint/ApiKey/Model` | com IA | endpoint OpenAI-compatible do perfil de texto |
-| `InboundWhatsAppAi:Vision:Endpoint/ApiKey/Model` | com IA | perfil de visão (OCR) |
-| `InboundWhatsAppAi:Vision:AllowImageInputs` | com IA | deve ser `true` |
+| `VINX_AGENT_PROVIDER_API_KEY` | sim, para Agente real | credencial somente no ambiente do processo WorkerHost |
 
-Tudo-ou-nada (IA): sem os dois perfis o worker sobe e cada imagem admitida
-falha fechada com `ai_unconfigured`; presente-porém-parcial derruba o boot
-(`ValidateOnStart`).
+Perfil real ausente ou inválido falha fechado; testes automatizados usam o
+modelo determinístico. OpenCode Go é só o primeiro perfil real/smoke, sem
+tornar o núcleo específico do provider.
 
 ## Estados de admissão (`resolution_state`)
 

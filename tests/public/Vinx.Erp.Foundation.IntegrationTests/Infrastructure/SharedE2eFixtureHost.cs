@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using Npgsql;
 using Vinx.Erp.AI;
 using Vinx.Erp.ApiHost.Agent;
+using Vinx.Erp.Foundation.Files;
 
 namespace Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
 
@@ -56,6 +57,10 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
     internal E2eDatasetReceipt Receipt => _receipt
         ?? throw new InvalidOperationException("The shared fixture receipt is not available.");
 
+    internal int MariaAgentVisionCallCount => RequireMariaHost().AgentVisionCallCount;
+
+    internal int ClaraAgentVisionCallCount => RequireClaraHost().AgentVisionCallCount;
+
     internal Task<NpgsqlConnection> OpenAdministratorConnectionAsync() =>
         RequireFixtureOwner().OpenAdministratorConnectionAsync();
 
@@ -72,7 +77,8 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
     public static async Task<SharedE2eFixtureHost> StartAsync(
         CancellationToken cancellationToken,
         IAgentModel? testAgentModel = null,
-        AgentRunOptions? testAgentRunOptions = null)
+        AgentRunOptions? testAgentRunOptions = null,
+        FileStorage? testFileStorage = null)
     {
         var sharedHost = new SharedE2eFixtureHost();
         var phase = E2eFixtureHostFailurePhase.FixtureStart;
@@ -82,6 +88,7 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
             sharedHost._fixtureCleanupResource = sharedHost._fixtureOwner;
             await sharedHost._fixtureOwner.StartAsync();
             await sharedHost._fixtureOwner.MigrateAsync();
+            await WolverineStorageDeployment.ApplyAsync(sharedHost._fixtureOwner);
 
             phase = E2eFixtureHostFailurePhase.Seed;
             var receipt = await E2eFixtureSeeder.SeedAsync(sharedHost._fixtureOwner, cancellationToken);
@@ -94,7 +101,8 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
                 mariaLease,
                 receipt,
                 testAgentModel,
-                testAgentRunOptions);
+                testAgentRunOptions,
+                testFileStorage);
             sharedHost._mariaHost = await E2eFixtureHost.StartPreparedAsync(
                 mariaContext,
                 mariaLease,
@@ -107,7 +115,8 @@ public sealed class SharedE2eFixtureHost : IAsyncDisposable
                 claraLease,
                 receipt,
                 testAgentModel,
-                testAgentRunOptions);
+                testAgentRunOptions,
+                testFileStorage);
             sharedHost._claraHost = await E2eFixtureHost.StartPreparedAsync(
                 claraContext,
                 claraLease,

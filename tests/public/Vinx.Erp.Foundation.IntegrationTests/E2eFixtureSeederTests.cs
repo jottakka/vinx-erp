@@ -56,7 +56,7 @@ public sealed class E2eFixtureSeederTests
             () => E2eFixtureSeeder.SeedAsync(fixture, CancellationToken.None));
         Assert.Equal(PostgresErrorCodes.UniqueViolation, partialFailure.SqlState);
         Assert.Equal(
-            (Users: 0L, ExternalIdentities: 0L, Groups: 1L, GroupName: "preexisting sentinel"),
+            (Users: 0L, ExternalIdentities: 0L, Groups: 1L, Files: 0L, GroupName: "preexisting sentinel"),
             await ReadRollbackStateAsync(fixture));
 
         await RemoveCanonicalGroupSentinelAsync(fixture);
@@ -72,19 +72,21 @@ public sealed class E2eFixtureSeederTests
                 Guid.Parse("a1000000-0000-4000-8000-000000000001"),
                 Guid.Parse("a2000000-0000-4000-8000-000000000001"),
                 Guid.Parse("a2000000-0000-4000-8000-000000000002"),
-                Guid.Parse("a2000000-0000-4000-8000-000000000003")),
+                Guid.Parse("a2000000-0000-4000-8000-000000000003"),
+                Guid.Parse("f4000000-0000-4000-8000-000000000001")),
             receipt);
 
         using var beforeSecondSeed = await ReadDatasetSummaryAsync(fixture);
         var root = beforeSecondSeed.RootElement;
         Assert.Equal(
-            [1L, 3L, 4L, 4L, 5L, 3L, 3L, 5L, 5L, 18L, 5L, 4L, 5L, 4L, 1L, 0L, 3L],
+            [1L, 3L, 4L, 4L, 5L, 3L, 3L, 5L, 5L, 21L, 1L, 5L, 4L, 5L, 4L, 1L, 0L, 3L],
             root.GetProperty("counts").EnumerateArray().Select(value => value.GetInt64()));
         Assert.Equal("Alfa,Beta", root.GetProperty("maria_companies").GetString());
         Assert.Equal(
             "Alfa/Atendimento agent=foundation.employees.create|service_desk.ticket.assign|" +
             "service_desk.ticket.create|service_desk.ticket.move|service_desk.ticket.read_queue;" +
-            "Alfa/Operations=ai.read|foundation.employees.create|paguai.draft.create|paguai.draft.read|" +
+            "Alfa/Operations=ai.read|foundation.employees.create|foundation.files.confirm|" +
+            "foundation.files.read-ocr|foundation.files.upload|paguai.draft.create|paguai.draft.read|" +
             "service_desk.ticket.assign|service_desk.ticket.create|service_desk.ticket.move|" +
             "service_desk.ticket.read_queue;Beta/Finance operator=paguai.draft.create|" +
             "paguai.draft.read;Beta/Reader=paguai.draft.read|service_desk.ticket.read_queue;" +
@@ -133,7 +135,11 @@ public sealed class E2eFixtureSeederTests
             "d3000000-0000-4000-8000-000000000015/f4000000-0000-4000-8000-000000000040," +
             "d3000000-0000-4000-8000-000000000016/f4000000-0000-4000-8000-000000000041," +
             "d3000000-0000-4000-8000-000000000017/f4000000-0000-4000-8000-000000000042," +
-            "d3000000-0000-4000-8000-000000000018/f4000000-0000-4000-8000-000000000065;" +
+            "d3000000-0000-4000-8000-000000000018/f4000000-0000-4000-8000-000000000065," +
+            "d3000000-0000-4000-8000-000000000019/f4000000-0000-4000-8000-000000000066," +
+            "d3000000-0000-4000-8000-000000000020/f4000000-0000-4000-8000-000000000067," +
+            "d3000000-0000-4000-8000-000000000021/f4000000-0000-4000-8000-000000000068;" +
+            "files=f4000000-0000-4000-8000-000000000001/f4000000-0000-4000-8000-000000000069;" +
             "employees=e1000000-0000-4000-8000-000000000001/f4000000-0000-4000-8000-000000000043," +
             "e1000000-0000-4000-8000-000000000002/f4000000-0000-4000-8000-000000000044," +
             "e1000000-0000-4000-8000-000000000003/f4000000-0000-4000-8000-000000000045," +
@@ -207,7 +213,7 @@ public sealed class E2eFixtureSeederTests
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
-    private static async Task<(long Users, long ExternalIdentities, long Groups, string GroupName)>
+    private static async Task<(long Users, long ExternalIdentities, long Groups, long Files, string GroupName)>
         ReadRollbackStateAsync(FoundationPostgresFixture fixture)
     {
         await using var connection = await fixture.OpenAdministratorConnectionAsync();
@@ -217,13 +223,19 @@ public sealed class E2eFixtureSeederTests
                 (SELECT count(*) FROM foundation.users),
                 (SELECT count(*) FROM foundation.external_identities),
                 (SELECT count(*) FROM foundation.groups),
+                (SELECT count(*) FROM foundation.files),
                 (SELECT name FROM foundation.groups
                     WHERE id = 'a1000000-0000-4000-8000-000000000001')
             """,
             connection);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetString(3));
+        return (
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3),
+            reader.GetString(4));
     }
 
     private static async Task RemoveCanonicalGroupSentinelAsync(FoundationPostgresFixture fixture)
@@ -251,6 +263,7 @@ public sealed class E2eFixtureSeederTests
                 + (SELECT count(*) FROM foundation.roles)
                 + (SELECT count(*) FROM foundation.role_assignments)
                 + (SELECT count(*) FROM foundation.role_capabilities)
+                + (SELECT count(*) FROM foundation.files)
                 + (SELECT count(*) FROM foundation.employees)
                 + (SELECT count(*) FROM paguai.requests)
                 + (SELECT count(*) FROM service_desk.atendimento_cards)
@@ -278,6 +291,7 @@ public sealed class E2eFixtureSeederTests
                     (SELECT count(*) FROM foundation.roles),
                     (SELECT count(*) FROM foundation.role_assignments),
                     (SELECT count(*) FROM foundation.role_capabilities),
+                    (SELECT count(*) FROM foundation.files),
                     (SELECT count(*) FROM foundation.employees),
                     (SELECT count(*) FROM paguai.requests),
                     (SELECT count(*) FROM service_desk.atendimento_cards),
@@ -328,16 +342,19 @@ public sealed class E2eFixtureSeederTests
                         UNION ALL SELECT 8, 'grants',
                             string_agg(id::text || '/' || request_id::text, ',' ORDER BY id)
                             FROM foundation.role_capabilities
-                        UNION ALL SELECT 9, 'employees',
+                        UNION ALL SELECT 9, 'files',
+                            string_agg(id::text || '/' || request_id::text, ',' ORDER BY id)
+                            FROM foundation.files
+                        UNION ALL SELECT 10, 'employees',
                             string_agg(id::text || '/' || request_id::text, ',' ORDER BY id)
                             FROM foundation.employees
-                        UNION ALL SELECT 10, 'paguai',
+                        UNION ALL SELECT 11, 'paguai',
                             string_agg(id::text || '/' || request_id::text, ',' ORDER BY id)
                             FROM paguai.requests
-                        UNION ALL SELECT 11, 'cards',
+                        UNION ALL SELECT 12, 'cards',
                             string_agg(id::text || '/' || request_id::text, ',' ORDER BY id)
                             FROM service_desk.atendimento_cards
-                        UNION ALL SELECT 12, 'notifications',
+                        UNION ALL SELECT 13, 'notifications',
                             string_agg(id::text || '/' || correlation_id::text || '/' ||
                                 provider_attempt_id::text, ',' ORDER BY id)
                             FROM notifications.notification_intents) AS signatures),

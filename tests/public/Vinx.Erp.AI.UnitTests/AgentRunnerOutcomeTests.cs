@@ -84,6 +84,8 @@ public sealed class AgentRunnerOutcomeTests
             nameof(AgentOutcome.ReasonCode),
             nameof(AgentOutcome.Text),
             nameof(AgentOutcome.ProposedActionName),
+            nameof(AgentOutcome.PaguaiProposal),
+            nameof(AgentOutcome.PolicyVersion),
             nameof(AgentOutcome.CorrelationId),
             nameof(AgentOutcome.Elapsed),
         };

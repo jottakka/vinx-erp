@@ -60,6 +60,11 @@ const typedResponseFields = {
   text: z.string().nullable(),
   sources: z.array(agentRunSourceSchema).nullable(),
   correlationId: z.uuid(),
+  paguaiProposalId: z
+    .uuid()
+    .nullable()
+    .optional()
+    .transform((value) => value ?? null),
 } as const;
 
 const okStatusSchema = z.enum([
@@ -109,6 +114,7 @@ export type AgentRunResponse = {
   text: string | null;
   sources: readonly AgentRunSource[] | null;
   correlationId: string;
+  paguaiProposalId: string | null;
 };
 
 export type AgentRunFailureKind =
