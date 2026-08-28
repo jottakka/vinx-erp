@@ -727,14 +727,20 @@ public sealed class InboundAgentChannelAdapter(
                 command,
                 "deep_link_selector",
                 deepLinkSelector is null ? DBNull.Value : deepLinkSelector);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-                || reader.IsDBNull(0))
+            Guid? pendingDeliveryId = null;
+            await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
             {
-                throw new InvalidOperationException("Inbound Telegram Agent outbox returned no delivery.");
+                if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+                    || reader.IsDBNull(0))
+                {
+                    throw new InvalidOperationException("Inbound Telegram Agent outbox returned no delivery.");
+                }
+
+                pendingDeliveryId = reader.GetGuid(0);
             }
 
-            deliveryId = reader.GetGuid(0);
+            // O reader precisa fechar antes de o outbox usar a mesma conexão.
+            deliveryId = pendingDeliveryId!.Value;
             outbox.Enroll(database);
             await outbox.PublishAsync(
                 new NotificationDeliveryRequested(deliveryId),

@@ -11,9 +11,16 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.AI;
+using Vinx.Erp.Foundation.Audit;
+using Vinx.Erp.Foundation.Identity;
+using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Notifications;
+using Vinx.Erp.Paguai;
 using Vinx.Erp.Notifications.Providers.Telegram;
+using Vinx.Erp.Notifications.Providers.Meta;
+using Vinx.Erp.Foundation.Files;
 using Wolverine;
 using Microsoft.Extensions.Logging.Abstractions;
 using Wolverine.EntityFrameworkCore;
@@ -1615,5 +1622,232 @@ public sealed class TelegramInboundWorkerTests(ITestOutputHelper output)
             "SELECT count(*) FROM vinx_wolverine_worker.wolverine_outgoing_envelopes",
             connection);
         return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task Worker_outbox_failure_rolls_back_the_agent_reply_intent_and_envelope_then_recovers()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var seed = await TelegramNotificationSeed.CreateCompanyWithRecipientAsync(
+            factory,
+            telegramAddress: "842002",
+            telegramContactValidated: true
+        );
+        var controlId = Guid.NewGuid();
+        var denialId = Guid.NewGuid();
+        await InboundWhatsAppAgentAdapterTests.GrantAgentDocumentCapabilitiesAsync(
+            factory,
+            seed.CompanyId,
+            seed.RecipientUserId);
+        Assert.Equal(
+            "admitted",
+            (await AdmitSelectionMessageAsync(factory, controlId, 3, 3, "842002")).Resolution);
+        Assert.Equal(
+            "admitted",
+            (await AdmitSelectionMessageAsync(factory, denialId, 4, 4, "842002")).Resolution);
+        await ExecuteScalarOnWorkerAsync(
+            factory,
+            "SELECT notifications.complete_inbound_telegram_text(@id)",
+            ("id", controlId));
+        await ExecuteScalarOnWorkerAsync(
+            factory,
+            "SELECT notifications.complete_inbound_telegram_text(@id)",
+            ("id", denialId));
+
+        await using var worker = new NotificationWorkerHostFactory(
+            factory.Fixture.WorkerConnectionString
+        );
+        await using var scope = worker.Services.CreateAsyncScope();
+        var database = scope.ServiceProvider.GetRequiredService<FoundationDbContext>();
+        var audit = new AuditAppender(database);
+        var adapter = new InboundAgentChannelAdapter(
+            database,
+            new AgentExecutionService(
+                database,
+                audit,
+                new AgentRunner(
+                    new ResolvedCompanyContextResolver(seed.CompanyId),
+                    new DeterministicE2eAgentModel(),
+                    NullLogger<AgentRunner>.Instance,
+                    profileId => profileId == AgentTaskProfileCatalog.ReadOnlySummarizeProfileId
+                        ? AgentTaskProfile.CreateValidated(
+                            AgentTaskProfileCatalog.ReadOnlySummarizeProfileId,
+                            "summarize",
+                            AgentJourneyScope.Company,
+                            AgentCapabilities.Read,
+                            new AgentModelSelection("test-provider", "test-model"),
+                            TimeSpan.FromSeconds(30),
+                            turnLimit: 1,
+                            maxTotalTokens: 8_000,
+                            allowedTools: [])
+                        : null),
+                new PaguaiProposalService(
+                    database,
+                    new CapabilityEvaluator(database),
+                    audit,
+                    NullLogger<PaguaiProposalService>.Instance)),
+            new InboundAttachmentMaterializer(
+                database,
+                new ThrowingFileStorage(),
+                new ThrowingMalwareScanner(),
+                Options.Create(new MalwareScannerOptions { Timeout = TimeSpan.FromSeconds(1) }),
+                new CapabilityEvaluator(database)),
+            new ThrowingHttpClientFactory(),
+            new MetaWhatsAppOptions(),
+            new TelegramOptions(),
+            NullLogger<InboundAgentChannelAdapter>.Instance,
+            scope.ServiceProvider.GetRequiredService<IDbContextOutbox>());
+
+        // Fase A (controle): com outbox íntegro, o adapter produz intent + envelope.
+        await adapter.ProcessAsync(
+            new InboundAgentRequestReceived(controlId, AgentChannelKind.Telegram),
+            CancellationToken.None);
+        Assert.Equal(1L, await CountAgentReplyIntentsAsync(factory, controlId));
+        Assert.Equal("agent_completed", await ReadAgentStatusAsync(factory, controlId));
+        var envelopesBefore = await CountWorkerOutgoingEnvelopesAsync(factory);
+
+        await SetTelegramWorkerOutboxInsertAsync(factory, granted: false);
+        try
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() =>
+                adapter.ProcessAsync(
+                    new InboundAgentRequestReceived(denialId, AgentChannelKind.Telegram),
+                    CancellationToken.None
+                )
+            );
+
+            Assert.Equal(0L, await CountAgentReplyIntentsAsync(factory, denialId));
+            Assert.Equal("agent_in_flight", await ReadAgentStatusAsync(factory, denialId));
+            Assert.Equal(envelopesBefore, await CountWorkerOutgoingEnvelopesAsync(factory));
+        }
+        finally
+        {
+            await SetTelegramWorkerOutboxInsertAsync(factory, granted: true);
+        }
+
+        await ExecuteScalarOnWorkerAsync(
+            factory,
+            "SELECT notifications.release_inbound_telegram_agent(@id)",
+            ("id", denialId));
+        await adapter.ProcessAsync(
+            new InboundAgentRequestReceived(denialId, AgentChannelKind.Telegram),
+            CancellationToken.None
+        );
+
+        Assert.Equal(1L, await CountAgentReplyIntentsAsync(factory, denialId));
+        Assert.Equal("agent_completed", await ReadAgentStatusAsync(factory, denialId));
+    }
+
+    private static async Task<object?> ExecuteScalarOnWorkerAsync(
+        FoundationApiFactory factory,
+        string sql,
+        params (string Name, object Value)[] parameters)
+    {
+        await using var connection = new NpgsqlConnection(factory.Fixture.WorkerConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        foreach (var (name, value) in parameters)
+        {
+            command.Parameters.AddWithValue(name, value);
+        }
+
+        return await command.ExecuteScalarAsync();
+    }
+
+    private static async Task<long> CountAgentReplyIntentsAsync(
+        FoundationApiFactory factory,
+        Guid inboundId)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM notifications.notification_intents WHERE event_key = @event_key",
+            connection);
+        command.Parameters.AddWithValue("event_key", $"telegram-agent:{inboundId}:result");
+        return Convert.ToInt64(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task<string> ReadAgentStatusAsync(
+        FoundationApiFactory factory,
+        Guid inboundId)
+    {
+        await using var connection = await factory.Fixture.OpenAdministratorConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT agent_status FROM notifications.inbound_telegram_messages WHERE id = @id",
+            connection);
+        command.Parameters.AddWithValue("id", inboundId);
+        return (string)(await command.ExecuteScalarAsync())!;
+    }
+
+    private sealed class ResolvedCompanyContextResolver(Guid companyId) : IAgentContextResolver
+    {
+        public Task<AgentContextResolution> ResolveAsync(
+            ActorContext actor,
+            AgentTaskProfile profile,
+            Guid? requestedCompanyId,
+            CancellationToken cancellationToken) => Task.FromResult(
+            new AgentContextResolution(
+                AgentContextResolutionStatus.Resolved,
+                "resolved",
+                new AgentExecutionContext(
+                    Guid.NewGuid(),
+                    Guid.NewGuid(),
+                    companyId,
+                    "Empresa do agente",
+                    Guid.NewGuid(),
+                    AgentTaskProfileCatalog.ReadOnlySummarizeProfileId,
+                    new HashSet<string> { AgentCapabilities.Read })));
+
+    }
+
+    private sealed class ThrowingFileStorage : FileStorage
+    {
+        public Task EnsurePrivateContainerAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException("Text-only agent path must not touch storage.");
+
+        public Task<SignedStorageUploadUrl> CreateSignedUploadUrlAsync(
+            string providerKey,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task UploadObjectAsync(
+            string providerKey,
+            ReadOnlyMemory<byte> content,
+            string contentType,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<StorageObjectMetadata> GetObjectMetadataAsync(
+            string providerKey,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<StorageObjectInspection> InspectObjectAsync(
+            string providerKey,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
+            string providerKey,
+            TimeSpan lifetime,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
+            string prefix,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class ThrowingMalwareScanner : IMalwareScanner
+    {
+        public Task<MalwareScanVerdict> ScanAsync(
+            MalwareScanRequest request,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class ThrowingHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) =>
+            throw new NotSupportedException("Text-only agent path must not call Telegram HTTP.");
     }
 }
