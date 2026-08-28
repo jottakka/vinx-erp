@@ -37,6 +37,8 @@ public sealed class StorageVerificationContractTests
 
         Assert.True(result.ExitCode == 0, result.Diagnostics);
         Assert.All(result.SupabaseContexts, context => Assert.Equal("<default>", context));
+        Assert.Contains("supabase start", result.SupabaseCommands);
+        Assert.Equal("supabase stop", result.SupabaseCommands.Last());
     }
 
     [Fact]

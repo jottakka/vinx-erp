@@ -72,6 +72,19 @@ public sealed class WorkerHostSecurityContractTests
         var ownerException = await interceptor.BeforeStoreAsync(ownerEnvelope, null, CancellationToken.None);
         Assert.IsType<WorkerHostTypes.WorkerOwnerInvitationDeadLetterException>(ownerException);
 
+        // Sem exceção tipada, o fallback do próprio envelope continua na
+        // taxonomia de convite de membro, nunca na classificação desconhecida.
+        var memberFallbackEnvelope = new Wolverine.Envelope(
+            new Vinx.Erp.Foundation.Permissions.MemberInvitationDeliveryRequested(Guid.NewGuid()));
+        var memberFallback = await interceptor.BeforeStoreAsync(
+            memberFallbackEnvelope,
+            null,
+            CancellationToken.None);
+        var fallbackMemberException = Assert.IsType<WorkerHostTypes.WorkerMemberInvitationDeadLetterException>(memberFallback);
+        Assert.Equal(
+            WorkerHostTypes.WorkerMemberInvitationDeadLetterException.UnexpectedExceptionType,
+            fallbackMemberException.ExceptionType);
+
         // Convite de membro preserva a classificação operacional, mesmo quando
         // a exceção recebida contém detalhes não persistíveis.
         var memberException = await interceptor.BeforeStoreAsync(
