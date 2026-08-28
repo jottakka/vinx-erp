@@ -62,14 +62,24 @@ public sealed record NotificationPreferenceResult(NotificationPreferenceState St
 /// é revalidado dentro da função de enfileiramento no momento da chamada para
 /// cada canal externo habilitado.
 /// </summary>
-public sealed class NotificationIntentService(
+public class NotificationIntentService(
     FoundationDbContext database,
     IDbContextOutbox outbox,
-    ILogger<NotificationIntentService> logger
+    ILogger<NotificationIntentService> logger,
+    string? enqueueFunctionName = null
 )
 {
     private const string Operation = "notification_intent";
     private const string Module = "foundation";
+
+    /// <summary>
+    /// Função SQL de enfileiramento. O runtime web usa a função genérica
+    /// (notifications.enqueue_notification_intent); o worker usa uma função
+    /// estreita worker-only (ex.: a de Demandas) com a MESMA assinatura — a
+    /// função base é revogada do vinx_worker.
+    /// </summary>
+    private readonly string enqueueFunction =
+        enqueueFunctionName ?? "notifications.enqueue_notification_intent";
 
     public async Task<NotificationEnqueueResult> EnqueueAsync(
         ActorContext actor,
@@ -288,9 +298,9 @@ public sealed class NotificationIntentService(
         var connection = database.Database.GetDbConnection();
         await using var sql = connection.CreateCommand();
         sql.Transaction = transaction.GetDbTransaction();
-        sql.CommandText = """
+        sql.CommandText = $"""
             SELECT status, delivery_id
-            FROM notifications.enqueue_notification_intent(
+            FROM {enqueueFunction}(
                 @company_id, @recipient_user_id, @event_key, @channel, @template_key, @deep_link_selector)
             """;
         AddParameter(sql, "company_id", command.CompanyId);

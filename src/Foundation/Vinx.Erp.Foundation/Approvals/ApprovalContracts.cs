@@ -106,7 +106,8 @@ public sealed record PrepareApprovalCommand
         string action,
         JsonElement payload,
         string policyVersion,
-        TimeSpan? timeToLive = null)
+        TimeSpan? timeToLive = null,
+        string? resourceKey = null)
     {
         if (companyId == Guid.Empty || requestId == Guid.Empty)
         {
@@ -118,6 +119,12 @@ public sealed record PrepareApprovalCommand
         if (payload.ValueKind != JsonValueKind.Object)
         {
             throw new ArgumentException("The approval payload must be a JSON object.");
+        }
+
+        var resolvedResourceKey = resourceKey ?? string.Empty;
+        if (resolvedResourceKey.Length > MaximumResourceKeyLength)
+        {
+            throw new ArgumentException("The approval resource key is out of bounds.");
         }
 
         var resolvedTimeToLive = timeToLive ?? DefaultTimeToLive;
@@ -132,6 +139,7 @@ public sealed record PrepareApprovalCommand
         Payload = payload;
         PolicyVersion = policyVersion;
         TimeToLive = resolvedTimeToLive;
+        ResourceKey = resolvedResourceKey;
     }
 
     public Guid CompanyId { get; }
@@ -147,6 +155,17 @@ public sealed record PrepareApprovalCommand
     public string PolicyVersion { get; }
 
     public TimeSpan TimeToLive { get; }
+
+    /// <summary>
+    /// Chave do recurso que delimita a fronteira de proposta viva por ator: o
+    /// legado do módulo AI (vazio) mantém o single-flight global por
+    /// ator/empresa; módulos por recurso (ex.: demandas por demanda) permitem
+    /// uma proposta viva por (ator, empresa, recurso).
+    /// </summary>
+    public string ResourceKey { get; }
+
+    /// <summary>Tamanho máximo aceito para <see cref="ResourceKey"/>.</summary>
+    public const int MaximumResourceKeyLength = 200;
 }
 
 /// <summary>Resultado da preparação: identifica a proposta opaca viva.</summary>
@@ -284,7 +303,7 @@ public enum UniqueViolationKind
 public static class ApprovalUniqueViolationClassifier
 {
     public const string LiveProposalUniqueIndexName =
-        "ix_approvals_company_id_actor_user_id";
+        "ix_approvals_company_id_actor_user_id_resource_key";
 
     public const string IdempotencyUniqueIndexName =
         "ix_idempotency_records_company_id_actor_user_id_command_name_r";

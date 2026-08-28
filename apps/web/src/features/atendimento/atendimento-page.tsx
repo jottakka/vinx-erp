@@ -26,7 +26,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AuthorizedCompanyFilter } from "../../shared/ui/authorized-company-filter";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanyIdentity } from "../../shared/ui/company-identity";
-import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
 import { StatusChip } from "../../shared/ui/status-chip";
 import {
@@ -34,23 +33,34 @@ import {
   resolveCompanyEntityPermissions,
 } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
+import { CategoriesAdminSection } from "./atendimento-categories-admin";
 import {
   type AtendimentoAssignmentOption,
   type AtendimentoCard,
   type AtendimentoChannel,
   type AtendimentoColumn,
+  type AtendimentoCommandResult,
   type AtendimentoPriority,
   atendimentoClient,
+  type LookupsResponse,
+  type QueueFilter,
 } from "./atendimento-client";
 import {
   type AtendimentoAttachmentUploader,
   AtendimentoCreateDialog,
 } from "./atendimento-create-dialog";
+import { AtendimentoDetailDialog } from "./atendimento-detail-dialog";
+import {
+  AtendimentoFilterBar,
+  filterFromSearchParams,
+  replaceUrlWithFilter,
+} from "./atendimento-filter-bar";
+import { channelLabel } from "./atendimento-lookup";
 import {
   channelLabels,
   formatAtendimentoDate,
   isAtendimentoOverdue,
-  priorityPresentation,
+  priorityPresentationFor,
 } from "./atendimento-presentation";
 
 const columns: readonly {
@@ -70,6 +80,7 @@ const createCapability = "service_desk.ticket.create";
 const moveCapability = "service_desk.ticket.move";
 const assignCapability = "service_desk.ticket.assign";
 const cancelCapability = "service_desk.ticket.cancel";
+const lookupAdminCapability = "service_desk.lookup.admin";
 
 type CardMenuState = {
   anchorEl: HTMLElement;
@@ -160,6 +171,14 @@ export function AtendimentoPage({
   const reloadSequence = useRef(0);
   const queueReloadToken = useRef(0);
   const recoveryTokens = useRef(new Map<string, number>());
+  // Filtros nascem da URL (compartilháveis por link) e reescrevem a URL.
+  const [filter, setFilter] = useState<QueueFilter>(() =>
+    filterFromSearchParams(window.location.search),
+  );
+  // Lookups por empresa: categorias/canais dos tickets de cada fila exibida.
+  const [lookupsByCompany, setLookupsByCompany] = useState<
+    Record<string, LookupsResponse>
+  >({});
 
   const createCompanies = useMemo(
     () =>
@@ -181,6 +200,14 @@ export function AtendimentoPage({
       ? companies.filter((company) => selected.includes(company.companyId))
       : companies;
   }, [companies, selectedCompanyIds]);
+  // Contexto de empresa dos filtros desacoplado do create: a barra serve
+  // qualquer sessão com leitura de fila, não só quem pode criar.
+  const filterCompanyId = useMemo(() => {
+    const requestedIds = requestedCompanies.map((company) => company.companyId);
+    return requestedIds.includes(companyId)
+      ? companyId
+      : (requestedIds[0] ?? "");
+  }, [companyId, requestedCompanies]);
   const visibleCards = useMemo(() => {
     const requestedCompanyIds = new Set(
       requestedCompanies.map((company) => company.companyId),
@@ -196,6 +223,15 @@ export function AtendimentoPage({
       }),
     [selectedCompany],
   );
+
+  function hasCapability(name: string) {
+    return (
+      selectedCompany?.capabilities.some(
+        (capability) =>
+          capability.name === name && capability.scopes.includes("Company"),
+      ) ?? false
+    );
+  }
 
   useEffect(() => {
     if (!createCompanies.some((company) => company.companyId === companyId)) {
@@ -227,7 +263,7 @@ export function AtendimentoPage({
     void Promise.all(
       requestedCompanies.map(async (company) => ({
         companyId: company.companyId,
-        cards: await atendimentoClient.list(company.companyId),
+        cards: await atendimentoClient.list(company.companyId, filter),
       })),
     ).then((results) => {
       if (!active) return;
@@ -239,12 +275,17 @@ export function AtendimentoPage({
             ) ?? [],
         );
         // Hidratação monotônica na ordem canônica da resposta: para cada
-        // companyId:cardId vale o snapshot de maior versão (um fila atrasada
-        // nunca rebaixa), a ordem vem de loadedCards (createdAt DESC, id DESC)
-        // e IDs ausentes da resposta são anexados depois. Sem o clear
-        // intermediário, um sucesso de mutação publicado durante o loading
-        // também não é descartado.
+        // companyId:cardId vale o snapshot de maior versão (uma fila atrasada
+        // nunca rebaixa) e a ordem vem de loadedCards (createdAt DESC, id
+        // DESC). A resposta é a autoridade das empresas consultadas: cartões
+        // ausentes saem do quadro (não combinam com o filtro atual), enquanto
+        // snapshots de outras empresas não consultadas permanecem intactos.
+        // Sem o clear intermediário, um sucesso de mutação publicado durante
+        // o loading também não é descartado.
         setCards((current) => {
+          const queriedCompanyIds = new Set(
+            requestedCompanies.map((company) => company.companyId),
+          );
           const currentByKey = new Map(
             current.map((card) => [cardMutationKey(card), card]),
           );
@@ -258,8 +299,9 @@ export function AtendimentoPage({
             );
           }
           for (const card of current) {
-            const key = cardMutationKey(card);
-            if (!merged.has(key)) merged.set(key, card);
+            if (!queriedCompanyIds.has(card.companyId)) {
+              merged.set(cardMutationKey(card), card);
+            }
           }
           return [...merged.values()];
         });
@@ -269,7 +311,37 @@ export function AtendimentoPage({
     return () => {
       active = false;
     };
+  }, [filter, requestedCompanies]);
+
+  // Lookups (categorias/canais) por empresa autorizada: alimentam chips,
+  // filtro de detalhe e admin de categorias sem vazar entre empresas.
+  useEffect(() => {
+    if (!requestedCompanies.length) return;
+    let active = true;
+    void Promise.all(
+      requestedCompanies.map(async (company) => ({
+        companyId: company.companyId,
+        lookups: await atendimentoClient.lookups(company.companyId),
+      })),
+    ).then((entries) => {
+      if (!active) return;
+      setLookupsByCompany((current) => {
+        const next = { ...current };
+        for (const entry of entries) {
+          if (entry.lookups) next[entry.companyId] = entry.lookups;
+        }
+        return next;
+      });
+    });
+    return () => {
+      active = false;
+    };
   }, [requestedCompanies]);
+
+  function applyFilter(next: QueueFilter) {
+    replaceUrlWithFilter(next);
+    setFilter(next);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -476,6 +548,38 @@ export function AtendimentoPage({
     }
   }
 
+  // Executor único de mutações de cartão (campos, atribuição do resumo e
+  // observadores do diálogo de detalhe): herda o lock por companyId:cardId
+  // compartilhado com move/assign/cancel e a recuperação monotônica — 409 com
+  // `current` aplica o snapshot, `mayHaveCommitted` reconcilia por readback e
+  // NoChange publica sem bump. Retorna o snapshot publicado, ou null quando a
+  // ação não foi concluída (bloqueada por lock concorrente ou recuperada).
+  async function executeCardMutation(
+    card: AtendimentoCard,
+    run: (card: AtendimentoCard) => Promise<AtendimentoCommandResult>,
+  ): Promise<AtendimentoCard | null> {
+    if (isRecoveringCard(card)) return null;
+    const lease = beginCardMutation(card);
+    if (!lease) return null;
+    try {
+      const result = await run(card);
+      if (!result.ok) {
+        await recover(
+          result.code,
+          result.current,
+          card.companyId,
+          card.id,
+          result.mayHaveCommitted === true,
+        );
+        return null;
+      }
+      applyCardSnapshot(result.card, lease);
+      return result.card;
+    } finally {
+      finishCardMutation(lease);
+    }
+  }
+
   function applyRecoveredCard(recovered: AtendimentoCard) {
     applyCardSnapshot(recovered);
   }
@@ -488,7 +592,7 @@ export function AtendimentoPage({
     token: number,
     expectedQueueToken: number,
   ) {
-    const refreshedCards = await atendimentoClient.list(companyId);
+    const refreshedCards = await atendimentoClient.list(companyId, filter);
     if (
       recoveryTokens.current.get(key) !== token ||
       queueReloadToken.current !== expectedQueueToken
@@ -647,6 +751,27 @@ export function AtendimentoPage({
     );
   }
 
+  const viewingCompanyLookups = viewingCard
+    ? lookupsByCompany[viewingCard.companyId]
+    : undefined;
+
+  // Rótulos dos chips de ticket vindos dos lookups da empresa do cartão.
+  function categoryNameOf(card: AtendimentoCard): string | null {
+    if (!card.categoryRefId) return null;
+    const category = lookupsByCompany[card.companyId]?.categories.find(
+      (item) => item.id === card.categoryRefId,
+    );
+    return category?.name ?? null;
+  }
+
+  function channelRefLabel(card: AtendimentoCard): string | null {
+    if (!card.channelRefId) return null;
+    const channel = lookupsByCompany[card.companyId]?.channels.find(
+      (item) => item.id === card.channelRefId,
+    );
+    return channel ? channelLabel(channel.key) : null;
+  }
+
   return (
     <CompanyProvider company={selectedCompany ?? null}>
       <Stack spacing={3}>
@@ -674,7 +799,7 @@ export function AtendimentoPage({
               </Tooltip>
             )
           }
-          description="Acompanhe e organize os atendimentos das empresas que você pode acessar."
+          description="Fila operacional por empresa com filtros compartilháveis e histórico. Arraste os cartões entre as colunas para movê-los."
           title={title}
         />
         {error ? (
@@ -686,13 +811,40 @@ export function AtendimentoPage({
           companies={companies}
           disabled={loading}
           label="Filtrar empresas"
-          onChange={setSelectedCompanyIds}
+          onChange={(nextCompanyIds) => {
+            setLookupsByCompany({});
+            setSelectedCompanyIds(nextCompanyIds);
+          }}
           selectedCompanyIds={selectedCompanyIds}
         />
         {!companies.length ? (
           <Alert severity="info">
             Sua sessão não possui empresa com acesso à fila de {title}.
           </Alert>
+        ) : null}
+        {filterCompanyId ? (
+          <AtendimentoFilterBar
+            companyId={filterCompanyId}
+            disabled={loading}
+            filter={filter}
+            onChange={applyFilter}
+          />
+        ) : null}
+        {companyId && hasCapability(lookupAdminCapability) ? (
+          <CategoriesAdminSection
+            categories={lookupsByCompany[companyId]?.categories ?? []}
+            companyId={companyId}
+            onChanged={() => {
+              void atendimentoClient.lookups(companyId).then((result) => {
+                if (!result) return;
+                setLookupsByCompany((current) => ({
+                  ...current,
+                  [companyId]: result,
+                }));
+              });
+            }}
+            onError={setError}
+          />
         ) : null}
         {loading ? (
           <Typography aria-live="polite" role="status">
@@ -781,6 +933,7 @@ export function AtendimentoPage({
                       card.column !== "cancelado" &&
                       !mutationPending &&
                       !cardRecovering;
+                    const priorityChip = priorityPresentationFor(card.priority);
                     return (
                       <Card
                         key={card.id}
@@ -851,8 +1004,8 @@ export function AtendimentoPage({
                               />
                             ) : null}
                             <StatusChip
-                              label={priorityPresentation[card.priority].label}
-                              tone={priorityPresentation[card.priority].tone}
+                              label={priorityChip.label}
+                              tone={priorityChip.tone}
                             />
                             <Chip
                               label={channelLabels[card.channel]}
@@ -868,6 +1021,20 @@ export function AtendimentoPage({
                             ) : null}
                             {isAtendimentoOverdue(card) ? (
                               <StatusChip label="Atrasado" tone="error" />
+                            ) : null}
+                            {card.categoryRefId ? (
+                              <Chip
+                                label={categoryNameOf(card) ?? "Categoria"}
+                                size="small"
+                                variant="outlined"
+                              />
+                            ) : null}
+                            {card.channelRefId ? (
+                              <Chip
+                                label={channelRefLabel(card) ?? "Canal"}
+                                size="small"
+                                variant="outlined"
+                              />
                             ) : null}
                           </Stack>
                         </CardContent>
@@ -951,6 +1118,16 @@ export function AtendimentoPage({
         open={createOpen}
       />
 
+      <AtendimentoDetailDialog
+        canAssign={viewingCard ? canAssignCard(viewingCard) : false}
+        card={viewingCard}
+        categories={viewingCompanyLookups?.categories ?? []}
+        channels={viewingCompanyLookups?.channels ?? []}
+        companyId={viewingCard?.companyId ?? companyId}
+        onClose={() => setViewingCard(null)}
+        onMutate={executeCardMutation}
+      />
+
       <Menu
         anchorEl={statusMenu?.anchorEl ?? null}
         onClose={() => setStatusMenu(null)}
@@ -1012,16 +1189,6 @@ export function AtendimentoPage({
           </MenuItem>
         ) : null}
       </Menu>
-
-      <ViewCardDialog
-        card={viewingCard}
-        companyName={
-          sessionCompanies.find(
-            (company) => company.companyId === viewingCard?.companyId,
-          )?.companyName ?? "Empresa autorizada"
-        }
-        onClose={() => setViewingCard(null)}
-      />
 
       <Dialog
         fullWidth
@@ -1138,67 +1305,4 @@ export function AtendimentoPage({
 
 function columnLabel(column: AtendimentoColumn): string {
   return columns.find((item) => item.id === column)?.label ?? column;
-}
-
-function ViewCardDialog({
-  card,
-  companyName,
-  onClose,
-}: {
-  card: AtendimentoCard | null;
-  companyName: string;
-  onClose: () => void;
-}) {
-  return (
-    <EntityDialog
-      description={`Atendimento de ${companyName}.`}
-      onClose={onClose}
-      open={Boolean(card)}
-      title="Visualizar atendimento"
-    >
-      {card ? (
-        <Stack spacing={1.5}>
-          <Typography component="p" variant="subtitle1">
-            {card.title}
-          </Typography>
-          <Typography color="text.secondary">{card.description}</Typography>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
-            <Chip
-              label={columnLabel(card.column)}
-              size="small"
-              variant="outlined"
-            />
-            <Chip
-              label={
-                card.assigneeMembershipId
-                  ? "Responsável atribuído"
-                  : "Sem responsável"
-              }
-              size="small"
-              variant="outlined"
-            />
-            <StatusChip
-              label={priorityPresentation[card.priority].label}
-              tone={priorityPresentation[card.priority].tone}
-            />
-            <Chip
-              label={channelLabels[card.channel]}
-              size="small"
-              variant="outlined"
-            />
-            {formatAtendimentoDate(card.slaDueAt) ? (
-              <Chip
-                label={`Prazo: ${formatAtendimentoDate(card.slaDueAt)}`}
-                size="small"
-                variant="outlined"
-              />
-            ) : null}
-            {isAtendimentoOverdue(card) ? (
-              <StatusChip label="Atrasado" tone="error" />
-            ) : null}
-          </Stack>
-        </Stack>
-      ) : null}
-    </EntityDialog>
-  );
 }
