@@ -12,8 +12,8 @@ import {
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
-import { isDemandasDeepLink } from "../../shared/routing/app-paths";
 import { vinxShadow, vinxTint } from "../../app/theme/surface-tokens";
+import { isDemandasDeepLink } from "../../shared/routing/app-paths";
 import { CompanyBadge } from "../../shared/ui/company-badge";
 import { PageHeader } from "../../shared/ui/page-header";
 import { useSession } from "../auth/session-provider";
