@@ -162,7 +162,7 @@ public sealed class CompanyPermissionDirectoryService(
                     resourceType,
                     null,
                     AuditOutcome.Denied,
-                    new CorrelationContext(actor.CorrelationId).CorrelationId,
+                    actor.CorrelationId,
                     DenialReason,
                     "{}"
                 ),

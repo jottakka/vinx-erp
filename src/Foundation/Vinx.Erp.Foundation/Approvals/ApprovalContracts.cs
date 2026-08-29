@@ -32,24 +32,6 @@ public static class CanonicalPayloadHasher
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 
-    public static bool IsValidHash(string? hash)
-    {
-        if (hash is not { Length: HashLength })
-        {
-            return false;
-        }
-
-        foreach (var character in hash)
-        {
-            if (character is not ((>= '0' and <= '9') or (>= 'a' and <= 'f')))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     private static void WriteCanonical(Utf8JsonWriter writer, JsonElement element)
     {
         switch (element.ValueKind)

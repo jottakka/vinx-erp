@@ -632,7 +632,11 @@ NOINHERIT NOBYPASSRLS`, `vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS` e
 `vinx_authorization_owner NOLOGIN NOINHERIT NOBYPASSRLS`. O owner de identidade
 possui somente `USAGE` em `foundation`, `SELECT` em `foundation.users` e
 `UPDATE` apenas em `sessions_valid_after`; o owner de autorização recebe
-somente leitura necessária para `current_actor_memberships()`. Essas roles são
+somente leitura necessária para `current_actor_memberships()`. Os owners
+`vinx_worker_owner`, `vinx_demandas_owner` e `vinx_permissions_owner`
+completam o inventário de 13 roles criadas em
+`infra/database/bootstrap-foundation-roles.sql` (fonte canônica, com a lista
+completa em `docs/runbooks/foundation-database.md`). Essas roles são
 distintas das roles legadas do Supabase: `anon`, `authenticated` e
 `service_role`.
 

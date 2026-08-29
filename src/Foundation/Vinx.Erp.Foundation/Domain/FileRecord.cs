@@ -76,9 +76,6 @@ public sealed class FileRecord : SoftDeletableEntity, ICompanyScoped
     /// <summary>Momento UTC do scan durável; bind de <c>MalwareScanVerdict.ScannedAtUtc</c>.</summary>
     public DateTimeOffset? ScannedAtUtc { get; private set; }
 
-#pragma warning disable CA1822 // A propriedade faz parte do contrato de entidade e é lida por instâncias nos testes e mapeamentos.
-    public bool IsQuarantined => true;
-#pragma warning restore CA1822
     public Company Company { get; private set; } = null!;
     public Membership UploaderMembership { get; private set; } = null!;
 
@@ -169,9 +166,6 @@ public sealed class FileRecord : SoftDeletableEntity, ICompanyScoped
         DeletedReason = null;
         RecordUpdate(actorUserId, requestId);
     }
-
-    public bool IsPhysicalDeletionAllowed(DateTimeOffset now) =>
-        DeletedAt is not null && RetentionUntil <= now;
 
     private void EnsureState(string expectedState)
     {

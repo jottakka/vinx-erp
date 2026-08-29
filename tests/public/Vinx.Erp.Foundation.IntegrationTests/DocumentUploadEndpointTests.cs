@@ -1371,11 +1371,10 @@ public sealed class DocumentUploadEndpointTests
                 GetChecksum(providerKey));
             // Inspeção determinística espelha o adapter real: nunca é o gate antimalware
             // (o veredito server-side do scanner decide).
-            return new StorageObjectInspection(metadata, MalwareScanStatus.Unavailable);
+            return new StorageObjectInspection(metadata);
         }
 
         public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(string providerKey, TimeSpan lifetime, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(string prefix, CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<StorageObjectSummary>>([]);
         public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken)

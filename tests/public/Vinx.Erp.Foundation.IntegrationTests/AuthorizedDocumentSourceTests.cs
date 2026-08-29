@@ -649,9 +649,6 @@ public sealed class AuthorizedDocumentSourceTests
             TimeSpan lifetime,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
-            string prefix,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) =>
             Task.CompletedTask;

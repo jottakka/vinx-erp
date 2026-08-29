@@ -104,7 +104,7 @@ public sealed class RoleAssignmentService(
                             "role_assignment",
                             assignment.Id,
                             AuditOutcome.Success,
-                            new CorrelationContext(actor.CorrelationId).CorrelationId,
+                            actor.CorrelationId,
                             null,
                             "{}"), cancellationToken);
                         await database.SaveChangesAsync(cancellationToken);
@@ -153,7 +153,7 @@ public sealed class RoleAssignmentService(
                 "role_assignment",
                 null,
                 AuditOutcome.Denied,
-                new CorrelationContext(actor.CorrelationId).CorrelationId,
+                actor.CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
             await transaction.CommitAsync(cancellationToken);

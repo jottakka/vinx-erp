@@ -90,7 +90,7 @@ public sealed class CapabilityMapService(
                 "authorization",
                 null,
                 AuditOutcome.Denied,
-                new CorrelationContext(actor.CorrelationId).CorrelationId,
+                actor.CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
             await transaction.CommitAsync(cancellationToken);

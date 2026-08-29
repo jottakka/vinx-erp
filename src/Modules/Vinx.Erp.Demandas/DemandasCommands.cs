@@ -8,7 +8,7 @@ public sealed record CreateDemandCommand(
     string Title,
     string Description,
     string Priority,
-    Guid ResponsibleMembershipId,
+    Guid? ResponsibleMembershipId,
     Guid? RoutineId = null,
     Guid? RequesterUserId = null,
     string? Tipo = null,
@@ -71,10 +71,6 @@ public sealed record CreateRoutineCommand(
     IReadOnlyList<string> DefaultChecklistItems,
     IReadOnlyList<CreateRoutineStageInput> Stages
 );
-
-/// <summary>Âncora canônica do hash de idempotência dos comandos com demanda.</summary>
-public sealed record PayloadRef(Guid DemandId, object Command);
-
 
 public sealed record CreateRoutineStageInput(
     int OrderIndex,

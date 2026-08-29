@@ -9,7 +9,7 @@ const read = (relativePath) => readFileSync(join(root, relativePath), "utf8");
 
 test("arquivos de runtime do projectmem permanecem descartáveis", () => {
   const gitignore = read(".gitignore");
-  const tracked = execFileSync("git", ["ls-files"], { cwd: root, encoding: "utf8" }).split("\n");
+  const tracked = execFileSync("git", ["ls-files", ".projectmem"], { cwd: root, encoding: "utf8" }).split("\n");
 
   for (const path of [
     ".projectmem/.current_issue",

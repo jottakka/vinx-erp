@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Vinx.Erp.Foundation.Notifications;
+using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Paguai;
@@ -7,6 +8,23 @@ using Wolverine;
 using Wolverine.Persistence.Durability;
 
 namespace Vinx.Erp.WorkerHost;
+
+/// <summary>Marcador de redação para envelopes sem gêmeo vazio conhecido: preserva
+/// a existência da mensagem na DLQ sem inventar um tipo operacional alheio.</summary>
+public sealed record RedactedUnknownWorkerMessage;
+
+/// <summary>Classificação opaca para envelopes sem tipo conhecido: a DLQ registra
+/// a falha sem reclassificá-la como entrega de convite de owner.</summary>
+internal sealed class WorkerRedactedUnknownDeadLetterException(string exceptionMessage)
+    : Exception(exceptionMessage),
+        IDeadLetterExceptionInfo
+{
+    public const string UnexpectedExceptionType = "worker_unknown_unexpected";
+
+    public string ExceptionType { get; } = UnexpectedExceptionType;
+
+    public string ExceptionMessage { get; } = exceptionMessage;
+}
 
 internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterInterceptor
 {
@@ -41,9 +59,27 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
             );
         }
 
+        if (envelope.Message is OwnerInvitationDeliveryRequested)
+        {
+            return ValueTask.FromResult<Exception?>(
+                new WorkerOwnerInvitationDeadLetterException(
+                    WorkerOwnerInvitationDeadLetterException.UnexpectedExceptionType,
+                    "Worker delivery ingress failed unexpectedly."
+                )
+            );
+        }
+
+        if (envelope.Message is MemberInvitationDeliveryRequested)
+        {
+            return ValueTask.FromResult<Exception?>(
+                new WorkerRedactedUnknownDeadLetterException(
+                    "Worker member invitation delivery failed unexpectedly."
+                )
+            );
+        }
+
         return ValueTask.FromResult<Exception?>(
-            new WorkerOwnerInvitationDeadLetterException(
-                WorkerOwnerInvitationDeadLetterException.UnexpectedExceptionType,
+            new WorkerRedactedUnknownDeadLetterException(
                 "Worker delivery ingress failed unexpectedly."
             )
         );
@@ -97,72 +133,56 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
 
     /// <summary>
     /// Redige por tipo de mensagem: o corpo vira o registro vazio do próprio
-    /// tipo e os headers diagnósticos são descartados antes da DLQ.
+    /// tipo (o canal/geração permanece quando é operacional e não sensível) e
+    /// os headers diagnósticos são descartados antes da DLQ. Envelope sem
+    /// gêmeo conhecido vira marcador opaco — nunca um tipo alheio.
     /// </summary>
     internal static void RedactEnvelope(Envelope envelope)
     {
         switch (envelope.Message)
         {
             case NotificationDeliveryRequested:
-                var redactedNotification = new NotificationDeliveryRequested(Guid.Empty);
-                envelope.Message = redactedNotification;
-                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
-                    redactedNotification,
-                    SerializerOptions
-                );
-                envelope.Headers.Clear();
+                RedactAs(envelope, new NotificationDeliveryRequested(Guid.Empty));
                 break;
             case InboundWhatsAppImageReceived:
-                var redactedInbound = new InboundWhatsAppImageReceived(Guid.Empty);
-                envelope.Message = redactedInbound;
-                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
-                    redactedInbound,
-                    SerializerOptions
-                );
-                envelope.Headers.Clear();
+                RedactAs(envelope, new InboundWhatsAppImageReceived(Guid.Empty));
                 break;
             case InboundWhatsAppTextCorrelationExpired:
-                var redactedExpiry = new InboundWhatsAppTextCorrelationExpired(Guid.Empty);
-                envelope.Message = redactedExpiry;
-                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
-                    redactedExpiry,
-                    SerializerOptions
-                );
-                envelope.Headers.Clear();
+                RedactAs(envelope, new InboundWhatsAppTextCorrelationExpired(Guid.Empty));
                 break;
             case InboundWhatsAppDocumentReceived:
-                var redactedDocument = new InboundWhatsAppDocumentReceived(Guid.Empty);
-                envelope.Message = redactedDocument;
-                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
-                    redactedDocument,
-                    SerializerOptions
-                );
-                envelope.Headers.Clear();
+                RedactAs(envelope, new InboundWhatsAppDocumentReceived(Guid.Empty));
                 break;
             case InboundTelegramTextReceived:
-                var redactedTelegram = new InboundTelegramTextReceived(Guid.Empty);
-                envelope.Message = redactedTelegram;
-                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
-                    redactedTelegram,
-                    SerializerOptions
-                );
-                envelope.Headers.Clear();
+                RedactAs(envelope, new InboundTelegramTextReceived(Guid.Empty));
+                break;
+            case InboundAgentRequestReceived agent:
+                // Preserva o canal (enum operacional) e zera o identificador sensível.
+                RedactAs(envelope, new InboundAgentRequestReceived(Guid.Empty, agent.Channel));
                 break;
             case PaguaiDraftCreated:
-                var redactedPaguai = new PaguaiDraftCreated(Guid.Empty, Guid.Empty, Guid.Empty);
-                envelope.Message = redactedPaguai;
-                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(redactedPaguai, SerializerOptions);
-                envelope.Headers.Clear();
+                RedactAs(envelope, new PaguaiDraftCreated(Guid.Empty, Guid.Empty, Guid.Empty));
+                break;
+            case OwnerInvitationDeliveryRequested:
+                RedactAs(envelope, new OwnerInvitationDeliveryRequested(Guid.Empty));
+                break;
+            case MemberInvitationDeliveryRequested:
+                RedactAs(envelope, new MemberInvitationDeliveryRequested(Guid.Empty));
+                break;
+            case DemandasAutomationTick tick:
+                // Geração e agendamento são operacionais e não carregam dado de negócio.
+                RedactAs(envelope, new DemandasAutomationTick(tick.ScheduledAt, tick.Generation));
                 break;
             default:
-                var redactedMessage = new OwnerInvitationDeliveryRequested(Guid.Empty);
-                envelope.Message = redactedMessage;
-                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
-                    redactedMessage,
-                    SerializerOptions
-                );
-                envelope.Headers.Clear();
+                RedactAs(envelope, new RedactedUnknownWorkerMessage());
                 break;
         }
+    }
+
+    private static void RedactAs<T>(Envelope envelope, T redacted)
+    {
+        envelope.Message = redacted;
+        envelope.Data = JsonSerializer.SerializeToUtf8Bytes(redacted, SerializerOptions);
+        envelope.Headers.Clear();
     }
 }

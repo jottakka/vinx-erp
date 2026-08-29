@@ -157,11 +157,11 @@ outro POST automático.
 
 ## Corte (o que ficou de fora)
 
-Download/quarentena/MIME/checksum/ClamAV de documentos, OCR e extração
-tipada, rascunho Pagaí e resposta automática para documentos — PRs seguintes
-do #272. Áudio inbound, resposta automática a texto isolado, histórico
+Áudio inbound, resposta automática a texto isolado, histórico
 multi-turno, chat/sessão, supervisão humana,
 templates de resposta e moderação dedicada (guardrails #136 segue em PR
-próprio). Webhook real em ambiente de teste da Meta não faz fan-out de
-eventos (constatado ao vivo em 2026-08-19); a receita de produção é idêntica
-à validada peça por peça.
+próprio). O pipeline de documentos (download, quarentena, MIME/checksum,
+ClamAV, OCR e rascunho Pagaí) já está implementado — ver "Documento seguro
+(#272 PR2)" e as PRs do #272. Webhook real em ambiente de teste da Meta não
+faz fan-out de eventos (constatado ao vivo em 2026-08-19); a receita de
+produção é idêntica à validada peça por peça.

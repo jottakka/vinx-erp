@@ -126,6 +126,5 @@ public sealed class AgentRunnerOutcomeTests
         new AgentModelSelection("test-provider", "test-model"),
         timeout ?? TimeSpan.FromSeconds(30),
         turnLimit: 1,
-        maxTotalTokens: 8_000,
         allowedTools: []);
 }

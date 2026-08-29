@@ -111,6 +111,43 @@ describe("notifications page", () => {
     ).toHaveAttribute("href", "/paguai");
   });
 
+  it("renders the canonical demandas deep link and drops malformed selectors", async () => {
+    const demandasItem: NotificationInboxItem = {
+      ...item,
+      id: "66666666-6666-6666-8666-666666666666",
+      action: {
+        kind: "demandas",
+        href: "/demandas?demand=77777777-7777-7777-8777-777777777777",
+      },
+    };
+    const malformedItem: NotificationInboxItem = {
+      ...item,
+      id: "88888888-8888-8888-8888-888888888888",
+      action: { kind: "demandas", href: "/demandas?demand=/../../evil" },
+    };
+    const client = {
+      fetchInboxPage: vi.fn().mockResolvedValue({
+        ok: true,
+        value: { items: [demandasItem, malformedItem], nextCursor: null },
+      }),
+      fetchUnreadCount: vi.fn(),
+      markNotificationRead: vi.fn(),
+    };
+    renderPage(client as never);
+
+    expect(
+      await screen.findByRole("link", {
+        name: /abrir origem: alfa/i,
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/demandas?demand=77777777-7777-7777-8777-777777777777",
+    );
+    // Deep link fora da allowlist canônica não vira ação clicável.
+    const links = screen.queryAllByRole("link", { name: /abrir origem/i });
+    expect(links).toHaveLength(1);
+  });
+
   it("confirms the server result before rendering the item as read", async () => {
     const user = userEvent.setup();
     const client = {

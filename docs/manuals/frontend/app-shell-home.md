@@ -4,9 +4,9 @@
 
 Depois de entrar, a página **Início** reúne as empresas que você está autorizado a consultar. A leitura padrão é **Todas as empresas autorizadas**. As cores e símbolos ajudam a identificar cada empresa, mas não mudam permissões nem escolhem uma empresa para ações.
 
-A estrutura em evolução inclui destinos de módulos em preparação. Paguai,
-Atendimento, Kanban e Pessoas explicam o escopo futuro, mas ainda não exibem
-dados nem ações operacionais.
+Os módulos são operacionais: Paguai, Atendimento, Demandas e Pessoas exibem
+dados reais e ações autorizadas por capability, com Permissões e
+Notificações complementando o fluxo.
 
 ## Navegação e ajuda
 

@@ -293,6 +293,5 @@ public sealed class MetaWhatsAppDocumentInboundTests
         public Task<StorageObjectInspection> InspectObjectAsync(string providerKey, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<Stream> OpenReadAsync(string providerKey, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(string providerKey, TimeSpan lifetime, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(string prefix, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

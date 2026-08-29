@@ -73,6 +73,8 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 type: "bigint",
                 nullable: true);
 
+            // FORCE RLS esconde as linhas do migrator: backfill com RLS desligada.
+            migrationBuilder.Sql("ALTER TABLE foundation.files DISABLE ROW LEVEL SECURITY");
             migrationBuilder.Sql(
                 """
                 UPDATE foundation.files
@@ -84,6 +86,7 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                     retention_until = CURRENT_TIMESTAMP + INTERVAL '30 days',
                     size_bytes = 0
                 """);
+            migrationBuilder.Sql("ALTER TABLE foundation.files ENABLE ROW LEVEL SECURITY");
 
             migrationBuilder.AlterColumn<string>(
                 name: "extension",
@@ -181,8 +184,15 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
                 type: "boolean",
                 nullable: true);
 
+            // O schema antigo só conhece o binário is_quarantined: estados
+            // liberados (verified, confirmed) descem como acessíveis; apenas
+            // quarentena e falha de verificação permanecem isolados.
+            // FORCE RLS na tabela esconde as linhas do migrator (NOBYPASSRLS,
+            // sem policy): o backfill precisa desligá-la durante o UPDATE.
+            migrationBuilder.Sql("ALTER TABLE foundation.files DISABLE ROW LEVEL SECURITY");
             migrationBuilder.Sql(
-                "UPDATE foundation.files SET is_quarantined = processing_state <> 'verified'");
+                "UPDATE foundation.files SET is_quarantined = processing_state IN ('quarantined', 'verification_failed')");
+            migrationBuilder.Sql("ALTER TABLE foundation.files ENABLE ROW LEVEL SECURITY");
 
             migrationBuilder.AlterColumn<bool>(
                 name: "is_quarantined",

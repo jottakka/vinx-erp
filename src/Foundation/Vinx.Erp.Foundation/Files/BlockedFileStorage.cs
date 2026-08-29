@@ -41,11 +41,6 @@ public sealed class BlockedFileStorage : FileStorage
         CancellationToken cancellationToken
     ) => Unavailable<Task<SignedStorageUrl>>();
 
-    public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
-        string prefix,
-        CancellationToken cancellationToken
-    ) => Unavailable<Task<IReadOnlyList<StorageObjectSummary>>>();
-
     public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) =>
         Unavailable<Task>();
 

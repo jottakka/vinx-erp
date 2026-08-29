@@ -34,7 +34,6 @@ public sealed record AgentTaskProfile(
     AgentModelSelection? ModelSelection,
     TimeSpan Timeout,
     int TurnLimit,
-    int MaxTotalTokens,
     IReadOnlyList<string> AllowedTools,
     bool SourcesRequired = false,
     IReadOnlySet<string>? RequiredOutputFields = null,
@@ -53,7 +52,6 @@ public sealed record AgentTaskProfile(
         AgentModelSelection? modelSelection,
         TimeSpan timeout,
         int turnLimit,
-        int maxTotalTokens,
         IReadOnlyList<string> allowedTools,
         bool allowDocumentAttachments = false,
         int maxInputCharacters = AgentInputLimits.MainTurnMaxCharacters)
@@ -66,7 +64,6 @@ public sealed record AgentTaskProfile(
             modelSelection,
             timeout,
             turnLimit,
-            maxTotalTokens,
             allowedTools,
             AllowDocumentAttachments: allowDocumentAttachments,
             MaxInputCharacters: maxInputCharacters);
@@ -100,11 +97,6 @@ public sealed record AgentTaskProfile(
             throw new ArgumentException(
                 "The turn limit must be 1 in this version; a higher limit requires an approved loop policy.",
                 nameof(TurnLimit));
-        }
-
-        if (MaxTotalTokens <= 0)
-        {
-            throw new ArgumentException("The total token budget must be positive.", nameof(MaxTotalTokens));
         }
 
         if (MaxInputCharacters is < 1 or > 1_000_000)

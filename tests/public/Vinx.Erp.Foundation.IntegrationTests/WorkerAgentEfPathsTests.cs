@@ -148,9 +148,7 @@ public sealed class WorkerAgentEfPathsTests
             CancellationToken cancellationToken) =>
             string.Equals(key, providerKey, StringComparison.Ordinal)
                 ? GetObjectMetadataAsync(key, cancellationToken).ContinueWith(
-                    task => (StorageObjectInspection)new StorageObjectInspection(
-                        task.Result,
-                        MalwareScanStatus.Clean))
+                    task => (StorageObjectInspection)new StorageObjectInspection(task.Result))
                 : throw new InvalidOperationException("Unexpected storage key.");
 
         public Task<Stream> OpenReadAsync(string key, CancellationToken cancellationToken) =>
@@ -163,9 +161,6 @@ public sealed class WorkerAgentEfPathsTests
             TimeSpan lifetime,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
-            string prefix,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task DeleteObjectAsync(string key, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

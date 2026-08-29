@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useMemo } from "react";
+import { createContext, type ReactNode, useMemo } from "react";
 import type { AuthorizedCompanyMembership } from "../../features/auth/session-contract";
 import { CompanyAccentScope } from "./company-accent-scope";
 import { resolveCompanyAppearance } from "./company-appearance";
@@ -64,8 +64,4 @@ export function CompanyProvider({ children, company }: CompanyProviderProps) {
       </CompanyAccentScope>
     </CompanyContext.Provider>
   );
-}
-
-export function useActiveCompany(): CompanyContextValue {
-  return useContext(CompanyContext);
 }

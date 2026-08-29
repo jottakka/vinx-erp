@@ -143,7 +143,28 @@ describe("DemandasPage", () => {
   it("renders the honest stage columns and advances by explicit command only", async () => {
     const advanceSpy = vi.spyOn(demandasClient, "advance").mockResolvedValue({
       ok: true,
-      demand: { ...initiationCard, stage: "execution", version: 2 },
+      demand: {
+        automationPaused: false,
+        companyId: "11111111-1111-4111-8111-111111111111",
+        cycleCount: 1,
+        departamento: null,
+        demandDisplayNumber: initiationCard.demandDisplayNumber,
+        demandNumber: initiationCard.demandNumber,
+        description: "Pagar fornecedor",
+        effectiveDeadline: null,
+        id: initiationCard.id,
+        isOverdue: false,
+        manualDueAt: null,
+        priority: initiationCard.priority,
+        responsibleMembershipId: initiationCard.responsibleMembershipId,
+        routineId: null,
+        slaDueAt: null,
+        stage: "execution",
+        stageDueAt: null,
+        title: initiationCard.title,
+        tipo: null,
+        version: 2,
+      },
     });
     vi.spyOn(demandasClient, "board").mockResolvedValue({
       items: [initiationCard],

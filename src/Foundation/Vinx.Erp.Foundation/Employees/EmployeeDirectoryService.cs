@@ -124,54 +124,37 @@ public sealed class EmployeeDirectoryService(
         }
     }
 
-    public async Task<AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>> ListAsync(
+    public Task<AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>> ListAsync(
         ActorContext actor,
         Guid companyId,
         CancellationToken cancellationToken
-    )
-    {
-        var authorization = await authorizedCompanies.ResolveAsync(
-            actor,
-            CreateRequirement,
-            cancellationToken
-        );
-        if (!authorization.IsSuccess)
-            return AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>.Failure(
-                authorization.ErrorCode!.Value
-            );
-        if (!authorization.Value!.CompanyIds.Contains(companyId))
-            return AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>.Failure(
-                AuthorizationErrorCode.CapabilityDenied
-            );
-        return await authorizedCompanies.ExecuteReadAsync(
-            actor,
-            CreateRequirement,
-            async (context, companyIds, token) =>
-                (IReadOnlyList<EmployeeDirectoryItem>)
-                    await context
-                        .Employees.AsNoTracking()
-                        .Where(x => x.CompanyId == companyId)
-                        .OrderBy(x => x.DisplayName)
-                        .Select(x => new EmployeeDirectoryItem(x.Id, x.MembershipId, x.DisplayName))
-                        .ToListAsync(token),
-            cancellationToken
-        );
-    }
+    ) => ListCoreAsync(actor, companyId, CreateRequirement, cancellationToken);
 
     /// <summary>
     /// Lista opções de pessoas da empresa para pickers (nome e IDs opacos),
     /// autorizada pela capability de leitura <c>directory.read</c>; nunca
     /// reutiliza a capability de criação de funcionário.
     /// </summary>
-    public async Task<AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>> ListForPickerAsync(
+    public Task<AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>> ListForPickerAsync(
         ActorContext actor,
         Guid companyId,
+        CancellationToken cancellationToken
+    ) => ListCoreAsync(actor, companyId, ReadRequirement, cancellationToken);
+
+    /// <summary>
+    /// Núcleo comum das listagens: resolve a capability exigida, nega empresa
+    /// cruzada antes da leitura e executa a projeção no snapshot com RLS.
+    /// </summary>
+    private async Task<AuthorizationResult<IReadOnlyList<EmployeeDirectoryItem>>> ListCoreAsync(
+        ActorContext actor,
+        Guid companyId,
+        CapabilityRequirement requirement,
         CancellationToken cancellationToken
     )
     {
         var authorization = await authorizedCompanies.ResolveAsync(
             actor,
-            ReadRequirement,
+            requirement,
             cancellationToken
         );
         if (!authorization.IsSuccess)
@@ -184,7 +167,7 @@ public sealed class EmployeeDirectoryService(
             );
         return await authorizedCompanies.ExecuteReadAsync(
             actor,
-            ReadRequirement,
+            requirement,
             async (context, companyIds, token) =>
                 (IReadOnlyList<EmployeeDirectoryItem>)
                     await context
@@ -223,7 +206,7 @@ public sealed class EmployeeDirectoryService(
                     "employee",
                     null,
                     AuditOutcome.Denied,
-                    new CorrelationContext(actor.CorrelationId).CorrelationId,
+                    actor.CorrelationId,
                     "capability_denied",
                     "{}"
                 ),

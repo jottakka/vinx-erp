@@ -22,13 +22,16 @@ request. GitHub Free may not offer the private-repository branch protections
 needed to enforce every desired rule, so agents never push or merge `main`;
 the repository owner performs reviewed merges deliberately.
 
-## Ordem de entrega atual
+## Módulos atuais
 
-A preparação local desta issue #11 não cria um frontend de produto. A fundação
-de autorização segue em [#19](https://github.com/jottakka/vinx-erp/issues/19),
-[#20](https://github.com/jottakka/vinx-erp/issues/20) e
-[#68](https://github.com/jottakka/vinx-erp/issues/68). Com esses contratos
-disponíveis, o primeiro consumidor de frontend é
-[#16](https://github.com/jottakka/vinx-erp/issues/16), seguido do bootstrap em
-[#90](https://github.com/jottakka/vinx-erp/issues/90). Essa ordem evita que o
-browser invente escopo de empresa, autorização ou acesso direto a providers.
+- **Foundation** (`src/Foundation`): identidade, autorização, empresa explícita,
+  auditoria, arquivos e notificações — fonte dos contratos compartilhados.
+- **Módulos de domínio** (`src/Modules`): `Vinx.Erp.AI`, `Vinx.Erp.Atendimento`,
+  `Vinx.Erp.Demandas`, `Vinx.Erp.Notifications` e `Vinx.Erp.Paguai`.
+- **Hosts** (`src/Hosts`): `ApiHost` (BFF + API de domínio) e `WorkerHost`
+  (filas Wolverine, outbox, DLQ).
+- **Web** (`apps/web`): rotas operacionais `/paguai`, `/atendimento`,
+  `/demandas`, `/pessoas`, `/permissoes`, `/notificacoes` e `/agente`.
+
+Ordem de entrega, issues e histórico por fatia ficam nos issues do GitHub e em
+`docs/superpowers/plans`; este README descreve apenas o estado atual.

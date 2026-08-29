@@ -53,7 +53,7 @@ public sealed class AtendimentoCardService(
         new(StringComparer.Ordinal) { "critica", "alta", "media", "baixa" };
 
     private static readonly HashSet<string> ValidColumns =
-        new(StringComparer.Ordinal) { "novo", "em_andamento", ClosedColumn };
+        new(StringComparer.Ordinal) { "novo", "em_andamento", ClosedColumn, CancelledColumn };
 
     /// <summary>
     /// Intents saem APÓS o commit da mutação: NotificationIntentService abre a
@@ -788,7 +788,13 @@ public sealed class AtendimentoCardService(
 
                     if (presenceChecked)
                     {
-                        // Repetição de adição: nada acontece e a versão fica.
+                        if (before.Version != command.ExpectedVersion)
+                        {
+                            // Repetição com versão obsoleta: conflito com o estado atual.
+                            return Mutation.IntegrityConflict(before);
+                        }
+
+                        // Repetição de adição com versão corrente: nada acontece e a versão fica.
                         return Mutation.Succeeded(before, AtendimentoCardOperationState.NoChange);
                     }
 
@@ -877,7 +883,13 @@ public sealed class AtendimentoCardService(
 
                     if (!presenceChecked)
                     {
-                        // Remoção de vínculo inexistente: idempotente, versão fica.
+                        if (before.Version != command.ExpectedVersion)
+                        {
+                            // Ausência com versão obsoleta: conflito com o estado atual.
+                            return Mutation.IntegrityConflict(before);
+                        }
+
+                        // Remoção de vínculo inexistente com versão corrente: idempotente, versão fica.
                         return Mutation.Succeeded(before, AtendimentoCardOperationState.NoChange);
                     }
 
@@ -1911,7 +1923,7 @@ public sealed class AtendimentoCardService(
                 ResourceType,
                 resourceId,
                 outcome,
-                new CorrelationContext(actor.CorrelationId).CorrelationId,
+                actor.CorrelationId,
                 reason,
                 "{}"
             ),

@@ -303,9 +303,9 @@ public sealed class BoardCursorTests
     {
         var at = new DateTimeOffset(2026, 8, 26, 12, 34, 56, TimeSpan.Zero);
         var id = Guid.NewGuid();
-        var encoded = DemandRules.EncodeBoardCursor(at, id);
+        var encoded = BoardCursor.Encode(at, id);
 
-        Assert.True(DemandRules.TryDecodeBoardCursor(encoded, out var decoded));
+        Assert.True(BoardCursor.TryDecode(encoded, out var decoded));
         Assert.Equal(at, decoded.OccurredAt);
         Assert.Equal(id, decoded.Id);
     }
@@ -316,6 +316,6 @@ public sealed class BoardCursorTests
     [InlineData("AAAA")]
     public void Malformed_cursors_are_rejected(string candidate)
     {
-        Assert.False(DemandRules.TryDecodeBoardCursor(candidate, out _));
+        Assert.False(BoardCursor.TryDecode(candidate, out _));
     }
 }

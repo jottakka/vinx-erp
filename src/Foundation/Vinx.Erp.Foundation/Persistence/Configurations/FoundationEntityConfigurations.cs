@@ -325,7 +325,6 @@ public sealed class FileRecordConfiguration : IEntityTypeConfiguration<FileRecor
         builder.HasKey(entity => entity.Id);
         builder.HasAlternateKey(entity => new { entity.CompanyId, entity.Id });
         builder.Property(entity => entity.Id).ValueGeneratedNever();
-        builder.Ignore(entity => entity.IsQuarantined);
         builder.Property(entity => entity.OriginalFileName).HasMaxLength(255).IsRequired();
         builder.Property(entity => entity.Extension).HasMaxLength(20).IsRequired();
         builder.Property(entity => entity.SizeBytes).IsRequired();

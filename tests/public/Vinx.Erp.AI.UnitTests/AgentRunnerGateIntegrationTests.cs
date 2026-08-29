@@ -305,7 +305,6 @@ public sealed class AgentRunnerGateIntegrationTests
         new AgentModelSelection("test-provider", "test-model"),
         TimeSpan.FromSeconds(30),
         TurnLimit: 1,
-        MaxTotalTokens: 8_000,
         AllowedTools: [],
         SourcesRequired: sourcesRequired,
         RequiredOutputFields: requiredOutputFields);
@@ -318,7 +317,6 @@ public sealed class AgentRunnerGateIntegrationTests
         new AgentModelSelection("test-provider", "test-model"),
         TimeSpan.FromSeconds(30),
         TurnLimit: 1,
-        MaxTotalTokens: 8_000,
         AllowedTools: [],
         AllowDocumentAttachments: true);
 

@@ -17,8 +17,6 @@ public enum MalwareScanStatus
     MalwareDetected = 2
 }
 
-public sealed record StorageObjectSummary(string Key, DateTimeOffset? CreatedAt);
-
 public interface FileStorage
 {
     Task EnsurePrivateContainerAsync(CancellationToken cancellationToken);
@@ -47,10 +45,6 @@ public interface FileStorage
     Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
         string providerKey,
         TimeSpan lifetime,
-        CancellationToken cancellationToken);
-
-    Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
-        string prefix,
         CancellationToken cancellationToken);
 
     Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken);

@@ -89,7 +89,6 @@ public sealed class AgentTaskProfileCatalog
             modelSelection,
             timeout: TimeSpan.FromSeconds(30),
             turnLimit: 1,
-            maxTotalTokens: 8_000,
             allowedTools: [],
             allowDocumentAttachments: true,
             maxInputCharacters);
@@ -105,7 +104,6 @@ public sealed class AgentTaskProfileCatalog
             modelSelection,
             timeout: TimeSpan.FromSeconds(30),
             turnLimit: 1,
-            maxTotalTokens: 8_000,
             allowedTools: [],
             allowDocumentAttachments: true,
             maxInputCharacters);

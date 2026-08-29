@@ -1262,6 +1262,51 @@ public sealed class PaguaiDraftEndpointTests
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? InvoiceFileId = null
     );
 
+    [Fact]
+    public async Task Infrastructure_failure_on_the_candidate_read_returns_unavailable_without_partial_state()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        var scenario = await SeedScenarioAsync(factory);
+        using var client = factory.CreateClient();
+        await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
+
+        await using (var revoke = new NpgsqlCommand(
+            "REVOKE EXECUTE ON FUNCTION notifications.read_inbound_whatsapp_invoice_candidate(uuid) FROM vinx_runtime;",
+            administrator))
+        {
+            await revoke.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            using var response = await client.PostAsJsonAsync(
+                "/paguai/requests/from-document",
+                new
+                {
+                    companyId = scenario.CompanyId,
+                    inboundMessageId = Guid.NewGuid(),
+                    title = "Fatura",
+                    description = "Falha de infraestrutura controlada.",
+                    proofRequirement = "optional",
+                });
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Contains("paguai_unavailable", body);
+        }
+        finally
+        {
+            await using var grant = new NpgsqlCommand(
+                "GRANT EXECUTE ON FUNCTION notifications.read_inbound_whatsapp_invoice_candidate(uuid) TO vinx_runtime;",
+                administrator);
+            await grant.ExecuteNonQueryAsync();
+        }
+
+        await using var after = factory.Fixture.CreateAdministratorDbContext();
+        Assert.False(await after.PaguaiRequests.AnyAsync(draft => draft.CompanyId == scenario.CompanyId));
+        Assert.False(await after.IdempotencyRecords.AnyAsync(record => record.CommandName == "paguai.draft.create"));
+    }
+
     private sealed record Scenario(
         Guid CompanyId,
         Guid ForeignCompanyId,

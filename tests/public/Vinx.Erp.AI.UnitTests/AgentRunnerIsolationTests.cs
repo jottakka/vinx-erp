@@ -84,7 +84,6 @@ public sealed class AgentRunnerIsolationTests
             new AgentModelSelection("test-provider", "test-model"),
             TimeSpan.FromSeconds(30),
             turnLimit: 1,
-            maxTotalTokens: 8_000,
             allowedTools: []);
         var resolver = new SequenceContextResolver(SequenceContextResolver.Resolved(companyId));
         var model = TestAgentModel.Text(responseText);
