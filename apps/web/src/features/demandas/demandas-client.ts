@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type DemandStage =
   | "initiation"
   | "execution"
@@ -70,13 +72,173 @@ export type DemandDetail = {
   }>;
 };
 
-export type CommandResult<Demand> =
-  | { ok: true; demand?: Demand; routine?: unknown }
+export type DemandCommandDemand = {
+  id: string;
+  companyId: string;
+  demandNumber: number;
+  demandDisplayNumber: string;
+  title: string;
+  description: string;
+  priority: DemandPriority;
+  stage: DemandStage;
+  routineId: string | null;
+  responsibleMembershipId: string;
+  tipo: string | null;
+  departamento: string | null;
+  manualDueAt: string | null;
+  slaDueAt: string | null;
+  stageDueAt: string | null;
+  effectiveDeadline: string | null;
+  automationPaused: boolean;
+  isOverdue: boolean;
+  cycleCount: number;
+  version: number;
+};
+
+export type CommandResult =
+  | { ok: true; demand: DemandCommandDemand }
   | { ok: false; code: string; current?: { version: number; stage: string } };
 
 const basePath = "/demandas";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
 const antiforgeryHeaderName = "X-CSRF-TOKEN";
+
+// Contrato estrito por operação: qualquer campo ausente, tipo errado ou
+// propriedade extra em 2xx é falha de protocolo — o cliente não repassa
+// payload não validado à UI.
+const demandStageSchema = z.enum([
+  "initiation",
+  "execution",
+  "awaiting_approval",
+  "closed",
+]);
+const demandPrioritySchema = z.enum(["critical", "high", "medium", "low"]);
+
+const demandBoardCardSchema = z
+  .object({
+    automationPaused: z.boolean(),
+    demandDisplayNumber: z.string(),
+    demandNumber: z.number().int(),
+    effectiveDeadline: z.string().nullable(),
+    id: z.string().uuid(),
+    isOverdue: z.boolean(),
+    priority: demandPrioritySchema,
+    responsibleMembershipId: z.string().uuid(),
+    stage: demandStageSchema,
+    stageStartedAt: z.string(),
+    title: z.string(),
+    version: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const demandBoardPageSchema = z
+  .object({
+    hasMore: z.boolean(),
+    items: z.array(demandBoardCardSchema),
+    nextCursor: z.string().nullable(),
+    total: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const demandDetailSchema = z
+  .object({
+    checklist: z.array(
+      z
+        .object({
+          doneAt: z.string().nullable(),
+          id: z.string().uuid(),
+          isDone: z.boolean(),
+          position: z.number().int(),
+          text: z.string(),
+        })
+        .strict(),
+    ),
+    demand: z
+      .object({
+        automationPaused: z.boolean(),
+        companyId: z.string().uuid(),
+        cycleCount: z.number().int().nonnegative(),
+        departamento: z.string().nullable(),
+        demandDisplayNumber: z.string(),
+        demandNumber: z.number().int(),
+        description: z.string(),
+        effectiveDeadline: z.string().nullable(),
+        id: z.string().uuid(),
+        isOverdue: z.boolean(),
+        manualDueAt: z.string().nullable(),
+        priority: demandPrioritySchema,
+        responsibleMembershipId: z.string().uuid(),
+        routineId: z.string().nullable(),
+        slaDueAt: z.string().nullable(),
+        stage: demandStageSchema,
+        stageDueAt: z.string().nullable(),
+        stageStartedAt: z.string(),
+        title: z.string(),
+        tipo: z.string().nullable(),
+        version: z.number().int().nonnegative(),
+      })
+      .strict(),
+    history: z.array(
+      z
+        .object({
+          actorUserId: z.string().uuid().nullable(),
+          cycleCount: z.number().int(),
+          fromStage: z.string().nullable(),
+          id: z.string().uuid(),
+          kind: z.string(),
+          occurredAt: z.string(),
+          toStage: z.string().nullable(),
+        })
+        .strict(),
+    ),
+    participants: z.array(
+      z
+        .object({
+          id: z.string().uuid(),
+          role: z.string(),
+          userId: z.string().uuid(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+// Os comandos devolvem a DemandResponse completa (não o card do board):
+// stageDueAt entra no lugar de stageStartedAt, que o contrato não expõe.
+const demandCommandDemandSchema = z
+  .object({
+    automationPaused: z.boolean(),
+    companyId: z.string().uuid(),
+    cycleCount: z.number().int().nonnegative(),
+    departamento: z.string().nullable(),
+    demandDisplayNumber: z.string(),
+    demandNumber: z.number().int(),
+    description: z.string(),
+    effectiveDeadline: z.string().nullable(),
+    id: z.string().uuid(),
+    isOverdue: z.boolean(),
+    manualDueAt: z.string().nullable(),
+    priority: demandPrioritySchema,
+    responsibleMembershipId: z.string().uuid(),
+    routineId: z.string().nullable(),
+    slaDueAt: z.string().nullable(),
+    stage: demandStageSchema,
+    stageDueAt: z.string().nullable(),
+    title: z.string(),
+    tipo: z.string().nullable(),
+    version: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const commandErrorSchema = z
+  .object({
+    code: z.string().min(1),
+    current: z
+      .object({ stage: z.string(), version: z.number().int() })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 function request(path: string, init: RequestInit = {}) {
   return fetch(path, {
@@ -131,7 +293,9 @@ export const demandasClient = {
       if (filters.limit) params.set("limit", String(filters.limit));
       if (filters.after) params.set("after", filters.after);
       const response = await request(`${basePath}/board?${params.toString()}`);
-      return response.ok ? ((await response.json()) as DemandBoardPage) : null;
+      if (!response.ok) return null;
+      const parsed = demandBoardPageSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
@@ -145,16 +309,15 @@ export const demandasClient = {
       const response = await request(
         `${basePath}/demands/${encodeURIComponent(demandId)}?companyId=${encodeURIComponent(companyId)}`,
       );
-      return response.ok ? ((await response.json()) as DemandDetail) : null;
+      if (!response.ok) return null;
+      const parsed = demandDetailSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
   },
 
-  async command<TDemand>(
-    path: string,
-    body: object,
-  ): Promise<CommandResult<TDemand>> {
+  async command(path: string, body: object): Promise<CommandResult> {
     try {
       const requestToken = await getAntiforgeryToken();
       if (!requestToken) return { code: "demandas_unavailable", ok: false };
@@ -167,18 +330,19 @@ export const demandasClient = {
         method: "POST",
       });
       if (response.ok) {
-        const payload = await response.json();
-        return typeof payload === "object" && payload !== null
-          ? { ok: true as const, ...(payload as object) }
-          : { ok: true as const };
+        const parsed = demandCommandDemandSchema.safeParse(
+          await response.json(),
+        );
+        return parsed.success
+          ? { ok: true as const, demand: parsed.data }
+          : { code: "demandas_unavailable", ok: false as const };
       }
-      const error = (await response.json().catch(() => null)) as {
-        code?: string;
-        current?: { version: number; stage: string };
-      } | null;
+      const error = commandErrorSchema.safeParse(
+        await response.json().catch(() => null),
+      );
       return {
-        code: error?.code ?? "demandas_unavailable",
-        current: error?.current,
+        code: error.success ? error.data.code : "demandas_unavailable",
+        current: error.success ? error.data.current : undefined,
         ok: false,
       };
     } catch {
@@ -194,7 +358,7 @@ export const demandasClient = {
     responsibleMembershipId: string;
     manualDueAt?: string;
   }) {
-    return this.command<DemandBoardCard>("/demands", {
+    return this.command("/demands", {
       companyId: input.companyId,
       description: input.description,
       priority: input.priority,
@@ -206,7 +370,7 @@ export const demandasClient = {
   },
 
   advance(companyId: string, card: DemandBoardCard) {
-    return this.command<DemandBoardCard>(`/demands/${card.id}/advance`, {
+    return this.command(`/demands/${card.id}/advance`, {
       companyId,
       expectedVersion: card.version,
       requestId: crypto.randomUUID(),
@@ -219,15 +383,12 @@ export const demandasClient = {
     version: number,
     itemId: string,
   ) {
-    return this.command<DemandBoardCard>(
-      `/demands/${demandId}/checklist-items/complete`,
-      {
-        companyId,
-        expectedVersion: version,
-        itemId,
-        requestId: crypto.randomUUID(),
-      },
-    );
+    return this.command(`/demands/${demandId}/checklist-items/complete`, {
+      companyId,
+      expectedVersion: version,
+      itemId,
+      requestId: crypto.randomUUID(),
+    });
   },
 
   reassign(
@@ -235,7 +396,7 @@ export const demandasClient = {
     card: DemandBoardCard,
     newResponsibleMembershipId: string,
   ) {
-    return this.command<DemandBoardCard>(`/demands/${card.id}/responsible`, {
+    return this.command(`/demands/${card.id}/responsible`, {
       companyId,
       expectedVersion: card.version,
       newResponsibleMembershipId,
@@ -244,7 +405,7 @@ export const demandasClient = {
   },
 
   pause(companyId: string, card: DemandBoardCard) {
-    return this.command<DemandBoardCard>(`/demands/${card.id}/pause`, {
+    return this.command(`/demands/${card.id}/pause`, {
       companyId,
       expectedVersion: card.version,
       requestId: crypto.randomUUID(),
@@ -252,7 +413,7 @@ export const demandasClient = {
   },
 
   resume(companyId: string, card: DemandBoardCard) {
-    return this.command<DemandBoardCard>(`/demands/${card.id}/resume`, {
+    return this.command(`/demands/${card.id}/resume`, {
       companyId,
       expectedVersion: card.version,
       requestId: crypto.randomUUID(),
@@ -260,7 +421,7 @@ export const demandasClient = {
   },
 
   resumeOverdue(companyId: string, card: DemandBoardCard, newDueAt: string) {
-    return this.command<DemandBoardCard>(`/demands/${card.id}/resume-overdue`, {
+    return this.command(`/demands/${card.id}/resume-overdue`, {
       companyId,
       expectedVersion: card.version,
       newDueAt,
@@ -275,7 +436,7 @@ export const demandasClient = {
     userId: string,
     asSupervisor: boolean,
   ) {
-    return this.command<DemandBoardCard>(`/demands/${demandId}/participants`, {
+    return this.command(`/demands/${demandId}/participants`, {
       asSupervisor,
       companyId,
       expectedVersion: version,
@@ -290,7 +451,7 @@ export const demandasClient = {
     version: number,
     approve: boolean,
   ) {
-    return this.command<DemandBoardCard>(
+    return this.command(
       `/demands/${demandId}/approval/${approve ? "approve" : "reject"}`,
       {
         companyId,

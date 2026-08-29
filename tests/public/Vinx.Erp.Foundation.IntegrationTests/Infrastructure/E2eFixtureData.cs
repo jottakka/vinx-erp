@@ -72,9 +72,6 @@ public sealed class E2eFixtureAttachmentStorage : FileStorage
         TimeSpan lifetime,
         CancellationToken cancellationToken) => throw new NotSupportedException();
 
-    public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
-        string prefix,
-        CancellationToken cancellationToken) => throw new NotSupportedException();
 
     public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) =>
         throw new NotSupportedException();

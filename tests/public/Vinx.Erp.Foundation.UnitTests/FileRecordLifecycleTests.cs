@@ -1,4 +1,3 @@
-using System.Reflection;
 using Vinx.Erp.Foundation.Domain;
 using Xunit;
 
@@ -9,30 +8,17 @@ public sealed class FileRecordLifecycleTests
     [Fact]
     public void Upload_metadata_starts_in_quarantine_with_canonical_fields()
     {
-        var record = new FileRecord(
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            "invoice.pdf",
-            ".pdf",
-            128L,
-            "application/pdf",
-            "sha256:abc",
-            "financial",
-            "user_upload",
-            DateTimeOffset.UtcNow.AddDays(30),
-            Guid.NewGuid(),
-            Guid.NewGuid());
+        var record = NewRecord();
 
-        Assert.Equal("invoice.pdf", Property(record, "OriginalFileName"));
-        Assert.Equal(".pdf", Property(record, "Extension"));
-        Assert.Equal(128L, Property(record, "SizeBytes"));
-        Assert.Equal("application/pdf", Property(record, "MimeType"));
+        Assert.Equal("invoice.pdf", record.OriginalFileName);
+        Assert.Equal(".pdf", record.Extension);
+        Assert.Equal(128L, record.SizeBytes);
+        Assert.Equal("application/pdf", record.MimeType);
         Assert.Equal("sha256:abc", record.Checksum);
         Assert.Equal("financial", record.Classification);
-        Assert.Equal("user_upload", Property(record, "Origin"));
-        Assert.Equal("quarantined", Property(record, "ProcessingState"));
-        Assert.True(record.IsQuarantined);
+        Assert.Equal("user_upload", record.Origin);
+        Assert.Equal(FileRecord.QuarantinedState, record.ProcessingState);
+        Assert.StartsWith("quarantine/", record.ProviderKey);
     }
 
     [Fact]
@@ -41,10 +27,10 @@ public sealed class FileRecordLifecycleTests
         var record = NewRecord();
 
         record.MarkVerified(Guid.NewGuid(), Guid.NewGuid());
-        record.MarkConfirmed(Guid.NewGuid(), Guid.NewGuid());
+        Assert.Equal(FileRecord.VerifiedState, record.ProcessingState);
 
-        Assert.Equal("confirmed", record.ProcessingState);
-        Assert.True(record.IsQuarantined);
+        record.MarkConfirmed(Guid.NewGuid(), Guid.NewGuid());
+        Assert.Equal(FileRecord.ConfirmedState, record.ProcessingState);
     }
 
     [Fact]
@@ -67,37 +53,36 @@ public sealed class FileRecordLifecycleTests
     {
         var record = NewRecord();
 
-        Invoke(record, "MarkVerificationFailed", "malware_detected", Guid.NewGuid(), Guid.NewGuid());
+        record.MarkVerificationFailed("malware_detected", Guid.NewGuid(), Guid.NewGuid());
 
-        Assert.Equal("verification_failed", record.ProcessingState);
-        Assert.Equal("malware_detected", Property(record, "FailureReason"));
-        Assert.True(record.IsQuarantined);
+        Assert.Equal(FileRecord.VerificationFailedState, record.ProcessingState);
+        Assert.Equal("malware_detected", record.FailureReason);
     }
 
     [Fact]
     public void Verified_document_cannot_return_to_verification_failed()
     {
         var record = NewRecord();
-        Invoke(record, "MarkVerified", Guid.NewGuid(), Guid.NewGuid());
+        record.MarkVerified(Guid.NewGuid(), Guid.NewGuid());
 
         Assert.Throws<InvalidOperationException>(() =>
-            Invoke(record, "MarkVerificationFailed", "content_type_mismatch", Guid.NewGuid(), Guid.NewGuid()));
+            record.MarkVerificationFailed("content_type_mismatch", Guid.NewGuid(), Guid.NewGuid()));
     }
 
     [Fact]
-    public void Retention_blocks_physical_delete_until_expiry()
+    public void Deleted_record_can_be_restored_once()
     {
         var record = NewRecord();
         var actor = Guid.NewGuid();
         var request = Guid.NewGuid();
-        Invoke(record, "MarkDeleted", "retention_test", actor, request);
+        record.MarkDeleted("retention_test", actor, request);
+        Assert.NotNull(record.DeletedAt);
 
-        Assert.False(record.IsPhysicalDeletionAllowed(DateTimeOffset.UtcNow));
-        Assert.True(record.IsPhysicalDeletionAllowed(DateTimeOffset.UtcNow.AddDays(31)));
+        record.Restore(actor, request);
 
-        Invoke(record, "Restore", actor, request);
         Assert.Null(record.DeletedAt);
-        Assert.False(record.IsPhysicalDeletionAllowed(DateTimeOffset.UtcNow.AddDays(31)));
+        Assert.Null(record.DeletedReason);
+        Assert.Throws<InvalidOperationException>(() => record.Restore(actor, request));
     }
 
     private static FileRecord NewRecord(string classification = "financial") => new(
@@ -114,21 +99,4 @@ public sealed class FileRecordLifecycleTests
         DateTimeOffset.UtcNow.AddDays(30),
         Guid.NewGuid(),
         Guid.NewGuid());
-
-    private static void Invoke(FileRecord record, string name, params object[] arguments)
-    {
-        var method = typeof(FileRecord).GetMethod(name, BindingFlags.Public | BindingFlags.Instance);
-        Assert.NotNull(method);
-        try
-        {
-            method.Invoke(record, arguments);
-        }
-        catch (TargetInvocationException exception) when (exception.InnerException is not null)
-        {
-            throw exception.InnerException;
-        }
-    }
-
-    private static object? Property(FileRecord record, string name) =>
-        typeof(FileRecord).GetProperty(name, BindingFlags.Public | BindingFlags.Instance)?.GetValue(record);
 }

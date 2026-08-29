@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { vinxShadow, vinxTint } from "../../app/theme/surface-tokens";
+import { isDemandasDeepLink } from "../../shared/routing/app-paths";
 import { CompanyBadge } from "../../shared/ui/company-badge";
 import { PageHeader } from "../../shared/ui/page-header";
 import { useSession } from "../auth/session-provider";
@@ -27,7 +28,13 @@ import { useNotifications } from "./notifications-provider";
 const client = createNotificationsClient();
 const pageSize = 20;
 
-const allowlistedHrefs = new Set(["/paguai", "/atendimento"]);
+// Allowlist fechada de ações da inbox: rotas exatas ou deep link canônico de
+// Demandas (mesmo validador do app-paths).
+function isAllowlistedHref(href: string): boolean {
+  return (
+    href === "/paguai" || href === "/atendimento" || isDemandasDeepLink(href)
+  );
+}
 
 function message(error: NotificationsError) {
   return (
@@ -213,7 +220,7 @@ export function NotificationsPage({
           {items.map((item) => {
             const companyName = companyNameFor(companies, item.companyId);
             const actionHref =
-              item.action && allowlistedHrefs.has(item.action.href)
+              item.action && isAllowlistedHref(item.action.href)
                 ? item.action.href
                 : null;
             // Nome acessível único mesmo com várias notificações da mesma

@@ -218,7 +218,6 @@ public sealed class AgentRunnerTests
         new AgentModelSelection("test-provider", "test-model"),
         timeout ?? TimeSpan.FromSeconds(30),
         turnLimit: 1,
-        maxTotalTokens: 8_000,
         allowedTools: []);
 
     private static (AgentRunner Runner, SequenceContextResolver Resolver, TestAgentModel Model) CreateRunner(

@@ -156,6 +156,15 @@ public static partial class NotificationInboxPresentation
             ["/atendimento"] = ("atendimento", "/atendimento"),
         };
 
+    /// <summary>
+    /// Parser fechado do deep link de Demandas: aceita exatamente
+    /// "/demandas?demand=&lt;uuid&gt;" (formato N persistido pelo composer ou
+    /// hifenizado) e devolve o href canônico com UUID hifenizado; query extra,
+    /// chave duplicada, fragmento ou UUID inválido não mapeiam.
+    /// </summary>
+    [GeneratedRegex(@"^/demandas\?demand=([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\z")]
+    private static partial Regex DemandasDeepLinkRegex();
+
     public static NotificationInboxItem Project(
         Guid id,
         Guid companyId,
@@ -168,11 +177,27 @@ public static partial class NotificationInboxPresentation
         var (source, eventName) = PaguaiDraftCreatedEventKeyRegex().IsMatch(eventKey)
             ? (PaguaiSource, PaguaiDraftCreatedEvent)
             : (DefaultSource, null);
-        var action =
+        NotificationInboxAction? action;
+        if (deepLinkSelector is not null && DeepLinks.TryGetValue(deepLinkSelector, out var mapped))
+        {
+            action = new NotificationInboxAction(mapped.Kind, mapped.Href);
+        }
+        else if (
             deepLinkSelector is not null
-            && DeepLinks.TryGetValue(deepLinkSelector, out var mapped)
-                ? new NotificationInboxAction(mapped.Kind, mapped.Href)
-                : null;
+            && DemandasDeepLinkRegex().Match(deepLinkSelector) is { Success: true } demandas
+        )
+        {
+            var rawId = demandas.Groups[1].Value;
+            var canonical = Guid.TryParseExact(rawId, "N", out var parsed)
+                ? parsed.ToString("D")
+                : rawId;
+            action = new NotificationInboxAction("demandas", $"/demandas?demand={canonical}");
+        }
+        else
+        {
+            action = null;
+        }
+
         return new NotificationInboxItem(id, companyId, source, eventName, createdAt, readAt, action);
     }
 

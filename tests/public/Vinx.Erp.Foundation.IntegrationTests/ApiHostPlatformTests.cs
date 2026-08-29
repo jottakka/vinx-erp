@@ -40,6 +40,7 @@ public sealed class ApiHostPlatformTests
     [InlineData("SUPABASE_AUTH_ISSUER", "http://identity.example.test/auth/v1")]
     [InlineData("SUPABASE_AUTH_AUDIENCE", "")]
     [InlineData("SUPABASE_AUTH_PUBLISHABLE_KEY", "")]
+    [InlineData("MalwareScanner:Timeout", "00:00:00")]
     public void Invalid_required_option_fails_host_startup_without_disclosing_credentials(
         string key,
         string value

@@ -10,15 +10,6 @@ public sealed class DocumentVerificationPolicyTests
     private const string OtherChecksum = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
     [Fact]
-    public void Inspection_contract_exposes_an_antimalware_status()
-    {
-        var property = typeof(StorageObjectInspection).GetProperty("MalwareScanStatus");
-
-        Assert.NotNull(property);
-        Assert.Equal("MalwareScanStatus", property!.PropertyType.Name);
-    }
-
-    [Fact]
     public void Verification_accepts_current_clean_verdict()
     {
         var record = NewRecord();
@@ -109,8 +100,7 @@ public sealed class DocumentVerificationPolicyTests
     {
         var record = NewRecord();
         var stored = new StorageObjectInspection(
-            new StorageObjectMetadata("quarantine/other/document", 127L, "image/png", OtherChecksum),
-            MalwareScanStatus.Clean);
+            new StorageObjectMetadata("quarantine/other/document", 127L, "image/png", OtherChecksum));
 
         Assert.Equal(
             "object_key_mismatch",
@@ -154,8 +144,7 @@ public sealed class DocumentVerificationPolicyTests
         string contentType = "application/pdf",
         string checksum = Checksum) =>
         new(
-            new StorageObjectMetadata(record.ProviderKey, sizeBytes, contentType, checksum),
-            MalwareScanStatus.Clean);
+            new StorageObjectMetadata(record.ProviderKey, sizeBytes, contentType, checksum));
 
     private static MalwareScanVerdict NewCleanVerdict(string checksum) => new(
         MalwareScanStatus.Clean, "vinx-test-engine", "1.0.0", "1.2026.08", DateTimeOffset.UtcNow, checksum, null);

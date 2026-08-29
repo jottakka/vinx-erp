@@ -38,13 +38,27 @@ Task 7 used a disposable detached clone of
 legacy migration, service, DDL or data command was run. Discovery was limited
 to `rg` inside that explicit clone.
 
-The fixed current Foundation database roles are:
+The fixed current Foundation database roles (fonte canônica:
+`infra/database/bootstrap-foundation-roles.sql`; nenhuma migration cria role):
+
+Login (aplicação e migração):
 
 - `vinx_migrator LOGIN NOINHERIT NOBYPASSRLS`
 - `vinx_runtime LOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_worker LOGIN NOINHERIT NOBYPASSRLS`
+
+`NOLOGIN` (ownership por schema/módulo):
+
 - `vinx_audit_owner NOLOGIN NOINHERIT NOBYPASSRLS`
 - `vinx_identity_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_authorization_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_platform_owner NOLOGIN NOINHERIT NOBYPASSRLS`
 - `vinx_provisioning_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_employee_directory_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_demandas_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_notifications_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_permissions_owner NOLOGIN NOINHERIT NOBYPASSRLS`
+- `vinx_worker_owner NOLOGIN NOINHERIT NOBYPASSRLS`
 
 `vinx_identity_owner` possui somente `USAGE` em `foundation`, `SELECT` em
 `foundation.users` e `UPDATE` somente em `sessions_valid_after`, enquanto

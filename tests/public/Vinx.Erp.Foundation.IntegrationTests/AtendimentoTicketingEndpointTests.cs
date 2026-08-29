@@ -406,6 +406,20 @@ public sealed class AtendimentoTicketingEndpointTests
         );
         Assert.Equal(HttpStatusCode.Conflict, staleRemove.StatusCode);
 
+        // No-op com versão obsoleta também é conflito: repetição de adição.
+        using var staleRepeat = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/watchers/add",
+            new WatcherRequest(scenario.CompanyId, Guid.NewGuid(), created.Version, scenario.AssigneeMembershipId)
+        );
+        Assert.Equal(HttpStatusCode.Conflict, staleRepeat.StatusCode);
+
+        // No-op com versão obsoleta: remoção de vínculo ausente.
+        using var staleAbsentRemove = await client.PostAsJsonAsync(
+            $"/atendimento/cards/{created.Id}/watchers/remove",
+            new WatcherRequest(scenario.CompanyId, Guid.NewGuid(), created.Version, scenario.OtherMembershipId!)
+        );
+        Assert.Equal(HttpStatusCode.Conflict, staleAbsentRemove.StatusCode);
+
         await using var administrator = await factory.Fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(
             "SELECT count(*) FROM service_desk.atendimento_card_watchers WHERE card_id = @card_id",

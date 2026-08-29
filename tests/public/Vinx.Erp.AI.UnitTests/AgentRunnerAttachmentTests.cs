@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Reflection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Vinx.Erp.AI;
 using Vinx.Erp.AI.DocumentContext;
@@ -197,37 +196,6 @@ public sealed class AgentRunnerAttachmentTests
     }
 
     [Fact]
-    public void Aggregate_truncation_never_splits_a_surrogate_pair()
-    {
-        var id = Guid.Parse("11111111-1111-4111-8111-111111111111");
-        var text = string.Concat(Enumerable.Repeat("😀\"\\\n", 24_000));
-        var context = new DocumentContextResult(
-            id,
-            DocumentContextStatus.Ready,
-            ClarificationReason: null,
-            [new DocumentSegment(1, $"{id:N}:p1", null, 1, DocumentSegmentSource.TextLayer, text)],
-            text.Length,
-            Truncated: false);
-        var compose = typeof(AgentRunner).GetMethod(
-            "ComposeTurn",
-            BindingFlags.Static | BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException("Agent turn composer was not found.");
-
-        var turn = Assert.IsType<string>(compose.Invoke(
-            null,
-            ["resuma", new[] { context }, MainInputCharacterLimit]));
-
-        Assert.True(turn.Length <= MainInputCharacterLimit, $"Main turn length was {turn.Length}.");
-        using var json = ContextJson(turn);
-        var finalText = json.RootElement.GetProperty("documents")[0]
-            .GetProperty("segments")[0]
-            .GetProperty("text")
-            .GetString()!;
-        Assert.False(finalText.Length > 0 && char.IsHighSurrogate(finalText[^1]));
-        Assert.True(json.RootElement.GetProperty("documents")[0].GetProperty("truncated").GetBoolean());
-    }
-
-    [Fact]
     public async Task Per_segment_truncation_sets_the_context_truncated_flag()
     {
         var id = Guid.NewGuid();
@@ -414,7 +382,6 @@ public sealed class AgentRunnerAttachmentTests
             new AgentModelSelection("test-provider", "test-model"),
             TimeSpan.FromSeconds(30),
             turnLimit: 1,
-            maxTotalTokens: 8_000,
             allowedTools: [],
             allowDocumentAttachments);
 

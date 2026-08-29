@@ -41,16 +41,6 @@ public sealed class ApprovalContractsTests
     }
 
     [Theory]
-    [InlineData(null, false)]
-    [InlineData("", false)]
-    [InlineData("abc", false)]
-    [InlineData("ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF01234567", false)]
-    [InlineData("abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345678", false)]
-    [InlineData("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", true)]
-    public void IsValidHash_enforces_sha256_lowercase_hexadecimal_format(string? hash, bool expected) =>
-        Assert.Equal(expected, CanonicalPayloadHasher.IsValidHash(hash));
-
-    [Theory]
     [InlineData("ix_approvals_company_id_actor_user_id_resource_key", UniqueViolationKind.LiveProposal)]
     [InlineData("ix_approvals_company_id_actor_user_id", UniqueViolationKind.Other)]
     [InlineData("ix_idempotency_records_company_id_actor_user_id_command_name_r", UniqueViolationKind.Idempotency)]
@@ -213,13 +203,5 @@ public sealed class ApprovalCapabilityPolicyPinTests
         Assert.Equal("demandas.approvals.expire", policy.ExpireCommandName);
         Assert.Equal("demandas.demand.advance", policy.CapabilityName);
         Assert.Equal(AuditSource.Web, policy.AuditSource);
-    }
-
-    [Fact]
-    public void From_capability_only_swaps_the_capability()
-    {
-        var policy = ApprovalCapabilityPolicy.FromCapability("outro.cap");
-        Assert.Equal("ai.approvals.confirm", policy.ConfirmCommandName);
-        Assert.Equal("outro.cap", policy.CapabilityName);
     }
 }

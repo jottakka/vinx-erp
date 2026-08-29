@@ -9,7 +9,6 @@ namespace Vinx.Erp.Foundation.Files;
 
 public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
 {
-    private const int ObjectListPageSize = 1000;
     private static readonly TimeSpan MaximumDownloadUrlLifetime = TimeSpan.FromMinutes(2);
 
     public async Task EnsurePrivateContainerAsync(CancellationToken cancellationToken)
@@ -134,8 +133,7 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
                     providerKey,
                     sizeBytes,
                     contentType,
-                    $"sha256:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}"),
-                MalwareScanStatus.Unavailable);
+                    $"sha256:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}"));
         }
         finally
         {
@@ -192,37 +190,6 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
         response.EnsureSuccessStatusCode();
         var url = await ReadUrlAsync(response.Content, cancellationToken);
         return new SignedStorageUrl(url, DateTimeOffset.UtcNow.Add(lifetime));
-    }
-
-    public async Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
-        string prefix,
-        CancellationToken cancellationToken)
-    {
-        ValidateObjectKey(prefix, allowEmpty: true);
-        var offset = 0;
-        var summaries = new List<StorageObjectSummary>();
-        while (true)
-        {
-            using var request = new HttpRequestMessage(
-                HttpMethod.Post,
-                new Uri(
-                    httpClient.BaseAddress!,
-                    $"storage/v1/object/list/{Uri.EscapeDataString(SupabaseStorageOptions.PrivateContainerId)}"))
-            {
-                Content = JsonContent.Create(new { prefix, limit = ObjectListPageSize, offset })
-            };
-            using var response = await httpClient.SendAsync(request, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            var objects = await response.Content.ReadFromJsonAsync<JsonElement[]>(cancellationToken: cancellationToken)
-                ?? [];
-            summaries.AddRange(objects.Select(ToStorageObjectSummary));
-            if (objects.Length < ObjectListPageSize)
-            {
-                return summaries;
-            }
-
-            offset = checked(offset + objects.Length);
-        }
     }
 
     public async Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken)
@@ -303,24 +270,6 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
         {
             throw new ArgumentException("Storage object key is invalid.", nameof(providerKey));
         }
-    }
-
-    private static StorageObjectSummary ToStorageObjectSummary(JsonElement item)
-    {
-        var name = item.TryGetProperty("name", out var nameProperty)
-            ? nameProperty.GetString()
-            : null;
-        var createdAt = item.TryGetProperty("created_at", out var createdAtProperty)
-            && DateTimeOffset.TryParse(
-                createdAtProperty.GetString(),
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal,
-                out var parsed)
-            ? parsed
-            : (DateTimeOffset?)null;
-        return new StorageObjectSummary(
-            string.IsNullOrWhiteSpace(name) ? throw new InvalidOperationException("Storage object name is missing.") : name,
-            createdAt);
     }
 
     private static void ValidateDownloadLifetime(TimeSpan lifetime)

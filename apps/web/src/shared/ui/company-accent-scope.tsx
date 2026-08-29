@@ -31,8 +31,6 @@ export function CompanyAccentScope({
   } as const;
 
   return (
-    <Box key={mode} sx={{ ...scopeVars, colorScheme: mode } as never}>
-      {children}
-    </Box>
+    <Box sx={{ ...scopeVars, colorScheme: mode } as never}>{children}</Box>
   );
 }

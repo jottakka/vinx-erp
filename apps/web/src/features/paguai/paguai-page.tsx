@@ -23,7 +23,10 @@ import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { useFeedback } from "../../shared/ui/feedback-provider";
 import { PageHeader } from "../../shared/ui/page-header";
 import { StatusChip } from "../../shared/ui/status-chip";
-import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
+import {
+  hasCompanyCapability,
+  resolveCompanyEntityPermissions,
+} from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import { PaguaiCreateDialog } from "./paguai-create-dialog";
 import {
@@ -160,11 +163,7 @@ export function PaguaiPage({
   const companies = useMemo(
     () =>
       (bootstrap?.companies ?? []).filter((company) =>
-        company.capabilities.some(
-          (capability) =>
-            capability.name === readCapability &&
-            capability.scopes.includes("Company"),
-        ),
+        hasCompanyCapability(company, readCapability),
       ),
     [bootstrap],
   );

@@ -14,6 +14,9 @@ dotnet format analyzers --severity warn --verify-no-changes
 dotnet format style --severity warn --verify-no-changes
 dotnet format whitespace --verify-no-changes
 dotnet build --no-restore
+# Contrato do launcher de E2E real: Docker-free standalone (smoke real segue
+# opt-in via VINX_RUN_REAL_E2E_*_SMOKE); exige o E2eHost já compilado.
+node --test scripts/run-real-e2e.test.mjs
 ./scripts/verify-foundation-database.sh
 ./scripts/verify-ef-negative-guards.sh
 

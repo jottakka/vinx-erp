@@ -52,6 +52,40 @@ public sealed class NotificationInboxTests
     }
 
     [Fact]
+    public void Demandas_presentation_normalizes_valid_ids_and_rejects_noncanonical_selectors()
+    {
+        var id = Guid.NewGuid();
+        var companyId = Guid.NewGuid();
+        var demandId = Guid.NewGuid();
+
+        foreach (var selector in new[]
+        {
+            $"/demandas?demand={demandId:N}",
+            $"/demandas?demand={demandId:D}",
+        })
+        {
+            var projected = NotificationInboxPresentation.Project(
+                id, companyId, "demanda.test", selector, DateTimeOffset.UtcNow, null);
+            Assert.Equal("demandas", projected.Action!.Kind);
+            Assert.Equal($"/demandas?demand={demandId:D}", projected.Action.Href);
+        }
+
+        foreach (var selector in new[]
+        {
+            $"/demandas?demand={demandId:D}".ToUpperInvariant(),
+            $"/demandas?demand={demandId:D}&extra=true",
+            $"/demandas?demand={demandId:D}&demand={Guid.NewGuid():D}",
+            $"/demandas?demand={demandId:D}#fragment",
+            "/demandas?demand=not-a-guid",
+        })
+        {
+            var rejected = NotificationInboxPresentation.Project(
+                id, companyId, "demanda.test", selector, DateTimeOffset.UtcNow, null);
+            Assert.Null(rejected.Action);
+        }
+    }
+
+    [Fact]
     public async Task Authorized_actor_lists_delivered_in_app_intents_with_company_of_origin()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();

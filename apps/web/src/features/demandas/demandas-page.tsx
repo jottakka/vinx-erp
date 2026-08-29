@@ -22,11 +22,17 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  demandasDetailPath,
+  readDemandasDemandId,
+} from "../../shared/routing/app-paths";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanySelect } from "../../shared/ui/company-select";
-import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
-import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
+import {
+  hasCompanyCapability,
+  resolveCompanyEntityPermissions,
+} from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
   type CommandResult,
@@ -62,15 +68,14 @@ export function DemandasPage() {
   const companies = useMemo(
     () =>
       (bootstrap?.companies ?? []).filter((company) =>
-        company.capabilities.some(
-          (capability) =>
-            capability.name === readCapability &&
-            capability.scopes.includes("Company"),
-        ),
+        hasCompanyCapability(company, readCapability),
       ),
     [bootstrap],
   );
   const [companyId, setCompanyId] = useState("");
+  const [pendingAdvanceIds, setPendingAdvanceIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   // Contexto ativo por empresa (contrato da baseline de arquitetura): a troca
   // de empresa limpa SINCRONAMENTE cartões/detalhe/erro e invalida respostas
@@ -82,6 +87,7 @@ export function DemandasPage() {
     (nextCompanyId: string) => {
       scopeGeneration.current += 1;
       boardRequest.current += 1;
+      setPendingAdvanceIds(new Set());
       setCards([]);
       setTotal(0);
       setHasMore(false);
@@ -184,10 +190,13 @@ export function DemandasPage() {
     void loadBoard();
   }, [loadBoard]);
 
-  // Deep link /demandas?demand=<id>: abre o detalhe direto.
+  const latestLoadBoard = useRef(loadBoard);
+  latestLoadBoard.current = loadBoard;
+
+  // Deep link /demandas?demand=<id canônico>: abre o detalhe direto; seletor
+  // inválido (UUID não canônico, query extra) é ignorado, não chamado.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const target = params.get("demand");
+    const target = readDemandasDemandId(window.location.search);
     if (target && companyId) setDetailId(target);
   }, [companyId]);
 
@@ -204,21 +213,16 @@ export function DemandasPage() {
         return;
       if (result) setDetail(result);
     });
-    window.history.replaceState(null, "", `/demandas?demand=${detailId}`);
+    window.history.replaceState(null, "", demandasDetailPath(detailId));
   }, [detailId, companyId]);
-
-  function replaceCard(updated?: DemandBoardCard) {
-    if (!updated) return void loadBoard({ silent: true });
-    setCards((current) =>
-      current.map((card) => (card.id === updated.id ? updated : card)),
-    );
-  }
 
   async function act(
     card: DemandBoardCard,
-    action: () => Promise<CommandResult<DemandBoardCard>>,
+    action: () => Promise<CommandResult>,
   ) {
+    const generation = scopeGeneration.current;
     const result = await action();
+    if (generation !== scopeGeneration.current) return;
     if (!result.ok) {
       setError(messageFor(result.code));
       const current = result.current;
@@ -230,8 +234,22 @@ export function DemandasPage() {
         );
       return;
     }
-    if (result.demand) replaceCard(result.demand);
-    else void loadBoard({ silent: true });
+    await latestLoadBoard.current({ silent: true });
+  }
+
+  function beginAdvance(card: DemandBoardCard) {
+    if (pendingAdvanceIds.has(card.id)) return;
+    setPendingAdvanceIds((current) => new Set(current).add(card.id));
+    void act(card, () => demandasClient.advance(companyId, card)).finally(
+      () => {
+        setPendingAdvanceIds((current) => {
+          if (!current.has(card.id)) return current;
+          const next = new Set(current);
+          next.delete(card.id);
+          return next;
+        });
+      },
+    );
   }
 
   const visibleCards = onlyOverdue
@@ -333,12 +351,9 @@ export function DemandasPage() {
                     <DemandCard
                       card={card}
                       canAdvance={permissions.canEdit}
+                      isAdvancing={pendingAdvanceIds.has(card.id)}
                       key={card.id}
-                      onAdvance={() =>
-                        void act(card, () =>
-                          demandasClient.advance(companyId, card),
-                        )
-                      }
+                      onAdvance={() => beginAdvance(card)}
                       onOpen={() => setDetailId(card.id)}
                     />
                   ))}
@@ -401,11 +416,13 @@ function deadlineLabel(
 function DemandCard({
   card,
   canAdvance,
+  isAdvancing,
   onAdvance,
   onOpen,
 }: {
   card: DemandBoardCard;
   canAdvance: boolean;
+  isAdvancing: boolean;
   onAdvance: () => void;
   onOpen: () => void;
 }) {
@@ -466,6 +483,7 @@ function DemandCard({
         {canAdvance && card.stage !== "closed" ? (
           <Button
             data-testid={`advance-${card.id}`}
+            disabled={isAdvancing}
             onClick={onAdvance}
             size="small"
             startIcon={<AdvanceIcon />}
@@ -578,7 +596,3 @@ export function DemandDetailDialog({
     </Dialog>
   );
 }
-
-// EntityDialog importado para manter a padronização visual de diálogos futuros
-// (criação/edição completa entram na fatia de web de rotinas).
-void EntityDialog;

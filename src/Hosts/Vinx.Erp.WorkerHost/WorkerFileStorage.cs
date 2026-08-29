@@ -52,11 +52,6 @@ public sealed class WorkerFileStorage(
         CancellationToken cancellationToken
     ) => _storage.CreateSignedDownloadUrlAsync(providerKey, lifetime, cancellationToken);
 
-    public Task<IReadOnlyList<StorageObjectSummary>> ListObjectsAsync(
-        string prefix,
-        CancellationToken cancellationToken
-    ) => _storage.ListObjectsAsync(prefix, cancellationToken);
-
     public Task DeleteObjectAsync(string providerKey, CancellationToken cancellationToken) =>
         _storage.DeleteObjectAsync(providerKey, cancellationToken);
 }

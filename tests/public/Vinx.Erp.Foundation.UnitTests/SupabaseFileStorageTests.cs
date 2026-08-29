@@ -55,20 +55,6 @@ public sealed class SupabaseFileStorageTests
             },
             request =>
             {
-                Assert.Equal(HttpMethod.Post, request.Method);
-                Assert.Equal("/storage/v1/object/list/vinx-foundation-private", request.RequestUri!.AbsolutePath);
-                Assert.Equal("{\"prefix\":\"quarantine\",\"limit\":1000,\"offset\":0}", ReadBody(request));
-                return JsonResponse(ObjectPage(0, 1000));
-            },
-            request =>
-            {
-                Assert.Equal(HttpMethod.Post, request.Method);
-                Assert.Equal("/storage/v1/object/list/vinx-foundation-private", request.RequestUri!.AbsolutePath);
-                Assert.Equal("{\"prefix\":\"quarantine\",\"limit\":1000,\"offset\":1000}", ReadBody(request));
-                return JsonResponse(ObjectPage(1000, 1));
-            },
-            request =>
-            {
                 Assert.Equal(HttpMethod.Delete, request.Method);
                 Assert.Equal(
                     "/storage/v1/object/vinx-foundation-private/quarantine/company/document",
@@ -81,14 +67,10 @@ public sealed class SupabaseFileStorageTests
         var upload = await storage.CreateSignedUploadUrlAsync("quarantine/company/document", CancellationToken.None);
         var download = await storage.CreateSignedDownloadUrlAsync(
             "quarantine/company/document", TimeSpan.FromMinutes(1), CancellationToken.None);
-        var objects = await storage.ListObjectsAsync("quarantine", CancellationToken.None);
         await storage.DeleteObjectAsync("quarantine/company/document", CancellationToken.None);
 
         Assert.Equal("https://storage.example.test/signed-upload", upload.Url.AbsoluteUri);
         Assert.Equal("https://storage.example.test/signed-download", download.Url.AbsoluteUri);
-        Assert.Equal(1001, objects.Count);
-        Assert.Equal("quarantine/company/0000", objects[0].Key);
-        Assert.Equal("quarantine/company/1000", objects[^1].Key);
     }
 
     [Fact]
@@ -107,7 +89,7 @@ public sealed class SupabaseFileStorageTests
     }
 
     [Fact]
-    public async Task Inspection_recalculates_metadata_and_reports_an_unavailable_malware_scan()
+    public async Task Inspection_recalculates_metadata_from_the_stored_object()
     {
         var payload = Encoding.UTF8.GetBytes("document payload");
         using var handler = new RequestSequenceHandler(request =>
@@ -129,7 +111,6 @@ public sealed class SupabaseFileStorageTests
 
         var inspection = await storage.InspectObjectAsync("quarantine/company/document", CancellationToken.None);
 
-        Assert.Equal(MalwareScanStatus.Unavailable, inspection.MalwareScanStatus);
         Assert.Equal(payload.LongLength, inspection.Metadata.SizeBytes);
         Assert.Equal("application/pdf", inspection.Metadata.ContentType);
     }
@@ -224,10 +205,6 @@ public sealed class SupabaseFileStorageTests
         client.DefaultRequestHeaders.Add("apikey", "not-a-credential");
         return new SupabaseFileStorage(client);
     }
-
-    private static string ObjectPage(int start, int count) => JsonSerializer.Serialize(
-        Enumerable.Range(start, count)
-            .Select(index => new { name = $"quarantine/company/{index:D4}", created_at = "2026-08-10T00:00:00Z" }));
 
     private static string ReadBody(HttpRequestMessage request) => request.Content!
         .ReadAsStringAsync()

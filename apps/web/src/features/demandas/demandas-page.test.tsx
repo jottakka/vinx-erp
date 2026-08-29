@@ -1,4 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
@@ -9,7 +15,9 @@ import type {
 } from "../auth/session-contract";
 import { SessionProvider } from "../auth/session-provider";
 import {
+  type CommandResult,
   type DemandBoardCard,
+  type DemandCommandDemand,
   type DemandDetail,
   demandasClient,
 } from "./demandas-client";
@@ -59,6 +67,29 @@ const initiationDetail: DemandDetail = {
   checklist: [],
   history: [],
   participants: [],
+};
+
+const commandDemand: DemandCommandDemand = {
+  automationPaused: false,
+  companyId: alfaCompanyId,
+  cycleCount: 1,
+  departamento: null,
+  demandDisplayNumber: "DEM-000001",
+  demandNumber: 1,
+  description: "Descrição da demanda",
+  effectiveDeadline: null,
+  id: initiationCard.id,
+  isOverdue: false,
+  manualDueAt: null,
+  priority: "high",
+  responsibleMembershipId: initiationCard.responsibleMembershipId,
+  routineId: null,
+  slaDueAt: null,
+  stage: "execution",
+  stageDueAt: null,
+  title: initiationCard.title,
+  tipo: null,
+  version: 2,
 };
 
 const overdueCard: DemandBoardCard = {
@@ -143,7 +174,7 @@ describe("DemandasPage", () => {
   it("renders the honest stage columns and advances by explicit command only", async () => {
     const advanceSpy = vi.spyOn(demandasClient, "advance").mockResolvedValue({
       ok: true,
-      demand: { ...initiationCard, stage: "execution", version: 2 },
+      demand: commandDemand,
     });
     vi.spyOn(demandasClient, "board").mockResolvedValue({
       items: [initiationCard],
@@ -163,6 +194,156 @@ describe("DemandasPage", () => {
       await screen.findByTestId(`advance-${initiationCard.id}`),
     );
     await waitFor(() => expect(advanceSpy).toHaveBeenCalledOnce());
+  });
+
+  it("reloads the board after a successful advance to use its canonical stage timestamp", async () => {
+    vi.spyOn(demandasClient, "advance").mockResolvedValue({
+      demand: commandDemand,
+      ok: true,
+    });
+    const canonicalStageStartedAt = new Date(
+      Date.now() - 2 * 3_600_000,
+    ).toISOString();
+    const boardSpy = vi
+      .spyOn(demandasClient, "board")
+      .mockResolvedValueOnce({
+        items: [initiationCard],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            ...initiationCard,
+            stage: "execution",
+            stageStartedAt: canonicalStageStartedAt,
+          },
+        ],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      });
+
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByTestId(`advance-${initiationCard.id}`),
+    );
+
+    await waitFor(() => expect(boardSpy).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("2h na etapa")).toBeVisible();
+  });
+
+  it("discards a command that resolves after switching companies without reloading the old scope", async () => {
+    let resolveAlfa: (result: CommandResult) => void = () => {};
+    const alfaCommand = new Promise<CommandResult>((resolve) => {
+      resolveAlfa = resolve;
+    });
+    const betaCard = {
+      ...initiationCard,
+      id: "88888888-8888-4888-8888-888888888888",
+      title: "Demanda da Beta",
+    };
+    const boardSpy = vi
+      .spyOn(demandasClient, "board")
+      .mockResolvedValueOnce({
+        items: [initiationCard],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        items: [betaCard],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      })
+      .mockResolvedValue({
+        items: [{ ...initiationCard, title: "Alfa tardia" }],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      });
+    const advanceSpy = vi
+      .spyOn(demandasClient, "advance")
+      .mockImplementation(() => alfaCommand);
+
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId(`advance-${initiationCard.id}`));
+    expect(advanceSpy).toHaveBeenCalledOnce();
+
+    await user.click(await screen.findByLabelText("Empresa"));
+    await user.click(await screen.findByRole("option", { name: "Beta" }));
+    expect(await screen.findByText("Demanda da Beta")).toBeVisible();
+
+    await act(async () => {
+      resolveAlfa({ ok: true, demand: commandDemand });
+      await Promise.resolve();
+    });
+
+    expect(boardSpy).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Demanda da Beta")).toBeVisible();
+    expect(screen.queryByText("Alfa tardia")).not.toBeInTheDocument();
+  });
+
+  it("keeps only the advancing card disabled until its canonical board reload settles", async () => {
+    let resolveReload: (page: {
+      items: DemandBoardCard[];
+      total: number;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }) => void = () => {};
+    const boardReload = new Promise<{
+      items: DemandBoardCard[];
+      total: number;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }>((resolve) => {
+      resolveReload = resolve;
+    });
+    const boardSpy = vi
+      .spyOn(demandasClient, "board")
+      .mockResolvedValueOnce({
+        items: [initiationCard],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      })
+      .mockImplementationOnce(() => boardReload);
+    const advanceSpy = vi
+      .spyOn(demandasClient, "advance")
+      .mockResolvedValue({ ok: true, demand: commandDemand });
+
+    renderPage();
+    const user = userEvent.setup();
+    const advanceButton = await screen.findByTestId(
+      `advance-${initiationCard.id}`,
+    );
+    await user.click(advanceButton);
+
+    await waitFor(() => expect(boardSpy).toHaveBeenCalledTimes(2));
+    expect(advanceButton).toBeDisabled();
+
+    fireEvent.click(advanceButton);
+    expect(advanceSpy).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      resolveReload({
+        items: [{ ...initiationCard, stage: "execution" }],
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId(`advance-${initiationCard.id}`),
+      ).not.toBeDisabled(),
+    );
   });
 
   it("hides advance actions from a company with read capability only", async () => {

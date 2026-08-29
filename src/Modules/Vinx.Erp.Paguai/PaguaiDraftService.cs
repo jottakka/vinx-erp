@@ -306,77 +306,94 @@ public sealed class PaguaiDraftService(
             return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
         }
 
-        await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))
+        // Falha de infraestrutura (Postgres, privilégio, conexão) não escapa como
+        // exceção bruta: o controller só mapeia 503 a partir do estado tipado.
+        try
         {
-            await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
-            await using var connection = await OpenConnectionAsync(cancellationToken);
-            await using var readCommand = connection.CreateCommand();
-            readCommand.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
-            readCommand.CommandText =
-                "SELECT company_id, state, beneficiary_name, amount, currency, due_date "
-                + "FROM notifications.read_inbound_whatsapp_invoice_candidate(@inbound_id)";
-            var inboundId = readCommand.CreateParameter();
-            inboundId.ParameterName = "inbound_id";
-            inboundId.Value = command.InboundMessageId;
-            readCommand.Parameters.Add(inboundId);
-            bool found = false;
-            var candidateCompanyId = Guid.Empty;
-            string candidateState = string.Empty;
-            string beneficiary = string.Empty;
-            string amountText = string.Empty;
-            string currency = string.Empty;
-            var dueDate = default(DateOnly);
-            await using (var reader = await readCommand.ExecuteReaderAsync(cancellationToken))
+            await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))
             {
-                if (await reader.ReadAsync(cancellationToken))
+                await ApplyContextAsync(actor, command.CompanyId, cancellationToken);
+                await using var connection = await OpenConnectionAsync(cancellationToken);
+                await using var readCommand = connection.CreateCommand();
+                readCommand.Transaction = database.Database.CurrentTransaction?.GetDbTransaction();
+                readCommand.CommandText =
+                    "SELECT company_id, state, beneficiary_name, amount, currency, due_date "
+                    + "FROM notifications.read_inbound_whatsapp_invoice_candidate(@inbound_id)";
+                var inboundId = readCommand.CreateParameter();
+                inboundId.ParameterName = "inbound_id";
+                inboundId.Value = command.InboundMessageId;
+                readCommand.Parameters.Add(inboundId);
+                bool found = false;
+                var candidateCompanyId = Guid.Empty;
+                string candidateState = string.Empty;
+                string beneficiary = string.Empty;
+                string amountText = string.Empty;
+                string currency = string.Empty;
+                var dueDate = default(DateOnly);
+                await using (var reader = await readCommand.ExecuteReaderAsync(cancellationToken))
                 {
-                    found = true;
-                    candidateCompanyId = reader.GetGuid(0);
-                    candidateState = reader.GetString(1);
-                    if (candidateState == "candidate")
+                    if (await reader.ReadAsync(cancellationToken))
                     {
-                        beneficiary = reader.GetString(2);
-                        amountText = reader.GetString(3);
-                        currency = reader.GetString(4);
-                        dueDate = reader.GetFieldValue<DateOnly>(5);
+                        found = true;
+                        candidateCompanyId = reader.GetGuid(0);
+                        candidateState = reader.GetString(1);
+                        if (candidateState == "candidate")
+                        {
+                            beneficiary = reader.GetString(2);
+                            amountText = reader.GetString(3);
+                            currency = reader.GetString(4);
+                            dueDate = reader.GetFieldValue<DateOnly>(5);
+                        }
                     }
                 }
-            }
 
-            if (
-                !found
-                || candidateCompanyId != command.CompanyId
-                || candidateState != "candidate"
-                || beneficiary.Length is < 1 or > 200
-                || !PaguaiAmountRules.TryParseText(amountText, out var amount)
-            )
-            {
-                // Sem candidato visível/fechado, candidato de outra empresa
-                // (mesmo que o ator tenha membership lá) ou gramática
-                // reprovada na fronteira: sem confiança silenciosa em dado
-                // persistido e sem copiar dados entre empresas.
-                await transaction.RollbackAsync(cancellationToken);
-                return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
-            }
+                if (
+                    !found
+                    || candidateCompanyId != command.CompanyId
+                    || candidateState != "candidate"
+                    || beneficiary.Length is < 1 or > 200
+                    || !PaguaiAmountRules.TryParseText(amountText, out var amount)
+                )
+                {
+                    // Sem candidato visível/fechado, candidato de outra empresa
+                    // (mesmo que o ator tenha membership lá) ou gramática
+                    // reprovada na fronteira: sem confiança silenciosa em dado
+                    // persistido e sem copiar dados entre empresas.
+                    await transaction.RollbackAsync(cancellationToken);
+                    return PaguaiDraftResult.Of(PaguaiDraftState.Invalid);
+                }
 
-            await transaction.CommitAsync(cancellationToken);
-            return await CreateAsync(
-                actor,
-                new CreateDraftCommand(
-                    CompanyId: command.CompanyId,
-                    RequestId: command.InboundMessageId,
-                    Title: command.Title,
-                    Description: command.Description,
-                    Amount: amount,
-                    Currency: currency,
-                    DueDate: dueDate,
-                    BeneficiaryDisplayName: beneficiary,
-                    ProofRequirement: command.ProofRequirement,
-                    SourceInboundMessageId: command.InboundMessageId,
-                    InvoiceFileId: null
-                ),
-                cancellationToken
+                await transaction.CommitAsync(cancellationToken);
+                return await CreateAsync(
+                    actor,
+                    new CreateDraftCommand(
+                        CompanyId: command.CompanyId,
+                        RequestId: command.InboundMessageId,
+                        Title: command.Title,
+                        Description: command.Description,
+                        Amount: amount,
+                        Currency: currency,
+                        DueDate: dueDate,
+                        BeneficiaryDisplayName: beneficiary,
+                        ProofRequirement: command.ProofRequirement,
+                        SourceInboundMessageId: command.InboundMessageId,
+                        InvoiceFileId: null
+                    ),
+                    cancellationToken
+                );
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(
+                exception,
+                "Paguai draft {Operation} {Module} {Result} {Reason}",
+                "from_document",
+                "paguai",
+                "unavailable",
+                "database_unavailable"
             );
+            return PaguaiDraftResult.Of(PaguaiDraftState.Unavailable);
         }
     }
 

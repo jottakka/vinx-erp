@@ -387,7 +387,7 @@ public sealed class FoundationAuthorizedDocumentSource(
                 ResourceType,
                 fileRecordId,
                 outcome,
-                new CorrelationContext(actor.CorrelationId).CorrelationId,
+                actor.CorrelationId,
                 reason,
                 "{}"),
             cancellationToken);

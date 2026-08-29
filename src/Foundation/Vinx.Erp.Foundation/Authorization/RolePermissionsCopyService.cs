@@ -164,7 +164,7 @@ public sealed class RolePermissionsCopyService(
                             "membership",
                             command.TargetMembershipId,
                             AuditOutcome.Success,
-                            new CorrelationContext(actor.CorrelationId).CorrelationId,
+                            actor.CorrelationId,
                             null,
                             "{}"), cancellationToken);
                         await database.SaveChangesAsync(cancellationToken);
@@ -215,7 +215,7 @@ public sealed class RolePermissionsCopyService(
                 "membership",
                 null,
                 AuditOutcome.Denied,
-                new CorrelationContext(actor.CorrelationId).CorrelationId,
+                actor.CorrelationId,
                 denial.ToStableCode(),
                 "{}"), cancellationToken);
             await transaction.CommitAsync(cancellationToken);

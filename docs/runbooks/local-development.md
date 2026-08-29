@@ -14,12 +14,11 @@ Zod, Vitest, Testing Library, MSW e Playwright.
 | Supabase local | Oferece Auth, Storage e runtime local aos adapters do servidor. | Ser cliente de dados ou administração pelo browser. |
 | PostgreSQL | Sustenta o runtime, migrações e contêineres descartáveis de teste. | Receber conexão direta do browser. |
 
-O web atual contém somente rota de saúde. O cliente HTTP tipado e o contrato
-com a API entram em [#16](https://github.com/jottakka/vinx-erp/issues/16); o
-bootstrap de pessoa, memberships e flags entra em
-[#90](https://github.com/jottakka/vinx-erp/issues/90). A autorização e a
-leitura multiempresa são entregas de Foundation em #19, #20 e #68, não
-decisões do browser.
+O web expõe rotas operacionais (`/paguai`, `/atendimento`, `/demandas`,
+`/pessoas`, `/permissoes`, `/notificacoes`, `/agente`) e conversa com a API C#
+pelo proxy do Vite em desenvolvimento, com contratos de autorização resolvidos
+no servidor — nunca no browser. Limites de produção (BFF same-origin, sem
+acesso direto a providers) continuam valendo.
 
 ## Pré-requisitos
 
@@ -52,7 +51,9 @@ Com a configuração padrão, os endereços locais são:
 - Mailpit: `http://127.0.0.1:54324`
 - PostgreSQL: porta `54322`
 
-O Compose do repositório declara apenas a rede compartilhada `vinx-erp`. Não
+O Compose do repositório (`infra/compose/compose.dev.yml`) declara apenas a
+rede Docker `vinx-erp`, reservada como contrato externo para anexar serviços
+locais quando necessário; nenhum serviço do repositório depende dela. Não
 inicie um segundo PostgreSQL, Auth ou Storage paralelo ao Supabase local.
 
 ## Variáveis locais esperadas
@@ -306,8 +307,9 @@ capabilities e queries antes de atualizar a tela.
 ```
 
 Os dois primeiros comandos usam PostgreSQL descartável e não requerem a
-credencial de runtime. O último inicia e encerra a stack local, verifica o
-bucket privado `vinx-foundation-private` e não imprime credenciais.
+credencial de runtime. O último exige não haver stack Supabase ativa no início:
+ele inicia e encerra somente a stack que criou, verifica o bucket privado
+`vinx-foundation-private` e não imprime credenciais.
 
 Selecione testes e gates pela matriz de
 [`public-verification.md`](public-verification.md). O CI é o gate completo normal

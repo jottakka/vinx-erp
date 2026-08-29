@@ -68,7 +68,7 @@ public sealed class PlatformOperatorAccessService(
                 await auditAppender.AppendAsync(
                     new AuditEventData(actor.UserId, AuditScope.Global, null, AuditSource.Web,
                         "platform.operator.required", "platform_operator", null, AuditOutcome.Denied,
-                        new CorrelationContext(actor.CorrelationId).CorrelationId,
+                        actor.CorrelationId,
                         "platform_operator_required", "{}"), cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return new PlatformOperatorAccessResult(PlatformOperatorAccessState.Denied);
@@ -90,7 +90,7 @@ public sealed class PlatformOperatorAccessService(
                     "platform_operator",
                     null,
                     AuditOutcome.Denied,
-                    new CorrelationContext(actor.CorrelationId).CorrelationId,
+                    actor.CorrelationId,
                     "mfa_assurance_required",
                     "{}"),
                 cancellationToken);
@@ -153,7 +153,7 @@ public sealed class PlatformOperatorAccessService(
                     "platform_operator",
                     null,
                     AuditOutcome.Denied,
-                    new CorrelationContext(actor.CorrelationId).CorrelationId,
+                    actor.CorrelationId,
                     "platform_operator_required",
                     "{}"
                 ),
