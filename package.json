@@ -11,6 +11,6 @@
     "test:projectmem-pilot": "node --test tests/projectmem-pilot.test.mjs"
   },
   "devDependencies": {
-    "supabase": "^2.115.0"
+    "supabase": "^2.116.0"
   }
 }
