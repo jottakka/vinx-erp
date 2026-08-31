@@ -47,7 +47,8 @@ public sealed class DocumentUploadService(
         "object_key_mismatch",
         "size_mismatch",
         "checksum_mismatch",
-        "content_type_mismatch"
+        "content_type_mismatch",
+        "content_magic_mismatch"
     };
 
     public async Task<DocumentUploadResult<DocumentUploadIntentResult>> CreateIntentAsync(

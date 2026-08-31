@@ -5,6 +5,9 @@
   <ItemGroup>
     <!-- O cliente clamd é internal; os testes de protocolo o exercitam contra o fake in-process. -->
     <InternalsVisibleTo Include="Vinx.Erp.Foundation.UnitTests" />
+    <!-- Guardas de FileStorage (FileStorageGuards) são internal; as dobras de Files
+         assinam URLs apenas pelos guardas reais. -->
+    <InternalsVisibleTo Include="Vinx.Erp.Foundation.IntegrationTests" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="EFCore.NamingConventions" />
