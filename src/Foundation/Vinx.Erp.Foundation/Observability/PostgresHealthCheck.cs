@@ -61,7 +61,7 @@ public sealed class PostgresHealthCheck(
             }
             finally
             {
-                await database.Database.CloseConnectionAsync(CancellationToken.None);
+                await database.Database.CloseConnectionAsync();
             }
         }
 
