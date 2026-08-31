@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Vinx.Erp.Foundation.Persistence;
 
@@ -13,8 +12,6 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations;
 /// pré-existente recebeu os canais padrão. Repete a semeadura com a
 /// visibilidade do dono restaurada no mesmo lote; sem mudança de modelo EF.
 /// </summary>
-[DbContext(typeof(FoundationDbContext))]
-[Migration("20260831100000_RepairAtendimentoChannelBackfill")]
 public partial class RepairAtendimentoChannelBackfill : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)
