@@ -120,6 +120,13 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                 DO $block$
                 BEGIN
+                    -- Trava ANTES das leituras da guarda, vale até o fim da
+                    -- transação: nenhuma referência concorrente commite entre
+                    -- a checagem e os drops (padrão do 20260828032135).
+                    LOCK TABLE service_desk.atendimento_cards IN ACCESS EXCLUSIVE MODE;
+                    LOCK TABLE service_desk.atendimento_card_history IN ACCESS EXCLUSIVE MODE;
+                    LOCK TABLE service_desk.atendimento_card_participants IN ACCESS EXCLUSIVE MODE;
+
                     IF EXISTS (SELECT 1 FROM service_desk.atendimento_card_participants)
                         OR EXISTS (
                             SELECT 1 FROM service_desk.atendimento_cards

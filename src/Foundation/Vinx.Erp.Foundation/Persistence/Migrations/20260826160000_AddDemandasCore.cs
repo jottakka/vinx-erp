@@ -343,8 +343,18 @@ public sealed class AddDemandasCore : Migration
     protected override void Down(MigrationBuilder migrationBuilder) =>
         migrationBuilder.Sql(
             """
+            -- As funções SECURITY DEFINER pertencem a vinx_demandas_owner
+            -- (criadas sob SET ROLE no Up): o DROP como vinx_migrator falha
+            -- com 42501, então a janela roda sob o papel dono (espelho do
+            -- Down do 20260826151000).
+            SET ROLE vinx_demandas_owner;
+            REVOKE ALL ON FUNCTION demandas.enumerate_automation_companies()
+                FROM PUBLIC, vinx_migrator, vinx_worker;
+            REVOKE ALL ON FUNCTION demandas.demand_responsible_user(uuid)
+                FROM PUBLIC, vinx_migrator, vinx_worker;
             DROP FUNCTION demandas.enumerate_automation_companies();
             DROP FUNCTION demandas.demand_responsible_user(uuid);
+            RESET ROLE;
             DROP POLICY capabilities_demandas_owner_read ON foundation.capabilities;
             DROP POLICY role_capabilities_demandas_owner_read ON foundation.role_capabilities;
             DROP POLICY demands_demandas_owner_read ON demandas.demands;
