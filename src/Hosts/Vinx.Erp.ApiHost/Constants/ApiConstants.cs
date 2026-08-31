@@ -12,4 +12,7 @@ internal static class ApiConstants
     /// <summary>Policy de rate limit das rotas protegidas da API.</summary>
     public const string ProtectedRateLimitPolicy = "foundation";
 
+    /// <summary>Policy de rate limit dos webhooks públicos de provedores.</summary>
+    public const string WebhookRateLimitPolicy = "webhook";
+
 }

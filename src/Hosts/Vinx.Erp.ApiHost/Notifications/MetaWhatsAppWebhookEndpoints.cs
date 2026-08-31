@@ -24,7 +24,8 @@ public static class MetaWhatsAppWebhookEndpoints
     {
         var group = app
             .MapGroup("/foundation/notifications/whatsapp/webhook")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiConstants.WebhookRateLimitPolicy);
         group.MapGet("", VerifyWebhookAsync);
         group.MapPost("", ReceiveWebhookAsync);
         return app;
@@ -47,7 +48,12 @@ public static class MetaWhatsAppWebhookEndpoints
             || !CryptographicOperationsFixedTimeEquals(token, options.WebhookVerifyToken)
         )
         {
-            return Results.Forbid();
+            // Mesmo formato { code } dos demais erros do webhook: falha na
+            // verificação é assinatura inválida, server-to-server.
+            return Results.Json(
+                new { code = "invalid_signature" },
+                statusCode: StatusCodes.Status403Forbidden
+            );
         }
 
         return Results.Text(challenge, "text/plain");

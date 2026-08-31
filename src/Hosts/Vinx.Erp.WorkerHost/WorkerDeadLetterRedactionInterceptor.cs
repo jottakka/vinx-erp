@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Vinx.Erp.Foundation.Notifications;
-using Vinx.Erp.Foundation.Platform;
+using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Paguai;
 using Wolverine;
@@ -41,10 +41,13 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
             );
         }
 
+        // Fallback neutro: sem tipo de mensagem conhecido, a falha não é
+        // reetiquetada como entrega de convite (nem de membro) — o motivo
+        // real permanece visível na DLQ.
         return ValueTask.FromResult<Exception?>(
-            new WorkerOwnerInvitationDeadLetterException(
-                WorkerOwnerInvitationDeadLetterException.UnexpectedExceptionType,
-                "Worker delivery ingress failed unexpectedly."
+            new WorkerUnknownEnvelopeDeadLetterException(
+                WorkerUnknownEnvelopeDeadLetterException.UnexpectedExceptionType,
+                "Worker dead-letter handling failed unexpectedly."
             )
         );
     }
@@ -97,7 +100,9 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
 
     /// <summary>
     /// Redige por tipo de mensagem: o corpo vira o registro vazio do próprio
-    /// tipo e os headers diagnósticos são descartados antes da DLQ.
+    /// tipo e os headers diagnósticos são descartados antes da DLQ. Tipo não
+    /// mapeado NÃO é reescrito para outro tipo: ganha marcador neutro e fica
+    /// visível para diagnóstico.
     /// </summary>
     internal static void RedactEnvelope(Envelope envelope)
     {
@@ -108,6 +113,36 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
                 envelope.Message = redactedNotification;
                 envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
                     redactedNotification,
+                    SerializerOptions
+                );
+                envelope.Headers.Clear();
+                break;
+            case MemberInvitationDeliveryRequested:
+                var redactedMemberInvitation = new MemberInvitationDeliveryRequested(Guid.Empty);
+                envelope.Message = redactedMemberInvitation;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
+                    redactedMemberInvitation,
+                    SerializerOptions
+                );
+                envelope.Headers.Clear();
+                break;
+            case InboundAgentRequestReceived:
+                var redactedAgentRequest = new InboundAgentRequestReceived(
+                    Guid.Empty,
+                    AgentChannelKind.Web
+                );
+                envelope.Message = redactedAgentRequest;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
+                    redactedAgentRequest,
+                    SerializerOptions
+                );
+                envelope.Headers.Clear();
+                break;
+            case DemandasAutomationTick:
+                var redactedAutomationTick = new DemandasAutomationTick(default, 0);
+                envelope.Message = redactedAutomationTick;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
+                    redactedAutomationTick,
                     SerializerOptions
                 );
                 envelope.Headers.Clear();
@@ -155,14 +190,36 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
                 envelope.Headers.Clear();
                 break;
             default:
-                var redactedMessage = new OwnerInvitationDeliveryRequested(Guid.Empty);
-                envelope.Message = redactedMessage;
+                // Tipo desconhecido: sem PII conhecida para remover e sem
+                // registro vazio para construir, o corpo vira um marcador
+                // neutro — o envelope permanece identificável na DLQ em vez
+                // de ser reetiquetado como outro tipo de mensagem.
                 envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
-                    redactedMessage,
+                    new RedactedDeadLetterBody(envelope.Message?.GetType().FullName),
                     SerializerOptions
                 );
                 envelope.Headers.Clear();
                 break;
         }
     }
+
+    private sealed record RedactedDeadLetterBody(string? MessageType);
+}
+
+/// <summary>
+/// Classificação neutra de DLQ para tipos de mensagem sem handler dedicado:
+/// evita reetiquetar falhas futuras como entrega de convite.
+/// </summary>
+internal sealed class WorkerUnknownEnvelopeDeadLetterException(
+    string exceptionType,
+    string exceptionMessage
+    )
+        : Exception,
+        IDeadLetterExceptionInfo
+{
+    public const string UnexpectedExceptionType = "worker_dead_letter_unexpected";
+
+    public string ExceptionType { get; } = exceptionType;
+
+    public string ExceptionMessage { get; } = exceptionMessage;
 }
