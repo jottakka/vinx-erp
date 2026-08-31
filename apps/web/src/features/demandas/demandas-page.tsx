@@ -608,10 +608,8 @@ export function DemandDetailDialog({
                 {detail.history.slice(0, 12).map((entry) => (
                   <ListItemButton key={entry.id} divider>
                     {historyKindLabel(entry.kind)}
-                    {entry.toStage
-                      ? ` → ${stageLabel(entry.toStage)}`
-                      : ""} · ciclo{" "}
-                    {entry.cycleCount}
+                    {entry.toStage ? ` → ${stageLabel(entry.toStage)}` : ""} ·
+                    ciclo {entry.cycleCount}
                   </ListItemButton>
                 ))}
               </List>
