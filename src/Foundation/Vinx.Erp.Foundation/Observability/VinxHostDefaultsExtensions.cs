@@ -21,9 +21,9 @@ public static class VinxHostDefaultsExtensions
                 // Fontes nativas do ASP.NET Core e do Npgsql, disponíveis sem
                 // pacotes extras. Medidores de módulos são adicionados por cada
                 // host (a Foundation não referencia módulos).
-                .AddSource("Microsoft.AspNetCore.Hosting")
-                .AddSource("Microsoft.AspNetCore.Server.Kestrel")
-                .AddSource("Npgsql"));
+                .AddMeter("Microsoft.AspNetCore.Hosting")
+                .AddMeter("Microsoft.AspNetCore.Server.Kestrel")
+                .AddMeter("Npgsql"));
         builder.Services.AddHealthChecks()
             .AddCheck<PostgresHealthCheck>("postgres", tags: ["postgres"]);
         return builder;

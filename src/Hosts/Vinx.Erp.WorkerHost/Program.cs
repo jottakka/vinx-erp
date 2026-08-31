@@ -40,7 +40,7 @@ builder.AddVinxHostDefaults();
 // Medidor do módulo Notifications: a Foundation não referencia módulos,
 // portanto a fonte é registrada aqui, no host que entrega as notificações.
 builder.Services.AddOpenTelemetry().WithMetrics(metrics =>
-    metrics.AddSource(NotificationDeliveryMetrics.MeterName));
+    metrics.AddMeter(NotificationDeliveryMetrics.MeterName));
 builder
     .Services.AddOptions<WorkerDatabaseOptions>()
     .Bind(builder.Configuration)
