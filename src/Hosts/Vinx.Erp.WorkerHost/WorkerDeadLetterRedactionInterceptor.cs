@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Permissions;
+using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Notifications;
 using Vinx.Erp.Paguai;
 using Wolverine;
@@ -122,6 +123,15 @@ internal sealed class WorkerDeadLetterRedactionInterceptor : IDeadLetterIntercep
                 envelope.Message = redactedMemberInvitation;
                 envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
                     redactedMemberInvitation,
+                    SerializerOptions
+                );
+                envelope.Headers.Clear();
+                break;
+            case OwnerInvitationDeliveryRequested:
+                var redactedOwnerInvitation = new OwnerInvitationDeliveryRequested(Guid.Empty);
+                envelope.Message = redactedOwnerInvitation;
+                envelope.Data = JsonSerializer.SerializeToUtf8Bytes(
+                    redactedOwnerInvitation,
                     SerializerOptions
                 );
                 envelope.Headers.Clear();
