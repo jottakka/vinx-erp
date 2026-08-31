@@ -18,6 +18,8 @@ using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Serialization;
 using Xunit;
 using WorkerProgram = workerhost::Program;
+using DemandasAutomationTick = workerhost::Vinx.Erp.WorkerHost.DemandasAutomationTick;
+using WorkerDeadLetterRedactionInterceptor = workerhost::Vinx.Erp.WorkerHost.WorkerDeadLetterRedactionInterceptor;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
 
