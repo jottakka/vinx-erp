@@ -8,6 +8,15 @@ import { atendimentoClient, type PersonOption } from "./atendimento-client";
  */
 const optionsCache = new Map<string, Promise<PersonOption[] | null>>();
 
+/**
+ * Limpa o cache quando a sessão muda (login, logout ou troca de identidade):
+ * opções de diretório pertencem à sessão que as carregou e nunca vazam para
+ * a seguinte. Chamado pelo SessionProvider junto com queryClient.clear().
+ */
+export function resetDirectoryOptionsCache() {
+  optionsCache.clear();
+}
+
 function loadDirectoryOptions(
   companyId: string,
 ): Promise<PersonOption[] | null> {
