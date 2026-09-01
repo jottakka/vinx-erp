@@ -1,6 +1,7 @@
 namespace Vinx.Erp.Notifications;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Vinx.Erp.Foundation.Persistence;
 
 /// <summary>
