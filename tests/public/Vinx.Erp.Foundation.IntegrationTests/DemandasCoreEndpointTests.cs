@@ -218,8 +218,15 @@ public sealed class DemandasCoreEndpointTests
 
         await using var workerHost = new WorkerAutomationHostFactory(factory.Fixture.WorkerConnectionString);
         using var workerClient = workerHost.CreateClient();
-        await Task.Delay(1500);
-        await AssertScheduledTickCountAsync(administrator, 0);
+        await WaitForAutomationHostHealthAsync(workerClient);
+        // Janela contínua de negação: o host saudável não pode semear cadeia
+        // enquanto o lease externo estiver vivo (nenhum tick pode aparecer).
+        var seedingDeadline = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(3));
+        while (DateTimeOffset.UtcNow < seedingDeadline)
+        {
+            await AssertScheduledTickCountAsync(administrator, 0);
+            await Task.Delay(250);
+        }
 
         // Dois hosts disputando: lease vivo faz o segundo claim perder.
         await using var workerDatabaseTwo = new FoundationDbContext(workerOptions);
@@ -237,8 +244,33 @@ public sealed class DemandasCoreEndpointTests
                 .GetRequiredService<IMessageBus>()
                 .PublishAsync(new DemandasAutomationTick(DateTimeOffset.UtcNow, firstClaim.Generation));
         }
-        await Task.Delay(1500);
-        await AssertScheduledTickCountAsync(administrator, 0);
+        // Espera o tick publicado ciclar pela fila (aparecer e ser consumido)
+        // antes de negar o sucessor — evita verde vacuoso em host lento. Se o
+        // consumo for rápido demais para observar o pico, a drenagem a zero
+        // também encerra a espera.
+        var sawEnqueued = false;
+        var staleDeadline = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(10));
+        while (DateTimeOffset.UtcNow < staleDeadline)
+        {
+            var pending = await administrator.Database
+                .SqlQuery<int>($"""SELECT count(*) AS "Value" FROM vinx_wolverine_queues.wolverine_queue_demandas_automation""")
+                .SingleAsync();
+            if (pending > 0)
+            {
+                sawEnqueued = true;
+            }
+            if (sawEnqueued && pending == 0)
+            {
+                break;
+            }
+            await Task.Delay(100);
+        }
+        var successorDeadline = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(3));
+        while (DateTimeOffset.UtcNow < successorDeadline)
+        {
+            await AssertScheduledTickCountAsync(administrator, 0);
+            await Task.Delay(250);
+        }
 
         // Takeover: novo dono com geração nova semeia e a SUA cadeia perpetua
         // exatamente UM sucessor por tick.
@@ -352,6 +384,32 @@ public sealed class DemandasCoreEndpointTests
             .SqlQuery<int>($"""SELECT count(*) AS "Value" FROM vinx_wolverine_worker.wolverine_incoming_envelopes WHERE status = 'Scheduled'""")
             .SingleAsync();
         Assert.True(final == expected, $"scheduled={final} expected={expected}");
+    }
+
+    /// <summary>
+    /// Espera o host de automação responder /health com 200 antes de qualquer
+    /// asserção negativa sobre semeadura de cadeia.
+    /// </summary>
+    private static async Task WaitForAutomationHostHealthAsync(HttpClient client)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(30));
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                using var response = await client.GetAsync("/health");
+                if (response.IsSuccessStatusCode)
+                {
+                    return;
+                }
+            }
+            catch (HttpRequestException)
+            {
+                // Host ainda não está aceitando conexões.
+            }
+            await Task.Delay(250);
+        }
+        Assert.Fail("Automation worker host did not become healthy.");
     }
 
     private sealed class WorkerAutomationHostFactory(string? connectionString)
