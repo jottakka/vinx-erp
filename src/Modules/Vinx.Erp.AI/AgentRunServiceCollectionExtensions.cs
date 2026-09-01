@@ -2,14 +2,12 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using Vinx.Erp.AI;
 using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Guardrails;
 using Vinx.Erp.AI.Providers;
 using Vinx.Erp.AI.Providers.OpenAiCompatible;
 
-namespace Vinx.Erp.ApiHost.Agent;
+namespace Vinx.Erp.AI;
 
 /// <summary>
 /// Composição server-side da superfície de execução do agente: options
@@ -18,24 +16,35 @@ namespace Vinx.Erp.ApiHost.Agent;
 /// provider configurado nenhum model é registrado e o runner falha fechado
 /// com provider_not_configured. A chave vem exclusivamente do resolvedor do
 /// ambiente do processo e nunca é logada, ecoada em validação ou devolvida.
+/// Raiz de composição do módulo: ambos os hosts (Api e Worker) chamam esta
+/// extensão; nenhuma configuração de agente fica hand-wired no host.
 /// </summary>
-internal static class AgentRunServiceCollectionExtensions
+public static class AgentRunServiceCollectionExtensions
 {
     private const string ConfigurationSection = "AgentRun";
     private const string ProviderHttpClientName = "agent-provider";
     private const string VisionHttpClientName = "agent-document-vision";
 
-    /// <summary>Registra options, gates, provider client, runner e o serviço de aplicação de POST /agent/runs.</summary>
+    /// <summary>Registra options, gates, provider client, runner e o serviço de execução do agente.</summary>
     public static IServiceCollection AddAgentRunSurface(
         this IServiceCollection services,
         IConfiguration configuration) =>
         AddAgentRunSurface(services, configuration, Environment.GetEnvironmentVariable, allowCredentiallessTestModel: false);
 
-    internal static IServiceCollection AddAgentRunSurface(
+    /// <summary>
+    /// Sobrecarga de composição com o resolvedor de credencial do processo
+    /// explícito. <paramref name="providerModuleTag"/> permite ao host etiquetar
+    /// a telemetria do provider (o Worker usa <c>ai/agent-provider</c>); quando
+    /// nulo, o ModuleTag padrão da options é preservado. As classes registradas
+    /// permanecem públicas e tipadas para a dependência inline do codegen do
+    /// Wolverine.
+    /// </summary>
+    public static IServiceCollection AddAgentRunSurface(
         this IServiceCollection services,
         IConfiguration configuration,
         Func<string, string?> readEnvironment,
-        bool allowCredentiallessTestModel = false)
+        bool allowCredentiallessTestModel = false,
+        string? providerModuleTag = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -46,7 +55,7 @@ internal static class AgentRunServiceCollectionExtensions
         // mensagem segura da própria options.
         var agentRun =
             configuration.GetSection(ConfigurationSection).Get<AgentRunOptions>() ?? new AgentRunOptions();
-        if (!IsValidConfiguration(agentRun, readEnvironment, allowCredentiallessTestModel))
+        if (!IsValidConfiguration(agentRun, readEnvironment, allowCredentiallessTestModel, providerModuleTag))
         {
             throw new InvalidOperationException("Agent run configuration is invalid.");
         }
@@ -54,7 +63,7 @@ internal static class AgentRunServiceCollectionExtensions
         services
             .AddOptions<AgentRunOptions>()
             .Bind(configuration.GetSection(ConfigurationSection))
-            .Validate(options => IsValidConfiguration(options, readEnvironment, allowCredentiallessTestModel), "Agent run configuration is invalid.")
+            .Validate(options => IsValidConfiguration(options, readEnvironment, allowCredentiallessTestModel, providerModuleTag), "Agent run configuration is invalid.")
             .ValidateOnStart();
 
         services.AddScoped<IAgentContextResolver, AgentContextResolver>();
@@ -67,7 +76,7 @@ internal static class AgentRunServiceCollectionExtensions
             selection = new AgentModelSelection(agentRun.Provider, agentRun.Model!);
             if (!allowCredentiallessTestModel)
             {
-                var providerProfile = ToProviderOptions(agentRun);
+                var providerProfile = ToProviderOptions(agentRun, providerModuleTag);
                 services.AddHttpClient(
                     ProviderHttpClientName,
                     client =>
@@ -81,6 +90,7 @@ internal static class AgentRunServiceCollectionExtensions
                 services.AddScoped<IAgentModel>(serviceProvider => new ChatClientAgentModel(
                     CreateProviderChatClient(
                         agentRun,
+                        providerModuleTag,
                         readEnvironment,
                         serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(ProviderHttpClientName),
                         serviceProvider.GetService<ILoggerFactory>())));
@@ -123,7 +133,8 @@ internal static class AgentRunServiceCollectionExtensions
             outputGate: serviceProvider.GetRequiredService<AgentOutputGate>(),
             documentContextNormalizer: serviceProvider.GetService<DocumentContextNormalizer>()));
         services.AddScoped<AgentExecutionService>();
-        services.AddScoped<AgentExecutionApplicationService>();
+        // O adaptador HTTP AgentExecutionApplicationService permanece no host
+        // (fronteira web do ApiHost); o Worker não o registra nem o consome.
         return services;
     }
 
@@ -133,7 +144,8 @@ internal static class AgentRunServiceCollectionExtensions
     private static bool IsValidConfiguration(
         AgentRunOptions options,
         Func<string, string?> readEnvironment,
-        bool allowCredentiallessTestModel)
+        bool allowCredentiallessTestModel,
+        string? providerModuleTag)
     {
         try
         {
@@ -146,7 +158,7 @@ internal static class AgentRunServiceCollectionExtensions
 
         if (!string.IsNullOrWhiteSpace(options.Provider)
             && new OpenAiCompatibleOptions.Validator()
-                .ValidateForRuntimeCredential(null, ToProviderOptions(options))
+                .ValidateForRuntimeCredential(null, ToProviderOptions(options, providerModuleTag))
                 .Failed)
         {
             return false;
@@ -159,6 +171,7 @@ internal static class AgentRunServiceCollectionExtensions
 
     private static IChatClient CreateProviderChatClient(
         AgentRunOptions options,
+        string? providerModuleTag,
         Func<string, string?> readEnvironment,
         HttpClient httpClient,
         ILoggerFactory? loggerFactory)
@@ -173,19 +186,23 @@ internal static class AgentRunServiceCollectionExtensions
                 : options.Model;
 
         return OpenAiCompatibleChatClient.CreateForServer(
-            ToProviderOptions(options),
+            ToProviderOptions(options, providerModuleTag),
             readEnvironment,
             httpClient,
             loggerFactory?.CreateLogger<OpenAiCompatibleChatClient>());
     }
 
-    private static OpenAiCompatibleOptions ToProviderOptions(AgentRunOptions options) => new()
+    private static OpenAiCompatibleOptions ToProviderOptions(AgentRunOptions options, string? providerModuleTag) => new()
     {
         Endpoint = options.Endpoint,
         Model = options.Model ?? string.Empty,
         Timeout = options.Timeout,
         MaxInputCharacters = AgentInputLimits.MainTurnMaxCharacters,
         ApprovedHosts = options.ApprovedHosts,
+        // Sem etiqueta do host o padrão da options é preservado (fonte única).
+        ModuleTag = string.IsNullOrWhiteSpace(providerModuleTag)
+            ? new OpenAiCompatibleOptions().ModuleTag
+            : providerModuleTag,
     };
 
     // Catálogo fixo: perfis aprovados do catálogo central com a seleção de

@@ -21,8 +21,8 @@
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Constants/ApiConstants.cs" Link="Constants/ApiConstants.cs" />
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentHttpContracts.cs" Link="Agent/AgentHttpContracts.cs" />
     <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentExecutionApplicationService.cs" Link="Agent/AgentExecutionApplicationService.cs" />
-    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentRunOptions.cs" Link="Agent/AgentRunOptions.cs" />
-    <Compile Include="../../../src/Hosts/Vinx.Erp.ApiHost/Agent/AgentRunServiceCollectionExtensions.cs" Link="Agent/AgentRunServiceCollectionExtensions.cs" />
+    <!-- AgentRunOptions e AgentRunServiceCollectionExtensions viraram tipos do
+         módulo AI: chegam pela ProjectReference, sem link de código do host. -->
     <ProjectReference Include="../../../src/Modules/Vinx.Erp.Notifications/Vinx.Erp.Notifications.csproj" />
   </ItemGroup>
 </Project>

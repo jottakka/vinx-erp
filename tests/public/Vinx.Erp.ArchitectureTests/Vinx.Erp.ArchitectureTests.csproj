@@ -11,5 +11,13 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
+    <!-- A matriz de dependências carrega os assemblies de todos os módulos
+         existentes em src/Modules; novos módulos entram aqui (e na matriz)
+         automaticamente ao serem criados na pasta. -->
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.AI/Vinx.Erp.AI.csproj" />
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.Atendimento/Vinx.Erp.Atendimento.csproj" />
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.Demandas/Vinx.Erp.Demandas.csproj" />
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.Notifications/Vinx.Erp.Notifications.csproj" />
+    <ProjectReference Include="../../../src/Modules/Vinx.Erp.Paguai/Vinx.Erp.Paguai.csproj" />
   </ItemGroup>
 </Project>

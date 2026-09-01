@@ -6,18 +6,12 @@ using Wolverine;
 namespace Vinx.Erp.WorkerHost;
 
 /// <summary>
-/// Mensagem de tick da automação de demandas (fila durável local). A geração
-/// cerca o fence da identidade durável: apenas a cadeia portadora da geração
-/// vigente do claim renova o lease e perpetua o próximo tick.
-/// </summary>
-public sealed record DemandasAutomationTick(DateTimeOffset ScheduledAt, long Generation);
-
-/// <summary>
 /// Handler do tick: executa a varredura (avança DUE primeiro, depois overdue) e
 /// agenda o próximo tick SOMENTE se a renovação do claim durável confirmar que
 /// esta geração ainda é a dona da cadeia. Classes públicas com inline-DI —
 /// handler interno/lambda é engolido silenciosamente como Handled pela cadeia
-/// Wolverine.
+/// Wolverine. O contrato <see cref="DemandasAutomationTick"/> vive no módulo
+/// Demandas (fila <see cref="DemandasQueues.Automation"/>, nome canônico).
 /// </summary>
 public sealed class DemandasAutomationTickHandler(
     DemandasAutomationScanService scan,

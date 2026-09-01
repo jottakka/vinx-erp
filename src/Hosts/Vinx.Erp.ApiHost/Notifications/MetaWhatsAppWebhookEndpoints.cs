@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 using Vinx.Erp.ApiHost.Constants;
 using Vinx.Erp.Foundation.Persistence;
+using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
 
 namespace Vinx.Erp.ApiHost.Notifications;

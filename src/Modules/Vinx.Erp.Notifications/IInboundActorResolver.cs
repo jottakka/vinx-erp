@@ -1,4 +1,4 @@
-namespace Vinx.Erp.ApiHost.Notifications;
+namespace Vinx.Erp.Notifications;
 
 /// <summary>
 /// Resolve o ator (usuário, empresa, membership) de um endereço inbound do
