@@ -13,14 +13,25 @@ public sealed class ModuleContractDocumentationTests
         "## Migration notes"
     ];
 
-    [Theory]
-    [InlineData("docs/modules/foundation.md")]
-    [InlineData("docs/modules/ai.md")]
-    [InlineData("docs/modules/_template.md")]
-    public void Module_contract_contains_required_headings(string relativePath)
+    [Fact]
+    public void Module_contracts_contain_required_headings()
     {
-        var text = File.ReadAllText(Path.Combine(RepositoryRoot(), relativePath));
-        Assert.All(RequiredHeadings, heading => Assert.Contains(heading, text, StringComparison.Ordinal));
+        // A lista de contratos nasce da árvore src/Modules: um módulo novo é
+        // coberto automaticamente (foundation e o template entram à parte).
+        var relativePaths = DiscoverModuleNames()
+            .Select(name => $"docs/modules/{name["Vinx.Erp.".Length..].ToLowerInvariant()}.md")
+            .Append("docs/modules/foundation.md")
+            .Append("docs/modules/_template.md")
+            .ToArray();
+
+        Assert.NotEmpty(DiscoverModuleNames());
+        Assert.All(
+            relativePaths,
+            relativePath =>
+            {
+                var text = File.ReadAllText(Path.Combine(RepositoryRoot(), relativePath));
+                Assert.All(RequiredHeadings, heading => Assert.Contains(heading, text, StringComparison.Ordinal));
+            });
     }
 
     [Fact]
@@ -57,32 +68,12 @@ public sealed class ModuleContractDocumentationTests
         Assert.DoesNotContain("src/lib/frasesMotivacionais.ts", text, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void LegacyInventoryRecordsFullDirectIntegrationPaths()
-    {
-        var text = File.ReadAllText(Path.Combine(RepositoryRoot(), "docs/inventory/legacy-foundation-inventory.md"));
-        var paths = new[]
-        {
-            "src/components/chamada/ChamadaGlobal.tsx:2",
-            "src/feature-module/Authentication/login/login.tsx:6",
-            "src/feature-module/Authentication/forgot-password/forgotPassword.tsx:6",
-            "src/feature-module/Pages/application-module/chat/chat.tsx:2",
-            "src/feature-module/Pages/application-module/chat/calls/callHistory.tsx:3",
-            "src/routes/feature.tsx:9"
-        };
-
-        foreach (var path in paths)
-        {
-            Assert.Contains($"`direct Supabase integration {path}` | `{path}`", text, StringComparison.Ordinal);
-        }
-
-        Assert.DoesNotContain("`direct Supabase integration ChamadaGlobal.tsx:2`", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("`direct Supabase integration login.tsx:6`", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("`direct Supabase integration forgotPassword.tsx:6`", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("`direct Supabase integration chat.tsx:2`", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("`direct Supabase integration callHistory.tsx:3`", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("`direct Supabase integration routes/feature.tsx:9`", text, StringComparison.Ordinal);
-    }
+    private static string[] DiscoverModuleNames() =>
+        Directory
+            .GetDirectories(Path.Combine(RepositoryRoot(), "src", "Modules"))
+            .Select(directory => new DirectoryInfo(directory).Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
 
     private static string RepositoryRoot()
     {

@@ -1,4 +1,4 @@
-namespace Vinx.Erp.ApiHost.Notifications;
+namespace Vinx.Erp.Notifications;
 
 /// <summary>
 /// Endereço estável do canal inbound do WhatsApp: o número de negócio que

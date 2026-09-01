@@ -1,15 +1,15 @@
+namespace Vinx.Erp.Notifications;
+
 using System.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using Vinx.Erp.Foundation.Persistence;
-using Vinx.Erp.Notifications;
 using Vinx.Erp.Notifications.Providers.Meta;
 using Wolverine;
 using Wolverine.EntityFrameworkCore;
 using Wolverine.Runtime;
-
-namespace Vinx.Erp.ApiHost.Notifications;
 
 /// <summary>Imagem inbound extraída do webhook: ids do canal/provider e legenda opcional.</summary>
 public sealed record InboundWhatsAppImage(

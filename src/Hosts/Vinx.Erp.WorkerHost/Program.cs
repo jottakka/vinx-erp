@@ -2,17 +2,12 @@ using JasperFx;
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using Vinx.Erp.AI;
-using Vinx.Erp.AI.DocumentContext;
-using Vinx.Erp.AI.Guardrails;
-using Vinx.Erp.AI.Providers;
-using Vinx.Erp.AI.Providers.OpenAiCompatible;
 using Vinx.Erp.Foundation.Audit;
 using Vinx.Erp.Foundation.Authorization;
 using Vinx.Erp.Foundation.Configuration;
@@ -143,100 +138,38 @@ builder.Services.AddDbContext<FoundationDbContext>(
             .UseSnakeCaseNamingConvention()
             .AddInterceptors(new RowVersionInterceptor())
 );
-var workerAgent =
-    builder.Configuration.GetSection(WorkerAgentRunOptions.SectionName)
-        .Get<WorkerAgentRunOptions>() ?? new WorkerAgentRunOptions();
-workerAgent.Validate(Environment.GetEnvironmentVariable);
+// Superfície do agente compartilhada com o ApiHost (raiz de composição do
+// módulo AI): options validadas on-start, gates e provider decididos na
+// composição; sem provider configurado o runner falha fechado. A etiqueta
+// "ai/agent-provider" preserva a telemetria de provider deste host e o
+// registro permanece classe pública tipada para a dependência inline do
+// codegen do Wolverine (AlwaysUseServiceLocationFor<AgentRunner> abaixo).
 builder.Services.AddScoped<AuditAppender>();
 builder.Services.AddScoped<CapabilityEvaluator>();
 builder.Services.AddScoped<AuthorizedCompanySetResolver>();
-builder.Services.AddScoped<IAgentContextResolver, AgentContextResolver>();
-builder.Services.AddScoped<PaguaiProposalService>();
-builder.Services.AddSingleton<SourceAuthorizationGate>();
-builder.Services.AddSingleton<AgentOutputGate>();
-AgentModelSelection? workerAgentSelection = null;
-if (workerAgent.Provider is not null)
-{
-    workerAgentSelection = new AgentModelSelection(workerAgent.Provider, workerAgent.Model!);
-    var providerProfile = workerAgent.ToProviderOptions();
-    builder.Services.AddHttpClient(
-        WorkerAgentRunOptions.ProviderHttpClientName,
-        client =>
-        {
-            client.BaseAddress = providerProfile.Endpoint;
-            client.Timeout = providerProfile.Timeout;
-        })
-        .ConfigurePrimaryHttpMessageHandler(() => OpenAiCompatibleTransport.Create(providerProfile));
-    builder.Services.AddScoped<IAgentModel>(serviceProvider =>
-        new ChatClientAgentModel(OpenAiCompatibleChatClient.CreateForServer(
-            providerProfile,
-            Environment.GetEnvironmentVariable,
-            serviceProvider.GetRequiredService<IHttpClientFactory>()
-                .CreateClient(WorkerAgentRunOptions.ProviderHttpClientName),
-            serviceProvider.GetRequiredService<ILogger<OpenAiCompatibleChatClient>>())));
-}
-
-if (workerAgent.Vision is { } workerVision)
-{
-    var visionProfile = workerVision.ToProviderOptions();
-    builder.Services.AddHttpClient(
-        WorkerAgentRunOptions.VisionHttpClientName,
-        client =>
-        {
-            client.BaseAddress = visionProfile.Endpoint;
-            client.Timeout = visionProfile.Timeout;
-        })
-        .ConfigurePrimaryHttpMessageHandler(() => OpenAiCompatibleTransport.Create(visionProfile));
-    builder.Services.AddScoped<IAuthorizedDocumentSource, FoundationAuthorizedDocumentSource>();
-    builder.Services.AddScoped(serviceProvider =>
-        new DocumentContextNormalizer(
-            serviceProvider.GetRequiredService<IAuthorizedDocumentSource>(),
-            new DocumentVisionOcr(OpenAiCompatibleChatClient.CreateForServer(
-                visionProfile,
-                Environment.GetEnvironmentVariable,
-                serviceProvider.GetRequiredService<IHttpClientFactory>()
-                    .CreateClient(WorkerAgentRunOptions.VisionHttpClientName),
-                serviceProvider.GetRequiredService<ILogger<OpenAiCompatibleChatClient>>())),
-            DocumentContextLimits.FromVisionProfile(
-                visionProfile,
-                workerVision.AllowedClassifications.ToHashSet(StringComparer.Ordinal))));
-}
-
-builder.Services.AddScoped(serviceProvider => new AgentRunner(
-    serviceProvider.GetRequiredService<IAgentContextResolver>(),
-    serviceProvider.GetService<IAgentModel>(),
-    serviceProvider.GetRequiredService<ILogger<AgentRunner>>(),
-    profileId => AgentTaskProfileCatalog.CreateApprovedProfile(
-        profileId,
-        workerAgentSelection,
-        AgentInputLimits.MainTurnMaxCharacters),
-    serviceProvider.GetRequiredService<AgentOutputGate>(),
-    serviceProvider.GetService<DocumentContextNormalizer>()));
-builder.Services.AddScoped<AgentExecutionService>();
+builder.Services.AddAgentRunSurface(
+    builder.Configuration,
+    Environment.GetEnvironmentVariable,
+    allowCredentiallessTestModel: false,
+    providerModuleTag: "ai/agent-provider");
+builder.Services.AddPaguaiProposal();
 builder.Services.AddScoped<OwnerInvitationDeliveryIngressService>();
 builder.Services.AddScoped<OwnerInvitationProviderDeliveryService>();
 builder.Services.AddScoped<MemberInvitationDeliveryIngressService>();
 builder.Services.AddScoped<MemberInvitationProviderDeliveryService>();
-builder.Services.AddSingleton<NotificationDeliveryMetrics>();
-builder.Services.AddScoped<NotificationProviderResolver>();
-builder.Services.AddScoped<INotificationProvider, InAppNotificationProvider>();
-builder.Services.AddScoped<INotificationProvider, MetaWhatsAppProvider>();
-builder.Services.AddScoped<INotificationProvider, EmailNotificationProvider>();
-builder.Services.AddScoped<INotificationProvider, TelegramProvider>();
-builder.Services.AddScoped<NotificationDeliveryWorkerService>();
+// Entrega de notificações: métricas, resolvedor e providers por canal (raiz
+// de composição do módulo Notifications).
+builder.Services.AddNotificationDelivery();
 // Worker enfileira intents de Demandas pela função worker-only estreita
 // (notifications.enqueue_demandas_notification_intent): a função genérica é
 // revogada do vinx_worker (20260827120000) — mesma assinatura, troca só no
 // nome. Mapeamento por TIPO (não factory): o codegen dos handlers Wolverine
 // rejeita factories opacas na cadeia de dependências.
 builder.Services.AddScoped<NotificationIntentService, DemandasWorkerNotificationIntentService>();
-builder.Services.AddScoped<DemandasNotificationComposer>();
-builder.Services.AddScoped<DemandasAutomationScanService>();
-builder.Services.AddScoped<DemandasSchedulerClaimStore>();
-builder.Services.AddScoped<InboundWhatsAppInteractionService>();
-builder.Services.AddScoped<InboundWhatsAppDocumentService>();
-builder.Services.AddScoped<InboundAttachmentMaterializer>();
-builder.Services.AddScoped<InboundAgentChannelAdapter>();
+// Automação de Demandas e processamento do inbound do WhatsApp (raízes de
+// composição dos módulos Demandas e Notifications).
+builder.Services.AddDemandasAutomation();
+builder.Services.AddInboundWhatsAppProcessing();
 // Storage privado condicionado por configuração (padrão do antimalware):
 // sem SUPABASE_STORAGE_* o worker sobe e o fluxo de documentos falha fechado
 // (BlockedFileStorage); configurado ativa o adapter Supabase.
@@ -278,7 +211,7 @@ builder
         // O header customizado apikey não pode atravessar redirects para outra origem.
         new SocketsHttpHandler { AllowAutoRedirect = false }
     );
-builder.Services.AddScoped<Vinx.Erp.Foundation.Files.FileStorage, WorkerFileStorage>();
+builder.Services.AddScoped<Vinx.Erp.Foundation.Files.FileStorage, Vinx.Erp.Foundation.Files.OptionsConfiguredFileStorage>();
 // Engine antimalware condicionada por configuração: sem "MalwareScanner:ClamAvEndpoint"
 // o worker permanece fail-closed (BlockedMalwareScanner); endpoint válido ativa o clamd.
 builder
@@ -292,7 +225,7 @@ builder
         "Malware scanner options must define a positive timeout and byte limit, plus a 'host:port' ClamAV endpoint when set."
     )
     .ValidateOnStart();
-builder.Services.AddSingleton<Vinx.Erp.Foundation.Files.IMalwareScanner, WorkerMalwareScanner>();
+builder.Services.AddSingleton<Vinx.Erp.Foundation.Files.IMalwareScanner, Vinx.Erp.Foundation.Files.OptionsConfiguredMalwareScanner>();
 builder
     .Services.AddOptions<MetaWhatsAppOptions>()
     .Bind(builder.Configuration)
@@ -417,23 +350,23 @@ builder.Host.UseWolverine(options =>
         .EnableMessageTransport(transport =>
             transport.TransportSchemaName("vinx_wolverine_queues")
         );
-    options.ListenToPostgresqlQueue("owner-invitation-delivery").UseDurableInbox();
-    options.ListenToPostgresqlQueue("member-invitation-delivery").UseDurableInbox();
-    options.ListenToPostgresqlQueue("notification-delivery").UseDurableInbox();
-    options.ListenToPostgresqlQueue("paguai-events").UseDurableInbox();
-    options.ListenToPostgresqlQueue("whatsapp-inbound").UseDurableInbox();
-    options.ListenToPostgresqlQueue("whatsapp-inbound-documents").UseDurableInbox();
-    options.ListenToPostgresqlQueue("telegram-inbound").UseDurableInbox();
-    options.ListenToPostgresqlQueue("demandas-automation").UseDurableInbox();
+    options.ListenToPostgresqlQueue(DeliveryQueues.OwnerInvitation).UseDurableInbox();
+    options.ListenToPostgresqlQueue(DeliveryQueues.MemberInvitation).UseDurableInbox();
+    options.ListenToPostgresqlQueue(DeliveryQueues.Notification).UseDurableInbox();
+    options.ListenToPostgresqlQueue(PaguaiQueues.Events).UseDurableInbox();
+    options.ListenToPostgresqlQueue(InboundQueues.WhatsAppInbound).UseDurableInbox();
+    options.ListenToPostgresqlQueue(InboundQueues.WhatsAppInboundDocuments).UseDurableInbox();
+    options.ListenToPostgresqlQueue(InboundQueues.TelegramInbound).UseDurableInbox();
+    options.ListenToPostgresqlQueue(DemandasQueues.Automation).UseDurableInbox();
     // O tick é produzido E consumido por este host: sem roteamento explícito o
     // envelope cairia no endpoint local padrão e a fila durável dedicada (com
     // grants próprios) ficaria órfã.
     options
         .PublishMessage<DemandasAutomationTick>()
-        .ToPostgresqlQueue("demandas-automation");
+        .ToPostgresqlQueue(DemandasQueues.Automation);
     options
         .PublishMessage<NotificationDeliveryRequested>()
-        .ToPostgresqlQueue("notification-delivery")
+        .ToPostgresqlQueue(DeliveryQueues.Notification)
         .UseDurableOutbox();
 });
 
@@ -464,83 +397,3 @@ internal sealed class WorkerDatabaseOptions
     public string ConnectionString { get; set; } = string.Empty;
 }
 
-internal sealed class WorkerAgentRunOptions
-{
-    public const string SectionName = "AgentRun";
-    public const string ProviderHttpClientName = "agent-provider";
-    public const string VisionHttpClientName = "agent-document-vision";
-    private const string OpenAiCompatibleProvider = "openai_compatible";
-
-    public string? Provider { get; set; }
-    public Uri? Endpoint { get; set; }
-    public string? Model { get; set; }
-    public IReadOnlyList<string> ApprovedHosts { get; set; } = [];
-    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
-    public WorkerAgentVisionOptions? Vision { get; set; }
-
-    public void Validate(Func<string, string?> readEnvironment)
-    {
-        if (Provider is null && Vision is null)
-        {
-            return;
-        }
-
-        if (!OpenAiCompatibleChatClient.HasServerCredential(readEnvironment)
-            || (Provider is not null
-                && (!string.Equals(Provider, OpenAiCompatibleProvider, StringComparison.Ordinal)
-                    || !ExactApprovedHostPolicy.Matches(Endpoint, ApprovedHosts)
-                    || new OpenAiCompatibleOptions.Validator()
-                        .ValidateForRuntimeCredential(null, ToProviderOptions()).Failed))
-            || (Vision is not null
-                && (!Vision.IsValid()
-                    || Provider is null
-                    || !string.Equals(Provider, Vision.Provider, StringComparison.Ordinal)
-                    || !string.Equals(Model, Vision.Model, StringComparison.Ordinal)
-                    || !ExactApprovedHostPolicy.ProfilesMatch(
-                        Endpoint,
-                        ApprovedHosts,
-                        Vision.Endpoint,
-                        Vision.ApprovedHosts))))
-        {
-            throw new InvalidOperationException("Agent run configuration is invalid.");
-        }
-    }
-
-    public OpenAiCompatibleOptions ToProviderOptions() => new()
-    {
-        Endpoint = Endpoint,
-        Model = Model ?? string.Empty,
-        Timeout = Timeout,
-        MaxInputCharacters = AgentInputLimits.MainTurnMaxCharacters,
-        ApprovedHosts = ApprovedHosts,
-        ModuleTag = "ai/agent-provider",
-    };
-}
-
-internal sealed class WorkerAgentVisionOptions
-{
-    public string? Provider { get; set; }
-    public Uri? Endpoint { get; set; }
-    public string? Model { get; set; }
-    public IReadOnlyList<string> ApprovedHosts { get; set; } = [];
-    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(45);
-    public IReadOnlyList<string> AllowedClassifications { get; set; } = [];
-
-    public bool IsValid() =>
-        string.Equals(Provider, "openai_compatible", StringComparison.Ordinal)
-        && AllowedClassifications.Count > 0
-        && AllowedClassifications.All(value => !string.IsNullOrWhiteSpace(value))
-        && ExactApprovedHostPolicy.Matches(Endpoint, ApprovedHosts)
-        && !new OpenAiCompatibleOptions.Validator()
-            .ValidateForRuntimeCredential(null, ToProviderOptions()).Failed;
-
-    public OpenAiCompatibleOptions ToProviderOptions() => new()
-    {
-        Endpoint = Endpoint,
-        Model = Model ?? string.Empty,
-        Timeout = Timeout,
-        ApprovedHosts = ApprovedHosts,
-        AllowImageInputs = true,
-        ModuleTag = "ai/agent-document-vision",
-    };
-}
