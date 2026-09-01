@@ -181,16 +181,28 @@ public sealed class NotificationWorkerTests
         claim.Parameters.AddWithValue("delivery_id", deliveryId);
         Assert.Equal("provider_in_flight", (string)(await claim.ExecuteScalarAsync())!);
 
+        // Canário: uma segunda entrega processável prova que o poller do
+        // worker está ciclando — a negação abaixo só é válida depois dele
+        // (evita verde vacuoso quando o host demora a subir).
+        var canary = await EnqueueWhatsAppAsync(factory, seed);
+        var canaryDeliveryId = canary.WhatsApp!.DeliveryId!.Value;
+
         await using var worker = new NotificationWorkerHostFactory(
             factory.Fixture.WorkerConnectionString,
             useFakeWhatsAppProvider: true
         );
         using var client = worker.CreateClient();
-        await Task.Delay(TimeSpan.FromSeconds(3));
+        await NotificationIntentSeed.WaitUntilDeliveryAsync(
+            factory,
+            canaryDeliveryId,
+            "delivered",
+            TimeSpan.FromSeconds(30)
+        );
+        Assert.Equal(1, FakeNotificationProvider.Calls);
 
         var state = await NotificationIntentSeed.ReadDeliveryAsync(factory, deliveryId);
         Assert.Equal("provider_in_flight", state.Status);
-        Assert.Equal(0, FakeNotificationProvider.Calls);
+        Assert.Equal(1, FakeNotificationProvider.Calls);
     }
 
     private static readonly string[] collection = new[] { "delivered", "provider_in_flight" };
