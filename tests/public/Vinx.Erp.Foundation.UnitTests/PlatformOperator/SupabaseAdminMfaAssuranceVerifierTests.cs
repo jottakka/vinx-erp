@@ -160,6 +160,7 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
     public async Task Verify_async_propagates_caller_cancellation()
     {
         var handler = new StubHttpMessageHandler(
+            _ => Json(HttpStatusCode.OK, AdminUserJson(Subject, VerifiedFactorJson)),
             async (_, cancellationToken) =>
             {
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
@@ -292,7 +293,8 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
             """;
 
     private sealed class StubHttpMessageHandler(
-        Func<HttpRequestMessage, HttpResponseMessage> sendAsync
+        Func<HttpRequestMessage, HttpResponseMessage> sendAsync,
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? sendAsyncWithCancellation = null
     ) : HttpMessageHandler
     {
         public string? RequestUri { get; private set; }
@@ -302,7 +304,7 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
 
         private int _callCount;
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken
         )
@@ -313,7 +315,11 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
             ApiKey = request.Headers.TryGetValues("apikey", out var values)
                 ? Assert.Single(values)
                 : null;
-            return Task.FromResult(sendAsync(request));
+            if (sendAsyncWithCancellation is not null)
+            {
+                return await sendAsyncWithCancellation(request, cancellationToken);
+            }
+            return sendAsync(request);
         }
     }
 
