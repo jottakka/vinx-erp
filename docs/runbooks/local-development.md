@@ -119,7 +119,7 @@ PostgreSQL, dois ApiHosts de principal fixo e dois Vites sem senha, token ou
 Supabase local:
 
 ```bash
-npm run dev:real-e2e -- --profiles maria,clara
+npm run dev:real-e2e -- --profiles maria,clara --agent-mode deterministic
 ```
 
 Maria usa `4174` e Clara usa `4175`; seed e verify executam uma vez no banco

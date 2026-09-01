@@ -3,6 +3,14 @@ set -euo pipefail
 
 readonly container_name="vinx-foundation-ef-negative-guards-$$"
 readonly admin_password="$(openssl rand -hex 32)"
+readonly repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly ef_core_version="$(sed -n 's/.*Include="Microsoft.EntityFrameworkCore" Version="\([^"]*\)".*/\1/p' "$repository_root/Directory.Packages.props")"
+
+if [[ -z "$ef_core_version" ]]; then
+  echo "Unable to determine the Entity Framework Core version from Directory.Packages.props." >&2
+  exit 1
+fi
+
 temporary_directory=""
 
 cleanup() {
@@ -22,7 +30,7 @@ write_project() {
   local project_directory="$1"
   mkdir -p "$project_directory"
 
-  cat > "$project_directory/Guard.csproj" <<'EOF'
+  cat > "$project_directory/Guard.csproj" <<EOF
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -30,7 +38,7 @@ write_project() {
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="${ef_core_version}">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
