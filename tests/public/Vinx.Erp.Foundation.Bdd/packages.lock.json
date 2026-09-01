@@ -1168,6 +1168,7 @@
           "Vinx.Erp.AI": "[1.0.0, )",
           "Vinx.Erp.ApiHost": "[1.0.0, )",
           "Vinx.Erp.Atendimento": "[1.0.0, )",
+          "Vinx.Erp.Demandas": "[1.0.0, )",
           "Vinx.Erp.PlatformBootstrap": "[1.0.0, )",
           "Vinx.Erp.WorkerHost": "[1.0.0, )",
           "xunit": "[2.9.3, )"
