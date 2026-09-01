@@ -2,6 +2,47 @@
 
 > A descoberta da issue [#45](https://github.com/jottakka/vinx-erp/issues/45) continua canônica para o domínio financeiro futuro. A issue #227 entrega apenas o recorte abaixo e substitui, para esse recorte, a antiga afirmação de que este documento não cria contrato técnico.
 
+## Ownership
+
+- Serviços `PaguaiDraftService` (rascunho, comprovante, link de prova) e
+  `PaguaiProposalService` (proposta de documento do Agente) em
+  `Vinx.Erp.Paguai`; composição via `AddPaguai` (ApiHost) e
+  `AddPaguaiProposal` (WorkerHost).
+- Mensagem durável `PaguaiDraftCreated` na fila `paguai-events`
+  (`PaguaiQueues.Events`); DLQ redige para `PaguaiDraftCreated(Guid.Empty,
+  Guid.Empty, Guid.Empty)`.
+- Referência AI → Paguai é a única aresta entre módulos autorizada (o módulo
+  AI lê regras de amount/proposta). Exceção registrada: leitura raw-SQL de
+  `notifications.read_inbound_whatsapp_invoice_candidate` (ver #345).
+
+## Company scope
+
+Empresa isolada por RLS (`paguai.requests` com policy requester/company);
+todo comando abre a transação com o contexto `app.company_id` da sessão.
+Replays por `foundation.idempotency_records` com hash canônico por comando.
+
+## Contract version
+
+- Valor: `decimal` com gramática `PaguaiAmountRules` (entrada pt-BR
+  `1.250,00`, wire canônico `1250.00`); nunca `double` nem parse
+  culture-sensitivo.
+- Link de comprovante: TTL de 2 minutos, alinhado ao teto
+  `SupabaseFileStorage.MaximumDownloadUrlLifetime` (contrato testado entre
+  camadas).
+
+## Deletion strategy
+
+Rascunhos e pedidos vivem na máquina de estados (`draft` → proposta →
+solicitação); não há exclusão física na V1. Comprovantes seguem a retenção
+do subsistema de arquivos (`foundation.file_records.retention_until`).
+
+## Migration notes
+
+- `20260820061738` converteu `amount_minor` (bigint) para `amount`
+  (numeric); replay legado lê `AmountMinor/100m` no shim de desserialização.
+- `20260829060000` adicionou CAS por versão no comprovante
+  (`proof_version`).
+
 ## MVP #227 — rascunho financeiro mínimo
 
 O MVP persiste `id`, `companyId`, `requestId`, `title`, `description`,
