@@ -25,6 +25,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanySelect } from "../../shared/ui/company-select";
 import { PageHeader } from "../../shared/ui/page-header";
+import { initialsFor } from "../atendimento/atendimento-lookup";
+import { useDirectoryOptions } from "../atendimento/use-directory-options";
 import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
 import {
@@ -153,6 +155,19 @@ export function DemandasPage() {
       }),
     [selectedCompany],
   );
+
+  // Diretório da empresa ativa (mesma fonte do Atendimento, cache compartilhado):
+  // mapa membershipId → nome de exibição para avatares com iniciais humanas.
+  const { options: directoryOptions } = useDirectoryOptions(companyId);
+  const responsibleNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const option of directoryOptions) {
+      if (!names.has(option.membershipId)) {
+        names.set(option.membershipId, option.displayName);
+      }
+    }
+    return names;
+  }, [directoryOptions]);
 
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -394,6 +409,7 @@ export function DemandasPage() {
                         )
                       }
                       onOpen={() => setDetailId(card.id)}
+                      responsibleNames={responsibleNames}
                     />
                   ))}
                 {visibleCards.filter((card) => card.stage === column.id)
@@ -458,19 +474,23 @@ function DemandCard({
   canAdvance,
   onAdvance,
   onOpen,
+  responsibleNames,
 }: {
   advancePending: boolean;
   card: DemandBoardCard;
   canAdvance: boolean;
   onAdvance: () => void;
   onOpen: () => void;
+  responsibleNames: ReadonlyMap<string, string>;
 }) {
+  const responsibleName = responsibleNames.get(card.responsibleMembershipId);
   return (
     <Card variant="outlined" data-testid={`demand-card-${card.id}`}>
       <CardContent sx={{ pb: 1 }}>
         <Stack direction="row" spacing={1}>
+          {/* Nome fora do diretório: fallback neutro, nunca fragmento de UUID. */}
           <Avatar sx={{ width: 28, height: 28 }}>
-            {card.responsibleMembershipId.slice(0, 2).toUpperCase()}
+            {responsibleName ? initialsFor(responsibleName) : "?"}
           </Avatar>
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography variant="subtitle1">{card.title}</Typography>

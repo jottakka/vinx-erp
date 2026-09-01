@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
+import { atendimentoClient } from "../atendimento/atendimento-client";
 import type {
   BootstrapSnapshot,
   EffectiveCapability,
@@ -70,6 +71,17 @@ const overdueCard: DemandBoardCard = {
   isOverdue: true,
   stage: "execution",
   title: "Fechamento contábil",
+};
+
+// Responsável fora do diretório: o avatar cai no fallback neutro.
+const unknownResponsibleCard: DemandBoardCard = {
+  ...initiationCard,
+  demandDisplayNumber: "DEM-000003",
+  demandNumber: 3,
+  id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  responsibleMembershipId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  stage: "execution",
+  title: "Conciliar extratos",
 };
 
 const readCapability = {
@@ -483,5 +495,36 @@ describe("DemandasPage", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
+  });
+
+  it("renders human initials for directory members and a neutral fallback otherwise", async () => {
+    vi.spyOn(atendimentoClient, "directoryOptions").mockResolvedValue([
+      {
+        displayName: "Bruno Souza",
+        employeeId: "77777777-7777-4777-8777-777777777777",
+        membershipId: initiationCard.responsibleMembershipId,
+      },
+    ]);
+    vi.spyOn(demandasClient, "board").mockResolvedValue({
+      items: [initiationCard, unknownResponsibleCard],
+      total: 2,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Pagar fornecedor")).toBeVisible();
+
+    // Membro presente no diretório: iniciais do nome de exibição.
+    const knownCard = screen.getByTestId(`demand-card-${initiationCard.id}`);
+    expect(await within(knownCard).findByText("BS")).toBeVisible();
+
+    // Membro ausente do diretório: fallback neutro, nunca fragmento de UUID.
+    const unknownCard = screen.getByTestId(
+      `demand-card-${unknownResponsibleCard.id}`,
+    );
+    expect(within(unknownCard).getByText("?")).toBeVisible();
+    expect(within(unknownCard).queryByText("DD")).not.toBeInTheDocument();
   });
 });
