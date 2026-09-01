@@ -66,7 +66,7 @@ public sealed class OpenAiCompatibleOptions
     /// <summary>Porta não padrão aprovada explicitamente; sem ela, somente 443.</summary>
     public int? ApprovedPort { get; set; }
 
-    /// <summary>Rótulo do perfil usado no escopo de logging (ex.: `ai/deepseek`).</summary>
+    /// <summary>Rótulo do perfil usado no escopo de logging (ex.: `ai/openai-compatible`).</summary>
     public string ModuleTag { get; set; } = "ai/openai-compatible";
 
     /// <summary>
