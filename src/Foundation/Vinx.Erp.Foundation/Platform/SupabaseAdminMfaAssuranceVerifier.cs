@@ -125,7 +125,7 @@ public sealed class SupabaseAdminMfaAssuranceVerifier(
                     ? MfaAssuranceVerificationResult.VerifiedFactorPresent()
                     : MfaAssuranceVerificationResult.VerifiedFactorAbsent();
             }
-            catch (JsonException)
+            catch (Exception exception) when (exception is JsonException or InvalidOperationException)
             {
                 LogUnavailable("provider_payload_invalid");
                 return MfaAssuranceVerificationResult.Unavailable();

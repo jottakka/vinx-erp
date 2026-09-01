@@ -49,7 +49,6 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
     [InlineData("{\"id\":\"external-subject\",\"factors\":[]}")]
     [InlineData("{\"id\":\"external-subject\",\"factors\":[{}]}")]
     [InlineData("{\"id\":\"external-subject\",\"factors\":[{\"id\":\"f1\",\"factor_type\":\"totp\",\"status\":\"unverified\"}]}")]
-    [InlineData("[]")]
     public async Task Verify_async_reports_absence_without_a_verified_factor(string body)
     {
         var handler = new StubHttpMessageHandler(_ => Json(HttpStatusCode.OK, body));
@@ -58,6 +57,19 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
         var result = await verifier.VerifyAsync(Subject, CancellationToken.None);
 
         Assert.Equal(MfaAssuranceVerificationState.VerifiedFactorAbsent, result.State);
+    }
+
+    [Fact]
+    public async Task Verify_async_reports_unavailable_for_a_malformed_payload()
+    {
+        // Um corpo que não é objeto de usuário é falha do provedor: sem cache
+        // e sem tratar como ausência (fail closed).
+        var handler = new StubHttpMessageHandler(_ => Json(HttpStatusCode.OK, "[]"));
+        var (verifier, _) = Verifier(handler);
+
+        var result = await verifier.VerifyAsync(Subject, CancellationToken.None);
+
+        Assert.Equal(MfaAssuranceVerificationState.Unavailable, result.State);
     }
 
     [Fact]
@@ -144,7 +156,7 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
         var handler = new StubHttpMessageHandler(_ =>
             throw new InvalidOperationException("The provider must not be called."));
         var verifier = new SupabaseAdminMfaAssuranceVerifier(
-            new StubHttpClientFactory(new HttpClient(handler)),
+            new StubHttpClientFactory(handler),
             new SupabaseAuthOptions { Issuer = Issuer, Audience = Audience },
             new SupabaseAdminOptions { ServiceRoleKey = string.Empty },
             new MfaAssuranceCache(),
@@ -253,7 +265,7 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
             : new MfaAssuranceCache(timeProvider);
         return (
             new SupabaseAdminMfaAssuranceVerifier(
-                new StubHttpClientFactory(new HttpClient(handler)),
+                new StubHttpClientFactory(handler),
                 new SupabaseAuthOptions { Issuer = Issuer, Audience = Audience },
                 new SupabaseAdminOptions { ServiceRoleKey = ServiceRoleKey },
                 cache,
@@ -323,9 +335,12 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
         }
     }
 
-    private sealed class StubHttpClientFactory(HttpClient httpClient) : IHttpClientFactory
+    private sealed class StubHttpClientFactory(HttpMessageHandler handler)
+        : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => httpClient;
+        // O verificador descarta o client a cada chamada (using), então a
+        // fábrica entrega uma nova instância por CreateClient.
+        public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
