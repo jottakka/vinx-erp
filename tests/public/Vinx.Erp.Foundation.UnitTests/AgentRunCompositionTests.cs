@@ -26,6 +26,9 @@ public sealed class AgentRunCompositionTests
     {
         var services = CreateBaseServices();
         services.AddAgentRunSurface(CreateConfiguration());
+        // O adaptador HTTP vive no ApiHost (referencia contratos de lá); o
+        // teste o registra explicitamente, como o host faz no Program.
+        services.AddScoped<AgentExecutionApplicationService>();
         var companyId = Guid.NewGuid();
         var actor = new ActorContext(Guid.NewGuid(), Guid.NewGuid());
         services.AddScoped<IAgentContextResolver>(_ => new StaticContextResolver(new AgentContextResolution(
