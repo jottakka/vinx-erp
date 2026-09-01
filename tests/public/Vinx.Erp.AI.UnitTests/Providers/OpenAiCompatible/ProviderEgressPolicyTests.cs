@@ -15,7 +15,7 @@ public sealed class ProviderEgressPolicyTests
 
     [Theory]
     [InlineData("https://provider.example.com/v1/")]
-    [InlineData("https://api.deepseek.com/v1/")]
+    [InlineData("https://api.provider.example.com/v1/")]
     [InlineData("https://8.8.8.8/v1/")]
     [InlineData("https://[2606:4700::1111]/v1/")]
     public void Public_https_endpoints_pass(string endpoint)
@@ -127,18 +127,18 @@ public sealed class ProviderEgressPolicyTests
     [Fact]
     public void Approved_hosts_match_exact_and_dot_boundary_suffix_only()
     {
-        var approved = new[] { "api.deepseek.com" };
+        var approved = new[] { "api.example.com" };
 
-        Assert.Empty(Validate("https://api.deepseek.com/v1/", approved));
-        Assert.Empty(Validate("https://eu.api.deepseek.com/v1/", approved));
+        Assert.Empty(Validate("https://api.example.com/v1/", approved));
+        Assert.Empty(Validate("https://eu.api.example.com/v1/", approved));
         Assert.Contains(
             "approved host list",
-            string.Join(';', Validate("https://notdeepseek.com/v1/", approved)),
+            string.Join(';', Validate("https://notexample.com/v1/", approved)),
             StringComparison.Ordinal);
         // Sufixo embutido em outro domínio não é subdomínio: fronteira de ponto.
         Assert.Contains(
             "approved host list",
-            string.Join(';', Validate("https://api.deepseek.com.evil.example/v1/", approved)),
+            string.Join(';', Validate("https://api.example.com.evil.example/v1/", approved)),
             StringComparison.Ordinal);
     }
 
