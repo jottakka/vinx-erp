@@ -5,12 +5,15 @@ using JasperFx;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.AspNetCore.Mvc;
 using Vinx.Erp.ApiHost.Constants;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using OpenTelemetry;
+using OpenTelemetry.Metrics;
 using Vinx.Erp.ApiHost;
 using Vinx.Erp.ApiHost.Agent;
 using Vinx.Erp.ApiHost.Contracts;
@@ -49,6 +52,10 @@ const string ProtectedRateLimitPolicy = ApiConstants.ProtectedRateLimitPolicy;
 const string BrowserSessionLoginRateLimitPolicy = "browser-session-login";
 const int MaximumEmployeeDirectoryRequestBodyBytes = 8 * 1024;
 builder.AddVinxHostDefaults();
+// Medidor do módulo Notifications: a Foundation não referencia módulos,
+// portanto a fonte é registrada aqui, no host que publica entregas.
+builder.Services.AddOpenTelemetry().WithMetrics(metrics =>
+    metrics.AddMeter(NotificationDeliveryMetrics.MeterName));
 builder
     .Services.AddOptions<FoundationDatabaseOptions>()
     .Bind(builder.Configuration)
@@ -338,6 +345,21 @@ builder.Services.AddRateLimiter(options =>
             )
     );
     options.AddPolicy(
+        ApiConstants.WebhookRateLimitPolicy,
+        context =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 120,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    AutoReplenishment = true,
+                }
+            )
+    );
+    options.AddPolicy(
         BrowserSessionLoginRateLimitPolicy,
         context =>
             RateLimitPartition.GetFixedWindowLimiter(
@@ -397,7 +419,14 @@ app.UseRateLimiter();
 app.UseMiddleware<BrowserBffAntiforgeryMiddleware>();
 app.UseMiddleware<InternalSessionGateMiddleware>();
 app.UseAuthorization();
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/live");
+app.MapHealthChecks(
+    "/health/ready",
+    new HealthCheckOptions { Predicate = check => check.Tags.Contains("postgres") }
+);
+// Alias do probe de liveness: sem execução de checks, o /health histórico
+// permanece 200 mesmo sem banco configurado.
+app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false });
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
