@@ -10,7 +10,9 @@ namespace Vinx.Erp.Foundation.Files;
 public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
 {
     private const int ObjectListPageSize = 1000;
-    private static readonly TimeSpan MaximumDownloadUrlLifetime = TimeSpan.FromMinutes(2);
+
+    /// <summary>Teto de segurança do provedor para URLs de download assinadas.</summary>
+    public static readonly TimeSpan MaximumDownloadUrlLifetime = TimeSpan.FromMinutes(2);
 
     public async Task EnsurePrivateContainerAsync(CancellationToken cancellationToken)
     {
@@ -114,6 +116,10 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
         await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
         var buffer = ArrayPool<byte>.Shared.Rent(81920);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        // Primeiros bytes do objeto para o sniff de magic bytes na verificação
+        // (assinaturas de no máximo 8 bytes; cópia própria porque o buffer é devolvido ao pool).
+        var leadingBytes = new byte[8];
+        var leadingLength = 0;
         try
         {
             long sizeBytes = 0;
@@ -126,6 +132,13 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
                     throw new InvalidOperationException("Storage object exceeds the maximum inspection size.");
                 }
 
+                if (leadingLength < leadingBytes.Length)
+                {
+                    var take = Math.Min(leadingBytes.Length - leadingLength, read);
+                    buffer.AsSpan(0, take).CopyTo(leadingBytes.AsSpan(leadingLength));
+                    leadingLength += take;
+                }
+
                 hash.AppendData(buffer, 0, read);
             }
 
@@ -135,7 +148,8 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
                     sizeBytes,
                     contentType,
                     $"sha256:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}"),
-                MalwareScanStatus.Unavailable);
+                MalwareScanStatus.Unavailable,
+                leadingBytes.AsMemory(0, leadingLength));
         }
         finally
         {
@@ -293,17 +307,8 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
         return null;
     }
 
-    private static void ValidateObjectKey(string providerKey, bool allowEmpty = false)
-    {
-        if ((!allowEmpty && string.IsNullOrWhiteSpace(providerKey))
-            || providerKey.Contains("..", StringComparison.Ordinal)
-            || providerKey.StartsWith('/')
-            || providerKey.EndsWith('/')
-            || providerKey.Contains('\\'))
-        {
-            throw new ArgumentException("Storage object key is invalid.", nameof(providerKey));
-        }
-    }
+    private static void ValidateObjectKey(string providerKey, bool allowEmpty = false) =>
+        FileStorageGuards.ValidateObjectKey(providerKey, allowEmpty);
 
     private static StorageObjectSummary ToStorageObjectSummary(JsonElement item)
     {
@@ -323,13 +328,8 @@ public sealed class SupabaseFileStorage(HttpClient httpClient) : FileStorage
             createdAt);
     }
 
-    private static void ValidateDownloadLifetime(TimeSpan lifetime)
-    {
-        if (lifetime <= TimeSpan.Zero || lifetime > MaximumDownloadUrlLifetime)
-        {
-            throw new ArgumentOutOfRangeException(nameof(lifetime));
-        }
-    }
+    private static void ValidateDownloadLifetime(TimeSpan lifetime) =>
+        FileStorageGuards.ValidateDownloadLifetime(lifetime);
 
     private sealed record CreateBucketRequest(string Id, string Name, bool Public);
     private sealed record BucketResponse(bool Public);

@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Vinx.Erp.Foundation.Files;
+using Vinx.Erp.Paguai;
 using Xunit;
 
 namespace Vinx.Erp.Foundation.UnitTests;
@@ -132,6 +133,35 @@ public sealed class SupabaseFileStorageTests
         Assert.Equal(MalwareScanStatus.Unavailable, inspection.MalwareScanStatus);
         Assert.Equal(payload.LongLength, inspection.Metadata.SizeBytes);
         Assert.Equal("application/pdf", inspection.Metadata.ContentType);
+    }
+
+    [Fact]
+    public async Task Inspection_captures_the_leading_magic_bytes_of_the_object()
+    {
+        var payload = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x0D };
+        using var handler = new RequestSequenceHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(payload)
+            {
+                Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png") }
+            }
+        });
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://storage.example.test/") };
+        var storage = CreateStorage(client);
+
+        var inspection = await storage.InspectObjectAsync("quarantine/company/document", CancellationToken.None);
+
+        Assert.Equal(payload.Take(8).ToArray(), inspection.LeadingBytes.ToArray());
+    }
+
+    [Fact]
+    public void Paguai_proof_link_lifetime_never_exceeds_the_storage_download_cap()
+    {
+        // Contrato entre módulos: o TTL pedido pelo Paguai precisa caber no teto real
+        // do provedor — acima dele toda assinatura de link falha fechado (503).
+        Assert.True(
+            PaguaiDraftService.ProofLinkLifetime <= SupabaseFileStorage.MaximumDownloadUrlLifetime,
+            $"proof link lifetime {PaguaiDraftService.ProofLinkLifetime} exceeds storage cap {SupabaseFileStorage.MaximumDownloadUrlLifetime}");
     }
 
     [Fact]
