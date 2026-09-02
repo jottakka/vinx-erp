@@ -95,7 +95,7 @@ public sealed class OpenAiCompatibleOptionsTests
     [Fact]
     public void Endpoint_outside_the_approved_host_list_fails_validation()
     {
-        var options = Approved(o => o.ApprovedHosts = ["api.deepseek.com"]);
+        var options = Approved(o => o.ApprovedHosts = ["api.example.com"]);
 
         var result = Validate(options);
 
