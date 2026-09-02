@@ -157,7 +157,7 @@ public sealed class PaguaiProofEndpointTests
     }
 
     [Fact]
-    public async Task Proof_link_is_freshly_signed_no_store_and_expires_within_five_minutes()
+    public async Task Proof_link_is_freshly_signed_no_store_and_expires_within_two_minutes()
     {
         var storage = new StubProofStorage();
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync(fileStorage: storage);
@@ -177,7 +177,7 @@ public sealed class PaguaiProofEndpointTests
         Assert.StartsWith("https://signed.storage.test/", url, StringComparison.Ordinal);
         Assert.True(DateTimeOffset.TryParse(linkBody.RootElement.GetProperty("expiresAt").GetString(), out _));
         var attempt = Assert.Single(storage.Attempts);
-        Assert.Equal(TimeSpan.FromMinutes(5), attempt.Lifetime);
+        Assert.Equal(TimeSpan.FromMinutes(2), attempt.Lifetime);
         Assert.Equal(proof.ProviderKey, attempt.ProviderKey);
     }
 
@@ -201,7 +201,7 @@ public sealed class PaguaiProofEndpointTests
         Assert.True(expiresAt <= retention, $"link {expiresAt:o} must not outlive retention {retention:o}");
         var attempt = Assert.Single(storage.Attempts);
         Assert.True(attempt.Lifetime > TimeSpan.FromMinutes(1), $"capped lifetime {attempt.Lifetime} too small");
-        Assert.True(attempt.Lifetime < TimeSpan.FromMinutes(5), $"capped lifetime {attempt.Lifetime} not capped");
+        Assert.True(attempt.Lifetime < TimeSpan.FromMinutes(2), $"capped lifetime {attempt.Lifetime} not capped");
     }
 
     [Theory]
@@ -1276,6 +1276,10 @@ public sealed class PaguaiProofEndpointTests
         public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(
             string providerKey, TimeSpan lifetime, CancellationToken cancellationToken)
         {
+            // Mesmos guardas do adapter real: a dobra não assina fora das regras de
+            // chave nem acima do teto de lifetime do provedor.
+            FileStorageGuards.ValidateObjectKey(providerKey);
+            FileStorageGuards.ValidateDownloadLifetime(lifetime);
             if (throwOnSign)
             {
                 throw new InvalidOperationException("Signing is unavailable in this test.");

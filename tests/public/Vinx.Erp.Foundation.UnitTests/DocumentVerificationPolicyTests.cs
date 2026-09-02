@@ -152,16 +152,60 @@ public sealed class DocumentVerificationPolicyTests
         FileRecord record,
         long sizeBytes = 128L,
         string contentType = "application/pdf",
-        string checksum = Checksum) =>
-        new(
+        string checksum = Checksum,
+        byte[]? leadingBytes = null)
+    {
+        // Por padrão os bytes iniciais batem com o MIME declarado (PDF de verdade);
+        // os testes de mismatch passam bytes explícitos que não batem.
+        leadingBytes ??= "%PDF-"u8.ToArray();
+        return new(
             new StorageObjectMetadata(record.ProviderKey, sizeBytes, contentType, checksum),
-            MalwareScanStatus.Clean);
+            MalwareScanStatus.Clean,
+            leadingBytes);
+    }
+
+    [Fact]
+    public void Verification_rejects_binary_content_whose_leading_bytes_do_not_match_the_declared_type()
+    {
+        var record = NewRecord();
+        var stored = NewInspection(record, leadingBytes: "safe document payload"u8.ToArray());
+
+        Assert.Equal(
+            "content_magic_mismatch",
+            DocumentVerificationPolicy.Validate(record, stored, NewCleanVerdict(Checksum)));
+    }
+
+    [Fact]
+    public void Verification_accepts_binary_content_whose_leading_bytes_match_the_signature()
+    {
+        var pngRecord = NewRecord("photo.png", ".png", "image/png");
+        var pngStored = NewInspection(
+            pngRecord, contentType: "image/png", leadingBytes: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        Assert.Null(DocumentVerificationPolicy.Validate(pngRecord, pngStored, NewCleanVerdict(Checksum)));
+
+        var jpegRecord = NewRecord("photo.jpg", ".jpg", "image/jpeg");
+        var jpegStored = NewInspection(
+            jpegRecord, contentType: "image/jpeg", leadingBytes: [0xFF, 0xD8, 0xFF, 0xE1]);
+        Assert.Null(DocumentVerificationPolicy.Validate(jpegRecord, jpegStored, NewCleanVerdict(Checksum)));
+    }
+
+    [Fact]
+    public void Verification_skips_magic_sniffing_for_unsigned_text_content()
+    {
+        var record = NewRecord("notes.txt", ".txt", "text/plain");
+        var stored = NewInspection(record, contentType: "text/plain", leadingBytes: []);
+
+        Assert.Null(DocumentVerificationPolicy.Validate(record, stored, NewCleanVerdict(Checksum)));
+    }
 
     private static MalwareScanVerdict NewCleanVerdict(string checksum) => new(
         MalwareScanStatus.Clean, "vinx-test-engine", "1.0.0", "1.2026.08", DateTimeOffset.UtcNow, checksum, null);
 
-    private static FileRecord NewRecord() => new(
-        Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "document.pdf", ".pdf", 128L,
-        "application/pdf", Checksum, "financial", "user_upload", DateTimeOffset.UtcNow.AddDays(30),
+    private static FileRecord NewRecord(
+        string fileName = "document.pdf",
+        string extension = ".pdf",
+        string mimeType = "application/pdf") => new(
+        Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), fileName, extension, 128L,
+        mimeType, Checksum, "financial", "user_upload", DateTimeOffset.UtcNow.AddDays(30),
         Guid.NewGuid(), Guid.NewGuid());
 }

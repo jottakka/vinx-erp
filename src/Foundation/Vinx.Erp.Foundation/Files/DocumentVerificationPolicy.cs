@@ -57,6 +57,31 @@ public static class DocumentVerificationPolicy
 
         return !string.Equals(verdict.ContentChecksum, stored.Checksum, StringComparison.OrdinalIgnoreCase)
             ? "malware_scan_unavailable"
-            : null;
+            : MatchesMagicBytes(stored.ContentType, inspection.LeadingBytes)
+                ? null
+                : "content_magic_mismatch";
+    }
+
+    /// <summary>
+    /// O Content-Type declarado é controlado pelo cliente, então os tipos binários
+    /// permitidos precisam bater com os primeiros bytes inspecionados no storage.
+    /// text/plain não tem assinatura confiável e fica de fora do sniff.
+    /// </summary>
+    private static bool MatchesMagicBytes(string contentType, ReadOnlyMemory<byte> leadingBytes)
+    {
+        ReadOnlySpan<byte> signature = MediaType(contentType) switch
+        {
+            "application/pdf" => "%PDF-"u8,
+            "image/jpeg" => [0xFF, 0xD8, 0xFF],
+            "image/png" => [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            _ => default
+        };
+        return signature.IsEmpty || leadingBytes.Span.StartsWith(signature);
+    }
+
+    private static string MediaType(string contentType)
+    {
+        var separator = contentType.IndexOf(';');
+        return (separator < 0 ? contentType : contentType[..separator]).Trim().ToLowerInvariant();
     }
 }

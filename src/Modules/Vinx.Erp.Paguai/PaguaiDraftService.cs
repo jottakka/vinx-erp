@@ -33,7 +33,9 @@ public sealed class PaguaiDraftService(
     private const string ProofFileUniqueIndexName = "uq_paguai_requests_proof_file";
 
     /// <summary>Vida útil máxima do link de leitura do comprovante; nunca persistido em payload.</summary>
-    private static readonly TimeSpan ProofLinkLifetime = TimeSpan.FromMinutes(5);
+    // Teto do Supabase Storage para URLs de download (SupabaseFileStorage.MaximumDownloadUrlLifetime):
+    // o provedor lança ArgumentError acima de 2 minutos — pedir 5 min falha sempre (503).
+    public static readonly TimeSpan ProofLinkLifetime = TimeSpan.FromMinutes(2);
 
     /// <summary>Margem de segurança ao limitar o TTL pela retenção (latência de assinatura).</summary>
     private static readonly TimeSpan ProofLinkCapSafetyMargin = TimeSpan.FromSeconds(1);
@@ -786,8 +788,8 @@ public sealed class PaguaiDraftService(
                     : PaguaiProofLinkResult.Of(PaguaiDraftState.NotFound);
             }
 
-            // TTL = min(5 minutos, retenção restante no relógio autoritativo),
-            // com margem conservadora quando o teto é a retenção: a URL não pode
+            // TTL = min(2 minutos — teto do provedor de storage, retenção restante no
+            // relógio autoritativo), com margem conservadora quando o teto é a retenção: a URL não pode
             // sobreviver à retenção nem pela latência entre esta leitura e a
             // assinatura do provedor. O provedor trunca para segundos inteiros,
             // então exigimos margem + 1 segundo válido: menos que isso falha
