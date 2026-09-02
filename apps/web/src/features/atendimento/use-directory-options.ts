@@ -85,6 +85,8 @@ export function useDirectoryOptions(companyId: string): {
     return () => {
       active = false;
     };
+    // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken é o gatilho
+    // de invalidação de sessão — reset limpa o estado e dispara recarga.
   }, [companyId, reloadToken]);
 
   const options = owned.companyId === companyId ? owned.options : [];
