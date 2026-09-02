@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -57,6 +58,20 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
         var result = await verifier.VerifyAsync(Subject, CancellationToken.None);
 
         Assert.Equal(MfaAssuranceVerificationState.VerifiedFactorAbsent, result.State);
+    }
+
+    [Fact]
+    public async Task Verify_async_reports_unavailable_when_the_response_body_read_fails()
+    {
+        // Headers 200 com corpo que falha na leitura: a negação tipada tem
+        // que vencer (bloqueio de revisão — leitura fora do fail-closed).
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new StallingContent() });
+        var (verifier, _) = Verifier(handler);
+
+        var result = await verifier.VerifyAsync(Subject, CancellationToken.None);
+
+        Assert.Equal(MfaAssuranceVerificationState.Unavailable, result.State);
     }
 
     [Fact]
@@ -303,6 +318,20 @@ public sealed class SupabaseAdminMfaAssuranceVerifierTests
               "factors": [{{factorJson}}]
             }
             """;
+
+    private sealed class StallingContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(
+            Stream stream,
+            TransportContext? context
+        ) => throw new IOException("provider body stalled");
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 16;
+            return true;
+        }
+    }
 
     private sealed class StubHttpMessageHandler(
         Func<HttpRequestMessage, HttpResponseMessage> sendAsync,
