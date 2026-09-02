@@ -192,10 +192,7 @@ describe("DemandasPage", () => {
     ).toBeVisible();
     const executionHeading = screen.getByText("Em execução");
     let container: HTMLElement | null = executionHeading.parentElement;
-    while (
-      container &&
-      !within(container).queryByText("Pagar fornecedor")
-    ) {
+    while (container && !within(container).queryByText("Pagar fornecedor")) {
       container = container.parentElement;
     }
     expect(
