@@ -64,6 +64,49 @@ public sealed class DemandasCoreEndpointTests
     }
 
     [Fact]
+    public async Task Reusing_a_create_request_with_different_payload_returns_idempotency_conflict()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        await using var administrator = factory.Fixture.CreateAdministratorDbContext();
+        var scenario = await SeedScenarioAsync(factory, administrator);
+        using var client = factory.CreateClient();
+
+        using var first = await client.PostAsJsonAsync("/demandas/demands", CreatePayloadBody(scenario));
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+
+        // Mesmo requestId com payload divergente: conflito de idempotência
+        // auditado (409), não replay e não indisponibilidade.
+        using var conflict = await client.PostAsJsonAsync("/demandas/demands", new
+        {
+            companyId = scenario.CompanyId,
+            requestId = scenario.RequestId,
+            title = "Título alterado",
+            description = "Mesmo request_id com payload diferente.",
+            priority = "high",
+            responsibleMembershipId = scenario.MembershipId,
+            manualDueAt = (DateTimeOffset?)null,
+        });
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        var error = await conflict.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.Equal("idempotency_conflict", error?.Code);
+
+        await using var verify = factory.Fixture.CreateAdministratorDbContext();
+        Assert.Equal(
+            1,
+            await verify.IdempotencyRecords.CountAsync(record =>
+                record.CompanyId == scenario.CompanyId && record.RequestId == scenario.RequestId
+            )
+        );
+        var denial = await verify.AuditEvents.SingleAsync(audit =>
+            audit.Action == "demandas.demand.create"
+            && audit.Outcome == AuditOutcome.Denied
+            && audit.Reason == "idempotency_conflict"
+        );
+        Assert.Equal("demandas.demand.create", denial.Action);
+    }
+
+    [Fact]
     public async Task Advance_with_wrong_version_returns_conflict_and_keeps_stage()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
@@ -646,6 +689,8 @@ public sealed class DemandasCoreEndpointTests
         bool HasMore,
         string? NextCursor
     );
+
+    private sealed record ErrorResponse(string Code);
 
 #pragma warning disable IDE0051 // Payload tipados usados pelos testes via JSON anônimo; tipos mantidos para clareza de contrato.
     private sealed record CreateDemand(
