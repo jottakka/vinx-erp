@@ -102,7 +102,13 @@ internal static class BrowserBffSessionEndpoints
                                 });
                             return Results.NoContent();
                         case BrowserBffSessionSignInState.Unauthorized:
-                            return Results.Unauthorized();
+                            // Mesmo formato { code } dos irmãos: o FE decide
+                            // pelo status 401 e ignora códigos fora do seu
+                            // vocabulário documentado.
+                            return Results.Json(
+                                new { code = "invalid_credentials" },
+                                statusCode: StatusCodes.Status401Unauthorized
+                            );
                         case BrowserBffSessionSignInState.RateLimited:
                             return Results.StatusCode(StatusCodes.Status429TooManyRequests);
                         default:

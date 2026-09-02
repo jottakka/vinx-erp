@@ -1,10 +1,13 @@
 using JasperFx;
 using System.Net.Http.Headers;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using OpenTelemetry;
+using OpenTelemetry.Metrics;
 using Vinx.Erp.AI;
 using Vinx.Erp.AI.DocumentContext;
 using Vinx.Erp.AI.Guardrails;
@@ -34,6 +37,10 @@ using Wolverine.Postgresql;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddVinxHostDefaults();
+// Medidor do módulo Notifications: a Foundation não referencia módulos,
+// portanto a fonte é registrada aqui, no host que entrega as notificações.
+builder.Services.AddOpenTelemetry().WithMetrics(metrics =>
+    metrics.AddMeter(NotificationDeliveryMetrics.MeterName));
 builder
     .Services.AddOptions<WorkerDatabaseOptions>()
     .Bind(builder.Configuration)
@@ -432,7 +439,16 @@ builder.Host.UseWolverine(options =>
 
 
 var app = builder.Build();
-app.MapHealthChecks("/health");
+// Liveness nunca executa checks: queda de banco não pode derrubar
+// reinício do pod (readiness existe para isso).
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
+app.MapHealthChecks(
+    "/health/ready",
+    new HealthCheckOptions { Predicate = check => check.Tags.Contains("postgres") }
+);
+// Alias do probe de liveness: sem execução de checks, o /health histórico
+// permanece 200 mesmo sem banco configurado.
+app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false });
 if (args.FirstOrDefault() is "db-apply" or "db-assert")
 {
     return await app.RunJasperFxCommands(args);

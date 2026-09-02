@@ -65,7 +65,7 @@ public sealed class BrowserBffSessionFlowTests
     }
 
     [Fact]
-    public async Task Invalid_provider_credentials_return_empty_401_without_a_browser_session_cookie()
+    public async Task Invalid_provider_credentials_return_code_shaped_401_without_a_browser_session_cookie()
     {
         var provider = new BrowserSessionProviderHandler
         {
@@ -78,7 +78,7 @@ public sealed class BrowserBffSessionFlowTests
         using var response = await SignInAsync(client);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        Assert.Empty(await response.Content.ReadAsStringAsync());
+        Assert.Equal("{\"code\":\"invalid_credentials\"}", await response.Content.ReadAsStringAsync());
         Assert.DoesNotContain(GetSetCookies(response), value => IsBrowserSessionCookie(value));
     }
 
@@ -187,7 +187,7 @@ public sealed class BrowserBffSessionFlowTests
     }
 
     [Fact]
-    public async Task Unprovisioned_provider_identity_returns_empty_401_without_a_browser_session_cookie()
+    public async Task Unprovisioned_provider_identity_returns_code_shaped_401_without_a_browser_session_cookie()
     {
         var provider = new BrowserSessionProviderHandler();
         await using var factory = await FoundationApiFactory
@@ -200,7 +200,7 @@ public sealed class BrowserBffSessionFlowTests
         using var response = await SignInAsync(client);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        Assert.Empty(await response.Content.ReadAsStringAsync());
+        Assert.Equal("{\"code\":\"invalid_credentials\"}", await response.Content.ReadAsStringAsync());
         Assert.DoesNotContain(GetSetCookies(response), value => IsBrowserSessionCookie(value));
     }
 

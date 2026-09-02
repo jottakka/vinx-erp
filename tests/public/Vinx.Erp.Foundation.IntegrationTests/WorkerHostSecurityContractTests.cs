@@ -10,11 +10,16 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Npgsql;
 using Vinx.Erp.Foundation.IntegrationTests.Infrastructure;
+using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
+using Vinx.Erp.Notifications;
+using Wolverine;
 using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Serialization;
 using Xunit;
 using WorkerProgram = workerhost::Program;
+using DemandasAutomationTick = workerhost::Vinx.Erp.WorkerHost.DemandasAutomationTick;
+using WorkerDeadLetterRedactionInterceptor = workerhost::Vinx.Erp.WorkerHost.WorkerDeadLetterRedactionInterceptor;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
 
@@ -282,6 +287,59 @@ public sealed class WorkerHostSecurityContractTests
     }
 
     [Fact]
+    public void Redaction_maps_live_handler_message_types_to_their_own_empty_record()
+    {
+        var member = Redact(new MemberInvitationDeliveryRequested(Guid.NewGuid()));
+        Assert.Equal(
+            Guid.Empty.ToString(),
+            member.RootElement.GetProperty("invitationId").GetString()
+        );
+
+        var agent = Redact(
+            new InboundAgentRequestReceived(Guid.NewGuid(), AgentChannelKind.WhatsApp)
+        );
+        Assert.Equal(
+            Guid.Empty.ToString(),
+            agent.RootElement.GetProperty("inboundMessageId").GetString()
+        );
+        Assert.Equal(0, agent.RootElement.GetProperty("channel").GetInt32());
+
+        var tick = Redact(new DemandasAutomationTick(DateTimeOffset.UtcNow, 42));
+        Assert.Equal(0L, tick.RootElement.GetProperty("generation").GetInt64());
+    }
+
+    [Fact]
+    public void Redaction_of_an_unmapped_envelope_type_keeps_a_neutral_marker_instead_of_relabeling()
+    {
+        var envelope = new Envelope(new UnmappedDeadLetterProbe(Guid.NewGuid()));
+        envelope.Headers["diagnostic"] = "payload";
+
+        WorkerDeadLetterRedactionInterceptor.RedactEnvelope(envelope);
+
+        Assert.Empty(envelope.Headers);
+        Assert.IsType<UnmappedDeadLetterProbe>(envelope.Message);
+        using var body = JsonDocument.Parse(envelope.Data);
+        Assert.Equal(
+            typeof(UnmappedDeadLetterProbe).FullName,
+            body.RootElement.GetProperty("messageType").GetString()
+        );
+    }
+
+    private static JsonDocument Redact(object message)
+    {
+        var envelope = new Envelope(message);
+        envelope.Headers["diagnostic"] = "payload";
+
+        WorkerDeadLetterRedactionInterceptor.RedactEnvelope(envelope);
+
+        Assert.Empty(envelope.Headers);
+        Assert.IsType(message.GetType(), envelope.Message);
+        return JsonDocument.Parse(envelope.Data);
+    }
+
+    private sealed record UnmappedDeadLetterProbe(Guid Payload);
+
+    [Fact]
     public async Task Worker_host_startup_fails_closed_without_a_service_role_key()
     {
         await using var fixture = new FoundationPostgresFixture();
@@ -390,6 +448,7 @@ public sealed class WorkerHostSecurityContractTests
         await using var worker = new WorkerHostFactory(fixture.WorkerConnectionString);
         using var client = worker.CreateClient();
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/ready")).StatusCode);
 
         await using var administrator = await fixture.OpenAdministratorConnectionAsync();
         await using var command = new NpgsqlCommand(

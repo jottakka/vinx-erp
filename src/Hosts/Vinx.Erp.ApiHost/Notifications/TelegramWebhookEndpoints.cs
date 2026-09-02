@@ -46,7 +46,8 @@ public static class TelegramWebhookEndpoints
                 "/foundation/notifications/telegram/webhook",
                 (Func<HttpRequest, Task<IResult>>)(request => ReceiveWebhookAsync(request, ingress))
             )
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(ApiConstants.WebhookRateLimitPolicy);
         return app;
     }
 

@@ -33,6 +33,24 @@ public sealed class MetaWhatsAppWebhookTests
     }
 
     [Fact]
+    public async Task Anonymous_webhook_requests_hit_the_fixed_window_limit_per_ip()
+    {
+        await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
+        using var client = factory.CreateClient();
+
+        var limited = false;
+        for (var attempt = 0; attempt < 130 && !limited; attempt++)
+        {
+            using var response = await client.GetAsync(
+                $"{WebhookPath}?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=1234567890"
+            );
+            limited = response.StatusCode == HttpStatusCode.TooManyRequests;
+        }
+
+        Assert.True(limited);
+    }
+
+    [Fact]
     public async Task Unsigned_or_tampered_post_is_rejected_before_any_side_effect()
     {
         await using var factory = await FoundationApiFactory.CreateWithAuthenticatedIdentityAsync();
