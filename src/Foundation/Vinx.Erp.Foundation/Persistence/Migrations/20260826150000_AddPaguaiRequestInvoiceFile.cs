@@ -48,6 +48,11 @@ namespace Vinx.Erp.Foundation.Persistence.Migrations
 
                 DO $block$
                 BEGIN
+                    -- Trava ANTES da leitura da guarda, vale até o fim da
+                    -- transação: nenhum vínculo concorrente commite entre a
+                    -- checagem e os drops (padrão do 20260828032135).
+                    LOCK TABLE paguai.requests IN ACCESS EXCLUSIVE MODE;
+
                     IF EXISTS (
                         SELECT 1 FROM paguai.requests
                         WHERE invoice_file_id IS NOT NULL) THEN

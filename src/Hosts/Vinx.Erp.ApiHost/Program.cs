@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Mvc;
 using Vinx.Erp.ApiHost.Constants;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -259,6 +260,36 @@ builder.Services.AddAuthorizationBuilder()
                 .RequireAuthenticatedUser()
                 .AddRequirements(new PlatformOperatorRequirement(requiresMfaAssurance: true))
     );
+// Re-derivação de MFA no uso do privilégio (policy platform.operator.mfa_assurance):
+// a configuração administrativa não valida on-start (sem a service role key o gate
+// permanece fechado em runtime, com log de aviso); o cliente nomeado tem timeout
+// curto por estar no caminho de autorização de cada requisição privilegiada.
+builder
+    .Services.AddOptions<SupabaseAdminOptions>()
+    .Bind(builder.Configuration);
+builder.Services.AddSingleton(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<SupabaseAdminOptions>>().Value
+);
+builder
+    .Services.AddHttpClient(
+        SupabaseAdminMfaAssuranceVerifier.HttpClientName,
+        client => client.Timeout = TimeSpan.FromSeconds(5)
+    )
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false,
+    });
+builder.Services.AddSingleton<MfaAssuranceCache>();
+builder.Services.AddSingleton<IMfaAssuranceVerifier>(serviceProvider =>
+    new SupabaseAdminMfaAssuranceVerifier(
+        serviceProvider.GetRequiredService<IHttpClientFactory>(),
+        serviceProvider.GetRequiredService<IOptions<SupabaseAuthOptions>>().Value,
+        serviceProvider.GetRequiredService<IOptions<SupabaseAdminOptions>>().Value,
+        serviceProvider.GetRequiredService<MfaAssuranceCache>(),
+        serviceProvider.GetRequiredService<ILogger<SupabaseAdminMfaAssuranceVerifier>>()
+    )
+);
 builder.Services.AddScoped<IAuthorizationHandler, PlatformOperatorAuthorizationHandler>();
 builder.Services.AddSingleton<
     IAuthorizationMiddlewareResultHandler,
@@ -416,7 +447,9 @@ app.UseRateLimiter();
 app.UseMiddleware<BrowserBffAntiforgeryMiddleware>();
 app.UseMiddleware<InternalSessionGateMiddleware>();
 app.UseAuthorization();
-app.MapHealthChecks("/health/live");
+// Liveness nunca executa checks: queda de banco não pode derrubar
+// reinício do pod (readiness existe para isso).
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks(
     "/health/ready",
     new HealthCheckOptions { Predicate = check => check.Tags.Contains("postgres") }

@@ -10,7 +10,8 @@ using Vinx.Erp.McpHost;
 
 var builder = WebApplication.CreateBuilder(args);
 const string McpRateLimitPolicy = "mcp";
-builder.AddVinxHostDefaults();
+// Sem dependência de banco: readiness não pode exigir Postgres.
+builder.AddVinxHostDefaults(registerPostgresHealthCheck: false);
 builder.Services.AddSupabaseJwtAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddRateLimiter(options =>
 {
@@ -55,7 +56,9 @@ app.Use(async (context, next) =>
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
-app.MapHealthChecks("/health/live");
+// Liveness nunca executa checks: queda de banco não pode derrubar
+// reinício do pod (readiness existe para isso).
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks(
     "/health/ready",
     new HealthCheckOptions { Predicate = check => check.Tags.Contains("postgres") }

@@ -20,7 +20,8 @@ namespace Vinx.Erp.Foundation.IntegrationTests;
 public sealed class DocumentUploadEndpointTests
 {
     private const string Checksum = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    private static readonly byte[] SafePayload = Encoding.UTF8.GetBytes("safe document payload");
+    // Cabeçalho PDF real: a verificação agora confere os magic bytes do conteúdo.
+    private static readonly byte[] SafePayload = Encoding.UTF8.GetBytes("%PDF-1.4\nsafe document payload");
     private static readonly byte[] EicarPayload = Encoding.ASCII.GetBytes(
         "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*");
 
@@ -1370,8 +1371,12 @@ public sealed class DocumentUploadEndpointTests
                 stored.ContentType,
                 GetChecksum(providerKey));
             // Inspeção determinística espelha o adapter real: nunca é o gate antimalware
-            // (o veredito server-side do scanner decide).
-            return new StorageObjectInspection(metadata, MalwareScanStatus.Unavailable);
+            // (o veredito server-side do scanner decide) e expõe os primeiros bytes
+            // para o sniff de magic bytes na verificação.
+            return new StorageObjectInspection(
+                metadata,
+                MalwareScanStatus.Unavailable,
+                stored.Content.AsMemory(0, Math.Min(8, stored.Content.Length)));
         }
 
         public Task<SignedStorageUrl> CreateSignedDownloadUrlAsync(string providerKey, TimeSpan lifetime, CancellationToken cancellationToken) => throw new NotSupportedException();

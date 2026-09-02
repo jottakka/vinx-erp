@@ -5,9 +5,11 @@
 O módulo tem o harness de contexto confiável (#132), o catálogo de perfis e
 os providers (#135). Desde #135-B, o provider é um núcleo genérico
 OpenAI-compatible (`OpenAiCompatibleChatClient`) atrás de `IChatClient`
-(Microsoft.Extensions.AI) com SDK oficial OpenAI 2.x; o DeepSeek v4 Flash é
-um perfil nomeado do núcleo, e perfis de visão podem ser declarados para o
-OCR de #134. Desde #138 a API supervisionada `POST /agent/runs` expõe o
+(Microsoft.Extensions.AI) com SDK oficial OpenAI 2.x, e perfis de visão
+podem ser declarados para o OCR de #134. O adapter hospedado do DeepSeek
+(#135-A) foi removido: foi substituído pelo núcleo OpenAI-compatible e
+ambos os hosts compõem somente o provider `openai_compatible`. Desde #138 a
+API supervisionada `POST /agent/runs` expõe o
 núcleo no ApiHost (ver seção API supervisionada). Desde #299 essa API aceita
 até três referências opacas de documentos e as normaliza pelo pipeline
 autorizado antes da única chamada principal. Não existe Anthropic,
@@ -75,8 +77,8 @@ endpoint, timeout e perfil aprovados.
 
 ## Modalidades e contrato de visão
 
-Perfis declaram o que aceitam. `AllowImageInputs=false` (padrão, inclui o
-DeepSeek hospedado): qualquer conteúdo de imagem na conversa é rejeitado
+Perfis declaram o que aceitam. `AllowImageInputs=false` (padrão): qualquer
+conteúdo de imagem na conversa é rejeitado
 deterministicamente antes de HTTP. `AllowImageInputs=true`: somente
 `DataContent` por bytes com media type png/jpeg/webp, dentro dos tetos de
 contagem e bytes e da admissão preflight. Imagem por URL nunca é aceita — o
@@ -115,7 +117,7 @@ aparecem em exceção ou log. O cancelamento do chamador propaga
 `OperationCanceledException` sem log de falha; somente o timeout interno vira
 a exceção redigida `timeout`. Cada execução recebe um correlation ID devolvido
 na resposta e propagado pelo escopo de logging com o rótulo do perfil
-(`ai/openai-compatible`, `ai/deepseek`).
+(`ai/openai-compatible`).
 
 O SDK aprovado serializa o teto de saída como `max_completion_tokens`; o valor
 do perfil é aplicado pelo adapter independentemente do campo aceito pelo

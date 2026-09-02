@@ -33,6 +33,7 @@ public sealed record PlatformOperatorBootstrapResponse(bool IsPlatformOperator);
 
 public sealed class PlatformOperatorAuthorizationHandler(
     PlatformOperatorAccessService accessService,
+    IMfaAssuranceVerifier mfaAssuranceVerifier,
     ILogger<PlatformOperatorAuthorizationHandler> logger
 ) : AuthorizationHandler<PlatformOperatorRequirement>
 {
@@ -83,6 +84,10 @@ public sealed class PlatformOperatorAuthorizationHandler(
         if (access.State is PlatformOperatorAccessState.Allowed && requirement.RequiresMfaAssurance)
         {
             access = await accessService.RequireMfaAssuranceAsync(actor, httpContext.RequestAborted);
+            if (access.State is PlatformOperatorAccessState.Allowed)
+            {
+                access = await RequireReverifiedMfaAssuranceAsync(httpContext);
+            }
         }
 
         PlatformOperatorAuthorization.SetAccessState(httpContext, access.State);
@@ -90,6 +95,53 @@ public sealed class PlatformOperatorAuthorizationHandler(
         {
             context.Succeed(requirement);
         }
+    }
+
+    /// <summary>
+    /// Rederiva o AAL2 no uso do privilégio: o claim "aal" do cookie de sessão é
+    /// copiado no sign-in e não acompanha remoção/demotação do fator no IdP.
+    /// O claim serve apenas como primeiro gate rápido (cookie aal1 nega sem chamar
+    /// o provedor — RequireMfaAssuranceAsync já retorna antes deste passo); um
+    /// cookie aal2 exige confirmação corrente de fator verificado na Admin API.
+    /// Camadas permanecem intencionais: o GUC app.mfa_assurance aplicado por
+    /// FoundationRlsContext/ApplyActorAsync continua refletindo o claim da sessão
+    /// e não muda; como todo endpoint com gate SQL de MFA está atrás desta policy,
+    /// a negação aqui falha fechado antes de qualquer fluxo que aplique o GUC.
+    /// </summary>
+    private async Task<PlatformOperatorAccessResult> RequireReverifiedMfaAssuranceAsync(
+        HttpContext httpContext
+    )
+    {
+        var subjectClaims = httpContext.User.FindAll("sub").ToArray();
+        if (subjectClaims.Length != 1 || string.IsNullOrWhiteSpace(subjectClaims[0].Value))
+        {
+            logger.LogWarning(EventTemplate, Operation, Module, "denied", "subject_missing");
+            return new PlatformOperatorAccessResult(PlatformOperatorAccessState.MfaAssuranceRequired);
+        }
+
+        var verification = await mfaAssuranceVerifier.VerifyAsync(
+            subjectClaims[0].Value,
+            httpContext.RequestAborted
+        );
+        if (verification.State is MfaAssuranceVerificationState.VerifiedFactorPresent)
+        {
+            return new PlatformOperatorAccessResult(PlatformOperatorAccessState.Allowed);
+        }
+
+        if (verification.State is MfaAssuranceVerificationState.VerifiedFactorAbsent)
+        {
+            // Negação de segurança relevante: o IdP não confirma mais fator verificado.
+            // A indisponibilidade já foi registrada com o motivo pelo verificador.
+            logger.LogWarning(
+                EventTemplate,
+                Operation,
+                Module,
+                "denied",
+                "mfa_factor_not_verified"
+            );
+        }
+
+        return new PlatformOperatorAccessResult(PlatformOperatorAccessState.MfaAssuranceRequired);
     }
 }
 

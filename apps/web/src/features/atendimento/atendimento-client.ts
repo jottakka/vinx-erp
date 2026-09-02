@@ -126,6 +126,47 @@ const atendimentoCardSchema = z
   .strict();
 const atendimentoCardsSchema = z.array(atendimentoCardSchema);
 
+const timelineEventSchema = z
+  .object({
+    id: z.string().min(1),
+    eventSeq: z.number().int().positive(),
+    actionKind: z.enum([
+      "created",
+      "assigned",
+      "moved",
+      "fields_updated",
+      "mentioned",
+      "watcher_added",
+      "watcher_removed",
+    ]),
+    actorMembershipId: atendimentoIdSchema.nullable(),
+    actorDisplayName: z.string().min(1),
+    occurredAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+const timelineEventsSchema = z.array(timelineEventSchema);
+
+const lookupCategorySchema = z
+  .object({
+    id: atendimentoIdSchema,
+    name: z.string().min(1),
+    isActive: z.boolean(),
+  })
+  .strict();
+const lookupChannelSchema = z
+  .object({
+    id: atendimentoIdSchema,
+    key: z.string().min(1),
+    isActive: z.boolean(),
+  })
+  .strict();
+const lookupsResponseSchema = z
+  .object({
+    categories: z.array(lookupCategorySchema),
+    channels: z.array(lookupChannelSchema),
+  })
+  .strict();
+
 function parseCard(value: unknown): AtendimentoCard | null {
   const parsed = atendimentoCardSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
@@ -472,7 +513,9 @@ export const atendimentoClient = {
       const response = await request(
         `${basePath}/${cardId}/events?companyId=${encodeURIComponent(companyId)}`,
       );
-      return response.ok ? ((await response.json()) as TimelineEvent[]) : null;
+      if (!response.ok) return null;
+      const parsed = timelineEventsSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
@@ -482,7 +525,9 @@ export const atendimentoClient = {
       const response = await request(
         `/atendimento/lookups?companyId=${encodeURIComponent(companyId)}`,
       );
-      return response.ok ? ((await response.json()) as LookupsResponse) : null;
+      if (!response.ok) return null;
+      const parsed = lookupsResponseSchema.safeParse(await response.json());
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
