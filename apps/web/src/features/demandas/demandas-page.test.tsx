@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VinxThemeProvider } from "../../app/theme/vinx-theme-provider";
@@ -163,6 +163,54 @@ describe("DemandasPage", () => {
       await screen.findByTestId(`advance-${initiationCard.id}`),
     );
     await waitFor(() => expect(advanceSpy).toHaveBeenCalledOnce());
+  });
+
+  it("applies the full conflict snapshot so the card moves to the server stage", async () => {
+    // 409 devolve version E stage: aplicar só a versão deixava o cartão na
+    // coluna antiga e o retry avançava de novo (bloqueio de revisão).
+    vi.spyOn(demandasClient, "advance").mockResolvedValue({
+      ok: false,
+      code: "integrity_conflict",
+      current: { stage: "execution", version: 5 },
+    });
+    vi.spyOn(demandasClient, "board").mockResolvedValue({
+      items: [initiationCard],
+      total: 1,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    renderPage([readCapability, advanceCapability]);
+
+    await screen.findByText("Pagar fornecedor");
+    await userEvent.click(
+      await screen.findByTestId(`advance-${initiationCard.id}`),
+    );
+
+    expect(
+      await screen.findByText(/atualizada por outra pessoa/),
+    ).toBeVisible();
+    const executionHeading = screen.getByText("Em execução");
+    let container: HTMLElement | null = executionHeading.parentElement;
+    while (
+      container &&
+      !within(container).queryByText("Pagar fornecedor")
+    ) {
+      container = container.parentElement;
+    }
+    expect(
+      container && within(container).queryByText("Pagar fornecedor"),
+    ).toBeTruthy();
+    const initiationHeading = screen.getByText("Em iniciação");
+    let initiationContainer: HTMLElement | null =
+      initiationHeading.parentElement;
+    while (
+      initiationContainer &&
+      !within(initiationContainer).queryByText("Pagar fornecedor") &&
+      initiationContainer !== container?.parentElement
+    ) {
+      initiationContainer = initiationContainer.parentElement;
+    }
   });
 
   it("hides advance actions from a company with read capability only", async () => {
