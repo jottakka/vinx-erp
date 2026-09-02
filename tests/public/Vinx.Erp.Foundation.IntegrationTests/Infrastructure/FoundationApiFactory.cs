@@ -33,6 +33,7 @@ using Vinx.Erp.Foundation.Identity;
 using JsonClaimValueTypes = Microsoft.IdentityModel.JsonWebTokens.JsonClaimValueTypes;
 using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
+using Vinx.Erp.Foundation.Platform;
 using Vinx.Erp.Foundation.Domain;
 using Vinx.Erp.Foundation.Files;
 using Wolverine;
@@ -63,6 +64,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
     private readonly DeterministicVisionHandler? _deterministicVisionHandler;
     private readonly IInterceptor? _testInterceptor;
     private readonly HttpMessageHandler? _browserSessionProviderHandler;
+    private readonly HttpMessageHandler? _supabaseAdminHandler;
     private readonly Func<ValueTask>? _disposeHostAsync;
     private readonly Func<ValueTask>? _disposeJwtAsync;
     private readonly bool _useJwtBearer;
@@ -83,6 +85,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         IAgentModel? testAgentModel = null,
         AgentRunOptions? testAgentRunOptions = null,
         HttpMessageHandler? browserSessionProviderHandler = null,
+        HttpMessageHandler? supabaseAdminHandler = null,
         IFoundationFixtureLifecycle? fixture = null,
         IFoundationFixtureAccess? preparedFixtureAccess = null,
         Func<ValueTask>? disposeHostAsync = null,
@@ -108,6 +111,7 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             : null;
         _testInterceptor = testInterceptor;
         _browserSessionProviderHandler = browserSessionProviderHandler;
+        _supabaseAdminHandler = supabaseAdminHandler;
         if (fixture is not null && preparedFixtureAccess is not null)
         {
             throw new ArgumentException("A factory cannot receive both a fixture owner and a prepared fixture access.");
@@ -260,7 +264,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         AgentRunOptions? agentRunOptions = null,
         bool provisionWolverineStorage = true,
         IInterceptor? commandInterceptor = null,
-        string telegramWebhookSecret = TelegramWebhookSecret)
+        string telegramWebhookSecret = TelegramWebhookSecret,
+        HttpMessageHandler? supabaseAdminHandler = null)
     {
         var resolvedActorUserId = actorUserId ?? Guid.NewGuid();
         var resolvedCorrelationId = correlationId ?? Guid.NewGuid();
@@ -280,7 +285,8 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
             testAgentRunOptions: agentRunOptions,
             provisionWolverineStorage: provisionWolverineStorage,
             testInterceptor: commandInterceptor,
-            telegramWebhookSecret: telegramWebhookSecret);
+            telegramWebhookSecret: telegramWebhookSecret,
+            supabaseAdminHandler: supabaseAdminHandler);
         return await PrepareAsync(factory);
     }
 
@@ -310,6 +316,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         var factory = await CreateAsync(
             actorUserId, correlationId, fileStorage, malwareScanner, malwareScanTimeout, aal,
             agentModel, agentRunOptions, commandInterceptor: commandInterceptor);
+        return await SeedAuthenticatedActorAndReturnAsync(factory);
+    }
+
+    public static async Task<FoundationApiFactory> CreateWithAuthenticatedIdentityAndMfaProviderAsync(
+        HttpMessageHandler supabaseAdminHandler,
+        string? aal = null)
+    {
+        var factory = await CreateAsync(aal: aal, supabaseAdminHandler: supabaseAdminHandler);
         return await SeedAuthenticatedActorAndReturnAsync(factory);
     }
 
@@ -458,6 +472,9 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
         builder.UseSetting("SUPABASE_AUTH_ISSUER", "https://project.supabase.co/auth/v1");
         builder.UseSetting("SUPABASE_AUTH_AUDIENCE", "authenticated");
         builder.UseSetting("SUPABASE_AUTH_PUBLISHABLE_KEY", "test-publishable-key");
+        builder.UseSetting(
+            SupabaseAdminOptions.ServiceRoleKeyConfigurationKey,
+            "test-admin-service-role-key");
         // Composição do agente em modo teste: a seção AgentRun decide na partida
         // se um provider existe (fail-closed quando ausente). O endpoint de
         // exemplo é HTTPS (loopback é rejeitado pela validação) e nunca é
@@ -627,6 +644,14 @@ public sealed class FoundationApiFactory : WebApplicationFactory<Program>, IAsyn
                 services.AddHttpClient<SupabasePasswordSessionClient>()
                     .ConfigurePrimaryHttpMessageHandler(() => _browserSessionProviderHandler);
             }
+
+            // MFA no uso do privilégio: o host de teste substitui o cliente admin
+            // nomeado por um handler determinístico; o padrão reporta um fator
+            // TOTP verificado para o sujeito solicitado.
+            services
+                .AddHttpClient(SupabaseAdminMfaAssuranceVerifier.HttpClientName)
+                .ConfigurePrimaryHttpMessageHandler(() =>
+                    _supabaseAdminHandler ?? new StubSupabaseAdminFactorHandler());
 
             if (!_useJwtBearer)
             {
@@ -1112,6 +1137,51 @@ internal sealed class CountingIdentityProvider(IIdentityProvider inner) : IIdent
         Interlocked.Increment(ref _callCount);
         return inner.TryGetExternalIdentityProof(principal, out proof);
     }
+}
+
+/// <summary>
+/// Stub determinístico da Admin API do Supabase para a re-derivação de MFA:
+/// ecoa o sujeito requisitado com um fator TOTP verificado; um respondedor
+/// customizado pode substituir o corpo (fator ausente, indisponível etc.).
+/// </summary>
+internal sealed class StubSupabaseAdminFactorHandler(
+    Func<HttpRequestMessage, HttpResponseMessage>? respond = null
+) : HttpMessageHandler
+{
+    private int _callCount;
+
+    public int CallCount => Volatile.Read(ref _callCount);
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _callCount);
+        if (respond is not null)
+        {
+            return Task.FromResult(respond(request));
+        }
+
+        var subject = Uri.UnescapeDataString(
+            request.RequestUri!.AbsolutePath.Split('/').Last());
+        return Task.FromResult(AdminUserJson(subject));
+    }
+
+    internal static HttpResponseMessage AdminUserJson(string subject) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new
+                {
+                    id = subject,
+                    factors = new[]
+                    {
+                        new { id = "factor-1", factor_type = "totp", status = "verified" },
+                    },
+                }),
+                System.Text.Encoding.UTF8,
+                "application/json"),
+        };
 }
 
 public enum GateDatabaseFailurePoint
