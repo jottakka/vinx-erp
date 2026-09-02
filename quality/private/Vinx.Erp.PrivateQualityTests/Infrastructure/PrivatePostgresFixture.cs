@@ -134,8 +134,22 @@ public sealed class PrivatePostgresFixture : IAsyncLifetime
             CREATE TABLE vinx_wolverine_worker.wolverine_outgoing_envelope (id uuid PRIMARY KEY, content jsonb);
             CREATE TABLE vinx_wolverine_worker.wolverine_dead_letters (id uuid PRIMARY KEY, content jsonb);
 
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_demandas_automation (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_demandas_automation_scheduled (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_member_invitation_delivery (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_member_invitation_delivery_scheduled (id uuid PRIMARY KEY, body jsonb);
             CREATE TABLE vinx_wolverine_queues.wolverine_queue_notification_delivery (id uuid PRIMARY KEY, body jsonb);
             CREATE TABLE vinx_wolverine_queues.wolverine_queue_notification_delivery_scheduled (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_owner_invitation_delivery_scheduled (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_paguai_events (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_paguai_events_scheduled (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_telegram_inbound (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_telegram_inbound_scheduled (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_whatsapp_inbound (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_whatsapp_inbound_documents (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_whatsapp_inbound_documents_scheduled (id uuid PRIMARY KEY, body jsonb);
+            CREATE TABLE vinx_wolverine_queues.wolverine_queue_whatsapp_inbound_scheduled (id uuid PRIMARY KEY, body jsonb);
             """;
         await using (var migrator = await OpenConnectionAsync(MigratorConnectionString))
         {
