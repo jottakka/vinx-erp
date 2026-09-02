@@ -285,7 +285,7 @@ export function DemandasPage() {
           setCards((items) =>
             items.map((item) =>
               item.id === card.id
-                ? { ...item, version: current.version }
+                ? { ...item, version: current.version, stage: current.stage }
                 : item,
             ),
           );
