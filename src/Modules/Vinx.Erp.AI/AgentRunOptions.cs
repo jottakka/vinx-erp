@@ -1,10 +1,10 @@
-namespace Vinx.Erp.ApiHost.Agent;
+namespace Vinx.Erp.AI;
 
 using Vinx.Erp.AI.Providers.OpenAiCompatible;
 
 /// <summary>
 /// Configuração aprovada da execução do agente, vinculada on-start pela
-/// composição (Task 4). Sem provider a execução falha fechada com
+/// composição. Sem provider a execução falha fechado com
 /// provider_not_configured; a chave vem somente do ambiente e nunca é logada,
 /// ecoada em validação ou devolvida em resposta.
 /// </summary>

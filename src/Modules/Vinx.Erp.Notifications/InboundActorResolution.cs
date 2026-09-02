@@ -1,4 +1,4 @@
-namespace Vinx.Erp.ApiHost.Notifications;
+namespace Vinx.Erp.Notifications;
 
 public enum InboundActorResolutionState
 {

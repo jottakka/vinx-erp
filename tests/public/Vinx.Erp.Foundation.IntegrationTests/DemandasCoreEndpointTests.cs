@@ -17,8 +17,8 @@ using Vinx.Erp.Foundation.Persistence;
 using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Wolverine;
 using Xunit;
-using WorkerAutomation = workerhost::Vinx.Erp.WorkerHost;
 using WorkerProgram = workerhost::Program;
+using WorkerAutomation = workerhost::Vinx.Erp.WorkerHost;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
 

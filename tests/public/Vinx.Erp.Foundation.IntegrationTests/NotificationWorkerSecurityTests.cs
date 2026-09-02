@@ -130,12 +130,49 @@ public sealed class NotificationWorkerSecurityTests
             factory.Fixture.WorkerConnectionString
         );
         using var client = worker.CreateClient();
-        await Task.Delay(TimeSpan.FromSeconds(3));
+        await WaitForWorkerHealthAsync(client);
+
+        // Janela contínua de negação: se o worker ciclar tarde e tentar
+        // entregar, alguma das leitura flagra a mudança de estado (em vez de
+        // um único instante após um delay fixo).
+        var watchDeadline = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(3));
+        while (DateTimeOffset.UtcNow < watchDeadline)
+        {
+            var watched = await NotificationIntentSeed.ReadDeliveryAsync(factory, deliveryId);
+            Assert.Equal("pending_delivery", watched.Status);
+            await Task.Delay(250);
+        }
 
         var state = await NotificationIntentSeed.ReadDeliveryAsync(factory, deliveryId);
         Assert.Equal("pending_delivery", state.Status);
         using var health = await client.GetAsync("/health");
         Assert.Equal(System.Net.HttpStatusCode.OK, health.StatusCode);
+    }
+
+    /// <summary>
+    /// Espera o worker responder /health com 200 — prova que o host subiu e
+    /// os hosted services iniciaram antes de qualquer asserção negativa.
+    /// </summary>
+    private static async Task WaitForWorkerHealthAsync(HttpClient client)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(TimeSpan.FromSeconds(30));
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                using var response = await client.GetAsync("/health");
+                if (response.IsSuccessStatusCode)
+                {
+                    return;
+                }
+            }
+            catch (HttpRequestException)
+            {
+                // Host ainda não está aceitando conexões.
+            }
+            await Task.Delay(250);
+        }
+        Assert.Fail("Worker host did not become healthy.");
     }
 
     [Fact]

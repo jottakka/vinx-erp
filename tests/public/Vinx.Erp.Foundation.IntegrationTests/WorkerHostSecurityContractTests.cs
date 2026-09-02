@@ -18,6 +18,8 @@ using Wolverine.Persistence.Durability;
 using Wolverine.Runtime.Serialization;
 using Xunit;
 using WorkerProgram = workerhost::Program;
+// O contrato do tick pertence ao módulo Demandas (fora do host); o alias
+// workerhost permanece para os tipos que ainda vivem no WorkerHost.
 using DemandasAutomationTick = workerhost::Vinx.Erp.WorkerHost.DemandasAutomationTick;
 using WorkerDeadLetterRedactionInterceptor = workerhost::Vinx.Erp.WorkerHost.WorkerDeadLetterRedactionInterceptor;
 

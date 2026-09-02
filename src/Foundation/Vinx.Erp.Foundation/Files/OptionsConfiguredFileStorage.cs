@@ -1,14 +1,16 @@
-using Microsoft.Extensions.Options;
-using Vinx.Erp.Foundation.Files;
+namespace Vinx.Erp.Foundation.Files;
 
-namespace Vinx.Erp.WorkerHost;
+using Microsoft.Extensions.Options;
 
 /// <summary>
-/// Composição de storage do worker para dependência inline-ável do codegen do
-/// Wolverine (classe pública tipada, sem factory lambda): sem configuração do
-/// Supabase Storage permanece fail-closed com BlockedFileStorage.
+/// Composição de storage condicionada por configuração, compartilhada pelos
+/// hosts para dependência inline-ável do codegen do Wolverine (classe pública
+/// tipada, sem factory lambda): sem a chave do Supabase Storage configurada
+/// permanece fail-closed com <see cref="BlockedFileStorage"/>; configurada,
+/// delega ao adapter <see cref="SupabaseFileStorage"/>. Hosts que exigem
+/// storage validam as options on-start — o caminho bloqueado fica inalcançável.
 /// </summary>
-public sealed class WorkerFileStorage(
+public sealed class OptionsConfiguredFileStorage(
     SupabaseFileStorage supabase,
     IOptions<SupabaseStorageOptions> options
 ) : FileStorage

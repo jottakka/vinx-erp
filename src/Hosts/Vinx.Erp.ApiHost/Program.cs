@@ -24,6 +24,7 @@ using Vinx.Erp.ApiHost.Models;
 using Vinx.Erp.ApiHost.OpenApi;
 using Vinx.Erp.ApiHost.Permissions;
 using Vinx.Erp.Atendimento;
+using Vinx.Erp.AI;
 using Vinx.Erp.Demandas;
 using Vinx.Erp.Foundation;
 using Vinx.Erp.Foundation.Audit;
@@ -148,39 +149,39 @@ builder.Host.UseWolverine(options =>
         );
     options
         .PublishMessage<OwnerInvitationDeliveryRequested>()
-        .ToPostgresqlQueue("owner-invitation-delivery")
+        .ToPostgresqlQueue(DeliveryQueues.OwnerInvitation)
         .UseDurableOutbox();
     options
         .PublishMessage<MemberInvitationDeliveryRequested>()
-        .ToPostgresqlQueue("member-invitation-delivery")
+        .ToPostgresqlQueue(DeliveryQueues.MemberInvitation)
         .UseDurableOutbox();
     options
         .PublishMessage<NotificationDeliveryRequested>()
-        .ToPostgresqlQueue("notification-delivery")
+        .ToPostgresqlQueue(DeliveryQueues.Notification)
         .UseDurableOutbox();
     options
         .PublishMessage<PaguaiDraftCreated>()
-        .ToPostgresqlQueue("paguai-events")
+        .ToPostgresqlQueue(PaguaiQueues.Events)
         .UseDurableOutbox();
     options
         .PublishMessage<InboundWhatsAppImageReceived>()
-        .ToPostgresqlQueue("whatsapp-inbound")
+        .ToPostgresqlQueue(InboundQueues.WhatsAppInbound)
         .UseDurableOutbox();
     options
         .PublishMessage<InboundAgentRequestReceived>()
-        .ToPostgresqlQueue("whatsapp-inbound")
+        .ToPostgresqlQueue(InboundQueues.WhatsAppInbound)
         .UseDurableOutbox();
     options
         .PublishMessage<InboundWhatsAppTextCorrelationExpired>()
-        .ToPostgresqlQueue("whatsapp-inbound")
+        .ToPostgresqlQueue(InboundQueues.WhatsAppInbound)
         .UseDurableOutbox();
     options
         .PublishMessage<InboundWhatsAppDocumentReceived>()
-        .ToPostgresqlQueue("whatsapp-inbound-documents")
+        .ToPostgresqlQueue(InboundQueues.WhatsAppInboundDocuments)
         .UseDurableOutbox();
     options
         .PublishMessage<InboundTelegramTextReceived>()
-        .ToPostgresqlQueue("telegram-inbound")
+        .ToPostgresqlQueue(InboundQueues.TelegramInbound)
         .UseDurableOutbox();
 });
 builder.Services.AddScoped<AuditAppender>();
@@ -191,8 +192,8 @@ builder.Services.AddScoped<FoundationBootstrapService>();
 builder.Services.AddScoped<PlatformOperatorAccessService>();
 builder.Services.AddScoped<PlatformOrganizationProvisioningService>();
 builder.Services.AddScoped<NotificationIntentService>();
-builder.Services.AddScoped<IInboundActorResolver, SqlInboundActorResolver>();
-builder.Services.AddScoped<InboundWhatsAppIngressService>();
+// Admissão inbound do WhatsApp (raiz de composição do módulo Notifications).
+builder.Services.AddWhatsAppIngress();
 builder.Services.AddScoped<InboundTelegramIngressService>();
 builder.Services.AddScoped<NotificationInboxService>();
 builder.Services.AddScoped<EmployeeDirectoryService>();
@@ -216,25 +217,20 @@ builder
         "Malware scanner options must define a positive timeout and byte limit, plus a 'host:port' ClamAV endpoint when set."
     )
     .ValidateOnStart();
-builder.Services.AddSingleton<IMalwareScanner>(serviceProvider =>
-    MalwareScannerComposition.SelectScanner(
-        serviceProvider.GetRequiredService<IOptions<MalwareScannerOptions>>().Value
-    )
-);
+builder.Services.AddSingleton<IMalwareScanner, OptionsConfiguredMalwareScanner>();
 builder.Services.AddScoped<DocumentUploadService>();
-builder.Services.AddScoped<PaguaiDraftService>();
-builder.Services.AddScoped<PaguaiProposalService>();
-builder.Services.AddScoped<PaguaiProposalConfirmationService>();
-builder.Services.AddScoped<AtendimentoCardService>();
-builder.Services.AddScoped<DemandasNotificationComposer>();
-builder.Services.AddScoped<DemandasApprovalsService>();
-builder.Services.AddScoped<DemandasService>();
+// Raízes de composição dos módulos (mesmos registros e lifetimes de antes).
+builder.Services.AddPaguai();
+builder.Services.AddAtendimento();
+builder.Services.AddDemandas();
 // Superfície do agente: options validadas on-start, gates e provider decididos
-// na composição; sem provider configurado o runner falha fechado.
+// na composição; sem provider configurado o runner falha fechado. O adaptador
+// HTTP permanece no host (fronteira web do ApiHost).
 builder.Services.AddAgentRunSurface(
     builder.Configuration,
     Environment.GetEnvironmentVariable,
     builder.Configuration.GetValue<bool>("AgentRun:AllowCredentiallessTestModel"));
+builder.Services.AddScoped<AgentExecutionApplicationService>();
 builder
     .Services.AddControllers(options => options.SuppressAsyncSuffixInActionNames = false)
     .AddJsonOptions(options =>
@@ -328,9 +324,10 @@ builder
             AllowAutoRedirect = false,
         }
     );
-builder.Services.AddScoped<FileStorage>(serviceProvider =>
-    serviceProvider.GetRequiredService<SupabaseFileStorage>()
-);
+// Mesmo wrapper compartilhado com o WorkerHost: as options são validadas
+// on-start (tudo ou nada), então o caminho BlockedFileStorage é inalcançável
+// neste host e a resolução permanece o SupabaseFileStorage.
+builder.Services.AddScoped<FileStorage, OptionsConfiguredFileStorage>();
 builder.Services.AddSingleton<AuthorizationTelemetry>();
 builder.Services.AddProblemDetails();
 builder.Services.AddRateLimiter(options =>

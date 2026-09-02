@@ -1,8 +1,8 @@
+namespace Vinx.Erp.Notifications;
+
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Vinx.Erp.Foundation.Persistence;
-
-namespace Vinx.Erp.ApiHost.Notifications;
 
 /// <summary>
 /// Resolução do ator inbound pela função SECURITY DEFINER
