@@ -291,6 +291,7 @@ export function PaguaiPage({
 
   async function resolveProposal(operation: PaguaiProposalOperation) {
     if (!proposal || !createCompany || proposalSubmitting) return;
+    const scopeGeneration = scopeGenerationRef.current;
     setProposalSubmitting(true);
     setProposalError(null);
     const previousAttempt = proposalMutationAttemptRef.current;
@@ -312,6 +313,9 @@ export function PaguaiPage({
         proposal.id,
         attempt.requestId,
       );
+      // Resposta tardia após troca de escopo: descartada antes de qualquer
+      // commit local (mesmo padrão de createAttempt/openView).
+      if (scopeGeneration !== scopeGenerationRef.current) return;
       setProposalSubmitting(false);
       if (!result.ok) {
         if (!isAmbiguousProposalError(result.error)) {
@@ -337,6 +341,7 @@ export function PaguaiPage({
       proposal.id,
       attempt.requestId,
     );
+    if (scopeGeneration !== scopeGenerationRef.current) return;
     setProposalSubmitting(false);
     if (!result.ok) {
       if (!isAmbiguousProposalError(result.error)) {
@@ -745,7 +750,7 @@ function DraftViewDialog({
             </Typography>
           </Stack>
           <Typography color="text.secondary" variant="caption">
-            Criado em {new Date(draft.createdAt).toLocaleString()}
+            Criado em {new Date(draft.createdAt).toLocaleString("pt-BR")}
           </Typography>
         </Stack>
       ) : null}

@@ -72,7 +72,11 @@ export type DemandDetail = {
 
 export type CommandResult<Demand> =
   | { ok: true; demand?: Demand; routine?: unknown }
-  | { ok: false; code: string; current?: { version: number; stage: string } };
+  | {
+      ok: false;
+      code: string;
+      current?: { version: number; stage: DemandStage };
+    };
 
 const basePath = "/demandas";
 const antiforgeryPath = "/foundation/identity/browser-session/antiforgery";
@@ -174,7 +178,7 @@ export const demandasClient = {
       }
       const error = (await response.json().catch(() => null)) as {
         code?: string;
-        current?: { version: number; stage: string };
+        current?: { version: number; stage: DemandStage };
       } | null;
       return {
         code: error?.code ?? "demandas_unavailable",

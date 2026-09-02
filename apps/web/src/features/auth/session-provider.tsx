@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { resetDirectoryOptionsCache } from "../atendimento/use-directory-options";
 import type {
   BrowserSessionCredentials,
   BrowserSessionOperationResult,
@@ -122,7 +123,11 @@ export function SessionProvider({
       mutationRequest.current?.abort();
       bootstrapRequest.current = null;
       mutationRequest.current = null;
-      if (clearCache) queryClient?.clear();
+      if (clearCache) {
+        queryClient?.clear();
+        // Opções de diretório em cache também pertencem à sessão: limpas junto.
+        resetDirectoryOptionsCache();
+      }
     },
     [queryClient],
   );

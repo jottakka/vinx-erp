@@ -24,7 +24,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CompanyProvider } from "../../shared/ui/company-context";
 import { CompanySelect } from "../../shared/ui/company-select";
-import { EntityDialog } from "../../shared/ui/entity-dialog";
 import { PageHeader } from "../../shared/ui/page-header";
 import { resolveCompanyEntityPermissions } from "../auth/company-capabilities";
 import { useSession } from "../auth/session-provider";
@@ -55,6 +54,27 @@ function messageFor(code: string) {
   if (code === "resumption_deadline_invalid")
     return "Informe um novo prazo futuro para retomar.";
   return "Não foi possível concluir a ação. Tente novamente.";
+}
+
+/** Rótulos do histórico de eventos (mesmo estilo dos eventos do Atendimento). */
+const historyKindLabels: Record<string, string> = {
+  checklist_item_completed: "Item de checklist concluído",
+  created: "Criada",
+  participant_added: "Participante adicionado",
+  participant_removed: "Participante removido",
+  paused: "Pausada",
+  reinitiated: "Reiniciada",
+  responsible_changed: "Responsável alterado",
+  resumed: "Retomada",
+  stage_advanced: "Etapa avançada",
+};
+
+function historyKindLabel(kind: string): string {
+  return historyKindLabels[kind] ?? kind;
+}
+
+function stageLabel(stage: string): string {
+  return columns.find((column) => column.id === stage)?.label ?? stage;
 }
 
 export function DemandasPage() {
@@ -113,6 +133,9 @@ export function DemandasPage() {
   const [loading, setLoading] = useState(false);
   const [onlyOverdue, setOnlyOverdue] = useState(false);
   const [search, setSearch] = useState("");
+  // Busca com debounce curto para não disparar leitura do quadro por tecla.
+  const [searchTerm, setSearchTerm] = useState("");
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [priority, setPriority] = useState("");
   const [responsible, setResponsible] = useState("");
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -134,6 +157,25 @@ export function DemandasPage() {
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  // Um avanço por cartão em voo: duplo clique não reenvia o comando.
+  const [pendingCardIds, setPendingCardIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+
+  useEffect(
+    () => () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    },
+    [],
+  );
+
+  function handleSearch(next: string) {
+    setSearchTerm(next);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setSearch(next.trim());
+    }, 300);
+  }
 
   const loadBoard = useCallback(
     async (options?: {
@@ -218,20 +260,31 @@ export function DemandasPage() {
     card: DemandBoardCard,
     action: () => Promise<CommandResult<DemandBoardCard>>,
   ) {
-    const result = await action();
-    if (!result.ok) {
-      setError(messageFor(result.code));
-      const current = result.current;
-      if (current)
-        setCards((items) =>
-          items.map((item) =>
-            item.id === card.id ? { ...item, version: current.version } : item,
-          ),
-        );
-      return;
+    setPendingCardIds((current) => new Set(current).add(card.id));
+    try {
+      const result = await action();
+      if (!result.ok) {
+        setError(messageFor(result.code));
+        const current = result.current;
+        if (current)
+          setCards((items) =>
+            items.map((item) =>
+              item.id === card.id
+                ? { ...item, version: current.version, stage: current.stage }
+                : item,
+            ),
+          );
+        return;
+      }
+      if (result.demand) replaceCard(result.demand);
+      else void loadBoard({ silent: true });
+    } finally {
+      setPendingCardIds((current) => {
+        const next = new Set(current);
+        next.delete(card.id);
+        return next;
+      });
     }
-    if (result.demand) replaceCard(result.demand);
-    else void loadBoard({ silent: true });
   }
 
   const visibleCards = onlyOverdue
@@ -265,9 +318,9 @@ export function DemandasPage() {
           <TextField
             data-testid="demandas-search"
             label="Buscar título"
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => handleSearch(event.target.value)}
             size="small"
-            value={search}
+            value={searchTerm}
           />
           <TextField
             data-testid="demandas-priority"
@@ -331,6 +384,7 @@ export function DemandasPage() {
                   .filter((card) => card.stage === column.id)
                   .map((card) => (
                     <DemandCard
+                      advancePending={pendingCardIds.has(card.id)}
                       card={card}
                       canAdvance={permissions.canEdit}
                       key={card.id}
@@ -399,11 +453,13 @@ function deadlineLabel(
 }
 
 function DemandCard({
+  advancePending,
   card,
   canAdvance,
   onAdvance,
   onOpen,
 }: {
+  advancePending: boolean;
   card: DemandBoardCard;
   canAdvance: boolean;
   onAdvance: () => void;
@@ -466,6 +522,7 @@ function DemandCard({
         {canAdvance && card.stage !== "closed" ? (
           <Button
             data-testid={`advance-${card.id}`}
+            disabled={advancePending}
             onClick={onAdvance}
             size="small"
             startIcon={<AdvanceIcon />}
@@ -550,9 +607,9 @@ export function DemandDetailDialog({
               <List dense disablePadding>
                 {detail.history.slice(0, 12).map((entry) => (
                   <ListItemButton key={entry.id} divider>
-                    {entry.kind}
-                    {entry.toStage ? ` → ${entry.toStage}` : ""} · ciclo{" "}
-                    {entry.cycleCount}
+                    {historyKindLabel(entry.kind)}
+                    {entry.toStage ? ` → ${stageLabel(entry.toStage)}` : ""} ·
+                    ciclo {entry.cycleCount}
                   </ListItemButton>
                 ))}
               </List>
@@ -578,7 +635,3 @@ export function DemandDetailDialog({
     </Dialog>
   );
 }
-
-// EntityDialog importado para manter a padronização visual de diálogos futuros
-// (criação/edição completa entram na fatia de web de rotinas).
-void EntityDialog;

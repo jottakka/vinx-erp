@@ -13,7 +13,7 @@ import {
   type QueueFilter,
   queueFilterToQuery,
 } from "./atendimento-client";
-import { priorityLabel } from "./atendimento-lookup";
+import { columnLabels, priorityLabel } from "./atendimento-lookup";
 import { PeoplePicker } from "./people-picker";
 
 export const columnChoices: readonly AtendimentoColumn[] = [
@@ -150,7 +150,7 @@ function SearchDebouncedInner({
         <MenuItem value="">&nbsp;</MenuItem>
         {columnChoices.map((column) => (
           <MenuItem key={column} value={column}>
-            {column}
+            {columnLabels[column]}
           </MenuItem>
         ))}
       </TextField>
