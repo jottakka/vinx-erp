@@ -34,6 +34,22 @@ public sealed class HostPlatformTests
     }
 
     [Fact]
+    public async Task Mcp_host_liveness_and_readiness_do_not_require_a_database()
+    {
+        // O McpHost não registra Npgsql nem FoundationDbContext: live e ready
+        // precisam responder 200 — antes o check postgres os derrubava para
+        // 503 permanente (bloqueio de revisão).
+        using var mcpFactory = new McpHostFactory();
+        using var client = mcpFactory.CreateClient();
+
+        using var live = await client.GetAsync("/health/live");
+        using var ready = await client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.OK, live.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, ready.StatusCode);
+    }
+
+    [Fact]
     public void Worker_host_fails_closed_without_database_configuration()
     {
         using var workerFactory = new WorkerHostFactory();
