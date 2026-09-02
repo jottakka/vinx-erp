@@ -18,6 +18,7 @@ using Vinx.Erp.Foundation.Persistence.Interceptors;
 using Wolverine;
 using Xunit;
 using WorkerProgram = workerhost::Program;
+using WorkerAutomation = workerhost::Vinx.Erp.WorkerHost;
 
 namespace Vinx.Erp.Foundation.IntegrationTests;
 
@@ -278,7 +279,7 @@ public sealed class DemandasCoreEndpointTests
         {
             await staleBusScope.ServiceProvider
                 .GetRequiredService<IMessageBus>()
-                .PublishAsync(new DemandasAutomationTick(DateTimeOffset.UtcNow, firstClaim.Generation));
+                .PublishAsync(new WorkerAutomation.DemandasAutomationTick(DateTimeOffset.UtcNow, firstClaim.Generation));
         }
         await Task.Delay(1500);
         await AssertScheduledTickCountAsync(administrator, 0);
@@ -292,7 +293,7 @@ public sealed class DemandasCoreEndpointTests
         {
             await busScope.ServiceProvider
                 .GetRequiredService<IMessageBus>()
-                .PublishAsync(new DemandasAutomationTick(DateTimeOffset.UtcNow, takeover.Generation));
+                .PublishAsync(new WorkerAutomation.DemandasAutomationTick(DateTimeOffset.UtcNow, takeover.Generation));
         }
 
         var advanced = false;

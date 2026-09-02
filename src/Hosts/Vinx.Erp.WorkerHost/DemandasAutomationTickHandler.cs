@@ -6,6 +6,18 @@ using Wolverine;
 namespace Vinx.Erp.WorkerHost;
 
 /// <summary>
+/// Mensagem de tick da automação de demandas (fila durável local). A geração
+/// cerca o fence da identidade durável: apenas a cadeia portadora da geração
+/// vigente do claim renova o lease e perpetua o próximo tick.
+///
+/// MUDANÇA DE TIPO BLOQUEADA (#379): o nome CLR deste record é a identidade
+/// durável dos envelopes Wolverine já persistidos — movê-lo para
+/// Vinx.Erp.Demandas quebra a desserialização da fila em deploy. O move
+/// exige upcaster/prova de upgrade com envelope pré-deploy.
+/// </summary>
+public sealed record DemandasAutomationTick(DateTimeOffset ScheduledAt, long Generation);
+
+/// <summary>
 /// Handler do tick: executa a varredura (avança DUE primeiro, depois overdue) e
 /// agenda o próximo tick SOMENTE se a renovação do claim durável confirmar que
 /// esta geração ainda é a dona da cadeia. Classes públicas com inline-DI —

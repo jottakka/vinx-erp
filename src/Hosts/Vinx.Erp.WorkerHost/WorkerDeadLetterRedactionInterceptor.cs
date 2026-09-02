@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Vinx.Erp.Demandas;
 using Vinx.Erp.Foundation.Notifications;
 using Vinx.Erp.Foundation.Permissions;
 using Vinx.Erp.Foundation.Platform;
