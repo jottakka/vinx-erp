@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Vinx.Erp.Foundation.Audit;
@@ -265,8 +266,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.demand.create", command.RequestId, Hash(command), routineCommand: false, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.demand.create", transaction, replay, cancellationToken);
             }
 
             // Roteamento: rotina explícita vence; sem escolha aplica a precedência.
@@ -393,7 +393,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.demand.create", command.RequestId, Hash(command), routineCommand: false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -445,8 +447,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.demand.advance", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.demand.advance", transaction, replay, cancellationToken);
             }
 
             var demand = await LockDemandAsync(command.CompanyId, demandId, cancellationToken);
@@ -498,7 +499,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.demand.advance", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -606,8 +609,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.demand.checklist.complete", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.demand.checklist.complete", transaction, replay, cancellationToken);
             }
 
             var demand = await LockDemandAsync(command.CompanyId, demandId, cancellationToken);
@@ -689,7 +691,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.demand.checklist.complete", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -738,8 +742,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.demand.reassign", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.demand.reassign", transaction, replay, cancellationToken);
             }
 
             var demand = await LockDemandAsync(command.CompanyId, demandId, cancellationToken);
@@ -802,7 +805,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.demand.reassign", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -885,8 +890,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.demand.pause", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.demand.pause", transaction, replay, cancellationToken);
             }
 
             var demand = await LockDemandAsync(command.CompanyId, demandId, cancellationToken);
@@ -923,7 +927,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.demand.pause", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -964,8 +970,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.demand.resume", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.demand.resume", transaction, replay, cancellationToken);
             }
 
             var demand = await LockDemandAsync(command.CompanyId, demandId, cancellationToken);
@@ -996,7 +1001,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.demand.resume", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1039,8 +1046,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.demand.resume_overdue", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.demand.resume_overdue", transaction, replay, cancellationToken);
             }
 
             var demand = await LockDemandAsync(command.CompanyId, demandId, cancellationToken);
@@ -1111,7 +1117,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.demand.resume_overdue", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1158,8 +1166,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.demand.participants.add", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.demand.participants.add", transaction, replay, cancellationToken);
             }
 
             var demand = await LockDemandAsync(command.CompanyId, demandId, cancellationToken);
@@ -1243,7 +1250,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.demand.participants.add", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1284,8 +1293,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.demand.participants.remove", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.demand.participants.remove", transaction, replay, cancellationToken);
             }
 
             var demand = await LockDemandAsync(command.CompanyId, demandId, cancellationToken);
@@ -1328,7 +1336,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.demand.participants.remove", command.RequestId, Hash(new PayloadRef(demandId, command)), false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1422,8 +1432,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.routine.create", command.RequestId, Hash(command), routineCommand: true, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.routine.create", transaction, replay, cancellationToken);
             }
 
             var invalid = ValidateRoutineStages(command);
@@ -1489,7 +1498,9 @@ public sealed class DemandasService(
         }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.routine.create", command.RequestId, Hash(command), routineCommand: true, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1531,8 +1542,7 @@ public sealed class DemandasService(
             var replay = await ReplayOrNullAsync(actor, command.CompanyId, "demandas.routine.update_status", command.RequestId, Hash(new PayloadRef(routineId, command)), true, cancellationToken);
             if (replay is not null)
             {
-                await transaction.RollbackAsync(cancellationToken);
-                return replay;
+                return await RollbackReplayAsync(actor, command.CompanyId, "demandas.routine.update_status", transaction, replay, cancellationToken);
             }
 
             var routine = await database.DemandRoutines.SingleOrDefaultAsync(candidate => candidate.CompanyId == command.CompanyId && candidate.Id == routineId, cancellationToken);
@@ -1561,9 +1571,19 @@ public sealed class DemandasService(
             LogInformation("succeeded", "routine_update_status");
             return new(DemandOperationState.Success, Routine: ToRoutineResponse(routine, []));
         }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Perdedor do CAS (RowVersion) numa atualização concorrente da
+            // rotina é conflito tipado, não indisponibilidade — mesmo contrato
+            // dos comandos de demanda que passam pelo ConflictResultAsync.
+            database.ChangeTracker.Clear();
+            return await ConflictResultAsync(actor, command.CompanyId, "demandas.routine.update_status", null, cancellationToken);
+        }
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
-            return IdempotencyRaceAsync();
+            database.ChangeTracker.Clear();
+            logger.LogWarning(exception, "Demandas {Operation} {Module} {Result} {Reason}", Operation, Module, "retrying", "idempotency_unique_conflict");
+            return await IdempotencyRaceAsync(actor, command.CompanyId, "demandas.routine.update_status", command.RequestId, Hash(new PayloadRef(routineId, command)), true, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1722,7 +1742,60 @@ public sealed class DemandasService(
     }
 
 
-    private static DemandOperationResult IdempotencyRaceAsync() => new(DemandOperationState.Unavailable);
+    /// <summary>Corrida de idempotência (violação de unicidade no insert do
+    /// receipt): concilia re-lendo o receipt do vencedor em transação própria
+    /// curta e devolve Replay — mesmo contrato do Atendimento e do Paguai,
+    /// nunca 503. A transação ambiente já sofreu rollback no unwind do
+    /// await using; receipt divergente vira idempotency_conflict auditado.
+    /// </summary>
+    private async Task<DemandOperationResult> IdempotencyRaceAsync(
+        ActorContext actor,
+        Guid companyId,
+        string commandName,
+        Guid requestId,
+        string payloadHash,
+        bool routineCommand,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            IdempotencyRecord? existing = null;
+            await using (var transaction = await database.Database.BeginTransactionAsync(cancellationToken))
+            {
+                await SetContextAsync(actor, companyId, cancellationToken);
+                existing = await database.IdempotencyRecords.SingleOrDefaultAsync(
+                    record => record.CompanyId == companyId && record.ActorUserId == actor.UserId && record.CommandName == commandName && record.RequestId == requestId,
+                    cancellationToken
+                );
+                await transaction.RollbackAsync(cancellationToken);
+            }
+
+            if (existing is null)
+            {
+                // Vencedor ainda não visível: sem receipt para conciliar, nega
+                // com conflito auditado (mesma postura do Atendimento).
+                return await DeniedAsync(actor, companyId, commandName, DemandOperationState.IntegrityConflict, cancellationToken);
+            }
+
+            if (!string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal))
+            {
+                return await DeniedAsync(actor, companyId, commandName, DemandOperationState.IdempotencyConflict, cancellationToken);
+            }
+
+            return ReplayFromRecord(existing, routineCommand);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            database.ChangeTracker.Clear();
+            LogUnavailable(exception, "idempotency_reconciliation_failed");
+            return new(DemandOperationState.Unavailable);
+        }
+    }
 
     private static DemandOperationResult? ValidGuard(Guid companyId, Guid requestId, long expectedVersion) =>
         companyId == Guid.Empty || requestId == Guid.Empty || !VersionOk(expectedVersion)
@@ -1916,12 +1989,21 @@ public sealed class DemandasService(
 
         if (!string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal))
         {
-            return await DeniedAsync(actor, companyId, commandName, DemandOperationState.IdempotencyConflict, cancellationToken);
+            // Marker SEM auditoria: DeniedAsync abre transação própria e a
+            // transação ambiente do chamador ainda está aberta aqui — o
+            // rollback cabe ao chamador (RollbackReplayAsync), na mesma
+            // sequência do Atendimento.
+            return new(DemandOperationState.IdempotencyConflict);
         }
 
+        return ReplayFromRecord(existing, routineCommand);
+    }
+
+    private DemandOperationResult ReplayFromRecord(IdempotencyRecord record, bool routineCommand)
+    {
         if (routineCommand)
         {
-            var routine = JsonSerializer.Deserialize<RoutineResponse>(existing.ResultJson);
+            var routine = JsonSerializer.Deserialize<RoutineResponse>(record.ResultJson);
             if (routine is null)
             {
                 LogUnavailable(null, "idempotency_result_invalid");
@@ -1932,7 +2014,7 @@ public sealed class DemandasService(
             return new(DemandOperationState.Replay, Routine: routine);
         }
 
-        var demand = JsonSerializer.Deserialize<DemandResponse>(existing.ResultJson);
+        var demand = JsonSerializer.Deserialize<DemandResponse>(record.ResultJson);
         if (demand is null)
         {
             LogUnavailable(null, "idempotency_result_invalid");
@@ -1941,6 +2023,28 @@ public sealed class DemandasService(
 
         LogInformation("replayed", "idempotency_match_demand");
         return new(DemandOperationState.Replay, Demand: demand);
+    }
+
+    /// <summary>Rollback da transação ambiente ANTES da auditoria da negação
+    /// (DeniedAsync abre transação própria; transação aninhada falha), mesma
+    /// sequência do Atendimento. Divergência de payload com o mesmo requestId
+    /// vira idempotency_conflict auditado em vez de 503 silencioso.</summary>
+    private async Task<DemandOperationResult> RollbackReplayAsync(
+        ActorContext actor,
+        Guid companyId,
+        string auditAction,
+        IDbContextTransaction transaction,
+        DemandOperationResult replay,
+        CancellationToken cancellationToken
+    )
+    {
+        await transaction.RollbackAsync(cancellationToken);
+        if (replay.State != DemandOperationState.IdempotencyConflict)
+        {
+            return replay;
+        }
+
+        return await DeniedAsync(actor, companyId, auditAction, DemandOperationState.IdempotencyConflict, cancellationToken);
     }
 
     private IdempotencyRecord NewIdempotencyRecord(

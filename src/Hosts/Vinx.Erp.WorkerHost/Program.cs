@@ -439,7 +439,9 @@ builder.Host.UseWolverine(options =>
 
 
 var app = builder.Build();
-app.MapHealthChecks("/health/live");
+// Liveness nunca executa checks: queda de banco não pode derrubar
+// reinício do pod (readiness existe para isso).
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks(
     "/health/ready",
     new HealthCheckOptions { Predicate = check => check.Tags.Contains("postgres") }

@@ -3,7 +3,23 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Scripts de custódia do banco: mesmos arquivos aplicados pelo harness público. -->
+    <EmbeddedResource Include="../../../infra/database/bootstrap-foundation-roles.sql" Link="Infrastructure/bootstrap-foundation-roles.sql" />
+    <EmbeddedResource Include="../../../infra/database/grant-wolverine-runtime.sql" Link="Infrastructure/grant-wolverine-runtime.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      Referência de produto permitida APENAS como provedor de migração em tempo de
+      build (FoundationDbContext + migrations EF). Toda asserção do suite é
+      assinada pelo verificador com Npgsql/SQL cru; nenhum serviço ou contrato
+      de produto é importado para os testes.
+    -->
+    <ProjectReference Include="../../../src/Foundation/Vinx.Erp.Foundation/Vinx.Erp.Foundation.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio">
       <PrivateAssets>all</PrivateAssets>

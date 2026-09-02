@@ -729,6 +729,76 @@ describe("PaguaiPage", () => {
     ).toBeNull();
   });
 
+  it("does not let a late confirm response commit a draft or notify a changed user membership scope", async () => {
+    const user = userEvent.setup();
+    const confirmResult = deferred<{ ok: true; value: typeof draft }>();
+    const confirmProposal = vi.fn(
+      (_company: string, _proposal: string, _requestId: string) =>
+        confirmResult.promise,
+    );
+    const getProposal = vi.fn(async () => ({
+      ok: true as const,
+      value: proposal,
+    }));
+    let activeBootstrap = bootstrap;
+    const sessionGateway: MockSessionGateway = {
+      getBootstrap: async () => activeBootstrap,
+      login: async () => activeBootstrap,
+      logout: async () => undefined,
+    };
+    const draftClient = {
+      confirmProposal,
+      create: async () => ({ ok: true as const, value: draft }),
+      detail: async () => ({ ok: true as const, value: draft }),
+      getProposal,
+      list: async () => ({ ok: true as const, value: [] }),
+      rejectProposal: async () => ({ ok: true as const, value: undefined }),
+    };
+    window.history.pushState({}, "", `/paguai?proposal=${proposal.id}`);
+
+    renderPageWithSessionRefresh(draftClient, sessionGateway);
+    await screen.findByRole("heading", { name: "Revisar proposta" });
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar solicitação" }),
+    );
+    await waitFor(() => expect(confirmProposal).toHaveBeenCalledTimes(1));
+
+    activeBootstrap = {
+      ...bootstrap,
+      companies: [
+        {
+          ...bootstrap.companies[0],
+          membershipId: "99999999-9999-4999-8999-999999999999",
+        },
+      ],
+      user: {
+        displayName: "Clara",
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      },
+    };
+    await user.click(
+      screen.getByRole("button", { hidden: true, name: "Atualizar sessão" }),
+    );
+    // A revisão é recarregada sob o novo escopo pelo deep link da proposta;
+    // o segundo getProposal só ocorre após a geração de escopo ser bumpada.
+    await waitFor(() => expect(getProposal).toHaveBeenCalledTimes(2));
+    expect(
+      await screen.findByRole("heading", { name: "Revisar proposta" }),
+    ).toBeVisible();
+
+    await act(async () => {
+      confirmResult.resolve({ ok: true, value: draft });
+      await confirmResult.promise;
+    });
+
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "Papel" }),
+    ).toBeNull();
+    expect(
+      screen.queryByText("Solicitação criada a partir da proposta."),
+    ).toBeNull();
+  });
+
   it("does not reopen a removed company draft when its detail response arrives late", async () => {
     const user = userEvent.setup();
     const betaDraft = {

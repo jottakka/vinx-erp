@@ -210,22 +210,44 @@ public sealed class DemandasApprovalsService(
                 }
             }
 
+            // Destinatários resolvidos DENTRO da transação (mesma ordem do
+            // ApplyStageAdvanceAsync no DemandasService): o GUC de RLS vive só
+            // nela (set_config local) — após o commit a consulta volta vazia e
+            // os avisos sairiam sem destinatário, silenciosamente.
+            var recipients = await RecipientsForStageChangeAsync(demand, command.CompanyId, cancellationToken);
+
             await auditAppender.AppendAsync(ApprovalDecisionAudit(actor, command, demand.Id, approve ? "demandas.approval.approve" : "demandas.approval.reject", AuditOutcome.Success), cancellationToken);
             await database.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            // Recomposição pós-commit (sem reabrir transação): fechado encerra o
-            // fluxo; veto reinicia para execution com ciclo novo.
-            var recipients = await RecipientsForStageChangeAsync(demand, command.CompanyId, cancellationToken);
-            await notifications.ComposeAsync(
-                actor,
-                command.CompanyId,
-                demand.Id,
-                demand.StageCycleCount,
-                DemandNotificationKinds.StageAdvanced,
-                recipients,
-                CancellationToken.None
-            );
+            // Composição pós-commit (flush terminal-only, mesma semântica do
+            // FlushNotificationsAsync): fechado encerra o fluxo; veto reinicia
+            // para execution com ciclo novo. O compositor abre transação
+            // própria (intent + outbox) e falha de aviso NUNCA desfaz a
+            // decisão já commitada — fica registrada em Warning.
+            try
+            {
+                await notifications.ComposeAsync(
+                    actor,
+                    command.CompanyId,
+                    demand.Id,
+                    demand.StageCycleCount,
+                    DemandNotificationKinds.StageAdvanced,
+                    recipients,
+                    CancellationToken.None
+                );
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Demandas {Operation} {Module} {Result} {Reason}",
+                    "approval_decision",
+                    Module,
+                    "succeeded",
+                    "notification_flush_deferred"
+                );
+            }
 
             logger.LogInformation(
                 "Demandas {Operation} {Module} {Result} {Reason}",
