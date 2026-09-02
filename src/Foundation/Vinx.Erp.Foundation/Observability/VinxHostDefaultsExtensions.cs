@@ -12,7 +12,15 @@ namespace Vinx.Erp.Foundation.Observability;
 /// </summary>
 public static class VinxHostDefaultsExtensions
 {
-    public static TBuilder AddVinxHostDefaults<TBuilder>(this TBuilder builder)
+    /// <param name="registerPostgresHealthCheck">
+    /// Registra o probe real de Postgres somente em hosts que dependem do
+    /// banco (ApiHost/WorkerHost). O McpHost não registra Npgsql nem
+    /// FoundationDbContext: com o check ele teria readiness permanentemente
+    /// 503.
+    /// </param>
+    public static TBuilder AddVinxHostDefaults<TBuilder>(
+        this TBuilder builder,
+        bool registerPostgresHealthCheck = true)
         where TBuilder : IHostApplicationBuilder
     {
         builder.Logging.AddVinxLogging();
@@ -24,8 +32,11 @@ public static class VinxHostDefaultsExtensions
                 .AddMeter("Microsoft.AspNetCore.Hosting")
                 .AddMeter("Microsoft.AspNetCore.Server.Kestrel")
                 .AddMeter("Npgsql"));
-        builder.Services.AddHealthChecks()
-            .AddCheck<PostgresHealthCheck>("postgres", tags: ["postgres"]);
+        var healthChecks = builder.Services.AddHealthChecks();
+        if (registerPostgresHealthCheck)
+        {
+            healthChecks.AddCheck<PostgresHealthCheck>("postgres", tags: ["postgres"]);
+        }
         return builder;
     }
 }
