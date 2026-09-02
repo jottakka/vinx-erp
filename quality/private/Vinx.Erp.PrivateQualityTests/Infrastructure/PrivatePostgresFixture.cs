@@ -199,8 +199,8 @@ public sealed class PrivatePostgresFixture : IAsyncLifetime
             INSERT INTO service_desk.atendimento_cards (id, company_id, title, description, column_name, created_by_user_id, updated_by_user_id, request_id)
             VALUES (@cardB, @companyB, 'Cartao confidencial', 'Descricao confidencial do cartao', 'novo', @userB, @userB, @request);
 
-            INSERT INTO paguai.requests (id, company_id, requester_user_id, request_id, title, description)
-            VALUES (@paguaiB, @companyB, @userB, @request, 'Pedido confidencial', 'Descricao confidencial do pedido');
+            INSERT INTO paguai.requests (id, company_id, requester_user_id, request_id, title, description, amount, currency)
+            VALUES (@paguaiB, @companyB, @userB, @request, 'Pedido confidencial', 'Descricao confidencial do pedido', 1250.00, 'BRL');
 
             INSERT INTO notifications.notification_intents (id, company_id, recipient_user_id, event_key, channel, template_key, status, provider_attempt_id, provider_resolved_at, correlation_id, created_by_user_id)
             VALUES (@intentB, @companyB, @userB, 'evento-confidencial-beta', 'in_app', 'modelo-inbox', 'delivered', gen_random_uuid(), clock_timestamp(), @request, @userB);
