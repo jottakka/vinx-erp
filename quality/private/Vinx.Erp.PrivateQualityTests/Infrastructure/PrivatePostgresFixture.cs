@@ -184,7 +184,7 @@ public sealed class PrivatePostgresFixture : IAsyncLifetime
                 (@membershipA, @companyA, @userA, @operatorUser, @operatorUser, @request, clock_timestamp(), clock_timestamp()),
                 (@membershipB, @companyB, @userB, @operatorUser, @operatorUser, @request, clock_timestamp(), clock_timestamp());
 
-            INSERT INTO foundation.external_identities (id, user_id, provider, subject, created_at)
+            INSERT INTO foundation.external_identities (id, user_id, issuer, subject, created_at)
             VALUES (@operatorIdentity, @operatorUser, 'test', 'operadora-semente', clock_timestamp());
 
             INSERT INTO foundation.platform_operators (singleton, external_identity_id)
