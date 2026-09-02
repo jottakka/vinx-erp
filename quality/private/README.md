@@ -77,3 +77,9 @@ Private test execution is independently authorized and recorded. Any needed
 production fix is implemented and verified through the public suite first;
 the verifier then reruns the private suite and communicates only a redacted
 result.
+
+## Achados abertos
+
+Os três testes de contexto forjado estão `Skip` (#371): o papel `vinx_runtime`
+pode forjar `app.company_id`/`app.user_id` e ler cross-tenant — decisão de
+endurecimento pendente. Os demais ataques negam corretamente.
