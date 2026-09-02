@@ -3,7 +3,7 @@ name: Public quality
 on:
   pull_request:
   push:
-    branches-ignore:
+    branches:
       - main
 
 permissions:
