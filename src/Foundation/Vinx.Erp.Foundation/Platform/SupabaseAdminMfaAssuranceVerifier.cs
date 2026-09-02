@@ -22,6 +22,7 @@ public sealed class SupabaseAdminMfaAssuranceVerifier(
 {
     public const string HttpClientName = "supabase-admin-mfa";
     private const int MaximumResponseBytes = 32 * 1024;
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(5);
     private const string Operation = "mfa_assurance_verification";
     private const string Module = "identity";
     private const string EventTemplate = "MFA assurance {Operation} {Module} {Result} {Reason}";
@@ -62,15 +63,26 @@ public sealed class SupabaseAdminMfaAssuranceVerifier(
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _serviceRoleKey);
         request.Headers.Add("apikey", _serviceRoleKey);
 
+        // Com ResponseHeadersRead o Timeout do HttpClient cobre só até os
+        // headers: o orçamento precisa valer para a troca inteira (headers +
+        // corpo), senão um stall no corpo escapa como 500 (bloqueio de
+        // revisão). Cancelamento do chamador continua propagando.
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bounded.CancelAfter(RequestTimeout);
+
         HttpResponseMessage response;
         try
         {
             response = await httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
+                bounded.Token);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
         {
             LogUnavailable("provider_timeout");
             return MfaAssuranceVerificationResult.Unavailable();
@@ -101,7 +113,31 @@ public sealed class SupabaseAdminMfaAssuranceVerifier(
                 return MfaAssuranceVerificationResult.Unavailable();
             }
 
-            var payload = await ReadResponseAsync(response, cancellationToken);
+            byte[]? payload;
+            try
+            {
+                payload = await ReadResponseAsync(response, bounded.Token);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                LogUnavailable("provider_timeout");
+                return MfaAssuranceVerificationResult.Unavailable();
+            }
+            catch (IOException)
+            {
+                LogUnavailable("provider_io_failure");
+                return MfaAssuranceVerificationResult.Unavailable();
+            }
+            catch (HttpRequestException)
+            {
+                LogUnavailable("provider_unreachable");
+                return MfaAssuranceVerificationResult.Unavailable();
+            }
+
             if (payload is null)
             {
                 LogUnavailable("provider_payload_too_large");
