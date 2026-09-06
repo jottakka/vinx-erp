@@ -69,8 +69,8 @@
       },
       "JasperFx": {
         "type": "Transitive",
-        "resolved": "2.53.0",
-        "contentHash": "3ATxrYgbecn1rZJOpSQF3e89j389bzSegFLYl4GtjTQxVV5Q+Y9BkcfC9dma/t/QeldUCFx0E4UcoS4gCZou4A==",
+        "resolved": "2.60.0",
+        "contentHash": "yZhSu7Qc/3jrsU3SuSBD9OcN6kQP/KAkYWB8A1QMW84KoQh4UrpYn7kE4j7dn9VnAMpfxV/FwyjW0Zn6cmM7Zw==",
         "dependencies": {
           "FastExpressionCompiler": "5.4.1",
           "ImTools": "4.0.0",
@@ -85,16 +85,16 @@
       },
       "JasperFx.Events": {
         "type": "Transitive",
-        "resolved": "2.53.0",
-        "contentHash": "Jmjg2sVAGPfTzK2NWkIKoRVXRio/L9RjGoqAh4ZgEfyAHoA0+1ZmYOMIN7XnjqrLm2fuvU8hQiztYcDARaIZ7A==",
+        "resolved": "2.60.0",
+        "contentHash": "c4nNvlcCj2uI3+X8aZvKhJBGEUSic8n2iC8FjeZOPSR3KSrcZJpSYHLPSVlAE5+bmkvvKSK/X5KrYAeLI9jH+w==",
         "dependencies": {
-          "JasperFx": "2.53.0"
+          "JasperFx": "2.60.0"
         }
       },
       "JasperFx.SourceGenerator": {
         "type": "Transitive",
-        "resolved": "2.53.0",
-        "contentHash": "Xp4RNol0Jnf+rET9OmGb9lLoROgYrX0kUN4kWnQj0i/7cUON2K4fJCuOv7MJq0f6r3MSLChcKVTF+d75xuL78Q=="
+        "resolved": "2.60.0",
+        "contentHash": "+lTMnjLDPeha6ut5R8oKLyDDFUqzFK2SIiwPLp00hfH9zGQFNrhKQBCSLUxvn3H9xyFQhG8iXPztd6n75L0epA=="
       },
       "Microsoft.Bcl.Cryptography": {
         "type": "Transitive",
@@ -709,29 +709,29 @@
       },
       "Weasel.Core": {
         "type": "Transitive",
-        "resolved": "9.25.1",
-        "contentHash": "WndVGQwDzluDmr/2WYRIERxMTq6kVV+yGjXHGwot5dseKwmheF3WOgkM6f2NMXjD/hecR4bFtat2jJT+D5i97Q==",
+        "resolved": "9.30.0",
+        "contentHash": "qxTZjySPzWWWNZxI3Z0aOQsLzqpByC0ovTy/hH/BPiq30xwyFU7ro01kxDFkVWAxA45zXjj6A6jkeudDzNy6yQ==",
         "dependencies": {
           "JasperFx": "2.46.0"
         }
       },
       "Weasel.EntityFrameworkCore": {
         "type": "Transitive",
-        "resolved": "9.25.1",
-        "contentHash": "DecVnY2wy1YJdI4gItanumPh+DpfC3O1cG12HTQmc54VUTmMME1IRSVToMae2rwnfcZq2NPX0E+NyEUiIFZjSA==",
+        "resolved": "9.30.0",
+        "contentHash": "W1tcBCK9/WsAkvOtFLlGW4QaTy718liL+WboSRnspBzU/h9LiA2ScbaZQ1MtVA7rRiS1oz3WaVZr5eW/TGgKcw==",
         "dependencies": {
           "Microsoft.EntityFrameworkCore.Relational": "10.0.0",
-          "Weasel.Core": "9.25.1"
+          "Weasel.Core": "9.30.0"
         }
       },
       "WolverineFx": {
         "type": "Transitive",
-        "resolved": "6.29.2",
-        "contentHash": "KwaOz3NUAdulYRDfgTZ4oPMo/nUakJKV4A8hTLAxqf1CgImxRpzL9iZaufa6GqUupXhCJsbnDiRZYw/uEnjH+Q==",
+        "resolved": "6.33.0",
+        "contentHash": "ioNpB4WnCJfL+HPbidptw5pWnFL0VCJFPcQDsQ0NOdJEL7/UaGiL1N1+OoHWqzNr5sUG+UWWioiKLNIjqMT+Gg==",
         "dependencies": {
-          "JasperFx": "2.53.0",
-          "JasperFx.Events": "2.53.0",
-          "JasperFx.SourceGenerator": "2.53.0",
+          "JasperFx": "2.60.0",
+          "JasperFx.Events": "2.60.0",
+          "JasperFx.SourceGenerator": "2.60.0",
           "Microsoft.Extensions.Caching.Memory": "10.0.0",
           "Microsoft.Extensions.Configuration": "10.0.0",
           "Microsoft.Extensions.Configuration.Abstractions": "10.0.0",
@@ -746,11 +746,11 @@
       },
       "WolverineFx.RDBMS": {
         "type": "Transitive",
-        "resolved": "6.29.2",
-        "contentHash": "IEyglFOIbdfKn0OTtFuJjmGpSReerkFOvcWeFfBrhGPCSNyiS9Mn8m3XUNjOWu6xUAGrRsfZECy30LPqRXd3uw==",
+        "resolved": "6.33.0",
+        "contentHash": "jGey8FreK9sygowojYlgDEiaPsJj2zOGafmWI3qDOoB2WvKr2U+jKDgxg6oZTSlW42WcJET/8ZWNnoQOh0DEUA==",
         "dependencies": {
-          "Weasel.Core": "9.25.1",
-          "WolverineFx": "6.29.2"
+          "Weasel.Core": "9.30.0",
+          "WolverineFx": "6.33.0"
         }
       },
       "vinx.erp.ai": {
@@ -779,7 +779,7 @@
           "OpenTelemetry.Extensions.Hosting": "[1.18.0, )",
           "OpenTelemetry.Instrumentation.AspNetCore": "[1.18.0, )",
           "OpenTelemetry.Instrumentation.Runtime": "[1.18.0, )",
-          "WolverineFx.EntityFrameworkCore": "[6.29.2, )"
+          "WolverineFx.EntityFrameworkCore": "[6.33.0, )"
         }
       },
       "vinx.erp.paguai": {
@@ -969,15 +969,15 @@
       },
       "WolverineFx.EntityFrameworkCore": {
         "type": "CentralTransitive",
-        "requested": "[6.29.2, )",
-        "resolved": "6.29.2",
-        "contentHash": "zGzXft/H2IG4FHnkENuW59GOm5Je1fkY+o0Aqj1SSKqiAd+L8LXTMZAmU1D0lG4lE8Q/iKf98/Sfq0+DJ8bUYA==",
+        "requested": "[6.33.0, )",
+        "resolved": "6.33.0",
+        "contentHash": "fkD6HeGaaab88Vp1Erfn9AXW/6ZmzNFTcTtFxoLg70yoViliy6drCPgdi7Amwjx5oPQ73v+p/ks123TU3+pMCA==",
         "dependencies": {
-          "Microsoft.EntityFrameworkCore": "10.0.2",
-          "Microsoft.EntityFrameworkCore.Design": "10.0.2",
-          "Microsoft.EntityFrameworkCore.Relational": "10.0.2",
-          "Weasel.EntityFrameworkCore": "9.25.1",
-          "WolverineFx.RDBMS": "6.29.2"
+          "Microsoft.EntityFrameworkCore": "10.0.4",
+          "Microsoft.EntityFrameworkCore.Design": "10.0.4",
+          "Microsoft.EntityFrameworkCore.Relational": "10.0.4",
+          "Weasel.EntityFrameworkCore": "9.30.0",
+          "WolverineFx.RDBMS": "6.33.0"
         }
       }
     }
