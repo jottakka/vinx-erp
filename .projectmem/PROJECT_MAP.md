@@ -23,7 +23,7 @@ identidade, autorização, auditoria, observabilidade e limites de provedor.
   - `Vinx.Erp.WorkerHost/Program.cs` — entrada de trabalhos assíncronos.
 - `apps/web/src/` — frontend React; acessa o ERP por API.
 - `docs/` — ADRs, contratos, módulos, runbooks, verificações e histórico.
-  - `docs/superpowers/specs/2026-08-08-vinx-erp-architecture-design.md` — limites arquiteturais.
+  - `docs/architecture/2026-08-08-vinx-erp-architecture-design.md` — limites arquiteturais.
   - `docs/runbooks/basic-memory.md` — índice local descartável de documentação.
 - `tests/public/` — testes públicos de domínio, arquitetura, BDD e integração.
 - `scripts/verify-public.sh` — gate público de construção e verificação.
