@@ -79,9 +79,9 @@ quality/
   private/
 docs/
   adr/
+  architecture/
   modules/
   runbooks/
-  superpowers/{specs,plans}/
 ```
 
 Do not add generic repositories, base services, mandatory mediator/CQRS,
