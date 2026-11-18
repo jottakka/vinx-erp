@@ -2,6 +2,10 @@
 
 ## Status
 
+Descontinuado em 2026-11-18: o piloto, os scripts de Basic Memory e o teste
+`test:projectmem-pilot` foram removidos do repositório. O registro abaixo é
+mantido como histórico da decisão.
+
 Piloto aprovado para tooling local. Não é dependência do produto nem decisão
 de adoção permanente de memória para agentes.
 
