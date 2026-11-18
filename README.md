@@ -6,14 +6,13 @@ versioned architecture and repository policies below.
 
 ## Route map
 
-- [Architecture design](docs/superpowers/specs/2026-08-08-vinx-erp-architecture-design.md)
+- [Architecture design](docs/architecture/2026-08-08-vinx-erp-architecture-design.md)
 - [Local-development runbook](docs/runbooks/local-development.md)
 - [ADR index](docs/adr/)
 - [Public verification](docs/runbooks/public-verification.md)
 
-Read [AGENTS.md](AGENTS.md) before changing behavior. It defines the required
-authorization, company-context, audit, observability, documentation and
-sensitive-data rules.
+Consulte o desenho de arquitetura e os runbooks acima antes de alterar
+comportamento.
 
 ## Verification and merge policy
 
@@ -32,3 +31,8 @@ disponíveis, o primeiro consumidor de frontend é
 [#16](https://github.com/jottakka/vinx-erp/issues/16), seguido do bootstrap em
 [#90](https://github.com/jottakka/vinx-erp/issues/90). Essa ordem evita que o
 browser invente escopo de empresa, autorização ou acesso direto a providers.
+
+## Licença
+
+O código original do projeto está disponível sob a [licença MIT](LICENSE).
+Dependências e materiais de terceiros mantêm suas respectivas licenças.

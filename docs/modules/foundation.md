@@ -507,7 +507,7 @@ timestamp não-default e checksum do veredito igual ao checksum do objeto
 inspecionado agora. Qualquer outro resultado falha fechado.
 
 Engine aprovada: **ClamAV/clamd, 2026-08-19** (comparativo e decisão em
-`docs/superpowers/specs/2026-08-18-issue-104-antimalware-engine-comparison.md`).
+`docs/architecture/2026-08-18-antimalware-engine-comparison.md`).
 A engine real é condicionada por configuração: com
 `MalwareScanner:ClamAvEndpoint` (`host:port`, formato validado on-start) o host
 compõe `ClamAvMalwareScanner`, que faz streaming do conteúdo direto do storage

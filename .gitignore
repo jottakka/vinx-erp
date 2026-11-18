@@ -14,17 +14,10 @@ test-results/
 *.feature.cs
 supabase/.temp/
 
-.cache/basic-memory/
-.cache/basic-memory-recovery/
-.cache/basic-memory-doctor.*
 
-.projectmem/events.jsonl
-.projectmem/.current_issue
-.projectmem/watch.pid
-.projectmem/watch.log
-.projectmem/structure.json
 
 # Capturas legadas: bundles confidenciais nunca entram no repositório
 legacy-snapshot-bundle*/
 legacy-profile-bundle*/
 .mimosa/
+.superpowers/

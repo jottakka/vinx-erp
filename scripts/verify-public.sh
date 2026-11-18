@@ -2,7 +2,6 @@
 set -euo pipefail
 
 npm ci
-npm run test:projectmem-pilot
 npm --workspace apps/web run lint
 npm --workspace apps/web run format:check
 npm --workspace apps/web run test -- --run
