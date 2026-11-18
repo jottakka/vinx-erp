@@ -6,7 +6,7 @@ versioned architecture and repository policies below.
 
 ## Route map
 
-- [Architecture design](docs/superpowers/specs/2026-08-08-vinx-erp-architecture-design.md)
+- [Architecture design](docs/architecture/2026-08-08-vinx-erp-architecture-design.md)
 - [Local-development runbook](docs/runbooks/local-development.md)
 - [ADR index](docs/adr/)
 - [Public verification](docs/runbooks/public-verification.md)

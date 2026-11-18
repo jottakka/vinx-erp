@@ -28,3 +28,4 @@ supabase/.temp/
 legacy-snapshot-bundle*/
 legacy-profile-bundle*/
 .mimosa/
+.superpowers/
